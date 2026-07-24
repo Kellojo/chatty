@@ -189,7 +189,7 @@
 			{#if testResult}
 				<div
 					class="flex items-start gap-2 rounded-md border p-3 text-sm {testResult.ok
-						? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+						? 'border-success/40 bg-success/10 text-success-foreground'
 						: 'border-destructive/40 bg-destructive/10 text-destructive'}"
 				>
 					{#if testResult.ok}

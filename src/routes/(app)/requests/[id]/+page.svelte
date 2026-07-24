@@ -32,8 +32,8 @@
 	}
 
 	function statusClass(status: ProxyRequestStatus): string {
-		if (status === 'running') return 'border-blue-500/50 text-blue-600 dark:text-blue-400';
-		if (status === 'complete') return 'text-green-600 dark:text-green-400';
+		if (status === 'running') return 'border-info/50 text-info-foreground';
+		if (status === 'complete') return 'text-success-foreground';
 		return '';
 	}
 
@@ -43,7 +43,7 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
+	<div class="mx-auto flex w-full max-w-7xl flex-col gap-4 p-6">
 		<div class="flex flex-col gap-1">
 			<Breadcrumb.Root>
 				<Breadcrumb.List>
@@ -60,7 +60,7 @@
 				<h1 class="text-xl font-semibold">Proxy request</h1>
 				<Badge variant={statusVariant(request.status)} class={statusClass(request.status)}>
 					{#if request.status === 'running'}
-						<span class="size-2 animate-pulse rounded-full bg-blue-500"></span>
+						<span class="size-2 animate-pulse rounded-full bg-info"></span>
 					{/if}
 					{request.status}
 				</Badge>

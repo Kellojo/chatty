@@ -235,31 +235,52 @@
 						>
 							<InfoIcon class="size-3.5" />
 						</button>
-						{#if open}
-							<div
-								class="absolute bottom-full left-0 z-20 mb-1 w-56 rounded-md border border-border bg-popover p-3 text-xs shadow-md"
-							>
-								<div class="mb-1.5 font-medium text-foreground">Generation info</div>
-								<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-muted-foreground">
-									<dt>Model</dt>
-									<dd class="truncate text-right font-mono" title={usage.modelId}>
-										{usage.modelId}
-									</dd>
-									<dt>Input tokens</dt>
-									<dd class="text-right tabular-nums">{formatTokens(usage.inputTokens)}</dd>
-									<dt>Output tokens</dt>
-									<dd class="text-right tabular-nums">{formatTokens(usage.outputTokens)}</dd>
-									<dt>Total tokens</dt>
-									<dd class="text-right tabular-nums">{formatTokens(usage.totalTokens)}</dd>
-									<dt>Latency</dt>
-									<dd class="text-right tabular-nums">{formatLatency(usage.latencyMs)}</dd>
-									<dt>Tokens/s</dt>
-									<dd class="text-right tabular-nums">{tokensPerSecond(usage)}</dd>
-									<dt>Cost</dt>
-									<dd class="text-right tabular-nums">{formatCost(usage.costUsd)}</dd>
-								</dl>
+					{#if open}
+						<div
+							class="absolute bottom-full left-0 z-20 mb-1.5 w-60 overflow-hidden rounded-lg border border-border bg-popover text-xs shadow-lg shadow-black/5 dark:shadow-black/40"
+						>
+							<div class="border-b border-border/60 px-3 py-2">
+								<div class="truncate font-mono text-[11px] text-foreground" title={usage.modelId}>
+									{usage.modelId}
+								</div>
+								<div class="mt-0.5 text-[10px] tracking-wide text-muted-foreground uppercase">
+									Generation info
+								</div>
 							</div>
-						{/if}
+							<dl class="px-3 py-2">
+								<div class="flex items-baseline justify-between py-0.5">
+									<dt class="text-muted-foreground">Cost</dt>
+									<dd class="text-sm font-medium text-foreground tabular-nums">
+										{formatCost(usage.costUsd)}
+									</dd>
+								</div>
+							</dl>
+							<dl class="border-t border-border/60 px-3 py-2">
+								<div class="flex items-baseline justify-between py-0.5">
+									<dt class="text-muted-foreground">Input</dt>
+									<dd class="text-foreground tabular-nums">{formatTokens(usage.inputTokens)}</dd>
+								</div>
+								<div class="flex items-baseline justify-between py-0.5">
+									<dt class="text-muted-foreground">Output</dt>
+									<dd class="text-foreground tabular-nums">{formatTokens(usage.outputTokens)}</dd>
+								</div>
+								<div class="flex items-baseline justify-between py-0.5">
+									<dt class="text-muted-foreground">Total</dt>
+									<dd class="text-foreground tabular-nums">{formatTokens(usage.totalTokens)}</dd>
+								</div>
+							</dl>
+							<dl class="border-t border-border/60 px-3 py-2">
+								<div class="flex items-baseline justify-between py-0.5">
+									<dt class="text-muted-foreground">Latency</dt>
+									<dd class="text-foreground tabular-nums">{formatLatency(usage.latencyMs)}</dd>
+								</div>
+								<div class="flex items-baseline justify-between py-0.5">
+									<dt class="text-muted-foreground">Throughput</dt>
+									<dd class="text-foreground tabular-nums">{tokensPerSecond(usage)} tok/s</dd>
+								</div>
+							</dl>
+						</div>
+					{/if}
 					</div>
 				{/if}
 			</MessageActions>

@@ -4,6 +4,7 @@
 	import Sidebar from '$lib/components/app/Sidebar.svelte';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import { startServerEvents } from '$lib/state/events.svelte.js';
+	import { setSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -12,6 +13,18 @@
 
 	let sidebarOpen = $state(data.sidebarOpen);
 	let mobileOpen = $state(false);
+
+	setSidebarState({
+		get open() {
+			return sidebarOpen;
+		},
+		get isMobile() {
+			return !isDesktop.current;
+		},
+		get mobileOpen() {
+			return mobileOpen;
+		}
+	});
 
 	function setSidebarOpen(open: boolean) {
 		sidebarOpen = open;
@@ -67,13 +80,6 @@
 			</div>
 			<div class="h-full w-1/2 shrink-0">
 				<main class="relative flex h-full flex-col">
-					<button
-						class="absolute top-2 left-2 z-10 rounded-md border bg-background p-1.5 text-muted-foreground hover:text-foreground"
-						onclick={toggleSidebar}
-						aria-label="Open sidebar"
-					>
-						<PanelLeftIcon class="size-4" />
-					</button>
 					{@render children()}
 				</main>
 			</div>
@@ -82,21 +88,18 @@
 
 	<!-- Desktop main content -->
 	{#if isDesktop.current}
-		<main
-			class="relative flex min-w-0 flex-1 flex-col transition-[padding] duration-200 {sidebarOpen
-				? ''
-				: 'pl-12'}"
-		>
-			{#if !sidebarOpen}
-				<button
-					class="absolute top-2 left-2 z-10 rounded-md border bg-background p-1.5 text-muted-foreground hover:text-foreground"
-					onclick={toggleSidebar}
-					aria-label="Open sidebar"
-				>
-					<PanelLeftIcon class="size-4" />
-				</button>
-			{/if}
+		<main class="relative flex min-w-0 flex-1 flex-col">
 			{@render children()}
 		</main>
+	{/if}
+
+	{#if isDesktop.current ? !sidebarOpen : !mobileOpen}
+		<button
+			class="absolute top-2 left-2 z-20 rounded-lg bg-muted p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			onclick={toggleSidebar}
+			aria-label="Open sidebar"
+		>
+			<PanelLeftIcon class="size-4" />
+		</button>
 	{/if}
 </div>

@@ -10,9 +10,10 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
+	import ModelSelect from '$lib/components/app/ModelSelect.svelte';
+	import type { ModelsByProvider } from '$lib/types.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -31,9 +32,15 @@
 
 	const providersById = $derived(new Map(data.providers.map((p) => [p.id, p])));
 
-	function modelsFor(providerId: string) {
-		return data.models.filter((m) => m.providerId === providerId);
-	}
+	const modelGroups = $derived.by<ModelsByProvider[]>(() => {
+		const byProvider: Record<string, PageData['models']> = {};
+		for (const model of data.models) {
+			(byProvider[model.providerId] ??= []).push(model);
+		}
+		return data.providers
+			.filter((p) => p.id in byProvider)
+			.map((p) => ({ provider: p, models: byProvider[p.id]! }));
+	});
 
 	async function api(path: string, method: string, body?: unknown): Promise<Response> {
 		const res = await fetch(path, {
@@ -79,12 +86,11 @@
 		formTargets = copy;
 	}
 
-	function setTargetProvider(index: number, providerId: string) {
-		formTargets = formTargets.map((t, i) => (i === index ? { providerId, modelId: '' } : t));
-	}
-
-	function setTargetModel(index: number, modelId: string) {
-		formTargets = formTargets.map((t, i) => (i === index ? { ...t, modelId } : t));
+	function setTargetModelRef(index: number, ref: string) {
+		const slash = ref.indexOf('/');
+		const providerId = slash === -1 ? '' : ref.slice(0, slash);
+		const modelId = slash === -1 ? '' : ref.slice(slash + 1);
+		formTargets = formTargets.map((t, i) => (i === index ? { providerId, modelId } : t));
 	}
 
 	async function submitForm(event: SubmitEvent) {
@@ -222,39 +228,15 @@
 				<Label>Targets (tried in order)</Label>
 				{#each formTargets as target, i (i)}
 					<div class="flex items-center gap-2">
-						<Select.Root
-							type="single"
-							value={target.providerId}
-							onValueChange={(v) => setTargetProvider(i, v)}
-						>
-							<Select.Trigger class="w-full min-w-0">
-								{target.providerId
-									? (providersById.get(target.providerId)?.name ?? target.providerId)
-									: 'Select provider'}
-							</Select.Trigger>
-							<Select.Content class="max-h-72">
-								{#each data.providers as provider (provider.id)}
-									<Select.Item value={provider.id}>{provider.name}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-						<Select.Root
-							type="single"
-							value={target.modelId}
-							onValueChange={(v) => setTargetModel(i, v)}
-							disabled={target.providerId === ''}
-						>
-							<Select.Trigger class="w-full min-w-0">
-								<span class="truncate">{target.modelId || 'Select model'}</span>
-							</Select.Trigger>
-							<Select.Content class="max-h-72 w-(--bits-select-anchor-width)">
-								{#each modelsFor(target.providerId) as model (model.id)}
-									<Select.Item value={model.modelId} title={model.modelId}>
-										<span class="truncate">{model.modelId}</span>
-									</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
+						<ModelSelect
+							groups={modelGroups}
+							value={target.providerId && target.modelId
+								? `${target.providerId}/${target.modelId}`
+								: ''}
+							onselect={(v) => setTargetModelRef(i, v)}
+							placeholder="Select model"
+							class="w-full min-w-0"
+						/>
 						<Button
 							variant="outline"
 							size="icon-sm"

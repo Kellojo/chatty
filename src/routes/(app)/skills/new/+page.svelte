@@ -44,7 +44,7 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-3xl flex-col gap-4 p-6">
+	<div class="mx-auto flex w-full max-w-7xl flex-col gap-4 p-6">
 		<h1 class="text-xl font-semibold">New skill</h1>
 
 		<div class="flex flex-col gap-1.5">

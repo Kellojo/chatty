@@ -38,8 +38,8 @@
 	}
 
 	function statusClass(run: AgentRun): string {
-		if (run.status === 'running') return 'border-blue-500/50 text-blue-600 dark:text-blue-400';
-		if (run.status === 'success') return 'text-green-600 dark:text-green-400';
+		if (run.status === 'running') return 'border-info/50 text-info-foreground';
+		if (run.status === 'success') return 'text-success-foreground';
 		return '';
 	}
 
@@ -53,7 +53,7 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
+	<div class="mx-auto flex w-full max-w-7xl flex-col gap-4 p-6">
 		<div class="flex flex-col gap-1">
 			<Breadcrumb.Root>
 				<Breadcrumb.List>

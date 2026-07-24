@@ -309,7 +309,7 @@
 		<div class="flex min-w-0 items-center gap-2">
 			<svg
 				viewBox="0 0 24 24"
-				class="brand-icon size-5 shrink-0 rounded-[4px] bg-foreground text-background"
+				class="brand-icon size-5 shrink-0 rounded-md bg-foreground text-background"
 				aria-hidden="true"
 			>
 				<g
@@ -341,30 +341,29 @@
 	</div>
 
 	<div class="px-3 pb-2">
-		<Button
-			variant="outline"
-			size="sm"
-			onclick={() => {
-				newChat();
-				handleNavigate();
-			}}
-			class="w-full"
-		>
-			<PlusIcon class="size-4" />
-			New chat
-		</Button>
+		<div class="relative">
+			<Input
+				bind:ref={searchInput}
+				placeholder="Search conversations…"
+				bind:value={query}
+				oninput={search}
+				class="h-8 pr-8 text-sm"
+			/>
+			<button
+				type="button"
+				class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				onclick={() => {
+					newChat();
+					handleNavigate();
+				}}
+				title="New chat"
+				aria-label="New chat"
+			>
+				<PlusIcon class="size-4" />
+			</button>
+		</div>
 	</div>
-
-	<div class="px-3 pb-2">
-		<Input
-			bind:ref={searchInput}
-			placeholder="Search conversations…"
-			bind:value={query}
-			oninput={search}
-			class="h-8 text-sm"
-		/>
-	</div>
-	<nav class="flex-1 overflow-y-auto px-2 pb-2 [mask-image:linear-gradient(to_bottom,transparent,black_1.5rem,black_calc(100%-1.5rem),transparent)]">
+	<nav class="flex-1 overflow-y-auto px-2 pb-2 [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)]">
 		{#each visibleGroups as group (group.label)}
 			<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{group.label}</p>
 			{#each group.items as c (c.id)}
@@ -383,11 +382,11 @@
 				</a>
 					{#if activeChats.has(c.id) || serverActiveChatIds.has(c.id)}
 						<LoaderCircleIcon
-							class="mr-1 size-3.5 shrink-0 animate-spin text-blue-600 dark:text-blue-400"
+							class="mr-1 size-3.5 shrink-0 animate-spin text-info-foreground"
 						/>
 					{:else if unreadIds.includes(c.id) && page.url.pathname !== '/chat/' + c.id}
 						<span
-							class="size-2 shrink-0 rounded-full bg-blue-600 dark:bg-blue-400"
+							class="size-2 shrink-0 rounded-full bg-info"
 							title="New messages"
 						></span>
 					{/if}
@@ -452,7 +451,7 @@
 					title="{agentStats.running} running of {agentStats.total} agents"
 				>
 					{#if agentStats.running > 0}
-						<span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+						<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
 					{/if}
 					{agentStats.running}/{agentStats.total}
 				</span>
@@ -512,7 +511,7 @@
 						title="{requestStats.running} running of {requestStats.total} requests"
 					>
 						{#if requestStats.running > 0}
-							<span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+							<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
 						{/if}
 						{formatCount(requestStats.total)}
 					</span>

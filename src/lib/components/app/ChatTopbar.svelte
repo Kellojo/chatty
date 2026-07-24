@@ -1,9 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { Label } from '$lib/components/ui/label/index.js';
-	import { Switch } from '$lib/components/ui/switch/index.js';
-	import * as Select from '$lib/components/ui/select/index.js';
 	import ModelPicker from './ModelPicker.svelte';
+	import { getSidebarState } from './sidebar-state.svelte.js';
 	import { decodeModelRef, encodeModelRef } from '$lib/model-ref.js';
 	import type { Agent, Conversation, ModelMapping, ModelsByProvider } from '$lib/types.js';
 
@@ -13,7 +11,6 @@
 		mappings = [],
 		defaultModel,
 		personas,
-		personaLocked = false,
 		onupdated
 	}: {
 		conversation: Conversation;
@@ -21,11 +18,15 @@
 		mappings?: ModelMapping[];
 		defaultModel?: { providerId: string; modelId: string } | null;
 		personas?: Agent[];
-		personaLocked?: boolean;
 		onupdated: (c: Conversation) => void;
 	} = $props();
 
 	let saving = $state(false);
+
+	const sidebar = getSidebarState();
+	const offsetForSidebar = $derived(
+		sidebar !== undefined && (sidebar.isMobile ? !sidebar.mobileOpen : !sidebar.open)
+	);
 
 	const defaultModelValue = $derived(
 		defaultModel ? encodeModelRef(defaultModel) : ''
@@ -69,21 +70,10 @@
 	);
 </script>
 
-<header class="flex items-center gap-3 border-b px-4 py-2">
+<header class="flex items-center gap-3 border-b px-4 py-2 {offsetForSidebar ? 'pl-12' : ''}">
 	<ModelPicker {groups} {mappings} value={currentModelValue} onselect={selectModel} disabled={saving} />
 
 	{#if personas && conversation.agentId}
 		<span class="text-sm text-muted-foreground">{personaLabel}</span>
 	{/if}
-
-	<div class="ml-auto flex items-center gap-3">
-		<Label class="flex items-center gap-2 text-sm text-muted-foreground">
-			Agent mode
-			<Switch
-				checked={conversation.mode === 'agent'}
-				disabled={saving}
-				onCheckedChange={(v) => patch({ mode: v ? 'agent' : 'chat' })}
-			/>
-		</Label>
-	</div>
 </header>

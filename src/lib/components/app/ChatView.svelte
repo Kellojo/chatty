@@ -284,7 +284,7 @@
 >
 	{#if fileDrop.dragActive}
 		<div
-			class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-blue-500 bg-background/70"
+			class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-info bg-background/70"
 		>
 			<span class="text-sm font-medium text-muted-foreground">Drop files to attach</span>
 		</div>

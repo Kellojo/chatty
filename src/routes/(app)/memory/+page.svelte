@@ -369,7 +369,7 @@
 					<span class="truncate">{node.name}</span>
 				</button>
 				{#if expanded.has(node.path) && node.children}
-					<div class="pl-3">
+					<div class="ml-[13px] border-l border-border pl-2">
 						{@render treeNodes(node.children, depth + 1)}
 					</div>
 				{/if}
@@ -397,15 +397,15 @@
 	{/each}
 {/snippet}
 
-<div class="flex min-h-0 flex-1">
-	<div class="flex w-72 shrink-0 flex-col border-r">
-		<div class="flex items-center gap-2 border-b px-3 pt-3 pb-2">
-			<BrainIcon class="size-5" />
-			<h1 class="text-lg font-semibold">Memory</h1>
-		</div>
-		<div class="flex flex-col gap-2 border-b p-3">
+<div class="h-full [scrollbar-gutter:stable] overflow-y-auto">
+	<div class="mx-auto flex w-full max-w-7xl gap-8 p-6">
+		<nav class="sticky top-6 flex w-56 shrink-0 flex-col gap-1 self-start">
+			<h1 class="mb-2 flex items-center gap-2 px-3 text-lg font-semibold">
+				<BrainIcon class="size-5" />
+				Memory
+			</h1>
 			{#if isAdmin}
-				<div class="flex rounded-md border p-0.5">
+				<div class="mb-1 flex rounded-md border p-0.5">
 					<button
 						type="button"
 						class="flex-1 rounded-sm px-2 py-1 text-xs {scope === 'user'
@@ -426,16 +426,18 @@
 					</button>
 				</div>
 			{/if}
-			<Input
-				placeholder="Search memory…"
-				bind:value={query}
-				oninput={onSearchInput}
-				class="h-8 text-sm"
-			/>
-			<div class="flex gap-2">
+			<div class="mb-1 px-0">
+				<Input
+					placeholder="Search memory…"
+					bind:value={query}
+					oninput={onSearchInput}
+					class="h-8 text-sm"
+				/>
+			</div>
+			<div class="mb-2 flex gap-2 px-0">
 				<Button variant="outline" size="sm" class="flex-1" onclick={startNew}>
 					<PlusIcon class="size-3.5" />
-					New concept
+					New
 				</Button>
 				<Button
 					variant="outline"
@@ -449,19 +451,18 @@
 					{:else}
 						<ZapIcon class="size-3.5" />
 					{/if}
-					Extract now
+					Extract
 				</Button>
 			</div>
-		</div>
-		<div class="flex-1 overflow-y-auto p-2">
+
 			{#if searchResults !== null}
 				{#if searchBusy}
-					<p class="px-2 pt-2 text-sm text-muted-foreground">Searching…</p>
+					<p class="px-3 pt-2 text-sm text-muted-foreground">Searching…</p>
 				{:else}
 					{#each searchResults as hit (`${hit.scope}:${hit.path}`)}
 						<button
 							type="button"
-							class="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent/50"
+							class="flex w-full flex-col gap-0.5 rounded-md px-3 py-1.5 text-left hover:bg-accent/50"
 							onclick={() => selectSearchHit(hit)}
 						>
 							<span class="flex items-center gap-1.5 text-sm">
@@ -481,118 +482,114 @@
 							<!-- eslint-enable svelte/no-at-html-tags -->
 						</button>
 					{:else}
-						<p class="px-2 pt-2 text-sm text-muted-foreground">No matches.</p>
+						<p class="px-3 pt-2 text-sm text-muted-foreground">No matches.</p>
 					{/each}
 				{/if}
 			{:else if treeLoading && tree.length === 0}
-				<p class="px-2 pt-2 text-sm text-muted-foreground">Loading…</p>
+				<p class="px-3 pt-2 text-sm text-muted-foreground">Loading…</p>
 			{:else}
 				{@render treeNodes(tree, 0)}
 				{#if tree.length === 0}
-					<p class="px-2 pt-2 text-sm text-muted-foreground">No concepts yet.</p>
+					<p class="px-3 pt-2 text-sm text-muted-foreground">No concepts yet.</p>
 				{/if}
 			{/if}
-		</div>
-	</div>
+		</nav>
 
-	<div class="min-w-0 flex-1 overflow-y-auto p-4">
-		{#if editor.mode === 'none'}
-			<div class="flex h-full items-center justify-center">
-				<div class="flex flex-col items-center gap-2 text-muted-foreground">
-					<BrainIcon class="size-8" />
-					<p class="text-sm">Select a concept or create a new one</p>
-				</div>
-			</div>
-		{:else if editorLoading}
-			<div class="flex h-full items-center justify-center">
-				<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
-			</div>
-		{:else}
-			<form onsubmit={save} class="mx-auto flex max-w-2xl flex-col gap-4">
-				<div class="flex items-center justify-between gap-2">
-					<Badge variant="secondary">{scope === 'shared' ? 'Shared' : 'My memory'}</Badge>
-					{#if editor.mode === 'edit' && editor.timestamp}
-						<span class="text-xs text-muted-foreground" title={editor.timestamp}>
-							Updated {new Date(editor.timestamp).toLocaleString()}
-						</span>
-					{/if}
-				</div>
-
-				<div class="flex flex-col gap-2">
-					<Label for="mem-path">Path</Label>
-					<Input
-						id="mem-path"
-						bind:value={editor.path}
-						required
-						placeholder="topics/foo.md"
-						class="font-mono text-sm"
-					/>
-					{#if editor.mode === 'edit'}
-						<p class="text-xs text-muted-foreground">Changing the path renames the concept.</p>
-					{/if}
-				</div>
-
-				<div class="grid grid-cols-2 gap-4">
-					<div class="flex flex-col gap-2">
-						<Label for="mem-title">Title</Label>
-						<Input id="mem-title" bind:value={editor.title} required maxlength={200} />
-					</div>
-					<div class="flex flex-col gap-2">
-						<Label for="mem-type">Type</Label>
-						<Input id="mem-type" bind:value={editor.type} placeholder="concept" maxlength={50} />
+		<main class="min-w-0 flex-1">
+			{#if editor.mode === 'none'}
+				<div class="flex h-96 items-center justify-center">
+					<div class="flex flex-col items-center gap-2 text-muted-foreground">
+						<BrainIcon class="size-8" />
+						<p class="text-sm">Select a concept or create a new one</p>
 					</div>
 				</div>
-
-				<div class="flex flex-col gap-2">
-					<Label for="mem-description">Description</Label>
-					<Input id="mem-description" bind:value={editor.description} maxlength={500} />
-				</div>
-
-				<div class="flex flex-col gap-2">
-					<Label for="mem-tags">Tags (comma-separated)</Label>
-					<Input id="mem-tags" bind:value={editor.tags} placeholder="people, family" />
-				</div>
-
-				<div class="flex flex-col gap-2">
-					<Label for="mem-body">Body</Label>
-					<Textarea id="mem-body" bind:value={editor.body} class="min-h-[40vh] font-mono text-sm" />
-				</div>
-
-				<div class="flex gap-2">
-					<Button type="submit" disabled={saveBusy}>
-						{saveBusy ? 'Saving…' : editor.mode === 'new' ? 'Create' : 'Save'}
-					</Button>
-					{#if editor.mode === 'edit'}
-						<Button variant="destructive" onclick={() => (deleteOpen = true)}>Delete</Button>
-					{:else}
-						<Button variant="outline" onclick={clearSelection}>Cancel</Button>
-					{/if}
-				</div>
-			</form>
-		{/if}
-	</div>
-
-	<div class="flex w-80 shrink-0 flex-col border-l">
-		<div class="border-b px-3 py-2.5">
-			<h2 class="text-sm font-semibold">History</h2>
-		</div>
-		<div class="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
-			{#if editor.mode !== 'edit'}
-				<p class="px-1 pt-2 text-sm text-muted-foreground">
-					Select a concept to see its write history.
-				</p>
-			{:else if writesLoading}
-				<div class="flex justify-center pt-4">
-					<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
+			{:else if editorLoading}
+				<div class="flex h-96 items-center justify-center">
+					<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
 				</div>
 			{:else}
-				{#each writes as entry (entry.id)}
-					<MemoryAuditEntry {entry} {restoreBusy} onrestore={restore} />
-				{:else}
-					<p class="px-1 pt-2 text-sm text-muted-foreground">No writes recorded yet.</p>
-				{/each}
+				<form onsubmit={save} class="flex w-full flex-col gap-4">
+					<div class="flex items-center justify-between gap-2">
+						<Badge variant="secondary">{scope === 'shared' ? 'Shared' : 'My memory'}</Badge>
+						{#if editor.mode === 'edit' && editor.timestamp}
+							<span class="text-xs text-muted-foreground" title={editor.timestamp}>
+								Updated {new Date(editor.timestamp).toLocaleString()}
+							</span>
+						{/if}
+					</div>
+
+					<div class="flex flex-col gap-2">
+						<Label for="mem-path">Path</Label>
+						<Input
+							id="mem-path"
+							bind:value={editor.path}
+							required
+							placeholder="topics/foo.md"
+							class="font-mono text-sm"
+						/>
+						{#if editor.mode === 'edit'}
+							<p class="text-xs text-muted-foreground">Changing the path renames the concept.</p>
+						{/if}
+					</div>
+
+					<div class="grid grid-cols-2 gap-4">
+						<div class="flex flex-col gap-2">
+							<Label for="mem-title">Title</Label>
+							<Input id="mem-title" bind:value={editor.title} required maxlength={200} />
+						</div>
+						<div class="flex flex-col gap-2">
+							<Label for="mem-type">Type</Label>
+							<Input id="mem-type" bind:value={editor.type} placeholder="concept" maxlength={50} />
+						</div>
+					</div>
+
+					<div class="flex flex-col gap-2">
+						<Label for="mem-description">Description</Label>
+						<Input id="mem-description" bind:value={editor.description} maxlength={500} />
+					</div>
+
+					<div class="flex flex-col gap-2">
+						<Label for="mem-tags">Tags (comma-separated)</Label>
+						<Input id="mem-tags" bind:value={editor.tags} placeholder="people, family" />
+					</div>
+
+					<div class="flex flex-col gap-2">
+						<Label for="mem-body">Body</Label>
+						<Textarea id="mem-body" bind:value={editor.body} class="min-h-[40vh] font-mono text-sm" />
+					</div>
+
+					<div class="flex gap-2">
+						<Button type="submit" disabled={saveBusy}>
+							{saveBusy ? 'Saving…' : editor.mode === 'new' ? 'Create' : 'Save'}
+						</Button>
+						{#if editor.mode === 'edit'}
+							<Button variant="destructive" onclick={() => (deleteOpen = true)}>Delete</Button>
+						{:else}
+							<Button variant="outline" onclick={clearSelection}>Cancel</Button>
+						{/if}
+					</div>
+				</form>
+
+				{#if editor.mode === 'edit'}
+					<section class="mt-10 w-full">
+						<h2 class="mb-3 text-sm font-semibold">History</h2>
+						<div class="flex flex-col gap-2">
+							{#if writesLoading}
+								<div class="flex justify-center pt-4">
+									<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
+								</div>
+							{:else}
+								{#each writes as entry (entry.id)}
+									<MemoryAuditEntry {entry} {restoreBusy} onrestore={restore} />
+								{:else}
+									<p class="text-sm text-muted-foreground">No writes recorded yet.</p>
+								{/each}
+							{/if}
+						</div>
+					</section>
+				{/if}
 			{/if}
-		</div>
+		</main>
 	</div>
 </div>
 

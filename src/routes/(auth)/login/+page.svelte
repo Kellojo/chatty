@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { authClient } from '$lib/auth-client.js';
 	import { resolve } from '$app/paths';
-	import BeamsBackground from '$lib/components/beams-background.svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -39,71 +41,62 @@
 	}
 </script>
 
-<main class="relative mx-auto flex min-h-screen max-w-md flex-col justify-center p-6">
-	<BeamsBackground class="fixed -z-10" />
-	<div
-		class="flex flex-col gap-6 rounded-xl border border-neutral-200 bg-white/90 p-8 shadow-lg backdrop-blur-md dark:border-neutral-800 dark:bg-neutral-900/90"
-	>
-		<h1 class="text-2xl font-semibold">Sign in to Chatty</h1>
+<div
+	class="flex w-full flex-col gap-6 rounded-4xl border bg-card p-8 text-card-foreground"
+>
+	<h1 class="text-center text-xl font-semibold tracking-tight">Sign in</h1>
 
-		{#if data.authConfig.passwordLogin}
-			<form onsubmit={submit} class="flex flex-col gap-3">
-				<label class="flex flex-col gap-1">
-					<span class="text-sm font-medium">Email</span>
-					<input
-						type="email"
-						bind:value={email}
-						required
-						autocomplete="email"
-						class="rounded-md border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-950"
-					/>
-				</label>
-				<label class="flex flex-col gap-1">
-					<span class="text-sm font-medium">Password</span>
-					<input
-						type="password"
-						bind:value={password}
-						required
-						autocomplete="current-password"
-						class="rounded-md border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-950"
-					/>
-				</label>
-				{#if errorMessage}
-					<p class="text-sm text-red-600 dark:text-red-400">{errorMessage}</p>
-				{/if}
-			<button
-				type="submit"
-				disabled={loading}
-				class="rounded-md bg-black px-3 py-2 text-white disabled:opacity-50 transition-colors hover:bg-neutral-900 active:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2"
-			>
+	{#if data.authConfig.passwordLogin}
+		<form onsubmit={submit} class="flex flex-col gap-4">
+			<div class="flex flex-col gap-2">
+				<Label for="email">Email</Label>
+				<Input id="email" type="email" bind:value={email} required autocomplete="email" />
+			</div>
+			<div class="flex flex-col gap-2">
+				<Label for="password">Password</Label>
+				<Input
+					id="password"
+					type="password"
+					bind:value={password}
+					required
+					autocomplete="current-password"
+				/>
+			</div>
+			{#if errorMessage}
+				<p class="text-sm text-destructive">{errorMessage}</p>
+			{/if}
+			<Button type="submit" disabled={loading} class="w-full">
 				{loading ? 'Signing in…' : 'Sign in'}
-			</button>
-			</form>
-		{/if}
+			</Button>
+		</form>
+	{/if}
 
-		{#if data.authConfig.oidc}
-			<button
-				onclick={signInWithOidc}
-				disabled={oidcLoading || loading}
-				class="rounded-md border border-neutral-300 px-3 py-2 transition-all hover:bg-neutral-100 active:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 dark:border-neutral-700 dark:hover:bg-neutral-800 disabled:opacity-50"
-			>
-				{#if oidcLoading}
-					<div class="flex items-center justify-center gap-2">
-						<svg class="h-4 w-4 animate-spin text-current" viewBox="0 0 24 24" fill="none">
-							<path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
-						</svg>
-						<span>Redirecting…</span>
-					</div>
-				{:else}
-					Sign in with SSO
-				{/if}
-			</button>
-		{/if}
+	{#if data.authConfig.oidc}
+		<Button
+			variant="outline"
+			onclick={signInWithOidc}
+			disabled={oidcLoading || loading}
+			class="w-full"
+		>
+			{#if oidcLoading}
+				<svg class="size-4 animate-spin" viewBox="0 0 24 24" fill="none">
+					<path
+						d="M12 2a10 10 0 0 1 10 10"
+						stroke="currentColor"
+						stroke-width="3"
+						stroke-linecap="round"
+					/>
+				</svg>
+				Redirecting…
+			{:else}
+				Sign in with SSO
+			{/if}
+		</Button>
+	{/if}
 
-		{#if data.authConfig.signup}
-			<p class="text-sm">
-				No account? <a href={resolve('/signup')} class="underline">Sign up</a>
-			</p>
-		{/if}
-	</div>
-</main>
+	{#if data.authConfig.signup}
+		<p class="text-center text-sm text-muted-foreground">
+			No account? <a href={resolve('/signup')} class="text-foreground underline-offset-4 hover:underline">Sign up</a>
+		</p>
+	{/if}
+</div>

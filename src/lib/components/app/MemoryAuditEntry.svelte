@@ -19,7 +19,7 @@
 
 	const actionClass = $derived(
 		entry.action === 'create'
-			? 'border-green-600/40 bg-green-600/10 text-green-700 dark:text-green-400'
+			? 'border-success/40 bg-success/10 text-success-foreground'
 			: entry.action === 'delete'
 				? ''
 				: 'border-border bg-secondary text-secondary-foreground'
