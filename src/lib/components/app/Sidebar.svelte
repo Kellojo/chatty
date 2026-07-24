@@ -306,7 +306,24 @@
 
 <aside class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30">
 	<div class="flex items-center justify-between gap-2 p-3">
-		<div class="flex min-w-0 items-baseline gap-2">
+		<div class="flex min-w-0 items-center gap-2">
+			<svg
+				viewBox="0 0 24 24"
+				class="brand-icon size-5 shrink-0 rounded-[4px] bg-foreground text-background"
+				aria-hidden="true"
+			>
+				<g
+					transform="translate(3.5 3.5) scale(0.7083)"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.4"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<path d="M5.5 6.5l5 5.5-5 5.5" />
+					<path class="brand-cursor" d="M12.5 18h6" />
+				</g>
+			</svg>
 			<a
 				href="https://github.com/Kellojo/ai-chat"
 				target="_blank"
@@ -552,3 +569,24 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+<style>
+	.brand-cursor {
+		animation: brand-blink 1.06s steps(1) infinite;
+	}
+	@keyframes brand-blink {
+		0%,
+		53% {
+			opacity: 1;
+		}
+		54%,
+		100% {
+			opacity: 0;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.brand-cursor {
+			animation: none;
+		}
+	}
+</style>
