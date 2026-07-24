@@ -9,6 +9,7 @@ import { createBashServer } from './bash.js';
 import { createSettingsServer } from './settings.js';
 import { createMemoryServer } from './memory.js';
 import { createAgentsServer } from './agents.js';
+import { createSkillsServer } from './skills.js';
 
 export type BuiltinServerFactory = (ctx: CallerContext) => McpServer;
 
@@ -21,5 +22,6 @@ export const BUILTIN_SERVERS: Record<string, BuiltinServerFactory> = {
 	bash: createBashServer,
 	settings: createSettingsServer,
 	memory: createMemoryServer,
-	agents: createAgentsServer
+	agents: createAgentsServer,
+	skills: createSkillsServer
 };

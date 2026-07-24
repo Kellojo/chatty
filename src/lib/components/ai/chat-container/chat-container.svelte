@@ -52,7 +52,7 @@
 
 <div
 	{@attach bindScrollElement}
-	class={cn('flex overflow-y-auto', className)}
+	class={cn('flex overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_2rem,black_calc(100%-2rem),transparent)]', className)}
 	role="log"
 	{...restProps}
 >

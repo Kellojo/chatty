@@ -31,7 +31,7 @@ export default defineConfig(({ mode }) => {
 						// it is ignored by browsers when a nonce/hash is present, so we
 						// keep style-src nonce-free on purpose.
 						'style-src': ['self', 'unsafe-inline'],
-						'img-src': ['self', 'data:', 'blob:'],
+						'img-src': ['self', 'data:', 'blob:', 'https:'],
 						'font-src': ['self', 'data:'],
 						'connect-src': ['self'],
 						'worker-src': ['self'],

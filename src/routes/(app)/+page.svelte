@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import {
 		PromptInput,
@@ -12,6 +13,7 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
 	import XIcon from '@lucide/svelte/icons/x';
 	import ModelPicker from '$lib/components/app/ModelPicker.svelte';
 	import { decodeModelRef } from '$lib/model-ref.js';
@@ -28,10 +30,28 @@
 	let picked = $state('');
 	let personaId = $state('');
 	let selectedFiles = $state<File[]>([]);
+	let fileInput: HTMLInputElement | undefined = $state();
+
+	$effect(() => {
+		if (page.url.searchParams.get('error') === 'conversation-not-found') {
+			toast.error('Conversation not found');
+			goto(resolve('/'), { replaceState: true });
+		}
+	});
 
 	const fileDrop = createFileDrop((files) => {
 		selectedFiles = [...selectedFiles, ...files];
 	});
+
+	function pickFiles() {
+		fileInput?.click();
+	}
+
+	function filesChosen(e: Event) {
+		const target = e.currentTarget as HTMLInputElement;
+		selectedFiles = [...selectedFiles, ...Array.from(target.files ?? [])];
+		target.value = '';
+	}
 
 	const defaultModelValue = $derived(
 		data.defaultModel ? `${data.defaultModel.providerId}/${data.defaultModel.modelId}` : ''
@@ -134,13 +154,18 @@
 		<PromptInput value={input} onValueChange={(v) => (input = v)} onSubmit={() => startChat(input)}>
 			<PromptInputTextarea placeholder="Ask anything…" />
 			<PromptInputActions class="justify-between">
-				<ModelPicker
-					groups={data.groups}
-					mappings={data.mappings}
-					value={selectedValue}
-					onselect={(v) => (picked = v)}
-					disabled={busy}
-				/>
+				<div class="flex items-center gap-1">
+					<ModelPicker
+						groups={data.groups}
+						mappings={data.mappings}
+						value={selectedValue}
+						onselect={(v) => (picked = v)}
+						disabled={busy}
+					/>
+					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
+						<PaperclipIcon class="size-4" />
+					</Button>
+				</div>
 				<Button
 					size="sm"
 					aria-label="Send"
@@ -152,6 +177,14 @@
 				</Button>
 			</PromptInputActions>
 		</PromptInput>
+		<input
+			bind:this={fileInput}
+			type="file"
+			multiple
+			accept="image/*,application/pdf,.txt,.md,.csv,.json,.xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+			class="hidden"
+			onchange={filesChosen}
+		/>
 		{#if modelMissing}
 			<p class="mt-2 text-sm text-muted-foreground">
 				{hasModels

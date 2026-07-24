@@ -17,7 +17,10 @@ vi.mock('../llm/registry.js', async () => {
 					{
 						type: 'finish',
 						finishReason: 'stop',
-						usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 }
+						usage: {
+							inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+							outputTokens: { total: 2, text: 2, reasoning: undefined }
+						}
 					} as never
 				]
 			})
@@ -157,6 +160,34 @@ describe('handleChatRequest', () => {
 		const title = getConversation(db, 'u1', conversation.id)!.title;
 		expect(title.endsWith('\u2026')).toBe(true);
 		expect(title.split(' ').pop()).not.toBe('\u2026');
+		closeDb();
+	});
+
+	it('persists usage metadata on the assistant message', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+
+		const res = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }]
+		});
+		expect(res.status).toBe(200);
+		const body = await res.text();
+		await new Promise((r) => setTimeout(r, 50));
+
+		// metadata chunk streamed to the client
+		expect(body).toContain('"usage"');
+
+		const assistant = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+		const usage = JSON.parse(assistant.usage_json!) as Record<string, unknown>;
+		expect(usage).toMatchObject({
+			providerId: 'p1',
+			modelId: 'm1',
+			inputTokens: 1,
+			outputTokens: 2,
+			totalTokens: 3
+		});
+		expect(typeof usage.latencyMs).toBe('number');
 		closeDb();
 	});
 });

@@ -3,11 +3,15 @@
 	import { Streamdown, type StreamdownProps } from 'streamdown-svelte';
 	import { mode } from 'mode-watcher';
 	import type { HTMLAttributes } from 'svelte/elements';
+	import MarkdownImage from './markdown-image.svelte';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
 	import githubDarkDefault from '@shikijs/themes/github-dark-default';
 	import { code } from '@streamdown-svelte/code';
+	import { math } from '@streamdown-svelte/math';
+	import { mermaid } from '@streamdown-svelte/mermaid';
+	import 'katex/dist/katex.min.css';
 
 	type Props = {
 		content: string;
@@ -32,6 +36,24 @@
 			'github-light-default': githubLightDefault,
 			'github-dark-default': githubDarkDefault
 		}}
-		plugins={{ code }}
+		plugins={{ code, math, mermaid }}
+		components={{ img: MarkdownImage }}
+		theme={{
+			h1: { base: 'mt-8 mb-3 text-3xl font-semibold text-foreground' },
+			h2: { base: 'mt-8 mb-3 text-2xl font-semibold text-foreground' },
+			h3: { base: 'mt-7 mb-2.5 text-xl font-semibold text-foreground' },
+			h4: { base: 'mt-6 mb-2 text-lg font-semibold text-foreground' },
+			h5: { base: 'mt-5 mb-2 text-base font-semibold text-foreground' },
+			h6: { base: 'mt-5 mb-2 text-sm font-semibold text-foreground' },
+			ul: { base: 'ml-0 list-outside list-disc pl-6 whitespace-normal text-foreground' },
+			ol: { base: 'ml-0 list-outside pl-6 whitespace-normal text-foreground' },
+			code: {
+				base: 'relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-sidebar p-2',
+				header: 'flex h-8 items-center justify-between pr-1 text-muted-foreground text-xs',
+				actions: 'absolute top-2 right-2 z-10',
+				buttons:
+					'pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-sidebar bg-sidebar/80 px-1.5 py-1 supports-[backdrop-filter]:bg-sidebar/70 supports-[backdrop-filter]:backdrop-blur'
+			}
+		}}
 	/>
 </div>

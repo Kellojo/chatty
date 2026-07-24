@@ -1,4 +1,4 @@
-import { error } from '@sveltejs/kit';
+import { error, redirect } from '@sveltejs/kit';
 import { hasActiveStream } from '$lib/server/chat/streams.js';
 import { getDb } from '$lib/server/db/index.js';
 import { listPersonaAgents, toPublic as agentToPublic } from '$lib/server/db/repo/agents.js';
@@ -21,8 +21,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 	if (!user) error(401, { message: 'Unauthorized' });
 	const db = getDb();
 	const conversation = getConversation(db, user.id, params.id);
-	if (!conversation || conversation.kind !== 'chat')
-		error(404, { message: 'Conversation not found' });
+	if (!conversation || conversation.kind !== 'chat') redirect(303, '/?error=conversation-not-found');
 	const roleModel = findRoleModel(db, 'chat');
 	let defaultModel: { providerId: string; modelId: string } | null = null;
 	if (roleModel) {

@@ -1,6 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../index.js';
 
+export interface MessageUsage {
+	providerId: string;
+	modelId: string;
+	inputTokens: number | null;
+	outputTokens: number | null;
+	totalTokens: number | null;
+	latencyMs: number | null;
+	costUsd: number | null;
+}
+
 export interface MessageRow {
 	id: string;
 	conversation_id: string;
@@ -9,6 +19,7 @@ export interface MessageRow {
 	content_text: string;
 	status: string;
 	error: string | null;
+	usage_json: string | null;
 	created_at: number;
 }
 
@@ -19,6 +30,7 @@ export interface ChatMessage {
 	parts: unknown[];
 	status: 'complete' | 'partial' | 'failed';
 	error: string | null;
+	usage: MessageUsage | null;
 	createdAt: number;
 }
 
@@ -30,6 +42,7 @@ export function toPublic(row: MessageRow): ChatMessage {
 		parts: JSON.parse(row.parts) as unknown[],
 		status: row.status as ChatMessage['status'],
 		error: row.error,
+		usage: row.usage_json ? (JSON.parse(row.usage_json) as MessageUsage) : null,
 		createdAt: row.created_at
 	};
 }
@@ -68,14 +81,15 @@ export interface CreateMessageInput {
 	parts: unknown[];
 	status?: 'complete' | 'partial' | 'failed';
 	error?: string | null;
+	usage?: MessageUsage | null;
 	createdAt?: number;
 }
 
 export function createMessage(db: Db, input: CreateMessageInput): MessageRow {
 	const id = input.id ?? randomUUID();
 	db.prepare(
-		`INSERT INTO messages (id, conversation_id, role, parts, content_text, status, error, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		`INSERT INTO messages (id, conversation_id, role, parts, content_text, status, error, usage_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		input.conversationId,
@@ -84,6 +98,7 @@ export function createMessage(db: Db, input: CreateMessageInput): MessageRow {
 		extractText(input.parts),
 		input.status ?? 'complete',
 		input.error ?? null,
+		input.usage ? JSON.stringify(input.usage) : null,
 		input.createdAt ?? Date.now()
 	);
 	return getMessage(db, id)!;

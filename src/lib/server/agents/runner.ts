@@ -23,6 +23,7 @@ import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { resolveModel } from '../llm/registry.js';
 import { isRetryableModelError, resolveRefTargets } from '../llm/mapped.js';
+import { resolveSkill, skillsIndexPrompt } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
 import { ensureAgentWorkspace } from '../workspaces.js';
 
@@ -107,8 +108,6 @@ export async function startAgentRun(
 		status: 'complete'
 	});
 
-	const system = `${agent.system_prompt}\n\n---\nYou are running autonomously as the agent "${agent.name}" (trigger: ${input.trigger}). Current time: ${new Date().toLocaleString('en-US', { timeZone: config.TZ })} (${config.TZ}). Do not ask the user questions; no one is watching live.`;
-
 	const { tools, close } = await buildTools({
 		userId: input.userId,
 		mode: 'agent',
@@ -121,6 +120,19 @@ export async function startAgentRun(
 		conversationId: conversation.id,
 		agentRunId: run.id
 	});
+
+	const skillNames = JSON.parse(agent.skill_names) as string[];
+	const boundSkillBodies: string[] = [];
+	for (const name of skillNames) {
+		const skill = resolveSkill(input.userId, name);
+		if (skill?.enabled) boundSkillBodies.push(`### Skill: ${skill.title}\n${skill.body}`);
+	}
+	const boundSection =
+		boundSkillBodies.length > 0
+			? `\n\n## Bound skills\nThe following skills are pre-loaded for this run.\n\n${boundSkillBodies.join('\n\n')}`
+			: '';
+	const skillsIndex = 'load_skill' in tools ? skillsIndexPrompt(input.userId) : '';
+	const system = `${agent.system_prompt}${boundSection}${skillsIndex ? `\n\n${skillsIndex}` : ''}\n\n---\nYou are running autonomously as the agent "${agent.name}" (trigger: ${input.trigger}). Current time: ${new Date().toLocaleString('en-US', { timeZone: config.TZ })} (${config.TZ}). Do not ask the user questions; no one is watching live.`;
 
 	const controller = new AbortController();
 	runControllers.set(run.id, controller);

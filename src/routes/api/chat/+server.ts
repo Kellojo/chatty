@@ -7,7 +7,8 @@ import type { UIMessage } from 'ai';
 
 const bodySchema = z.object({
 	conversationId: z.string().min(1),
-	messages: z.array(z.looseObject({ id: z.string(), role: z.string(), parts: z.array(z.any()) }))
+	messages: z.array(z.looseObject({ id: z.string(), role: z.string(), parts: z.array(z.any()) })),
+	skill: z.string().min(1).max(64).optional()
 });
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -17,7 +18,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	try {
 		return await handleChatRequest(user.id, {
 			conversationId: parsed.data.conversationId,
-			messages: parsed.data.messages as UIMessage[]
+			messages: parsed.data.messages as UIMessage[],
+			skill: parsed.data.skill
 		});
 	} catch (e) {
 		if (e instanceof ChatRequestError) error(e.status, { message: e.message });

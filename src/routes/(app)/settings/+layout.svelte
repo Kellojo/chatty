@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
+	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 
 	const sections = [
-		{ href: '/settings/account', label: 'Account', adminOnly: false, group: '' },
+		{ href: '/settings/account', label: 'Account', adminOnly: false, group: 'General' },
 		{ href: '/settings/providers', label: 'Providers', adminOnly: true, group: 'Models' },
 		{ href: '/settings/models', label: 'Models', adminOnly: true, group: 'Models' },
 		{ href: '/settings/mappings', label: 'Mappings', adminOnly: true, group: 'Models' },
@@ -20,7 +21,7 @@
 	const isAdmin = $derived(data.user.role === 'admin');
 	const visibleSections = $derived(sections.filter((section) => !section.adminOnly || isAdmin));
 	const visibleGroups = $derived(
-		(['', 'Models', 'Other'] as const)
+		(['General', 'Models', 'Other'] as const)
 			.map((name) => ({ name, items: visibleSections.filter((section) => section.group === name) }))
 			.filter((group) => group.items.length > 0)
 	);
@@ -29,11 +30,14 @@
 <div class="h-full [scrollbar-gutter:stable] overflow-y-auto">
 	<div class="mx-auto flex w-full max-w-7xl gap-8 p-6">
 		<nav class="sticky top-6 flex w-40 shrink-0 flex-col gap-1 self-start">
-			<h1 class="mb-2 px-3 text-lg font-semibold">Settings</h1>
+			<h1 class="mb-2 flex items-center gap-2 px-3 text-lg font-semibold">
+				<SettingsIcon class="size-5" />
+				Settings
+			</h1>
 			{#each visibleGroups as group (group.name)}
 				{#if group.name}
 					<h2
-						class="mt-2 border-t px-2 pt-3 pb-1 text-xs font-semibold tracking-wider text-foreground uppercase"
+						class="mt-2 border-b px-2 pt-3 pb-1 text-xs font-semibold tracking-wider text-foreground uppercase"
 					>
 						{group.name}
 					</h2>

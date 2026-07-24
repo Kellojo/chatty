@@ -23,17 +23,21 @@ import {
 	deleteMessagesNotIn,
 	extractText,
 	getMessage,
-	updateMessage
+	updateMessage,
+	type MessageUsage
 } from '../db/repo/messages.js';
 import { getAttachment, linkAttachmentsToMessage } from '../db/repo/attachments.js';
 import { getAgent } from '../db/repo/agents.js';
-import { findRoleModel } from '../db/repo/models.js';
+import { findModel, findRoleModel } from '../db/repo/models.js';
+import { computeCostUsd } from '../proxy/pricing.js';
 import { getGlobalInstructions } from '../db/repo/user-settings.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
+import { recordSkillInvocation } from '../db/repo/skill-invocations.js';
 import { resolveModel, ModelUnavailableError } from '../llm/registry.js';
 import { isRetryableModelError, resolveRefTargets } from '../llm/mapped.js';
 import { buildSystemPrompt } from '../llm/systemPrompt.js';
+import { resolveSkill } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
 import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
 import { registerStream, releaseStream } from './streams.js';
@@ -126,7 +130,7 @@ function syncMessages(db: Db, conversationId: string, incoming: UIMessage[]): UI
 
 export async function handleChatRequest(
 	userId: string,
-	body: { conversationId: string; messages: UIMessage[] }
+	body: { conversationId: string; messages: UIMessage[]; skill?: string }
 ): Promise<Response> {
 	const db = getDb();
 	let conversation = getConversation(db, userId, body.conversationId);
@@ -174,13 +178,42 @@ export async function handleChatRequest(
 	publishServerEvent(userId, { type: 'chat.stream.started', conversationId: conversation.id });
 
 	let errorText: string | null = null;
-	const system = buildSystemPrompt(conversation, getGlobalInstructions(db, userId));
+	const agentSkillNames = agent ? (JSON.parse(agent.skill_names) as string[]) : [];
+	const boundSkillNames = [...agentSkillNames];
+	let manualSkillWarning: string | null = null;
+	if (body.skill) {
+		const skill = resolveSkill(userId, body.skill);
+		if (!skill) {
+			manualSkillWarning = `The requested skill "${body.skill}" was not found.`;
+		} else if (!skill.enabled) {
+			manualSkillWarning = `The requested skill "${body.skill}" is disabled.`;
+		} else {
+			boundSkillNames.push(skill.name);
+			recordSkillInvocation(db, {
+				skillName: skill.name,
+				scope: skill.scope,
+				userId,
+				conversationId: conversation.id,
+				messageId: lastUserMessage.id,
+				triggeredBy: 'manual'
+			});
+		}
+	}
+	const system = buildSystemPrompt(conversation, {
+		globalInstructions: getGlobalInstructions(db, userId),
+		userId,
+		boundSkillNames,
+		includeSkillsIndex: 'load_skill' in tools,
+		extraWarning: manualSkillWarning
+	});
 	const modelMessages = await convertToModelMessages(
 		inlineAttachmentParts(db, conversation.id, body.messages)
 	);
 	const stopWhen = stepCountIs(
 		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5
 	);
+
+	let usageMeta: MessageUsage | null = null;
 
 	const stream = createUIMessageStream<UIMessage>({
 		originalMessages: body.messages,
@@ -195,6 +228,7 @@ export async function handleChatRequest(
 				const buffer: UIMessageChunk[] = [];
 				try {
 					const model = resolveModel(target);
+					const startedAt = Date.now();
 					log.info('LLM inference started', {
 						conversationId: conversation.id,
 						providerId: target.providerId,
@@ -242,6 +276,25 @@ export async function handleChatRequest(
 						writer.write(chunk);
 					}
 					totalTokensUsed = await result.usage;
+					const priceRow = findModel(db, target.providerId, target.modelId);
+					usageMeta = {
+						providerId: target.providerId,
+						modelId: target.modelId,
+						inputTokens: totalTokensUsed?.inputTokens ?? null,
+						outputTokens: totalTokensUsed?.outputTokens ?? null,
+						totalTokens: totalTokensUsed?.totalTokens ?? null,
+						latencyMs: Date.now() - startedAt,
+						costUsd: computeCostUsd(
+							priceRow?.price_input ?? null,
+							priceRow?.price_output ?? null,
+							totalTokensUsed?.inputTokens,
+							totalTokensUsed?.outputTokens
+						)
+					};
+					writer.write({
+						type: 'message-metadata',
+						messageMetadata: { usage: usageMeta }
+					} as UIMessageChunk);
 					log.info('LLM inference finished', {
 						conversationId: conversation.id,
 						streamIndex: i,
@@ -268,7 +321,8 @@ export async function handleChatRequest(
 						role: 'assistant',
 						parts: responseMessage.parts,
 						status,
-						error: errorText
+						error: errorText,
+						usage: usageMeta
 					});
 				}
 				if (status === 'complete') {

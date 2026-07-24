@@ -3,6 +3,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import BrainIcon from '@lucide/svelte/icons/brain';
@@ -14,6 +15,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -40,6 +42,12 @@
 		unreadIds: string[];
 		onclose: () => void;
 	} = $props();
+
+	const isMobile = new MediaQuery('(max-width: 767px)');
+
+	function handleNavigate() {
+		if (isMobile.current) onclose();
+	}
 
 	let extraState = $state<{ base: Conversation[]; extra: Conversation[]; hasMore: boolean }>(
 		(() => ({ base: conversations, extra: [], hasMore }))()
@@ -87,6 +95,7 @@
 	let deleteTarget = $state<Conversation | null>(null);
 	let agentStats = $state<{ running: number; total: number } | null>(null);
 	let memoryCount = $state<number | null>(null);
+	let skillCount = $state<number | null>(null);
 	let requestStats = $state<{ running: number; total: number } | null>(null);
 
 	function refreshAgentStats() {
@@ -103,6 +112,15 @@
 			.then((r) => (r.ok ? r.json() : null))
 			.then((d) => {
 				if (d) memoryCount = d.count;
+			})
+			.catch(() => {});
+	}
+
+	function refreshSkillCount() {
+		fetch('/api/skills/stats')
+			.then((r) => (r.ok ? r.json() : null))
+			.then((d) => {
+				if (d) skillCount = d.count;
 			})
 			.catch(() => {});
 	}
@@ -141,6 +159,7 @@
 	onMount(() => {
 		refreshAgentStats();
 		refreshMemoryCount();
+		refreshSkillCount();
 		if (user.role === 'admin') refreshRequestCount();
 		refreshActiveChats().catch(() => {});
 		let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -175,11 +194,15 @@
 				case 'memory.changed':
 					refreshMemoryCount();
 					break;
+				case 'skills.changed':
+					refreshSkillCount();
+					break;
 			}
 		});
 		const offResync = onServerEventResync(() => {
 			refreshAgentStats();
 			refreshMemoryCount();
+			refreshSkillCount();
 			if (user.role === 'admin') refreshRequestCount();
 			refreshActiveChats().catch(() => {});
 		});
@@ -295,13 +318,21 @@
 			</a>
 			<span class="text-xs text-muted-foreground">v{version}</span>
 		</div>
-		<Button variant="ghost" size="sm" onclick={onclose} aria-label="Close sidebar">
+		<Button variant="ghost" size="sm" onclick={() => onclose()} aria-label="Close sidebar">
 			<XIcon class="size-4" />
 		</Button>
 	</div>
 
 	<div class="px-3 pb-2">
-		<Button variant="outline" size="sm" onclick={newChat} class="w-full">
+		<Button
+			variant="outline"
+			size="sm"
+			onclick={() => {
+				newChat();
+				handleNavigate();
+			}}
+			class="w-full"
+		>
 			<PlusIcon class="size-4" />
 			New chat
 		</Button>
@@ -316,7 +347,7 @@
 			class="h-8 text-sm"
 		/>
 	</div>
-	<nav class="flex-1 overflow-y-auto px-2 pb-2">
+	<nav class="flex-1 overflow-y-auto px-2 pb-2 [mask-image:linear-gradient(to_bottom,transparent,black_1.5rem,black_calc(100%-1.5rem),transparent)]">
 		{#each visibleGroups as group (group.label)}
 			<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{group.label}</p>
 			{#each group.items as c (c.id)}
@@ -325,13 +356,14 @@
 						? 'bg-accent text-accent-foreground'
 						: 'hover:bg-accent/50'}"
 				>
-					<a
-						href={resolve(`/chat/${c.id}`)}
-						class="min-w-0 flex-1 truncate px-2 py-1.5"
-						title={c.title || 'New chat'}
-					>
-						{c.title || 'New chat'}
-					</a>
+				<a
+					href={resolve(`/chat/${c.id}`)}
+					class="min-w-0 flex-1 truncate px-2 py-1.5"
+					title={c.title || 'New chat'}
+					onclick={handleNavigate}
+				>
+					{c.title || 'New chat'}
+				</a>
 					{#if activeChats.has(c.id) || serverActiveChatIds.has(c.id)}
 						<LoaderCircleIcon
 							class="mr-1 size-3.5 shrink-0 animate-spin text-blue-600 dark:text-blue-400"
@@ -393,6 +425,7 @@
 			)
 				? 'bg-accent text-accent-foreground'
 				: 'text-muted-foreground hover:bg-accent/50'}"
+			onclick={handleNavigate}
 		>
 			<BotIcon class="size-4" />
 			Agents
@@ -415,6 +448,7 @@
 			)
 				? 'bg-accent text-accent-foreground'
 				: 'text-muted-foreground hover:bg-accent/50'}"
+			onclick={handleNavigate}
 		>
 			<BrainIcon class="size-4" />
 			Memory
@@ -422,6 +456,24 @@
 				<span
 					class="ml-auto text-xs text-muted-foreground tabular-nums"
 					title="{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}">{memoryCount}</span
+				>
+			{/if}
+		</a>
+		<a
+			href={resolve('/skills')}
+			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+				'/skills'
+			)
+				? 'bg-accent text-accent-foreground'
+				: 'text-muted-foreground hover:bg-accent/50'}"
+			onclick={handleNavigate}
+		>
+			<SparklesIcon class="size-4" />
+			Skills
+			{#if skillCount !== null}
+				<span
+					class="ml-auto text-xs text-muted-foreground tabular-nums"
+					title="{skillCount} {skillCount === 1 ? 'skill' : 'skills'}">{skillCount}</span
 				>
 			{/if}
 		</a>
@@ -433,6 +485,7 @@
 				)
 					? 'bg-accent text-accent-foreground'
 					: 'text-muted-foreground hover:bg-accent/50'}"
+				onclick={handleNavigate}
 			>
 				<ScrollTextIcon class="size-4" />
 				Requests
@@ -460,6 +513,7 @@
 				href={resolve('/settings')}
 				aria-label="Settings"
 				title="Settings"
+				onclick={handleNavigate}
 			>
 				<SettingsIcon class="size-4" />
 			</Button>

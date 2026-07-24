@@ -2,8 +2,8 @@
 	import { onMount } from 'svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import { Badge } from '$lib/components/ui/badge/index.js';
-	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
@@ -77,14 +77,10 @@
 <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 	<div class="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
 		<div class="flex flex-col gap-1">
-			<Breadcrumb.Root>
-				<Breadcrumb.List>
-					<Breadcrumb.Item>
-						<Breadcrumb.Page>Requests</Breadcrumb.Page>
-					</Breadcrumb.Item>
-				</Breadcrumb.List>
-			</Breadcrumb.Root>
-			<h1 class="text-xl font-semibold">Proxy Requests</h1>
+			<h1 class="flex items-center gap-2 text-xl font-semibold">
+				<ScrollTextIcon class="size-5" />
+				Requests
+			</h1>
 		</div>
 
 		<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">

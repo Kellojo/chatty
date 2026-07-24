@@ -19,4 +19,12 @@
 	} = $props();
 </script>
 
-<ModelSelect {groups} {mappings} {value} {onselect} {disabled} {placeholder} class="w-64" />
+<ModelSelect
+	{groups}
+	{mappings}
+	{value}
+	{onselect}
+	{disabled}
+	{placeholder}
+	class="w-40 sm:w-64"
+/>

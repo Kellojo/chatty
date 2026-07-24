@@ -37,6 +37,42 @@
 		'openai-compatible': 'OpenAI-compatible'
 	};
 
+	interface ProviderPreset {
+		label: string;
+		baseUrl: string;
+	}
+
+	const presets: Record<string, ProviderPreset> = {
+		custom: { label: 'Custom', baseUrl: '' },
+		openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1' },
+		openrouter: { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1' },
+		'lm-studio': { label: 'LM Studio', baseUrl: 'http://localhost:1234/v1' },
+		ollama: { label: 'Ollama', baseUrl: 'http://localhost:11434/v1' },
+		groq: { label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1' },
+		together: { label: 'Together AI', baseUrl: 'https://api.together.xyz/v1' },
+		deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1' },
+		mistral: { label: 'Mistral', baseUrl: 'https://api.mistral.ai/v1' }
+	};
+
+	let addPreset = $state('custom');
+
+	function applyPreset(presetKey: string) {
+		addPreset = presetKey;
+		if (presetKey !== 'custom') {
+			addBaseUrl = presets[presetKey].baseUrl;
+			if (!addName) addName = presets[presetKey].label;
+		}
+	}
+
+	function openAdd() {
+		addName = '';
+		addType = 'anthropic';
+		addPreset = 'custom';
+		addBaseUrl = '';
+		addApiKey = '';
+		addOpen = true;
+	}
+
 	async function api(path: string, method: string, body?: unknown): Promise<Response> {
 		const res = await fetch(path, {
 			method,
@@ -62,10 +98,6 @@
 			});
 			toast.success(`Provider "${addName}" added`);
 			addOpen = false;
-			addName = '';
-			addType = 'anthropic';
-			addBaseUrl = '';
-			addApiKey = '';
 			await invalidateAll();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to add provider');
@@ -147,7 +179,7 @@
 <div class="flex flex-col gap-4">
 	<div class="flex items-center justify-between">
 		<h2 class="text-xl font-semibold">Providers</h2>
-		<Button onclick={() => (addOpen = true)}>Add provider</Button>
+		<Button onclick={openAdd}>Add provider</Button>
 	</div>
 
 	<Table.Root>
@@ -233,6 +265,17 @@
 				</Select.Root>
 			</div>
 			{#if addType === 'openai-compatible'}
+				<div class="flex flex-col gap-2">
+					<Label>Preset</Label>
+					<Select.Root type="single" value={addPreset} onValueChange={applyPreset}>
+						<Select.Trigger class="w-full">{presets[addPreset].label}</Select.Trigger>
+						<Select.Content>
+							{#each Object.entries(presets) as [key, preset] (key)}
+								<Select.Item value={key}>{preset.label}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
 				<div class="flex flex-col gap-2">
 					<Label for="add-baseurl">Base URL</Label>
 					<Input

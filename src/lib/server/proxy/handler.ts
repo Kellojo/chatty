@@ -287,6 +287,12 @@ function servedCost(
 	target: ModelMappingTarget,
 	usage: LanguageModelUsage | null
 ): number | null {
+	// Prefer the actual cost from the provider if available (e.g., OpenRouter)
+	const rawCost = usage?.raw?.cost;
+	if (typeof rawCost === 'number' && Number.isFinite(rawCost)) {
+		return rawCost;
+	}
+	// Fall back to calculating from stored pricing
 	const row = findModel(db, target.providerId, target.modelId);
 	return computeCostUsd(
 		row?.price_input ?? null,

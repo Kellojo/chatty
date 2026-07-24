@@ -11,10 +11,11 @@
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import InfoIcon from '@lucide/svelte/icons/info';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
-	import type { UIMessage } from '$lib/types.js';
+	import type { MessageUsage, UIMessage } from '$lib/types.js';
 
 	let {
 		messages,
@@ -42,6 +43,48 @@
 	type Part = UIMessage['parts'][number];
 
 	const openReasoning = new SvelteSet<string>();
+	const openUsage = new SvelteSet<string>();
+
+	function toggleUsage(key: string) {
+		if (openUsage.has(key)) openUsage.delete(key);
+		else openUsage.add(key);
+	}
+
+	function onWindowClick(event: MouseEvent) {
+		if (openUsage.size === 0) return;
+		const target = event.target as HTMLElement | null;
+		if (target?.closest('[data-usage-popover]')) return;
+		openUsage.clear();
+	}
+
+	function onWindowKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') openUsage.clear();
+	}
+
+	function messageUsage(message: UIMessage): MessageUsage | null {
+		const meta = message.metadata as { usage?: MessageUsage } | undefined;
+		return meta?.usage ?? null;
+	}
+
+	function formatTokens(n: number | null): string {
+		return n == null ? '—' : n.toLocaleString();
+	}
+
+	function formatCost(usd: number | null): string {
+		if (usd == null) return '—';
+		if (usd < 0.01) return `$${usd.toFixed(6)}`;
+		return `$${usd.toFixed(4)}`;
+	}
+
+	function formatLatency(ms: number | null): string {
+		if (ms == null) return '—';
+		return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
+	}
+
+	function tokensPerSecond(usage: MessageUsage): string {
+		if (usage.outputTokens == null || usage.latencyMs == null || usage.latencyMs <= 0) return '—';
+		return (usage.outputTokens / (usage.latencyMs / 1000)).toFixed(1);
+	}
 
 	function toggleReasoning(key: string) {
 		if (openReasoning.has(key)) openReasoning.delete(key);
@@ -74,6 +117,8 @@
 		return (part as { url?: string }).url ?? '';
 	}
 </script>
+
+<svelte:window onclick={onWindowClick} onkeydown={onWindowKeydown} />
 
 <div class={cn('mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6', className)}>
 	{#each messages as message, index (message.id)}
@@ -176,6 +221,46 @@
 					>
 						<RefreshCwIcon class="size-3.5" />
 					</button>
+				{/if}
+				{#if message.role === 'assistant' && messageUsage(message)}
+					{@const usage = messageUsage(message)!}
+					{@const open = openUsage.has(message.id)}
+					<div class="relative" data-usage-popover>
+						<button
+							title="Generation info"
+							aria-label="Generation info"
+							aria-expanded={open}
+							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+							onclick={() => toggleUsage(message.id)}
+						>
+							<InfoIcon class="size-3.5" />
+						</button>
+						{#if open}
+							<div
+								class="absolute bottom-full left-0 z-20 mb-1 w-56 rounded-md border border-border bg-popover p-3 text-xs shadow-md"
+							>
+								<div class="mb-1.5 font-medium text-foreground">Generation info</div>
+								<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-muted-foreground">
+									<dt>Model</dt>
+									<dd class="truncate text-right font-mono" title={usage.modelId}>
+										{usage.modelId}
+									</dd>
+									<dt>Input tokens</dt>
+									<dd class="text-right tabular-nums">{formatTokens(usage.inputTokens)}</dd>
+									<dt>Output tokens</dt>
+									<dd class="text-right tabular-nums">{formatTokens(usage.outputTokens)}</dd>
+									<dt>Total tokens</dt>
+									<dd class="text-right tabular-nums">{formatTokens(usage.totalTokens)}</dd>
+									<dt>Latency</dt>
+									<dd class="text-right tabular-nums">{formatLatency(usage.latencyMs)}</dd>
+									<dt>Tokens/s</dt>
+									<dd class="text-right tabular-nums">{tokensPerSecond(usage)}</dd>
+									<dt>Cost</dt>
+									<dd class="text-right tabular-nums">{formatCost(usage.costUsd)}</dd>
+								</dl>
+							</div>
+						{/if}
+					</div>
 				{/if}
 			</MessageActions>
 		</Message>

@@ -12,6 +12,7 @@ import { failRunningProxyRequests } from '$lib/server/db/repo/proxy-requests.js'
 import { startDailyJobs } from '$lib/server/jobs.js';
 import { createLogger } from '$lib/server/logger.js';
 import { reconcileMemoryFts } from '$lib/server/memory/fts.js';
+import { seedDefaultSkills } from '$lib/server/skills/defaults.js';
 
 const log = createLogger('server');
 
@@ -30,6 +31,7 @@ if (!building) {
 	if (upserted > 0 || removed > 0) {
 		log.info(`Memory index reconciled: ${upserted} upserted, ${removed} removed`);
 	}
+	seedDefaultSkills();
 	startAgentEventDispatcher();
 	startAgentScheduler(getDb());
 	startDailyJobs(getDb());

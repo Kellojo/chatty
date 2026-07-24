@@ -208,18 +208,31 @@
 		return parts;
 	}
 
+	const SKILL_CMD = /^\/skill\s+([a-z0-9][a-z0-9-]{0,63})\s*/i;
+
 	async function send(text: string) {
-		const trimmed = text.trim();
+		let trimmed = text.trim();
 		if ((!trimmed && selectedFiles.length === 0) || streaming) return;
+		let skill: string | undefined;
+		const skillMatch = trimmed.match(SKILL_CMD);
+		if (skillMatch) {
+			skill = skillMatch[1];
+			trimmed = trimmed.slice(skillMatch[0].length).trim();
+			if (!trimmed) trimmed = `Use the ${skill} skill.`;
+		}
 		try {
+			const body = skill ? { body: { skill } } : undefined;
 			if (selectedFiles.length > 0) {
 				const fileParts = await uploadFiles();
 				selectedFiles = [];
-				chat.sendMessage({
-					parts: [...(trimmed ? [{ type: 'text' as const, text: trimmed }] : []), ...fileParts]
-				});
+				chat.sendMessage(
+					{
+						parts: [...(trimmed ? [{ type: 'text' as const, text: trimmed }] : []), ...fileParts]
+					},
+					body
+				);
 			} else {
-				chat.sendMessage({ text: trimmed });
+				chat.sendMessage({ text: trimmed }, body);
 			}
 			activeChats.set(conversation.id, chat);
 			input = '';
@@ -349,7 +362,14 @@
 				{/if}
 			</PromptInputActions>
 		</PromptInput>
-		<input bind:this={fileInput} type="file" multiple class="hidden" onchange={filesChosen} />
+		<input
+			bind:this={fileInput}
+			type="file"
+			multiple
+			accept="image/*,application/pdf,.txt,.md,.csv,.json,.xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+			class="hidden"
+			onchange={filesChosen}
+		/>
 	</div>
 </div>
 

@@ -399,6 +399,10 @@
 
 <div class="flex min-h-0 flex-1">
 	<div class="flex w-72 shrink-0 flex-col border-r">
+		<div class="flex items-center gap-2 border-b px-3 pt-3 pb-2">
+			<BrainIcon class="size-5" />
+			<h1 class="text-lg font-semibold">Memory</h1>
+		</div>
 		<div class="flex flex-col gap-2 border-b p-3">
 			{#if isAdmin}
 				<div class="flex rounded-md border p-0.5">

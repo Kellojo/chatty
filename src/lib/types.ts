@@ -85,6 +85,7 @@ export type ServerEvent =
 	| { type: 'agent.run.started'; agentId: string; runId: string }
 	| { type: 'agent.run.progress'; agentId: string; runId: string }
 	| { type: 'agent.run.finished'; agentId: string; runId: string; status: AgentRunStatus }
+	| { type: 'skills.changed' }
 	| { type: 'proxy.request.started'; requestId: string }
 	| { type: 'proxy.request.finished'; requestId: string; status: 'complete' | 'failed' };
 
@@ -187,6 +188,16 @@ export interface ProxyRequest {
 	compression: ProxyCompression | null;
 }
 
+export interface MessageUsage {
+	providerId: string;
+	modelId: string;
+	inputTokens: number | null;
+	outputTokens: number | null;
+	totalTokens: number | null;
+	latencyMs: number | null;
+	costUsd: number | null;
+}
+
 export interface ChatMessage {
 	id: string;
 	conversationId: string;
@@ -194,6 +205,7 @@ export interface ChatMessage {
 	parts: unknown[];
 	status: 'complete' | 'partial' | 'failed';
 	error: string | null;
+	usage: MessageUsage | null;
 	createdAt: number;
 }
 
@@ -201,6 +213,7 @@ export function chatMessageToUIMessage(message: ChatMessage): UIMessage {
 	return {
 		id: message.id,
 		role: message.role,
-		parts: message.parts as UIMessage['parts']
+		parts: message.parts as UIMessage['parts'],
+		metadata: message.usage ? { usage: message.usage } : undefined
 	};
 }

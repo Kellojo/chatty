@@ -3,6 +3,8 @@
 @import 'shadcn-svelte/tailwind.css';
 @import '@fontsource-variable/inter';
 
+@source '../../node_modules/streamdown-svelte/dist/theme.js';
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
@@ -125,5 +127,22 @@
 	}
 	html {
 		@apply font-sans;
+	}
+
+	/* Thin scrollbars that appear on hover */
+	::-webkit-scrollbar {
+		width: 8px;
+		height: 8px;
+	}
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	::-webkit-scrollbar-thumb {
+		background: var(--muted-foreground);
+		border-radius: 4px;
+		transition: background 0.2s ease;
+	}
+	::-webkit-scrollbar-thumb:hover {
+		background: var(--foreground);
 	}
 }
