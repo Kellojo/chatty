@@ -6,30 +6,37 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 vi.mock('../llm/registry.js', async () => {
 	const { MockLanguageModelV3 } = await import('ai/test');
 	const { simulateReadableStream } = await import('ai');
+	const state = ((
+		globalThis as { __chatChunksState?: { chunks: unknown[] | null } }
+	).__chatChunksState ??= { chunks: null });
+	const defaultChunks = [
+		{ type: 'text-start', id: 't1' },
+		{ type: 'text-delta', id: 't1', delta: 'Hi ' },
+		{ type: 'text-delta', id: 't1', delta: 'there' },
+		{ type: 'text-end', id: 't1' },
+		{
+			type: 'finish',
+			finishReason: 'stop',
+			usage: {
+				inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+				outputTokens: { total: 2, text: 2, reasoning: undefined }
+			}
+		}
+	];
 	const model = new MockLanguageModelV3({
 		doStream: async () => ({
 			stream: simulateReadableStream({
-				chunks: [
-					{ type: 'text-start', id: 't1' },
-					{ type: 'text-delta', id: 't1', delta: 'Hi ' },
-					{ type: 'text-delta', id: 't1', delta: 'there' },
-					{ type: 'text-end', id: 't1' },
-					{
-						type: 'finish',
-						finishReason: 'stop',
-						usage: {
-							inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-							outputTokens: { total: 2, text: 2, reasoning: undefined }
-						}
-					} as never
-				]
+				chunks: (state.chunks ?? defaultChunks) as never[]
 			})
 		})
 	});
 	return {
 		resolveModel: () => model,
 		roleModel: () => undefined,
-		ModelUnavailableError: class ModelUnavailableError extends Error {}
+		ModelUnavailableError: class ModelUnavailableError extends Error {},
+		__setChunks: (chunks: unknown[] | null) => {
+			state.chunks = chunks;
+		}
 	};
 });
 
@@ -47,6 +54,9 @@ const { createConversation, getConversation } = await import('../db/repo/convers
 const { listMessages } = await import('../db/repo/messages.js');
 const { createProvider } = await import('../db/repo/providers.js');
 const { createModel } = await import('../db/repo/models.js');
+const registry = (await import('../llm/registry.js')) as unknown as {
+	__setChunks: (chunks: unknown[] | null) => void;
+};
 
 type Db = ReturnType<typeof getDb>;
 
@@ -69,7 +79,7 @@ describe('handleChatRequest', () => {
 
 		const res = await handleChatRequest('u1', {
 			conversationId: conversation.id,
-			messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }]
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
 		});
 		expect(res.status).toBe(200);
 		await res.text();
@@ -92,24 +102,17 @@ describe('handleChatRequest', () => {
 
 		const first = await handleChatRequest('u1', {
 			conversationId: conversation.id,
-			messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }]
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
 		});
 		await first.text();
 		await new Promise((r) => setTimeout(r, 50));
 		const afterFirst = listMessages(db, conversation.id);
 		const assistant1 = afterFirst.find((m) => m.role === 'assistant')!;
 
+		// second request sends only the new user message; history comes from the DB
 		const second = await handleChatRequest('u1', {
 			conversationId: conversation.id,
-			messages: [
-				{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
-				{
-					id: assistant1.id,
-					role: 'assistant',
-					parts: JSON.parse(assistant1.parts) as never[]
-				},
-				{ id: 'msg-2', role: 'user', parts: [{ type: 'text', text: 'again' }] }
-			]
+			message: { id: 'msg-2', role: 'user', parts: [{ type: 'text', text: 'again' }] }
 		});
 		expect(second.status).toBe(200);
 		await second.text();
@@ -119,6 +122,88 @@ describe('handleChatRequest', () => {
 		expect(messages).toHaveLength(4);
 		const assistants = messages.filter((m) => m.role === 'assistant');
 		expect(new Set(assistants.map((m) => m.id)).size).toBe(2);
+		expect(assistant1.id).toBeTruthy();
+		closeDb();
+	});
+
+	it('does not wipe history when the client sends only the new message', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+
+		const first = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		await first.text();
+		await new Promise((r) => setTimeout(r, 50));
+		expect(listMessages(db, conversation.id)).toHaveLength(2);
+
+		// a stale/buggy client sends only the new message without prior history
+		const second = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-2', role: 'user', parts: [{ type: 'text', text: 'again' }] }
+		});
+		await second.text();
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(listMessages(db, conversation.id)).toHaveLength(4);
+		closeDb();
+	});
+
+	it('truncateFrom deletes the anchor and later messages, then upserts the new message', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+
+		const first = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		await first.text();
+		await new Promise((r) => setTimeout(r, 50));
+		const assistant1 = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+
+		// regenerate: drop the assistant answer and everything after, resubmit the user message
+		const res = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+			truncateFrom: assistant1.id
+		});
+		expect(res.status).toBe(200);
+		await res.text();
+		await new Promise((r) => setTimeout(r, 50));
+
+		const messages = listMessages(db, conversation.id);
+		expect(messages).toHaveLength(2);
+		expect(messages[0].id).toBe('msg-1');
+		expect(messages[1].role).toBe('assistant');
+		expect(messages[1].id).not.toBe(assistant1.id);
+		closeDb();
+	});
+
+	it('rejects with 400 when truncateFrom references an unknown message', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+
+		await expect(
+			handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+				truncateFrom: 'does-not-exist'
+			})
+		).rejects.toMatchObject({ status: 400, message: expect.stringContaining('truncateFrom') });
+		closeDb();
+	});
+
+	it('rejects with 400 when the triggering message is not a user message', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+
+		await expect(
+			handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] }
+			})
+		).rejects.toMatchObject({ status: 400, message: expect.stringContaining('user message') });
 		closeDb();
 	});
 
@@ -136,7 +221,7 @@ describe('handleChatRequest', () => {
 
 		const res = await handleChatRequest('u1', {
 			conversationId: conversation.id,
-			messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello world' }] }]
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello world' }] }
 		});
 		expect(res.status).toBe(200);
 		await res.text();
@@ -162,7 +247,7 @@ describe('handleChatRequest', () => {
 
 		const res = await handleChatRequest('u1', {
 			conversationId: conversation.id,
-			messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: longPrompt }] }]
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: longPrompt }] }
 		});
 		expect(res.status).toBe(200);
 		await res.text();
@@ -180,7 +265,7 @@ describe('handleChatRequest', () => {
 
 		const res = await handleChatRequest('u1', {
 			conversationId: conversation.id,
-			messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }]
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
 		});
 		expect(res.status).toBe(200);
 		const body = await res.text();
@@ -202,6 +287,105 @@ describe('handleChatRequest', () => {
 		closeDb();
 	});
 
+	it('persists reasoning and tool output when the stream has no text-delta', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		registry.__setChunks([
+			{ type: 'reasoning-start', id: 'r1' },
+			{ type: 'reasoning-delta', id: 'r1', delta: 'thinking hard' },
+			{ type: 'reasoning-end', id: 'r1' },
+			{
+				type: 'finish',
+				finishReason: 'stop',
+				usage: {
+					inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+					outputTokens: { total: 2, text: 2, reasoning: undefined }
+				}
+			}
+		]);
+		try {
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+			});
+			expect(res.status).toBe(200);
+			await res.text();
+			await new Promise((r) => setTimeout(r, 50));
+
+			const assistant = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+			const parts = JSON.parse(assistant.parts) as { type: string }[];
+			expect(parts.length).toBeGreaterThan(0);
+			expect(assistant.status).toBe('complete');
+		} finally {
+			registry.__setChunks(null);
+			closeDb();
+		}
+	});
+
+	it('creates the assistant row up front and fills it while streaming', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+
+		const res = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		expect(res.status).toBe(200);
+
+		// the assistant row exists immediately, before the stream is consumed
+		const assistantEarly = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+		expect(assistantEarly).toBeTruthy();
+
+		const body = await res.text();
+		await new Promise((r) => setTimeout(r, 100));
+
+		const assistant = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+		// same row, updated in place
+		expect(assistant.id).toBe(assistantEarly.id);
+		expect(assistant.status).toBe('complete');
+		expect(JSON.parse(assistant.parts)).toContainEqual(
+			expect.objectContaining({ type: 'text', text: 'Hi there' })
+		);
+		// the client stream carried the stable message id
+		expect(body).toContain(assistant.id);
+		closeDb();
+	});
+
+	it('regenerate keeps an assistant row during streaming and leaves a complete one after', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+
+		const first = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		await first.text();
+		await new Promise((r) => setTimeout(r, 50));
+		const assistant1 = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+
+		const second = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+			truncateFrom: assistant1.id
+		});
+		expect(second.status).toBe(200);
+
+		// mid-stream: the truncated message is replaced by a fresh in-flight row
+		const duringMessages = listMessages(db, conversation.id);
+		expect(duringMessages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+
+		await second.text();
+		await new Promise((r) => setTimeout(r, 50));
+
+		const messages = listMessages(db, conversation.id);
+		expect(messages).toHaveLength(2);
+		const assistant2 = messages.find((m) => m.role === 'assistant')!;
+		expect(assistant2.id).not.toBe(assistant1.id);
+		expect(assistant2.status).toBe('complete');
+		expect(JSON.parse(assistant2.parts).length).toBeGreaterThan(0);
+		closeDb();
+	});
+
 	it('rejects with 400 when the selected model is disabled', async () => {
 		const db = getDb();
 		db.prepare(
@@ -217,7 +401,7 @@ describe('handleChatRequest', () => {
 		await expect(
 			handleChatRequest('u1', {
 				conversationId: conversation.id,
-				messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }]
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
 			})
 		).rejects.toMatchObject({
 			status: 400,
@@ -245,7 +429,7 @@ describe('handleChatRequest', () => {
 		await expect(
 			handleChatRequest('u1', {
 				conversationId: conversation.id,
-				messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }]
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
 			})
 		).rejects.toMatchObject({
 			status: 400,

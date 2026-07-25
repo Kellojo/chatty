@@ -4,8 +4,11 @@ import {
 	convertToModelMessages,
 	createUIMessageStream,
 	createUIMessageStreamResponse,
+	parseJsonEventStream,
+	readUIMessageStream,
 	stepCountIs,
 	streamText,
+	uiMessageChunkSchema,
 	type UIMessage,
 	type UIMessageChunk
 } from 'ai';
@@ -20,9 +23,12 @@ import {
 } from '../db/repo/conversations.js';
 import {
 	createMessage,
-	deleteMessagesNotIn,
+	deleteMessage,
+	deleteMessagesFrom,
 	extractText,
 	getMessage,
+	listMessages,
+	toPublic,
 	updateMessage,
 	type MessageUsage
 } from '../db/repo/messages.js';
@@ -42,7 +48,7 @@ import { resolveSkill } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
 import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
 import { attachmentCache } from './attachmentCache.js';
-import { registerStream, releaseStream } from './streams.js';
+import { appendChunk, markDone, registerStream, releaseStream } from './streams.js';
 import { generateConversationTitle } from './title.js';
 
 const log = createLogger('chat');
@@ -65,28 +71,36 @@ function attachmentIdFromUrl(url: string, conversationId: string): string | null
 	return id || null;
 }
 
-async function inlineAttachmentParts(db: Db, conversationId: string, messages: UIMessage[]): Promise<UIMessage[]> {
-	return await Promise.all(messages.map(async (message) => ({
-		...message,
-		parts: await Promise.all(message.parts.map(async (part) => {
-			if (part.type !== 'file') return part;
-			const attachmentId = attachmentIdFromUrl(part.url, conversationId);
-			if (!attachmentId) return part;
-			const row = getAttachment(db, attachmentId);
-			if (!row) return part;
-			try {
-				let dataUri = attachmentCache.get(attachmentId);
-				if (dataUri === undefined) {
-					const bytes = await fs.readFile(resolveAttachment(row.path));
-					dataUri = `data:${row.mime};base64,${bytes.toString('base64')}`;
-					attachmentCache.set(attachmentId, dataUri);
-				}
-				return { ...part, url: dataUri };
-			} catch {
-				return part;
-			}
+async function inlineAttachmentParts(
+	db: Db,
+	conversationId: string,
+	messages: UIMessage[]
+): Promise<UIMessage[]> {
+	return await Promise.all(
+		messages.map(async (message) => ({
+			...message,
+			parts: await Promise.all(
+				message.parts.map(async (part) => {
+					if (part.type !== 'file') return part;
+					const attachmentId = attachmentIdFromUrl(part.url, conversationId);
+					if (!attachmentId) return part;
+					const row = getAttachment(db, attachmentId);
+					if (!row) return part;
+					try {
+						let dataUri = attachmentCache.get(attachmentId);
+						if (dataUri === undefined) {
+							const bytes = await fs.readFile(resolveAttachment(row.path));
+							dataUri = `data:${row.mime};base64,${bytes.toString('base64')}`;
+							attachmentCache.set(attachmentId, dataUri);
+						}
+						return { ...part, url: dataUri };
+					} catch {
+						return part;
+					}
+				})
+			)
 		}))
-	})));
+	);
 }
 
 function ensureModel(db: Db, userId: string, conversation: ConversationRow): ConversationRow {
@@ -105,39 +119,108 @@ function ensureModel(db: Db, userId: string, conversation: ConversationRow): Con
 	return updated ?? conversation;
 }
 
-function syncMessages(db: Db, conversationId: string, incoming: UIMessage[]): UIMessage {
-	deleteMessagesNotIn(
-		db,
-		conversationId,
-		incoming.map((m) => m.id)
-	);
-	const last = incoming[incoming.length - 1];
-	if (!last || last.role !== 'user') {
-		throw new ChatRequestError(400, 'Last message must be a user message');
+function historyFromDb(db: Db, conversationId: string): UIMessage[] {
+	return listMessages(db, conversationId).map((row) => {
+		const message = toPublic(row);
+		return {
+			id: message.id,
+			role: message.role,
+			parts: message.parts as UIMessage['parts'],
+			metadata: message.usage ? { usage: message.usage } : undefined
+		};
+	});
+}
+
+function upsertUserMessage(db: Db, conversationId: string, message: UIMessage): UIMessage {
+	if (message.role !== 'user') {
+		throw new ChatRequestError(400, 'Triggering message must be a user message');
 	}
-	const existing = getMessage(db, last.id);
+	const existing = getMessage(db, message.id);
 	if (existing) {
-		updateMessage(db, last.id, { parts: last.parts, error: null, status: 'complete' });
+		if (existing.conversation_id !== conversationId) {
+			throw new ChatRequestError(400, 'Message does not belong to this conversation');
+		}
+		updateMessage(db, message.id, { parts: message.parts, error: null, status: 'complete' });
 	} else {
 		createMessage(db, {
-			id: last.id,
+			id: message.id,
 			conversationId,
 			role: 'user',
-			parts: last.parts,
+			parts: message.parts,
 			status: 'complete'
 		});
 	}
-	const attachmentIds = last.parts
+	const attachmentIds = message.parts
 		.filter((p) => p.type === 'file')
 		.map((p) => attachmentIdFromUrl((p as { url: string }).url, conversationId))
 		.filter((id): id is string => id !== null);
-	linkAttachmentsToMessage(db, last.id, attachmentIds);
-	return last;
+	linkAttachmentsToMessage(db, message.id, attachmentIds);
+	return message;
+}
+
+const PERSIST_INTERVAL_MS = 500;
+
+// Consumes the tee'd copy of the SSE stream: mirrors every chunk into the
+// reconnect buffer and keeps the assistant row in the DB in sync (throttled)
+// so a reload mid-stream sees the live, partially generated message.
+async function consumeStreamCopy(
+	conversationId: string,
+	messageId: string,
+	sseStream: ReadableStream<string>
+): Promise<void> {
+	const db = getDb();
+	let lastPersist = 0;
+	const persist = (parts: unknown[]) => {
+		try {
+			updateMessage(db, messageId, { parts });
+		} catch (e) {
+			log.error('Failed to persist streaming assistant message', {
+				conversationId,
+				error: e instanceof Error ? e.message : String(e)
+			});
+		}
+	};
+	try {
+		// Tee again: one branch replays raw chunks into the reconnect buffer, the
+		// other reconstructs the live message for throttled DB persistence.
+		const [rawBranch, messageBranch] = sseStream.tee();
+		const rawChunks = parseJsonEventStream({
+			stream: rawBranch.pipeThrough(new TextEncoderStream()),
+			schema: uiMessageChunkSchema
+		});
+		const mirror = (async () => {
+			for await (const parsed of rawChunks) {
+				if (parsed.success) appendChunk(conversationId, parsed.value as UIMessageChunk);
+			}
+		})();
+
+		const messageChunks = parseJsonEventStream({
+			stream: messageBranch.pipeThrough(new TextEncoderStream()),
+			schema: uiMessageChunkSchema
+		});
+		const uiStream = readUIMessageStream<UIMessage>({
+			stream: messageChunks as unknown as ReadableStream<UIMessageChunk>,
+			onError: () => undefined
+		});
+		for await (const message of uiStream) {
+			if (message.parts.length === 0) continue;
+			const now = Date.now();
+			if (now - lastPersist >= PERSIST_INTERVAL_MS) {
+				lastPersist = now;
+				persist(message.parts);
+			}
+		}
+		await mirror;
+	} catch {
+		// the main response stream failing is handled by onEnd/onError
+	} finally {
+		markDone(conversationId);
+	}
 }
 
 export async function handleChatRequest(
 	userId: string,
-	body: { conversationId: string; messages: UIMessage[]; skill?: string }
+	body: { conversationId: string; message: UIMessage; truncateFrom?: string; skill?: string }
 ): Promise<Response> {
 	const db = getDb();
 	let conversation = getConversation(db, userId, body.conversationId);
@@ -146,7 +229,14 @@ export async function handleChatRequest(
 
 	conversation = ensureModel(db, userId, conversation);
 	const agent = conversation.agent_id ? getAgent(db, conversation.agent_id) : undefined;
-	const lastUserMessage = syncMessages(db, conversation.id, body.messages);
+	if (body.truncateFrom !== undefined) {
+		const anchor = getMessage(db, body.truncateFrom);
+		if (!anchor || anchor.conversation_id !== conversation.id) {
+			throw new ChatRequestError(400, 'truncateFrom message not found in this conversation');
+		}
+		deleteMessagesFrom(db, conversation.id, body.truncateFrom);
+	}
+	const lastUserMessage = upsertUserMessage(db, conversation.id, body.message);
 	if (conversation.title === '') {
 		const raw = extractText(lastUserMessage.parts).trim().replace(/\s+/g, ' ');
 		let provisional: string;
@@ -201,6 +291,17 @@ export async function handleChatRequest(
 	registerStream(conversation.id, controller);
 	publishServerEvent(userId, { type: 'chat.stream.started', conversationId: conversation.id });
 
+	// The assistant message exists from the start and is filled incrementally by
+	// consumeStreamCopy, so a reload mid-stream never sees a gap.
+	const assistantMessageId = randomUUID();
+	createMessage(db, {
+		id: assistantMessageId,
+		conversationId: conversation.id,
+		role: 'assistant',
+		parts: [],
+		status: 'partial'
+	});
+
 	let errorText: string | null = null;
 	const agentSkillNames = agent ? (JSON.parse(agent.skill_names) as string[]) : [];
 	const boundSkillNames = [...agentSkillNames];
@@ -230,8 +331,9 @@ export async function handleChatRequest(
 		includeSkillsIndex: 'load_skill' in tools,
 		extraWarning: manualSkillWarning
 	});
+	const history = historyFromDb(db, conversation.id);
 	const modelMessages = await convertToModelMessages(
-		await inlineAttachmentParts(db, conversation.id, body.messages)
+		await inlineAttachmentParts(db, conversation.id, history)
 	);
 	const stopWhen = stepCountIs(
 		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5
@@ -240,8 +342,8 @@ export async function handleChatRequest(
 	let usageMeta: MessageUsage | null = null;
 
 	const stream = createUIMessageStream<UIMessage>({
-		originalMessages: body.messages,
-		generateId: () => randomUUID(),
+		originalMessages: history,
+		generateId: () => assistantMessageId,
 		onError: (error) => {
 			log.error('Chat stream error', {
 				conversationId: conversation.id,
@@ -288,20 +390,18 @@ export async function handleChatRequest(
 						}
 					});
 					const uiStream = result.toUIMessageStream({
-						originalMessages: body.messages,
-						generateMessageId: () => randomUUID()
+						originalMessages: history,
+						generateMessageId: () => assistantMessageId
 					});
 					for await (const chunk of uiStream) {
 						const c = chunk as { type?: string };
 						if (c.type === 'error') throw new Error(errorText ?? 'An error occurred');
-						const isContent =
-							c.type === 'text-delta' ||
-							c.type === 'tool-input-start' ||
-							c.type === 'tool-input-delta' ||
-							c.type === 'tool-input-available';
-						if (!isContent) {
-							if (!contentful) buffer.push(chunk);
-							else writer.write(chunk);
+						// Only the leading `start` chunk is pure framing; everything else is
+						// model output. Buffering only `start` lets us still retry the next
+						// target if this one errors before producing anything, while
+						// guaranteeing no real output is ever dropped.
+						if (c.type === 'start' && !contentful) {
+							buffer.push(chunk);
 							continue;
 						}
 						if (!contentful) {
@@ -351,15 +451,14 @@ export async function handleChatRequest(
 			try {
 				const status = isAborted ? 'partial' : errorText ? 'failed' : 'complete';
 				if (responseMessage.parts.length > 0 || status !== 'failed') {
-					createMessage(db, {
-						id: responseMessage.id,
-						conversationId: conversation.id,
-						role: 'assistant',
+					updateMessage(db, assistantMessageId, {
 						parts: responseMessage.parts,
 						status,
 						error: errorText,
 						usage: usageMeta
 					});
+				} else {
+					deleteMessage(db, assistantMessageId);
 				}
 				if (status === 'complete') {
 					publishServerEvent(userId, {
@@ -390,5 +489,10 @@ export async function handleChatRequest(
 		}
 	});
 
-	return createUIMessageStreamResponse({ stream });
+	return createUIMessageStreamResponse({
+		stream,
+		consumeSseStream: ({ stream: sseStream }) => {
+			void consumeStreamCopy(conversation.id, assistantMessageId, sseStream);
+		}
+	});
 }

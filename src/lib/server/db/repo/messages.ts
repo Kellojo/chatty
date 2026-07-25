@@ -107,18 +107,28 @@ export function createMessage(db: Db, input: CreateMessageInput): MessageRow {
 export function updateMessage(
 	db: Db,
 	id: string,
-	patch: { parts?: unknown[]; status?: 'complete' | 'partial' | 'failed'; error?: string | null }
+	patch: {
+		parts?: unknown[];
+		status?: 'complete' | 'partial' | 'failed';
+		error?: string | null;
+		usage?: MessageUsage | null;
+	}
 ): MessageRow | undefined {
 	const existing = getMessage(db, id);
 	if (!existing) return undefined;
 	const parts = patch.parts !== undefined ? JSON.stringify(patch.parts) : existing.parts;
 	db.prepare(
-		'UPDATE messages SET parts = ?, content_text = ?, status = ?, error = ? WHERE id = ?'
+		'UPDATE messages SET parts = ?, content_text = ?, status = ?, error = ?, usage_json = ? WHERE id = ?'
 	).run(
 		parts,
 		patch.parts !== undefined ? extractText(patch.parts) : existing.content_text,
 		patch.status ?? existing.status,
 		patch.error !== undefined ? patch.error : existing.error,
+		patch.usage !== undefined
+			? patch.usage
+				? JSON.stringify(patch.usage)
+				: null
+			: existing.usage_json,
 		id
 	);
 	return getMessage(db, id);
@@ -128,12 +138,16 @@ export function deleteMessage(db: Db, id: string): boolean {
 	return db.prepare('DELETE FROM messages WHERE id = ?').run(id).changes > 0;
 }
 
-export function deleteMessagesNotIn(db: Db, conversationId: string, keepIds: string[]): number {
-	if (keepIds.length === 0) {
-		return db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(conversationId).changes;
-	}
-	const placeholders = keepIds.map(() => '?').join(', ');
+export function deleteMessagesFrom(db: Db, conversationId: string, messageId: string): number {
+	const ref = getMessage(db, messageId);
+	if (!ref || ref.conversation_id !== conversationId) return 0;
+	const anchor = db.prepare('SELECT rowid AS rowid FROM messages WHERE id = ?').get(messageId) as {
+		rowid: number;
+	};
 	return db
-		.prepare(`DELETE FROM messages WHERE conversation_id = ? AND id NOT IN (${placeholders})`)
-		.run(conversationId, ...keepIds).changes;
+		.prepare(
+			`DELETE FROM messages WHERE conversation_id = ?
+			 AND (created_at > ? OR (created_at = ? AND rowid >= ?))`
+		)
+		.run(conversationId, ref.created_at, ref.created_at, anchor.rowid).changes;
 }

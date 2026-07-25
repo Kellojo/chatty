@@ -80,8 +80,28 @@
 			messages: untrack(() => initialMessages.map(chatMessageToUIMessage)),
 			transport: new DefaultChatTransport({
 				api: '/api/chat',
-				prepareSendMessagesRequest: ({ messages }) => ({
-					body: { conversationId: conversation.id, messages }
+				prepareSendMessagesRequest: ({ messages, trigger, messageId }) => {
+					if (trigger === 'regenerate-message' && messageId) {
+						// the SDK has already sliced the assistant message off; the last
+						// remaining message is the user message to regenerate from
+						const message = messages[messages.length - 1];
+						return {
+							body: { conversationId: conversation.id, message, truncateFrom: messageId }
+						};
+					}
+					const message = messages[messages.length - 1];
+					const truncateFrom = pendingTruncateFrom;
+					pendingTruncateFrom = undefined;
+					return {
+						body: {
+							conversationId: conversation.id,
+							message,
+							...(truncateFrom ? { truncateFrom } : {})
+						}
+					};
+				},
+				prepareReconnectToStreamRequest: () => ({
+					api: `/api/chat/${conversation.id}/stream`
 				})
 			}),
 			onError: (error) => {
@@ -101,6 +121,7 @@
 	}
 
 	let chat = $state(initChat());
+	let pendingTruncateFrom = $state<string | undefined>(undefined);
 
 	const reusedLocal = activeChats.has(untrack(() => conversation.id));
 	// svelte-ignore state_referenced_locally
@@ -137,7 +158,21 @@
 	}
 
 	onMount(() => {
-		if (!remoteGenerating) markRead();
+		if (remoteGenerating) {
+			// A stream is (or was) running server-side. Attach to it for live tokens;
+			// a 204 means it already finished, so just reload the persisted state.
+			chat
+				.resumeStream()
+				.catch(() => undefined)
+				.finally(() => {
+					if (chat.status !== 'streaming' && chat.status !== 'submitted') {
+						remoteGenerating = false;
+						void invalidateAll();
+					}
+				});
+		} else {
+			markRead();
+		}
 	});
 
 	$effect(() => {
@@ -271,11 +306,23 @@
 		const index = chat.messages.findIndex((m) => m.id === messageId);
 		if (index === -1) return;
 		chat.messages = chat.messages.slice(0, index);
+		pendingTruncateFrom = messageId;
 		input = text;
 	}
 
 	const fileDrop = createFileDrop((files) => {
 		selectedFiles = [...selectedFiles, ...files];
+	});
+
+	// Navigating away destroys this view (the page uses {#key}); make sure the
+	// sidebar indicator doesn't keep spinning for a chat we're no longer showing.
+	onMount(() => {
+		const id = conversation.id;
+		return () => {
+			if (activeChats.get(id) === chat) {
+				activeChats.delete(id);
+			}
+		};
 	});
 
 	function pickFiles() {

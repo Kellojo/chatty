@@ -3,7 +3,7 @@ import { openDatabase, type Db } from '../index.js';
 import { createConversation } from './conversations.js';
 import {
 	createMessage,
-	deleteMessagesNotIn,
+	deleteMessagesFrom,
 	extractText,
 	listMessages,
 	toPublic,
@@ -36,16 +36,24 @@ describe('messages repo', () => {
 		expect(toPublic(m).parts).toHaveLength(3);
 	});
 
-	it('deleteMessagesNotIn removes only unlisted messages of the conversation', () => {
-		const keep = createMessage(db, { conversationId, role: 'user', parts: [] });
-		const drop = createMessage(db, { conversationId, role: 'assistant', parts: [] });
+	it('deleteMessagesFrom removes the anchor and later messages of the conversation', () => {
+		createMessage(db, { conversationId, role: 'user', parts: [] });
+		const anchor = createMessage(db, { conversationId, role: 'assistant', parts: [] });
+		createMessage(db, { conversationId, role: 'user', parts: [] });
 		const otherConv = createConversation(db, 'u1');
 		const other = createMessage(db, { conversationId: otherConv.id, role: 'user', parts: [] });
-		expect(deleteMessagesNotIn(db, conversationId, [keep.id])).toBe(1);
-		const remaining = listMessages(db, conversationId).map((m) => m.id);
-		expect(remaining).toEqual([keep.id]);
+		expect(deleteMessagesFrom(db, conversationId, anchor.id)).toBe(2);
+		const remaining = listMessages(db, conversationId).map((m) => m.role);
+		expect(remaining).toEqual(['user']);
 		expect(listMessages(db, otherConv.id).map((m) => m.id)).toEqual([other.id]);
-		expect(drop.id).not.toBe(keep.id);
+	});
+
+	it('deleteMessagesFrom ignores messages from another conversation', () => {
+		const otherConv = createConversation(db, 'u1');
+		const foreign = createMessage(db, { conversationId: otherConv.id, role: 'user', parts: [] });
+		createMessage(db, { conversationId, role: 'user', parts: [] });
+		expect(deleteMessagesFrom(db, conversationId, foreign.id)).toBe(0);
+		expect(listMessages(db, conversationId)).toHaveLength(1);
 	});
 
 	it('updateMessage patches parts, status, and error', () => {
