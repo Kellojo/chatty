@@ -9,6 +9,7 @@ import { createSettingsServer } from './settings.js';
 import { createMemoryServer } from './memory.js';
 import { createAgentsServer } from './agents.js';
 import { createSkillsServer } from './skills.js';
+import { createCodeExecServer } from './code-exec.js';
 
 export type BuiltinServerFactory = (ctx: CallerContext) => McpServer;
 
@@ -21,5 +22,6 @@ export const BUILTIN_SERVERS: Record<string, BuiltinServerFactory> = {
 	settings: createSettingsServer,
 	memory: createMemoryServer,
 	agents: createAgentsServer,
-	skills: createSkillsServer
+	skills: createSkillsServer,
+	'code-exec': createCodeExecServer
 };

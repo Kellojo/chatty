@@ -33,13 +33,15 @@ describe('tools registry', () => {
 			'fs_ls',
 			'get_setting',
 			'search_memory',
-			'create_concept'
+			'create_concept',
+			'code_exec'
 		]) {
 			expect(names).toContain(expected);
 		}
 		expect(built.toolToServer.now).toBe('datetime');
 		expect(built.toolToServer.fs_ls).toBe('fs');
 		expect(built.toolToServer.search_memory).toBe('memory');
+		expect(built.toolToServer.code_exec).toBe('code-exec');
 		await built.close();
 	});
 

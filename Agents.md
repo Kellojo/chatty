@@ -33,6 +33,12 @@ SvelteKit 2 + Svelte 5 (runes forced for all non-`node_modules` files, see `vite
 
 - No PR CI. `.github/workflows/docker-image.yml` only builds/pushes a GHCR image on push or `v*` tags; the tag version is injected into `package.json` during the workflow.
 
+## Subagents
+
+- Running LLMs locally, so parallelism is the primary way to speed up workflows.
+- Up to **4** subagent instances can run concurrently. Use the `task` tool liberally for independent work — e.g. multiple file reads, parallel greps/searches across directories, or splitting a large feature into separate agents (e.g. one writes components, another writes tests).
+- Prefer launching all 4 up front when you have that many independent pieces of work, rather than chaining them sequentially.
+
 ## Reference docs in repo
 
 - `requirements.md`, `implementation-plan.md`, `todos.md` — historical/planning docs; verify against code before trusting.
