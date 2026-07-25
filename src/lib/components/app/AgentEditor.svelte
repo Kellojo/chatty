@@ -46,7 +46,10 @@
 	const eventLabels: Record<AgentEventName, string> = {
 		'memory.changed': 'Memory created/updated/deleted',
 		'chat.created': 'Chat created',
-		'chat.message_completed': 'Chat message completed'
+		'chat.message_completed': 'Chat message completed',
+		'skill.created': 'Skill created',
+		'skill.updated': 'Skill updated',
+		'skill.deleted': 'Skill deleted'
 	};
 
 	// svelte-ignore state_referenced_locally
@@ -57,7 +60,7 @@
 		modelValue: agent?.providerId && agent?.modelId ? `${agent.providerId}/${agent.modelId}` : '',
 		triggerType: (agent?.triggerType ?? 'manual') as AgentTriggerType,
 		cron: agent?.triggerConfig.cron ?? '',
-		event: (agent?.triggerConfig.event ?? 'memory.changed') as AgentEventName,
+		event: (agent?.triggerConfig.event ?? 'skill.created') as AgentEventName,
 		every: String(agent?.triggerConfig.every ?? 1) as string | number,
 		instructions: agent?.triggerConfig.instructions ?? '',
 		restrictTools: agent?.toolAllowlist != null,
@@ -365,7 +368,11 @@
 		</Card.Content>
 	</Card.Root>
 
-	{#if !readonly}
+	{#if readonly}
+		<div class="flex justify-end">
+			<Button variant="outline" href={resolve('/agents')}>Back to agents</Button>
+		</div>
+	{:else}
 		<div class="flex justify-end gap-2">
 			<Button variant="outline" href={resolve('/agents')}>Cancel</Button>
 			<Button onclick={save} disabled={busy || !form.name.trim() || !form.systemPrompt.trim()}>

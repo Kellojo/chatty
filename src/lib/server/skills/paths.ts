@@ -1,9 +1,8 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { config } from '../config.js';
-import type { MemoryScope } from '../memory/paths.js';
 
-export type SkillScope = MemoryScope;
+export type SkillScope = 'user' | 'shared';
 
 export const SKILL_FILE_NAMES = ['skill.md', 'SKILL.md'] as const;
 
@@ -23,11 +22,7 @@ export function isValidSkillName(name: string): boolean {
 }
 
 export function skillsRoot(scope: SkillScope, userId: string): string {
-	return path.join(
-		path.resolve(config.MEMORY_VOLUME),
-		scope === 'shared' ? 'shared' : userId,
-		'skills'
-	);
+	return path.join(path.resolve(config.SKILLS_VOLUME), scope === 'shared' ? 'shared' : userId);
 }
 
 export function defaultSkillsSource(): string {

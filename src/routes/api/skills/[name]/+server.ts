@@ -68,6 +68,7 @@ export const PUT: RequestHandler = async ({ locals, params, url, request }) => {
 			body: parsed.data.body ?? existing.body
 		});
 		publishServerEvent(user.id, { type: 'skills.changed' });
+		publishServerEvent(user.id, { type: 'skill.updated', name: skill.name, scope });
 		return json({ skill });
 	} catch (e) {
 		error(400, { message: e instanceof Error ? e.message : 'Failed to update skill' });
@@ -80,6 +81,7 @@ export const DELETE: RequestHandler = ({ locals, params, url }) => {
 	if (scope === 'shared') requireAdmin(locals);
 	if (!deleteSkill(scope, user.id, params.name)) error(404, { message: 'Skill not found' });
 	publishServerEvent(user.id, { type: 'skills.changed' });
+	publishServerEvent(user.id, { type: 'skill.deleted', name: params.name, scope });
 	return json({ ok: true });
 };
 

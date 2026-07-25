@@ -38,6 +38,14 @@
 		return skill.source;
 	}
 
+	function isShadowed(skillName: string): boolean {
+		return data.shadowedSkills.some((s) => s.name === skillName);
+	}
+
+	function shadowedVersion(skillName: string): SkillSummary | undefined {
+		return data.shadowedSkills.find((s) => s.name === skillName);
+	}
+
 	async function toggleSkill(skill: SkillSummary, enabled: boolean) {
 		if (toggleBusy) return;
 		toggleBusy = `${skill.scope}:${skill.name}`;
@@ -171,102 +179,246 @@
 			</div>
 		</div>
 
-		<Table.Root>
-			<Table.Header>
-				<Table.Row>
-					<Table.Head>Skill</Table.Head>
-					<Table.Head>Source</Table.Head>
-					<Table.Head>Scope</Table.Head>
-					<Table.Head>Enabled</Table.Head>
-					<Table.Head class="text-right">Actions</Table.Head>
-				</Table.Row>
-			</Table.Header>
-			<Table.Body>
-				{#each data.skills as skill (`${skill.scope}:${skill.name}`)}
+		<!-- Your Skills -->
+		<div class="flex flex-col gap-2">
+			<h2 class="text-lg font-semibold">Your Skills</h2>
+			<Table.Root>
+				<Table.Header>
 					<Table.Row>
-						<Table.Cell class="max-w-96">
-							<div class="flex items-center gap-2">
-								<a
-									class="truncate font-medium hover:underline"
-									title={skill.name}
-									href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)}
-								>
-									{skill.title}
-								</a>
-								{#if skill.version}
-									<span class="text-xs text-muted-foreground">v{skill.version}</span>
-								{/if}
-							</div>
-							<p class="line-clamp-2 text-sm text-muted-foreground" title={skill.description}>
-								{skill.description}
-							</p>
-						</Table.Cell>
-						<Table.Cell>
-							<Badge variant="secondary" title={skill.source}>{sourceLabel(skill)}</Badge>
-						</Table.Cell>
-						<Table.Cell>
-							<Badge variant="outline">{skill.scope}</Badge>
-						</Table.Cell>
-						<Table.Cell>
-							<Switch
-								checked={skill.enabled}
-								disabled={toggleBusy !== null}
-								onCheckedChange={(checked) => toggleSkill(skill, checked)}
-							/>
-						</Table.Cell>
-						<Table.Cell class="text-right whitespace-nowrap">
-							<DropdownMenu.Root>
-								<DropdownMenu.Trigger>
-									{#snippet child({ props })}
-										<Button
-											{...props}
-											variant="ghost"
-											size="icon"
-											title="Actions"
-											aria-label="Actions"
-										>
-											<EllipsisIcon class="size-4" />
-										</Button>
-									{/snippet}
-								</DropdownMenu.Trigger>
-								<DropdownMenu.Content align="end">
-									<DropdownMenu.Item>
-										{#snippet child({ props })}
-											<a href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)} {...props}>
-												Edit
-											</a>
-										{/snippet}
-									</DropdownMenu.Item>
-									<DropdownMenu.Item
-										onclick={() => {
-											duplicateTarget = skill;
-											duplicateName = `${skill.name}-copy`;
-										}}
+						<Table.Head>Skill</Table.Head>
+						<Table.Head>Source</Table.Head>
+						<Table.Head>Enabled</Table.Head>
+						<Table.Head class="text-right">Actions</Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each data.userSkills as skill (skill.name)}
+						{@const shadowed = shadowedVersion(skill.name)}
+						<Table.Row>
+							<Table.Cell class="max-w-96">
+								<div class="flex items-center gap-2">
+									<a
+										class="truncate font-medium hover:underline"
+										title={skill.name}
+										href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)}
 									>
-										Duplicate
-									</DropdownMenu.Item>
-									{#if data.isAdmin && skill.scope === 'user'}
-										<DropdownMenu.Item onclick={() => promote(skill)}>
-											Promote to shared
-										</DropdownMenu.Item>
+										{skill.title}
+									</a>
+									{#if skill.version}
+										<span class="text-xs text-muted-foreground">v{skill.version}</span>
 									{/if}
-									<DropdownMenu.Separator />
-									<DropdownMenu.Item variant="destructive" onclick={() => (deleteTarget = skill)}>
-										Delete
-									</DropdownMenu.Item>
-								</DropdownMenu.Content>
-							</DropdownMenu.Root>
-						</Table.Cell>
-					</Table.Row>
-				{:else}
+									{#if shadowed}
+										<Badge variant="outline" class="text-xs" title={`Overrides shared skill: ${shadowed.title}`}>
+											shadows shared
+										</Badge>
+									{/if}
+								</div>
+								<p class="line-clamp-2 text-sm text-muted-foreground" title={skill.description}>
+									{skill.description}
+								</p>
+							</Table.Cell>
+							<Table.Cell>
+								<Badge variant="secondary" title={skill.source}>{sourceLabel(skill)}</Badge>
+							</Table.Cell>
+							<Table.Cell>
+								<Switch
+									checked={skill.enabled}
+									disabled={toggleBusy !== null}
+									onCheckedChange={(checked) => toggleSkill(skill, checked)}
+								/>
+							</Table.Cell>
+							<Table.Cell class="text-right whitespace-nowrap">
+								<DropdownMenu.Root>
+									<DropdownMenu.Trigger>
+										{#snippet child({ props })}
+											<Button
+												{...props}
+												variant="ghost"
+												size="icon"
+												title="Actions"
+												aria-label="Actions"
+											>
+												<EllipsisIcon class="size-4" />
+											</Button>
+										{/snippet}
+									</DropdownMenu.Trigger>
+									<DropdownMenu.Content align="end">
+										<DropdownMenu.Item>
+											{#snippet child({ props })}
+												<a href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)} {...props}>
+													Edit
+												</a>
+											{/snippet}
+										</DropdownMenu.Item>
+										<DropdownMenu.Item
+											onclick={() => {
+												duplicateTarget = skill;
+												duplicateName = `${skill.name}-copy`;
+											}}
+										>
+											Duplicate
+										</DropdownMenu.Item>
+										{#if data.isAdmin && skill.scope === 'user'}
+											<DropdownMenu.Item onclick={() => promote(skill)}>
+												Promote to shared
+											</DropdownMenu.Item>
+										{/if}
+										<DropdownMenu.Separator />
+										<DropdownMenu.Item variant="destructive" onclick={() => (deleteTarget = skill)}>
+											Delete
+										</DropdownMenu.Item>
+									</DropdownMenu.Content>
+								</DropdownMenu.Root>
+							</Table.Cell>
+						</Table.Row>
+					{:else}
+						<Table.Row>
+							<Table.Cell colspan={4} class="text-center text-muted-foreground">
+								No personal skills yet. Create one or import from git.
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		</div>
+
+		<!-- Shared Skills -->
+		<div class="flex flex-col gap-2">
+			<h2 class="text-lg font-semibold">Shared Skills</h2>
+			<p class="text-sm text-muted-foreground">
+				Skills available to all users. Your personal skills with the same name take precedence.
+			</p>
+			<Table.Root>
+				<Table.Header>
 					<Table.Row>
-						<Table.Cell colspan={5} class="text-center text-muted-foreground">
-							No skills yet. Create one or import from git.
-						</Table.Cell>
+						<Table.Head>Skill</Table.Head>
+						<Table.Head>Source</Table.Head>
+						<Table.Head>Enabled</Table.Head>
+						<Table.Head class="text-right">Actions</Table.Head>
 					</Table.Row>
-				{/each}
-			</Table.Body>
-		</Table.Root>
+				</Table.Header>
+				<Table.Body>
+					{#each data.sharedSkills as skill (skill.name)}
+						<Table.Row>
+							<Table.Cell class="max-w-96">
+								<div class="flex items-center gap-2">
+									<a
+										class="truncate font-medium hover:underline"
+										title={skill.name}
+										href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)}
+									>
+										{skill.title}
+									</a>
+									{#if skill.version}
+										<span class="text-xs text-muted-foreground">v{skill.version}</span>
+									{/if}
+								</div>
+								<p class="line-clamp-2 text-sm text-muted-foreground" title={skill.description}>
+									{skill.description}
+								</p>
+							</Table.Cell>
+							<Table.Cell>
+								<Badge variant="secondary" title={skill.source}>{sourceLabel(skill)}</Badge>
+							</Table.Cell>
+							<Table.Cell>
+								<Switch
+									checked={skill.enabled}
+									disabled={toggleBusy !== null || !data.isAdmin}
+									onCheckedChange={(checked) => toggleSkill(skill, checked)}
+								/>
+							</Table.Cell>
+							<Table.Cell class="text-right whitespace-nowrap">
+								<DropdownMenu.Root>
+									<DropdownMenu.Trigger>
+										{#snippet child({ props })}
+											<Button
+												{...props}
+												variant="ghost"
+												size="icon"
+												title="Actions"
+												aria-label="Actions"
+											>
+												<EllipsisIcon class="size-4" />
+											</Button>
+										{/snippet}
+									</DropdownMenu.Trigger>
+									<DropdownMenu.Content align="end">
+										<DropdownMenu.Item>
+											{#snippet child({ props })}
+												<a href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)} {...props}>
+													{data.isAdmin ? 'Edit' : 'View'}
+												</a>
+											{/snippet}
+										</DropdownMenu.Item>
+										<DropdownMenu.Item
+											onclick={() => {
+												duplicateTarget = skill;
+												duplicateName = `${skill.name}-copy`;
+											}}
+										>
+											Duplicate to personal
+										</DropdownMenu.Item>
+										{#if data.isAdmin}
+											<DropdownMenu.Separator />
+											<DropdownMenu.Item
+												variant="destructive"
+												onclick={() => (deleteTarget = skill)}
+											>
+												Delete
+											</DropdownMenu.Item>
+										{/if}
+									</DropdownMenu.Content>
+								</DropdownMenu.Root>
+							</Table.Cell>
+						</Table.Row>
+					{:else}
+						<Table.Row>
+							<Table.Cell colspan={4} class="text-center text-muted-foreground">
+								No shared skills available.
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		</div>
+
+		<!-- Shadowed Shared Skills (info only) -->
+		{#if data.shadowedSkills.length > 0}
+			<details class="rounded-lg border">
+				<summary class="cursor-pointer px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/50">
+					{data.shadowedSkills.length} shared skill{data.shadowedSkills.length !== 1 ? 's' : ''} overridden by your personal versions
+				</summary>
+				<div class="border-t px-4 py-2">
+					<Table.Root>
+						<Table.Body>
+							{#each data.shadowedSkills as skill (skill.name)}
+								<Table.Row class="text-muted-foreground">
+									<Table.Cell class="max-w-96">
+										<div class="flex items-center gap-2">
+											<span class="truncate font-medium" title={skill.name}>{skill.title}</span>
+											<Badge variant="outline" class="text-xs">shadowed</Badge>
+										</div>
+										<p class="line-clamp-1 text-sm" title={skill.description}>{skill.description}</p>
+									</Table.Cell>
+									<Table.Cell>
+										<Badge variant="secondary">{sourceLabel(skill)}</Badge>
+									</Table.Cell>
+									<Table.Cell class="text-right">
+										<Button
+											variant="ghost"
+											size="sm"
+											href={resolve(`/skills/${skill.name}?scope=shared`)}
+										>
+											View shared
+										</Button>
+									</Table.Cell>
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				</div>
+			</details>
+		{/if}
 	</div>
 </div>
 

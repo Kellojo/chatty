@@ -7,7 +7,7 @@ vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
 const VOL = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-scanner-'));
-process.env.MEMORY_VOLUME = VOL;
+process.env.SKILLS_VOLUME = VOL;
 
 const scanner = await import('./scanner.js');
 const { skillsRoot } = await import('./paths.js');

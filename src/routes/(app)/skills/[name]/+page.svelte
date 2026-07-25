@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import CopyIcon from '@lucide/svelte/icons/copy';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
@@ -23,6 +25,10 @@
 	let enabled = $state(data.skill.enabled);
 	let body = $state(data.skill.body);
 	let busy = $state(false);
+
+	let duplicateOpen = $state(false);
+	let duplicateName = $state(`${data.skill.name}-copy`);
+	let duplicateBusy = $state(false);
 
 	const scopeParam = $derived(data.scope === 'shared' ? '?scope=shared' : '');
 
@@ -76,6 +82,28 @@
 			busy = false;
 		}
 	}
+
+	async function confirmDuplicate() {
+		if (duplicateBusy || !duplicateName.trim()) return;
+		duplicateBusy = true;
+		try {
+			const res = await fetch(`/api/skills/${data.skill.name}`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ action: 'duplicate', newName: duplicateName.trim() })
+			});
+			const resData = (await res.json().catch(() => null)) as { message?: string } | null;
+			if (!res.ok) throw new Error(resData?.message ?? `Request failed (${res.status})`);
+			toast.success(`Duplicated to ${duplicateName.trim()}`);
+			duplicateOpen = false;
+			await invalidateAll();
+			await goto(resolve(`/skills/${duplicateName.trim()}`));
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to duplicate skill');
+		} finally {
+			duplicateBusy = false;
+		}
+	}
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -85,50 +113,67 @@
 				<h1 class="text-xl font-semibold">{data.skill.name}</h1>
 				<Badge variant="outline">{data.scope}</Badge>
 				<Badge variant="secondary">{data.skill.source}</Badge>
+				{#if !data.canEdit}
+					<Badge variant="outline" class="text-muted-foreground">read-only</Badge>
+				{/if}
 			</div>
-			<Button variant="destructive" size="sm" onclick={remove} disabled={busy}>Delete</Button>
+			{#if data.canEdit}
+				<Button variant="destructive" size="sm" onclick={remove} disabled={busy}>Delete</Button>
+			{/if}
 		</div>
 
+		{#if !data.canEdit}
+			<div class="rounded-lg border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
+				This is a shared skill. Only administrators can edit it.
+			</div>
+			<div class="flex justify-end">
+				<Button variant="outline" onclick={() => (duplicateOpen = true)}>
+					<CopyIcon class="size-4" />
+					Duplicate to personal
+				</Button>
+			</div>
+		{/if}
+
 		<div class="flex items-center gap-2">
-			<Switch checked={enabled} onCheckedChange={(c) => (enabled = c)} />
+			<Switch checked={enabled} onCheckedChange={(c) => (enabled = c)} disabled={!data.canEdit} />
 			<span class="text-sm text-muted-foreground">{enabled ? 'Enabled' : 'Disabled'}</span>
 		</div>
 
 		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 			<div class="flex flex-col gap-1.5">
 				<Label for="title">Title</Label>
-				<Input id="title" bind:value={title} />
+				<Input id="title" bind:value={title} disabled={!data.canEdit} />
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="version">Version</Label>
-				<Input id="version" placeholder="1.0.0" bind:value={version} />
+				<Input id="version" placeholder="1.0.0" bind:value={version} disabled={!data.canEdit} />
 			</div>
 		</div>
 
 		<div class="flex flex-col gap-1.5">
 			<Label for="description">Description</Label>
-			<Input id="description" bind:value={description} />
+			<Input id="description" bind:value={description} disabled={!data.canEdit} />
 		</div>
 
 		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 			<div class="flex flex-col gap-1.5">
 				<Label for="when">When to use (optional)</Label>
-				<Input id="when" placeholder="Free-text guidance for the model" bind:value={when} />
+				<Input id="when" placeholder="Free-text guidance for the model" bind:value={when} disabled={!data.canEdit} />
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="tools">Expected tools (comma-separated)</Label>
-				<Input id="tools" placeholder="webfetch, search_memory" bind:value={tools} />
+				<Input id="tools" placeholder="webfetch, search_memory" bind:value={tools} disabled={!data.canEdit} />
 			</div>
 		</div>
 
 		<div class="flex flex-col gap-1.5">
 			<Label for="author">Author</Label>
-			<Input id="author" bind:value={author} />
+			<Input id="author" bind:value={author} disabled={!data.canEdit} />
 		</div>
 
 		<div class="flex min-h-72 flex-col gap-1.5">
 			<Label for="body">Instructions (markdown)</Label>
-			<Textarea id="body" class="min-h-72 flex-1 font-mono text-sm" bind:value={body} />
+			<Textarea id="body" class="min-h-72 flex-1 font-mono text-sm" bind:value={body} disabled={!data.canEdit} />
 		</div>
 
 		{#if data.skill.references.length > 0}
@@ -145,12 +190,15 @@
 			</div>
 		{/if}
 
-		<div class="flex justify-end">
-			<Button disabled={busy || !title.trim() || !description.trim()} onclick={save}>
-				{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-				Save
-			</Button>
-		</div>
+		{#if data.canEdit}
+			<div class="flex justify-end gap-2">
+				<Button variant="outline" href={resolve('/skills')}>Cancel</Button>
+				<Button disabled={busy || !title.trim() || !description.trim()} onclick={save}>
+					{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
+					Save
+				</Button>
+			</div>
+		{/if}
 
 		{#if data.invocations.length > 0}
 			<div class="mt-4 flex flex-col gap-2">
@@ -179,3 +227,25 @@
 		{/if}
 	</div>
 </div>
+
+<Dialog.Root open={duplicateOpen} onOpenChange={(open) => !open && (duplicateOpen = false)}>
+	<Dialog.Content>
+		<Dialog.Header>
+			<Dialog.Title>Duplicate skill</Dialog.Title>
+			<Dialog.Description>
+				Copy "{data.skill.name}" into your personal skills under a new name.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="flex flex-col gap-1.5">
+			<Label for="dup-name">New name</Label>
+			<Input id="dup-name" bind:value={duplicateName} />
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (duplicateOpen = false)}>Cancel</Button>
+			<Button disabled={duplicateBusy || !duplicateName.trim()} onclick={confirmDuplicate}>
+				{#if duplicateBusy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
+				Duplicate
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>

@@ -63,7 +63,10 @@ export interface Conversation {
 export const AGENT_EVENT_NAMES = [
 	'memory.changed',
 	'chat.created',
-	'chat.message_completed'
+	'chat.message_completed',
+	'skill.created',
+	'skill.updated',
+	'skill.deleted'
 ] as const;
 
 export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
@@ -85,6 +88,9 @@ export type ServerEvent =
 	| { type: 'agent.run.progress'; agentId: string; runId: string }
 	| { type: 'agent.run.finished'; agentId: string; runId: string; status: AgentRunStatus }
 	| { type: 'skills.changed' }
+	| { type: 'skill.created'; name: string; scope: 'user' | 'shared' }
+	| { type: 'skill.updated'; name: string; scope: 'user' | 'shared' }
+	| { type: 'skill.deleted'; name: string; scope: 'user' | 'shared' }
 	| { type: 'proxy.request.started'; requestId: string }
 	| { type: 'proxy.request.finished'; requestId: string; status: 'complete' | 'failed' };
 

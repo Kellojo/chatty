@@ -24,7 +24,7 @@ vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
 const VOL = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-gitimport-'));
-process.env.MEMORY_VOLUME = VOL;
+process.env.SKILLS_VOLUME = VOL;
 
 const { importSkillsFromGit, parseGitUrl } = await import('./gitImport.js');
 const { skillsRoot } = await import('./paths.js');

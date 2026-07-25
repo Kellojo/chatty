@@ -8,21 +8,21 @@ import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, params, url }) => {
 	const user = requireUser(locals);
+	const isAdmin = (user as { role?: string }).role === 'admin';
 	const scope = url.searchParams.get('scope') === 'shared' ? 'shared' : 'user';
-	if (scope === 'shared' && (user as { role?: string }).role !== 'admin') {
-		error(403, { message: 'Admin required' });
-	}
 	const skill = readSkill(scope, user.id, params.name);
 	if (!skill) error(404, { message: 'Skill not found' });
+	const canEdit = scope === 'user' || isAdmin;
 	return {
 		skill,
 		scope,
+		canEdit,
 		invocations: listSkillInvocations(getDb(), {
 			userId: user.id,
 			skillName: skill.name,
 			limit: 50
 		}),
 		timeFormat: getTimeFormat(getDb(), user.id),
-		isAdmin: (user as { role?: string }).role === 'admin'
+		isAdmin
 	};
 };

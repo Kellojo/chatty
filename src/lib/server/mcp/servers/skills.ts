@@ -127,6 +127,7 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 				return err(e instanceof Error ? e.message : 'failed to create skill');
 			}
 			publishServerEvent(ctx.userId, { type: 'skills.changed' });
+			publishServerEvent(ctx.userId, { type: 'skill.created', name: skill.name, scope: 'user' });
 			return text(JSON.stringify({ name: skill.name, title: skill.title, scope: skill.scope }));
 		}
 	);
@@ -193,6 +194,7 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 				return err(e instanceof Error ? e.message : 'failed to update skill');
 			}
 			publishServerEvent(ctx.userId, { type: 'skills.changed' });
+			publishServerEvent(ctx.userId, { type: 'skill.updated', name: skill.name, scope: 'user' });
 			return text(JSON.stringify({ name: skill.name, title: skill.title, scope: skill.scope }));
 		}
 	);
@@ -215,6 +217,7 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 			}
 			deleteSkill('user', ctx.userId, name);
 			publishServerEvent(ctx.userId, { type: 'skills.changed' });
+			publishServerEvent(ctx.userId, { type: 'skill.deleted', name, scope: 'user' });
 			return text(`deleted skill: ${name}`);
 		}
 	);

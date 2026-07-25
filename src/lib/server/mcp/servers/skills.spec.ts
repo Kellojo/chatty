@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
-process.env.MEMORY_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skills-mcp-'));
+process.env.SKILLS_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skills-mcp-'));
 
 const { createSkillsServer } = await import('./skills.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
@@ -44,7 +44,7 @@ function isError(res: unknown): boolean {
 }
 
 function skillDir(name: string): string {
-	return path.join(process.env.MEMORY_VOLUME!, 'u1', 'skills', name);
+	return path.join(process.env.SKILLS_VOLUME!, 'u1', name);
 }
 
 describe('skills server create/update/delete', () => {
@@ -133,13 +133,13 @@ describe('skills server create/update/delete', () => {
 		});
 		expect(isError(badRef)).toBe(true);
 		expect(readSkill('user', 'u1', 'ref-escape')).toBeNull();
-		expect(fs.existsSync(path.join(process.env.MEMORY_VOLUME!, 'u1', 'skills', 'outside.md'))).toBe(
+		expect(fs.existsSync(path.join(process.env.SKILLS_VOLUME!, 'u1', 'outside.md'))).toBe(
 			false
 		);
 	});
 
 	it('update shadows a shared skill instead of modifying it', async () => {
-		const sharedDir = path.join(process.env.MEMORY_VOLUME!, 'shared', 'skills', 'shared-skill');
+		const sharedDir = path.join(process.env.SKILLS_VOLUME!, 'shared', 'shared-skill');
 		fs.mkdirSync(sharedDir, { recursive: true });
 		fs.writeFileSync(
 			path.join(sharedDir, 'skill.md'),

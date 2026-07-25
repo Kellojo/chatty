@@ -9,6 +9,7 @@ const boolFromString = (fallback: 'true' | 'false') =>
 const schema = z.object({
 	DATABASE_PATH: z.string().default('./data/ai-chat.db'),
 	MEMORY_VOLUME: z.string().default('./memory'),
+	SKILLS_VOLUME: z.string().default('./skills'),
 	DOCUMENTS_VOLUME: z.string().default('./documents'),
 	WORKSPACES_VOLUME: z.string().default('./workspaces'),
 	WORKSPACE_GC_DAYS: z.coerce.number().int().min(1).default(30),

@@ -7,11 +7,13 @@ services:
     environment:
       DATABASE_PATH: /data/ai-chat.db
       MEMORY_VOLUME: /memory
+      SKILLS_VOLUME: /skills
       DOCUMENTS_VOLUME: /documents
       WORKSPACES_VOLUME: /workspaces
     volumes:
       - data:/data
       - memory:/memory
+      - skills:/skills
       - documents:/documents
       - workspaces:/workspaces
     restart: unless-stopped
@@ -19,5 +21,6 @@ services:
 volumes:
   data:
   memory:
+  skills:
   documents:
   workspaces:

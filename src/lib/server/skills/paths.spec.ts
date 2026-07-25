@@ -6,7 +6,7 @@ import path from 'node:path';
 vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
-process.env.MEMORY_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-paths-'));
+process.env.SKILLS_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-paths-'));
 
 const paths = await import('./paths.js');
 
@@ -42,12 +42,12 @@ describe('isValidSkillName', () => {
 describe('skillsRoot', () => {
 	it('resolves user scope under the user id', () => {
 		const root = paths.skillsRoot('user', 'u1');
-		expect(root).toBe(path.join(path.resolve(process.env.MEMORY_VOLUME!), 'u1', 'skills'));
+		expect(root).toBe(path.join(path.resolve(process.env.SKILLS_VOLUME!), 'u1'));
 	});
 
 	it('resolves shared scope under shared/', () => {
 		const root = paths.skillsRoot('shared', 'u1');
-		expect(root).toBe(path.join(path.resolve(process.env.MEMORY_VOLUME!), 'shared', 'skills'));
+		expect(root).toBe(path.join(path.resolve(process.env.SKILLS_VOLUME!), 'shared'));
 	});
 });
 
