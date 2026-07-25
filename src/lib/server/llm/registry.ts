@@ -36,7 +36,8 @@ function buildFactory(provider: ProviderRow): LanguageModelFactory {
 	const p = createOpenAICompatible({
 		name: provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
 		apiKey,
-		baseURL: provider.base_url
+		baseURL: provider.base_url,
+		includeUsage: true,
 	});
 	return (modelId) => p(modelId);
 }
