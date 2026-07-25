@@ -16,26 +16,36 @@ import { seedDefaultSkills } from '$lib/server/skills/defaults.js';
 
 const log = createLogger('server');
 
-if (!building) {
-	seedBuiltinAgent(getDb());
-	seedMemoryCleanupAgent(getDb());
-	const interrupted = failRunningAgentRuns(getDb());
-	if (interrupted > 0) {
-		log.warn(`Marked ${interrupted} interrupted agent run(s) as failed`);
+	if (!building) {
+		try {
+			seedBuiltinAgent(getDb());
+			seedMemoryCleanupAgent(getDb());
+			const interrupted = failRunningAgentRuns(getDb());
+			if (interrupted > 0) {
+				log.warn(`Marked ${interrupted} interrupted agent run(s) as failed`);
+			}
+			const interruptedProxy = failRunningProxyRequests(getDb());
+			if (interruptedProxy > 0) {
+				log.warn(`Marked ${interruptedProxy} interrupted proxy request(s) as failed`);
+			}
+		} catch (e) {
+			log.error('Failed to seed builtin agent or clean up runs:', e instanceof Error ? e.message : String(e));
+		}
+		setTimeout(() => {
+			try {
+				const { upserted, removed } = reconcileMemoryFts(getDb());
+				if (upserted > 0 || removed > 0) {
+					log.info(`Memory index reconciled: ${upserted} upserted, ${removed} removed`);
+				}
+			} catch (e) {
+				log.error('Failed to reconcile memory FTS:', e instanceof Error ? e.message : String(e));
+			}
+		}, 0);
+		seedDefaultSkills();
+		startAgentEventDispatcher();
+		startAgentScheduler(getDb());
+		startDailyJobs(getDb());
 	}
-	const interruptedProxy = failRunningProxyRequests(getDb());
-	if (interruptedProxy > 0) {
-		log.warn(`Marked ${interruptedProxy} interrupted proxy request(s) as failed`);
-	}
-	const { upserted, removed } = reconcileMemoryFts(getDb());
-	if (upserted > 0 || removed > 0) {
-		log.info(`Memory index reconciled: ${upserted} upserted, ${removed} removed`);
-	}
-	seedDefaultSkills();
-	startAgentEventDispatcher();
-	startAgentScheduler(getDb());
-	startDailyJobs(getDb());
-}
 
 const authRoutes: Handle = ({ event, resolve }) =>
 	svelteKitHandler({ event, resolve, auth, building });

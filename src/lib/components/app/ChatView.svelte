@@ -23,6 +23,8 @@
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
+	import MicButton from '$lib/components/app/MicButton.svelte';
+	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import {
 		chatMessageToUIMessage,
 		type Agent,
@@ -57,8 +59,20 @@
 	// svelte-ignore state_referenced_locally
 	let conversation = $state(initialConversation);
 	let input = $state('');
+	const speech = createSpeechRecognition();
 	let selectedFiles = $state<File[]>([]);
 	let fileInput: HTMLInputElement | undefined = $state();
+
+	const displayInput = $derived(speech.recording ? (input + ' ' + speech.display).trim() : input);
+
+	$effect(() => {
+		if (!speech.recording && speech.finalTranscript) {
+			input = (input + ' ' + speech.finalTranscript).trim();
+			speech.reset();
+		}
+	});
+
+	$effect(() => () => speech.destroy());
 
 	function createChat(): Chat<UIMessage> {
 		return new Chat({
@@ -211,6 +225,8 @@
 	const SKILL_CMD = /^\/skill\s+([a-z0-9][a-z0-9-]{0,63})\s*/i;
 
 	async function send(text: string) {
+		speech.stop();
+		speech.reset();
 		let trimmed = text.trim();
 		if ((!trimmed && selectedFiles.length === 0) || streaming) return;
 		let skill: string | undefined;
@@ -341,16 +357,19 @@
 			</div>
 		{/if}
 		<PromptInput
-			value={input}
+			value={displayInput}
 			onValueChange={(v) => (input = v)}
 			isLoading={streaming}
-			onSubmit={() => send(input)}
+			onSubmit={() => send(displayInput)}
 		>
 			<PromptInputTextarea placeholder="Ask anything…" />
 			<PromptInputActions class="justify-between">
-				<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
-					<PaperclipIcon class="size-4" />
-				</Button>
+				<div class="flex items-center gap-1">
+					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
+						<PaperclipIcon class="size-4" />
+					</Button>
+					<MicButton {speech} />
+				</div>
 				{#if streaming}
 					<Button size="sm" variant="destructive" aria-label="Stop" onclick={stop}>
 						<SquareIcon class="size-4" />

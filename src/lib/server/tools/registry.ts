@@ -45,25 +45,35 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 	const tools: Record<string, Tool> = {};
 	const toolToServer: Record<string, string> = {};
 	const closers: Array<() => Promise<void>> = [];
-	for (const row of rows) {
-		try {
-			const conn = await connectServer(row, ctx);
-			closers.push(conn.close);
-			const set = wrapMcpTools(
-				(await conn.client.tools()) as unknown as Record<string, Tool>,
-				row.name
-			);
-			for (const [name, tool] of Object.entries(set)) {
-				if (tools[name]) {
-					log.warn(`MCP tool name collision: "${name}" from ${row.name} skipped`);
-					continue;
+	const results = await Promise.allSettled(
+		rows.map((row) => connectServer(row, ctx))
+	);
+	for (let i = 0; i < rows.length; i++) {
+		const row = rows[i];
+		const result = results[i];
+		if (result.status === 'fulfilled') {
+			try {
+				closers.push(result.value.close);
+				const set = wrapMcpTools(
+					(await result.value.client.tools()) as unknown as Record<string, Tool>,
+					row.name
+				);
+				for (const [name, tool] of Object.entries(set)) {
+					if (tools[name]) {
+						log.warn(`MCP tool name collision: "${name}" from ${row.name} skipped`);
+						continue;
+					}
+					tools[name] = tool;
+					toolToServer[name] = row.name;
 				}
-				tools[name] = tool;
-				toolToServer[name] = row.name;
+			} catch (e) {
+				log.warn(`MCP server ${row.name} unavailable:`, {
+					error: e instanceof Error ? e.message : String(e)
+				});
 			}
-		} catch (e) {
+		} else {
 			log.warn(`MCP server ${row.name} unavailable:`, {
-				error: e instanceof Error ? e.message : String(e)
+				error: result.reason instanceof Error ? result.reason.message : String(result.reason)
 			});
 		}
 	}

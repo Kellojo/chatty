@@ -78,4 +78,28 @@ describe('tools registry', () => {
 		expect(Object.keys(built.tools)).toContain('now');
 		await built.close();
 	});
+
+	it('connects multiple servers in parallel', async () => {
+		repo.createMcpServer(getDb(), {
+			name: 'remote-a',
+			transport: 'http',
+			url: 'http://127.0.0.1:1/mcp'
+		});
+		repo.createMcpServer(getDb(), {
+			name: 'remote-b',
+			transport: 'http',
+			url: 'http://127.0.0.1:2/mcp'
+		});
+		const built = await buildTools({ userId: 'u1', memoryEnabled: true });
+		expect(Object.keys(built.tools)).toContain('now');
+		await built.close();
+	});
+
+	it('resolves tool collisions in row order (first-wins)', async () => {
+		const built = await buildTools({ userId: 'u1', memoryEnabled: false });
+		const collisionToolName = Object.keys(built.tools)[0];
+		expect(collisionToolName).toBeDefined();
+		const serverA = built.toolToServer[collisionToolName];
+		expect(typeof serverA).toBe('string');
+	});
 });

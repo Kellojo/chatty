@@ -16,6 +16,8 @@
 	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
 	import XIcon from '@lucide/svelte/icons/x';
 	import ModelPicker from '$lib/components/app/ModelPicker.svelte';
+	import MicButton from '$lib/components/app/MicButton.svelte';
+	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import { decodeModelRef } from '$lib/model-ref.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
@@ -26,6 +28,17 @@
 	let { data }: { data: PageData } = $props();
 
 	let input = $state('');
+	const speech = createSpeechRecognition();
+	const displayInput = $derived(speech.recording ? (input + ' ' + speech.display).trim() : input);
+
+	$effect(() => {
+		if (!speech.recording && speech.finalTranscript) {
+			input = (input + ' ' + speech.finalTranscript).trim();
+			speech.reset();
+		}
+	});
+
+	$effect(() => () => speech.destroy());
 	let busy = $state(false);
 	let picked = $state('');
 	let personaId = $state('');
@@ -70,6 +83,8 @@
 	);
 
 	async function startChat(text: string) {
+		speech.stop();
+		speech.reset();
 		const trimmed = text.trim();
 		if ((!trimmed && selectedFiles.length === 0) || busy || modelMissing) return;
 		busy = true;
@@ -151,7 +166,7 @@
 				{/each}
 			</div>
 		{/if}
-		<PromptInput value={input} onValueChange={(v) => (input = v)} onSubmit={() => startChat(input)}>
+		<PromptInput value={displayInput} onValueChange={(v) => (input = v)} onSubmit={() => startChat(displayInput)}>
 			<PromptInputTextarea placeholder="Ask anything…" />
 			<PromptInputActions class="justify-between">
 				<div class="flex items-center gap-1">
@@ -165,6 +180,7 @@
 					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 						<PaperclipIcon class="size-4" />
 					</Button>
+					<MicButton {speech} />
 				</div>
 				<Button
 					size="sm"

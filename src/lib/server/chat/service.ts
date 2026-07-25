@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {
 	convertToModelMessages,
@@ -40,6 +40,7 @@ import { buildSystemPrompt } from '../llm/systemPrompt.js';
 import { resolveSkill } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
 import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
+import { attachmentCache } from './attachmentCache.js';
 import { registerStream, releaseStream } from './streams.js';
 import { generateConversationTitle } from './title.js';
 
@@ -63,23 +64,28 @@ function attachmentIdFromUrl(url: string, conversationId: string): string | null
 	return id || null;
 }
 
-function inlineAttachmentParts(db: Db, conversationId: string, messages: UIMessage[]): UIMessage[] {
-	return messages.map((message) => ({
+async function inlineAttachmentParts(db: Db, conversationId: string, messages: UIMessage[]): Promise<UIMessage[]> {
+	return await Promise.all(messages.map(async (message) => ({
 		...message,
-		parts: message.parts.map((part) => {
+		parts: await Promise.all(message.parts.map(async (part) => {
 			if (part.type !== 'file') return part;
 			const attachmentId = attachmentIdFromUrl(part.url, conversationId);
 			if (!attachmentId) return part;
 			const row = getAttachment(db, attachmentId);
 			if (!row) return part;
 			try {
-				const bytes = fs.readFileSync(resolveAttachment(row.path));
-				return { ...part, url: `data:${row.mime};base64,${bytes.toString('base64')}` };
+				let dataUri = attachmentCache.get(attachmentId);
+				if (dataUri === undefined) {
+					const bytes = await fs.readFile(resolveAttachment(row.path));
+					dataUri = `data:${row.mime};base64,${bytes.toString('base64')}`;
+					attachmentCache.set(attachmentId, dataUri);
+				}
+				return { ...part, url: dataUri };
 			} catch {
 				return part;
 			}
-		})
-	}));
+		}))
+	})));
 }
 
 function ensureModel(db: Db, userId: string, conversation: ConversationRow): ConversationRow {
