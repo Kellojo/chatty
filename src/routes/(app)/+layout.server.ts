@@ -6,7 +6,7 @@ import {
 	listUnreadChatIds,
 	toPublic
 } from '$lib/server/db/repo/conversations.js';
-import { getSidebarOpen } from '$lib/server/db/repo/user-settings.js';
+import { getSidebarOpen, getUserSettings } from '$lib/server/db/repo/user-settings.js';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
@@ -22,6 +22,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		conversations: rows.slice(0, CONVERSATIONS_PAGE_SIZE).map(toPublic),
 		hasMoreConversations: rows.length > CONVERSATIONS_PAGE_SIZE,
 		unreadIds: listUnreadChatIds(db, locals.user.id),
-		sidebarOpen: getSidebarOpen(db, locals.user.id)
+		sidebarOpen: getSidebarOpen(db, locals.user.id),
+		settings: getUserSettings(db, locals.user.id)
 	};
 };

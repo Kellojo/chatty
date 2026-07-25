@@ -1,21 +1,13 @@
 <script lang="ts">
 	import { setMode } from 'mode-watcher';
 	import { toast } from 'svelte-sonner';
-	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
-	import {
-		MAX_GLOBAL_INSTRUCTIONS_LENGTH,
-		MAX_SUGGESTIONS,
-		THEMES,
-		TIME_FORMATS,
-		type Theme,
-		type TimeFormat
-	} from '$lib/user-settings.js';
-	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import { THEMES, TIME_FORMATS, type Theme, type TimeFormat } from '$lib/user-settings.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -38,17 +30,8 @@
 	let timeFormat = $state<TimeFormat>(data.settings.timeFormat);
 	let timeFormatBusy = $state(false);
 
-	let rows = $state(data.settings.suggestions.map((text) => ({ id: crypto.randomUUID(), text })));
-	let suggestionsBusy = $state(false);
-
-	let instructions = $state(data.settings.globalInstructions);
-	let savedInstructions = $state(data.settings.globalInstructions);
-	let instructionsBusy = $state(false);
-
 	async function putSettings(body: {
 		theme?: Theme;
-		suggestions?: string[];
-		globalInstructions?: string;
 		timeFormat?: TimeFormat;
 	}) {
 		const res = await fetch('/api/user/settings', {
@@ -94,58 +77,41 @@
 		}
 	}
 
-	function addRow() {
-		if (rows.length >= MAX_SUGGESTIONS) return;
-		rows = [...rows, { id: crypto.randomUUID(), text: '' }];
+	let passwordDialogOpen = $state(false);
+	let currentPassword = $state('');
+	let newPassword = $state('');
+	let confirmNewPassword = $state('');
+	let passwordBusy = $state(false);
+
+	function openPasswordDialog() {
+		currentPassword = '';
+		newPassword = '';
+		confirmNewPassword = '';
+		passwordDialogOpen = true;
 	}
 
-	function removeRow(id: string) {
-		rows = rows.filter((row) => row.id !== id);
-	}
-
-	async function saveSuggestions() {
-		if (suggestionsBusy) return;
-		const cleaned = rows.map((row) => row.text.trim()).filter((text) => text.length > 0);
-		suggestionsBusy = true;
-		try {
-			await putSettings({ suggestions: cleaned });
-			rows = cleaned.map((text) => ({ id: crypto.randomUUID(), text }));
-			toast.success('Suggestions saved');
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to save suggestions');
-		} finally {
-			suggestionsBusy = false;
+	async function submitPassword(event: SubmitEvent) {
+		event.preventDefault();
+		if (passwordBusy || !currentPassword || !newPassword || newPassword !== confirmNewPassword) {
+			toast.error('Please fill in all fields and ensure passwords match.');
+			return;
 		}
-	}
-
-	async function saveInstructions() {
-		if (instructionsBusy) return;
-		const trimmed = instructions.trim();
-		if (trimmed === savedInstructions) return;
-		instructionsBusy = true;
+		passwordBusy = true;
 		try {
-			await putSettings({ globalInstructions: trimmed });
-			savedInstructions = trimmed;
-			toast.success(trimmed ? 'Instructions saved' : 'Instructions cleared');
+			await fetch('/api/user/password', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ currentPassword, newPassword })
+			});
+			toast.success('Password updated');
+			passwordDialogOpen = false;
+			currentPassword = '';
+			newPassword = '';
+			confirmNewPassword = '';
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to save instructions');
+			toast.error(e instanceof Error ? e.message : 'Failed to update password');
 		} finally {
-			instructionsBusy = false;
-		}
-	}
-
-	async function resetInstructions() {
-		if (instructionsBusy || !savedInstructions) return;
-		instructionsBusy = true;
-		try {
-			await putSettings({ globalInstructions: '' });
-			instructions = '';
-			savedInstructions = '';
-			toast.success('Instructions cleared');
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to reset instructions');
-		} finally {
-			instructionsBusy = false;
+			passwordBusy = false;
 		}
 	}
 </script>
@@ -207,83 +173,68 @@
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>Chat suggestions</Card.Title>
-			<Card.Description>
-				Shown as quick-start chips on the home page. Up to {MAX_SUGGESTIONS} suggestions.
-			</Card.Description>
+			<Card.Title>Change password</Card.Title>
+			<Card.Description>Update your account password.</Card.Description>
 		</Card.Header>
-		<Card.Content class="flex flex-col gap-3">
-			{#each rows as row (row.id)}
-				<div class="flex items-center gap-2">
-					<Input bind:value={row.text} maxlength={200} placeholder="Suggestion text" />
-					<Button
-						variant="ghost"
-						size="sm"
-						onclick={() => removeRow(row.id)}
-						aria-label="Remove suggestion"
-					>
-						<XIcon class="size-4" />
-					</Button>
-				</div>
-			{:else}
-				<p class="text-sm text-muted-foreground">No suggestions yet. Add one below.</p>
-			{/each}
-			<div class="flex items-center gap-2">
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={addRow}
-					disabled={rows.length >= MAX_SUGGESTIONS}
-				>
-					Add suggestion
-				</Button>
-				<Button size="sm" onclick={saveSuggestions} disabled={suggestionsBusy}>
-					{suggestionsBusy ? 'Saving…' : 'Save suggestions'}
-				</Button>
-			</div>
-		</Card.Content>
-	</Card.Root>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Response instructions</Card.Title>
-			<Card.Description>
-				Tell the assistant how to respond (e.g. "never use emojis"). Applies to every chat, in
-				addition to any per-conversation system prompt.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-2">
-			<Textarea
-				bind:value={instructions}
-				rows={4}
-				maxlength={MAX_GLOBAL_INSTRUCTIONS_LENGTH}
-				placeholder="e.g. Answer concisely and never use emojis."
-			/>
-			<div class="flex items-center justify-between">
-				<p class="text-xs text-muted-foreground">
-					This is added to the system prompt of every chat. Leave empty for no global instructions.
-				</p>
-				<span class="shrink-0 text-xs text-muted-foreground"
-					>{instructions.length}/{MAX_GLOBAL_INSTRUCTIONS_LENGTH}</span
-				>
-			</div>
-			<div class="flex justify-end gap-2">
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={resetInstructions}
-					disabled={instructionsBusy || !savedInstructions}
-				>
-					Clear
-				</Button>
-				<Button
-					size="sm"
-					onclick={saveInstructions}
-					disabled={instructionsBusy || instructions.trim() === savedInstructions}
-				>
-					{instructionsBusy ? 'Saving…' : 'Save instructions'}
-				</Button>
-			</div>
+		<Card.Content class="flex justify-end">
+			<Button onclick={openPasswordDialog}>Update password</Button>
 		</Card.Content>
 	</Card.Root>
 </div>
+
+<Dialog.Root open={passwordDialogOpen} onOpenChange={(open) => {
+	passwordDialogOpen = open;
+	if (!open) {
+		currentPassword = '';
+		newPassword = '';
+		confirmNewPassword = '';
+	}
+}}>
+	<Dialog.Content>
+		<Dialog.Header>
+			<Dialog.Title>Update password</Dialog.Title>
+		</Dialog.Header>
+		<form onsubmit={submitPassword} class="flex flex-col gap-4">
+			<div class="flex flex-col gap-1">
+				<Label for="dialog-current-password">Current password</Label>
+				<Input
+					id="dialog-current-password"
+					type="password"
+					bind:value={currentPassword}
+					required
+					placeholder="Enter current password"
+					autocomplete="current-password"
+				/>
+			</div>
+			<div class="flex flex-col gap-1">
+				<Label for="dialog-new-password">New password</Label>
+				<Input
+					id="dialog-new-password"
+					type="password"
+					bind:value={newPassword}
+					required
+					minlength={8}
+					placeholder="At least 8 characters"
+					autocomplete="new-password"
+				/>
+			</div>
+			<div class="flex flex-col gap-1">
+				<Label for="dialog-confirm-new-password">Confirm new password</Label>
+				<Input
+					id="dialog-confirm-new-password"
+					type="password"
+					bind:value={confirmNewPassword}
+					required
+					minlength={8}
+					placeholder="Re-enter new password"
+					autocomplete="new-password"
+				/>
+			</div>
+			<Dialog.Footer>
+				<Button type="submit" disabled={passwordBusy}>
+					{passwordBusy ? 'Updating…' : 'Update password'}
+				</Button>
+			</Dialog.Footer>
+		</form>
+	</Dialog.Content>
+</Dialog.Root>
