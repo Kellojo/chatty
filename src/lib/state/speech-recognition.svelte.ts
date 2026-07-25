@@ -7,6 +7,10 @@ const _w: any = browser ? window : null;
 const SpeechRecognitionImpl = _w?.SpeechRecognition ?? _w?.webkitSpeechRecognition;
 const supported = !!SpeechRecognitionImpl;
 
+if (browser && !supported) {
+	console.warn('Speech recognition is not supported in this browser');
+}
+
 export function createSpeechRecognition() {
 	let recording = $state(false);
 	let finalTranscript = $state('');
@@ -29,7 +33,6 @@ export function createSpeechRecognition() {
 	}
 
 	function onError(event: SpeechRecognitionEvent): string | undefined {
-		console.log(event);
 		const error = event.error;
 		let message: string;
 		if (error === 'not-allowed' || error === 'service-not-allowed') {
@@ -57,7 +60,6 @@ export function createSpeechRecognition() {
 		r.continuous = true;
 		r.interimResults = true;
 		r.lang = navigator.language ?? 'en';
-		r.processingLocally = true;
 
 		recognition = r;
 		finalTranscript = '';
@@ -76,7 +78,8 @@ export function createSpeechRecognition() {
 		try {
 			recording = true;
 			r.start();
-		} catch {
+		} catch (e) {
+			console.error('Speech recognition start failed:', e);
 			recording = false;
 		}
 	}
@@ -105,9 +108,15 @@ export function createSpeechRecognition() {
 		get recording() {
 			return recording;
 		},
-		finalTranscript,
-		interim,
-		display,
+		get finalTranscript() {
+			return finalTranscript;
+		},
+		get interim() {
+			return interim;
+		},
+		get display() {
+			return display;
+		},
 		start,
 		stop,
 		reset,

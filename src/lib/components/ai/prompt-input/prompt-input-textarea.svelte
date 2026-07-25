@@ -46,7 +46,7 @@
 
 <Textarea
 	bind:ref={context.textareaRef}
-	value={context.value}
+	bind:value={context.value}
 	oninput={handleInput}
 	onkeydown={handleKeyDown}
 	class={cn(

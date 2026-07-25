@@ -46,14 +46,11 @@
 		}
 	);
 
-	watch(
-		() => value,
-		(newValue) => {
-			if (newValue !== undefined) {
-				contextInstance.value = newValue;
-			}
+	$effect(() => {
+		if (value !== undefined) {
+			contextInstance.value = value;
 		}
-	);
+	});
 
 	watch(
 		() => onValueChange,
