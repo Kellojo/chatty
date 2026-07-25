@@ -15,11 +15,7 @@ const patchSchema = z.object({
 	transport: z.enum(['http', 'sse']).optional(),
 	url: z.url().nullish(),
 	token: z.string().min(1).nullable().optional(),
-	enabled: z.boolean().optional(),
-	scopes: z
-		.array(z.enum(['chat', 'agent']))
-		.min(1)
-		.optional()
+	enabled: z.boolean().optional()
 });
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {

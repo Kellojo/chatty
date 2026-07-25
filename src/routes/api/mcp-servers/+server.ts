@@ -15,11 +15,7 @@ const createSchema = z.object({
 	transport: z.enum(['http', 'sse']),
 	url: z.url(),
 	token: z.string().min(1).nullish(),
-	enabled: z.boolean().optional(),
-	scopes: z
-		.array(z.enum(['chat', 'agent']))
-		.min(1)
-		.optional()
+	enabled: z.boolean().optional()
 });
 
 export const GET: RequestHandler = ({ locals }) => {

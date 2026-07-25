@@ -7,7 +7,6 @@ export const GET: RequestHandler = async ({ locals }) => {
 	const user = requireUser(locals);
 	const { tools, toolToServer, close } = await buildTools({
 		userId: user.id,
-		mode: 'agent',
 		memoryEnabled: true
 	});
 	try {

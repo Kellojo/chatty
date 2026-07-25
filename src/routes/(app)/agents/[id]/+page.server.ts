@@ -17,7 +17,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!agent || (agent.user_id !== null && agent.user_id !== user.id)) {
 		error(404, { message: 'Agent not found' });
 	}
-	const built = await buildTools({ userId: user.id, mode: 'agent', memoryEnabled: true });
+	const built = await buildTools({ userId: user.id, memoryEnabled: true });
 	try {
 		const tools = Object.entries(built.tools)
 			.map(([name, t]) => ({

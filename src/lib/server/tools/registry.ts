@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { Tool } from 'ai';
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
-import { listEnabledMcpServers, type McpMode } from '../db/repo/mcp-servers.js';
+import { listEnabledMcpServers } from '../db/repo/mcp-servers.js';
 import { createLogger } from '../logger.js';
 import { connectServer } from '../mcp/clientManager.js';
 import type { CallerContext } from '../mcp/types.js';
@@ -12,7 +12,6 @@ const log = createLogger('tools');
 
 export interface BuildToolsInput {
 	userId: string;
-	mode: McpMode;
 	memoryEnabled: boolean;
 	workspaceDir?: string | null;
 	agentAllowlist?: string[];
@@ -40,7 +39,7 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		conversationId: input.conversationId,
 		agentRunId: input.agentRunId
 	};
-	const rows = listEnabledMcpServers(db, input.mode).filter(
+	const rows = listEnabledMcpServers(db).filter(
 		(row) => input.memoryEnabled || row.name !== 'memory'
 	);
 	const tools: Record<string, Tool> = {};

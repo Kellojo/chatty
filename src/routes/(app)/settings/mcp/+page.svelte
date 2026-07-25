@@ -183,7 +183,6 @@
 				<Table.Head>Name</Table.Head>
 				<Table.Head>Transport</Table.Head>
 				<Table.Head>URL</Table.Head>
-				<Table.Head>Scopes</Table.Head>
 				<Table.Head>Enabled</Table.Head>
 				<Table.Head class="text-right">Actions</Table.Head>
 			</Table.Row>
@@ -203,7 +202,6 @@
 					<Table.Cell class="max-w-48 truncate text-muted-foreground" title={server.url ?? ''}>
 						{server.url ?? '—'}
 					</Table.Cell>
-					<Table.Cell class="text-muted-foreground">{server.scopes.join(', ')}</Table.Cell>
 					<Table.Cell>
 						<Switch
 							checked={enabledOverride[server.id] ?? server.enabled}
@@ -236,7 +234,7 @@
 				</Table.Row>
 			{:else}
 				<Table.Row>
-					<Table.Cell colspan={6} class="text-center text-muted-foreground">
+					<Table.Cell colspan={5} class="text-center text-muted-foreground">
 						No MCP servers configured.
 					</Table.Cell>
 				</Table.Row>

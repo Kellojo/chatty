@@ -39,7 +39,6 @@ export interface McpServerInfo {
 	url: string | null;
 	hasToken: boolean;
 	enabled: boolean;
-	scopes: ('chat' | 'agent')[];
 	builtin: boolean;
 }
 

@@ -3,7 +3,6 @@ import { encryptSecret } from '../../crypto.js';
 import type { Db } from '../index.js';
 
 export type McpTransport = 'builtin' | 'stdio' | 'http' | 'sse';
-export type McpMode = 'chat' | 'agent';
 
 export interface McpServerRow {
 	id: string;
@@ -14,7 +13,6 @@ export interface McpServerRow {
 	url: string | null;
 	token_enc: string | null;
 	enabled: number;
-	scopes: string;
 	builtin: number;
 }
 
@@ -25,18 +23,7 @@ export interface McpServer {
 	url: string | null;
 	hasToken: boolean;
 	enabled: boolean;
-	scopes: McpMode[];
 	builtin: boolean;
-}
-
-function parseScopes(raw: string): McpMode[] {
-	try {
-		const parsed = JSON.parse(raw) as unknown;
-		if (!Array.isArray(parsed)) return ['chat', 'agent'];
-		return parsed.filter((s): s is McpMode => s === 'chat' || s === 'agent');
-	} catch {
-		return ['chat', 'agent'];
-	}
 }
 
 export function toPublic(row: McpServerRow): McpServer {
@@ -47,7 +34,6 @@ export function toPublic(row: McpServerRow): McpServer {
 		url: row.url,
 		hasToken: row.token_enc != null && row.token_enc.length > 0,
 		enabled: row.enabled === 1,
-		scopes: parseScopes(row.scopes),
 		builtin: row.builtin === 1
 	};
 }
@@ -58,10 +44,8 @@ export function listMcpServers(db: Db): McpServerRow[] {
 		.all() as McpServerRow[];
 }
 
-export function listEnabledMcpServers(db: Db, mode: McpMode): McpServerRow[] {
-	return listMcpServers(db).filter(
-		(row) => row.enabled === 1 && parseScopes(row.scopes).includes(mode)
-	);
+export function listEnabledMcpServers(db: Db): McpServerRow[] {
+	return listMcpServers(db).filter((row) => row.enabled === 1);
 }
 
 export function getMcpServer(db: Db, id: string): McpServerRow | undefined {
@@ -74,22 +58,20 @@ export interface CreateMcpServerInput {
 	url: string;
 	token?: string | null;
 	enabled?: boolean;
-	scopes?: McpMode[];
 }
 
 export function createMcpServer(db: Db, input: CreateMcpServerInput): McpServerRow {
 	const id = randomUUID();
 	db.prepare(
-		`INSERT INTO mcp_servers (id, name, transport, url, token_enc, enabled, scopes, builtin)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
+		`INSERT INTO mcp_servers (id, name, transport, url, token_enc, enabled, builtin)
+		 VALUES (?, ?, ?, ?, ?, ?, 0)`
 	).run(
 		id,
 		input.name,
 		input.transport,
 		input.url,
 		input.token ? encryptSecret(input.token) : null,
-		input.enabled === false ? 0 : 1,
-		JSON.stringify(input.scopes ?? ['chat', 'agent'])
+		input.enabled === false ? 0 : 1
 	);
 	return getMcpServer(db, id)!;
 }
@@ -100,7 +82,6 @@ export interface UpdateMcpServerInput {
 	url?: string | null;
 	token?: string | null;
 	enabled?: boolean;
-	scopes?: McpMode[];
 }
 
 export function updateMcpServer(
@@ -112,7 +93,7 @@ export function updateMcpServer(
 	if (!existing) return undefined;
 	const isBuiltin = existing.builtin === 1;
 	db.prepare(
-		`UPDATE mcp_servers SET name = ?, transport = ?, url = ?, token_enc = ?, enabled = ?, scopes = ?
+		`UPDATE mcp_servers SET name = ?, transport = ?, url = ?, token_enc = ?, enabled = ?
 		 WHERE id = ?`
 	).run(
 		!isBuiltin && patch.name !== undefined ? patch.name : existing.name,
@@ -124,7 +105,6 @@ export function updateMcpServer(
 				: null
 			: existing.token_enc,
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
-		patch.scopes !== undefined ? JSON.stringify(patch.scopes) : existing.scopes,
 		id
 	);
 	return getMcpServer(db, id);

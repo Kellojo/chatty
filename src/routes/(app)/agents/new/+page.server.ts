@@ -11,7 +11,7 @@ import type { PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ locals }) => {
 	const user = requireUser(locals);
 	const db = getDb();
-	const built = await buildTools({ userId: user.id, mode: 'agent', memoryEnabled: true });
+	const built = await buildTools({ userId: user.id, memoryEnabled: true });
 	try {
 		const tools = Object.entries(built.tools)
 			.map(([name, t]) => ({

@@ -35,7 +35,6 @@ describe('mcp-servers repo', () => {
 		expect(created.token_enc).not.toBe('secret-token');
 		const pub = repo.toPublic(repo.getMcpServer(db, created.id)!);
 		expect(pub.hasToken).toBe(true);
-		expect(pub.scopes).toEqual(['chat', 'agent']);
 		expect(repo.deleteMcpServer(db, created.id)).toBe(true);
 		expect(repo.getMcpServer(db, created.id)).toBeUndefined();
 	});
@@ -45,28 +44,22 @@ describe('mcp-servers repo', () => {
 		expect(repo.getMcpServer(db, 'builtin-fs')).toBeDefined();
 	});
 
-	it('updates enabled/scopes on builtin, ignores name/url changes', () => {
+	it('updates enabled on builtin, ignores name/url changes', () => {
 		const updated = repo.updateMcpServer(db, 'builtin-fs', {
 			name: 'renamed',
 			url: 'https://evil.example.com',
-			enabled: false,
-			scopes: ['agent']
+			enabled: false
 		})!;
 		expect(updated.name).toBe('fs');
 		expect(updated.url).toBeNull();
 		expect(updated.enabled).toBe(0);
-		expect(repo.toPublic(updated).scopes).toEqual(['agent']);
 	});
 
-	it('listEnabledMcpServers filters by enabled and mode', () => {
+	it('listEnabledMcpServers filters by enabled only', () => {
 		repo.updateMcpServer(db, 'builtin-fs', { enabled: false });
-		repo.updateMcpServer(db, 'builtin-settings', { scopes: ['agent'] });
-		const chatNames = repo.listEnabledMcpServers(db, 'chat').map((r) => r.name);
-		const agentNames = repo.listEnabledMcpServers(db, 'agent').map((r) => r.name);
-		expect(chatNames).not.toContain('fs');
-		expect(chatNames).not.toContain('settings');
-		expect(agentNames).toContain('settings');
-		expect(agentNames).not.toContain('fs');
+		const names = repo.listEnabledMcpServers(db).map((r) => r.name);
+		expect(names).not.toContain('fs');
+		expect(names).toContain('settings');
 	});
 
 	it('rejects duplicate names', () => {

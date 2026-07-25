@@ -164,7 +164,6 @@ export async function handleChatRequest(
 
 	const { tools, close } = await buildTools({
 		userId,
-		mode: conversation.mode === 'agent' ? 'agent' : 'chat',
 		memoryEnabled: conversation.memory_enabled === 1,
 		workspaceDir: conversationWorkspace(conversation.id),
 		agentAllowlist: agent?.tool_allowlist

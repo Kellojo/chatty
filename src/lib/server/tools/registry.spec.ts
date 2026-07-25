@@ -22,8 +22,8 @@ describe('tools registry', () => {
 		seedUser('u1', 'user');
 	});
 
-	it('builds tools from all enabled builtin servers in chat mode', async () => {
-		const built = await buildTools({ userId: 'u1', mode: 'chat', memoryEnabled: true });
+	it('builds tools from all enabled builtin servers', async () => {
+		const built = await buildTools({ userId: 'u1', memoryEnabled: true });
 		const names = Object.keys(built.tools);
 		for (const expected of [
 			'fetch',
@@ -45,26 +45,15 @@ describe('tools registry', () => {
 
 	it('skips disabled servers', async () => {
 		repo.updateMcpServer(getDb(), 'builtin-fs', { enabled: false });
-		const built = await buildTools({ userId: 'u1', mode: 'chat', memoryEnabled: true });
+		const built = await buildTools({ userId: 'u1', memoryEnabled: true });
 		expect(Object.keys(built.tools)).not.toContain('fs_ls');
 		expect(Object.keys(built.tools)).toContain('now');
 		await built.close();
 	});
 
-	it('honors per-server mode scopes', async () => {
-		repo.updateMcpServer(getDb(), 'builtin-settings', { scopes: ['agent'] });
-		const chat = await buildTools({ userId: 'u1', mode: 'chat', memoryEnabled: true });
-		expect(Object.keys(chat.tools)).not.toContain('get_setting');
-		await chat.close();
-		const agent = await buildTools({ userId: 'u1', mode: 'agent', memoryEnabled: true });
-		expect(Object.keys(agent.tools)).toContain('get_setting');
-		await agent.close();
-	});
-
 	it('applies the agent allowlist', async () => {
 		const built = await buildTools({
 			userId: 'u1',
-			mode: 'agent',
 			memoryEnabled: true,
 			agentAllowlist: ['now', 'fs_ls', 'nonexistent']
 		});
@@ -73,7 +62,7 @@ describe('tools registry', () => {
 	});
 
 	it('excludes memory tools when memoryEnabled=false', async () => {
-		const built = await buildTools({ userId: 'u1', mode: 'chat', memoryEnabled: false });
+		const built = await buildTools({ userId: 'u1', memoryEnabled: false });
 		expect(Object.keys(built.tools)).toContain('now');
 		expect(Object.keys(built.tools)).not.toContain('search_memory');
 		await built.close();
@@ -85,7 +74,7 @@ describe('tools registry', () => {
 			transport: 'http',
 			url: 'http://127.0.0.1:1/mcp'
 		});
-		const built = await buildTools({ userId: 'u1', mode: 'chat', memoryEnabled: true });
+		const built = await buildTools({ userId: 'u1', memoryEnabled: true });
 		expect(Object.keys(built.tools)).toContain('now');
 		await built.close();
 	});

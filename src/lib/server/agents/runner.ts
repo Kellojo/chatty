@@ -110,7 +110,6 @@ export async function startAgentRun(
 
 	const { tools, close } = await buildTools({
 		userId: input.userId,
-		mode: 'agent',
 		memoryEnabled: true,
 		workspaceDir,
 		agentAllowlist: agent.tool_allowlist
