@@ -163,7 +163,7 @@
 				{:else if part.type === 'file'}
 					{@const url = fileUrl(part)}
 					{#if part.mediaType?.startsWith('image/')}
-						<img src={url} alt="Attachment" class="max-h-64 rounded-md border" />
+						<img src={url} alt="Attachment" class="max-h-24 max-w-40 rounded-md border" />
 					{:else}
 						<!-- eslint-disable svelte/no-navigation-without-resolve -->
 						<a
@@ -235,52 +235,52 @@
 						>
 							<InfoIcon class="size-3.5" />
 						</button>
-					{#if open}
-						<div
-							class="absolute bottom-full left-0 z-20 mb-1.5 w-60 overflow-hidden rounded-lg border border-border bg-popover text-xs shadow-lg shadow-black/5 dark:shadow-black/40"
-						>
-							<div class="border-b border-border/60 px-3 py-2">
-								<div class="truncate font-mono text-[11px] text-foreground" title={usage.modelId}>
-									{usage.modelId}
+						{#if open}
+							<div
+								class="absolute bottom-full left-0 z-20 mb-1.5 w-60 overflow-hidden rounded-lg border border-border bg-popover text-xs shadow-lg shadow-black/5 dark:shadow-black/40"
+							>
+								<div class="border-b border-border/60 px-3 py-2">
+									<div class="truncate font-mono text-[11px] text-foreground" title={usage.modelId}>
+										{usage.modelId}
+									</div>
+									<div class="mt-0.5 text-[10px] tracking-wide text-muted-foreground uppercase">
+										Generation info
+									</div>
 								</div>
-								<div class="mt-0.5 text-[10px] tracking-wide text-muted-foreground uppercase">
-									Generation info
-								</div>
+								<dl class="px-3 py-2">
+									<div class="flex items-baseline justify-between py-0.5">
+										<dt class="text-muted-foreground">Cost</dt>
+										<dd class="text-sm font-medium text-foreground tabular-nums">
+											{formatCost(usage.costUsd)}
+										</dd>
+									</div>
+								</dl>
+								<dl class="border-t border-border/60 px-3 py-2">
+									<div class="flex items-baseline justify-between py-0.5">
+										<dt class="text-muted-foreground">Input</dt>
+										<dd class="text-foreground tabular-nums">{formatTokens(usage.inputTokens)}</dd>
+									</div>
+									<div class="flex items-baseline justify-between py-0.5">
+										<dt class="text-muted-foreground">Output</dt>
+										<dd class="text-foreground tabular-nums">{formatTokens(usage.outputTokens)}</dd>
+									</div>
+									<div class="flex items-baseline justify-between py-0.5">
+										<dt class="text-muted-foreground">Total</dt>
+										<dd class="text-foreground tabular-nums">{formatTokens(usage.totalTokens)}</dd>
+									</div>
+								</dl>
+								<dl class="border-t border-border/60 px-3 py-2">
+									<div class="flex items-baseline justify-between py-0.5">
+										<dt class="text-muted-foreground">Latency</dt>
+										<dd class="text-foreground tabular-nums">{formatLatency(usage.latencyMs)}</dd>
+									</div>
+									<div class="flex items-baseline justify-between py-0.5">
+										<dt class="text-muted-foreground">Throughput</dt>
+										<dd class="text-foreground tabular-nums">{tokensPerSecond(usage)} tok/s</dd>
+									</div>
+								</dl>
 							</div>
-							<dl class="px-3 py-2">
-								<div class="flex items-baseline justify-between py-0.5">
-									<dt class="text-muted-foreground">Cost</dt>
-									<dd class="text-sm font-medium text-foreground tabular-nums">
-										{formatCost(usage.costUsd)}
-									</dd>
-								</div>
-							</dl>
-							<dl class="border-t border-border/60 px-3 py-2">
-								<div class="flex items-baseline justify-between py-0.5">
-									<dt class="text-muted-foreground">Input</dt>
-									<dd class="text-foreground tabular-nums">{formatTokens(usage.inputTokens)}</dd>
-								</div>
-								<div class="flex items-baseline justify-between py-0.5">
-									<dt class="text-muted-foreground">Output</dt>
-									<dd class="text-foreground tabular-nums">{formatTokens(usage.outputTokens)}</dd>
-								</div>
-								<div class="flex items-baseline justify-between py-0.5">
-									<dt class="text-muted-foreground">Total</dt>
-									<dd class="text-foreground tabular-nums">{formatTokens(usage.totalTokens)}</dd>
-								</div>
-							</dl>
-							<dl class="border-t border-border/60 px-3 py-2">
-								<div class="flex items-baseline justify-between py-0.5">
-									<dt class="text-muted-foreground">Latency</dt>
-									<dd class="text-foreground tabular-nums">{formatLatency(usage.latencyMs)}</dd>
-								</div>
-								<div class="flex items-baseline justify-between py-0.5">
-									<dt class="text-muted-foreground">Throughput</dt>
-									<dd class="text-foreground tabular-nums">{tokensPerSecond(usage)} tok/s</dd>
-								</div>
-							</dl>
-						</div>
-					{/if}
+						{/if}
 					</div>
 				{/if}
 			</MessageActions>

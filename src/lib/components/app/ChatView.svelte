@@ -12,10 +12,11 @@
 		PromptInputActions
 	} from '$lib/components/ai/prompt-input/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { Badge } from '$lib/components/ui/badge/index.js';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
+	import FileIcon from '@lucide/svelte/icons/file';
+	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import XIcon from '@lucide/svelte/icons/x';
 	import ChatTopbar from './ChatTopbar.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
@@ -178,7 +179,7 @@
 	$effect(() => {
 		const pending = pendingMessage.consume();
 		if (!pending) return;
-		if (pending.files.length > 0) selectedFiles = [...selectedFiles, ...pending.files];
+		if (pending.files.length > 0) addFiles(pending.files);
 		send(pending.text);
 	});
 
@@ -275,7 +276,7 @@
 			const body = skill ? { body: { skill } } : undefined;
 			if (selectedFiles.length > 0) {
 				const fileParts = await uploadFiles();
-				selectedFiles = [];
+				clearFiles();
 				chat.sendMessage(
 					{
 						parts: [...(trimmed ? [{ type: 'text' as const, text: trimmed }] : []), ...fileParts]
@@ -311,7 +312,7 @@
 	}
 
 	const fileDrop = createFileDrop((files) => {
-		selectedFiles = [...selectedFiles, ...files];
+		addFiles(files);
 	});
 
 	// Navigating away destroys this view (the page uses {#key}); make sure the
@@ -325,13 +326,90 @@
 		};
 	});
 
+	// Object URLs for pending image previews, kept in a plain map (not reactive —
+	// entries are added/removed alongside every selectedFiles mutation below).
+	const previewUrls = new Map<File, string>();
+	function previewUrl(file: File): string | undefined {
+		return previewUrls.get(file);
+	}
+
+	const TEXT_TYPES = new Set(['application/json', 'application/xml']);
+	const TEXT_EXT = /\.(txt|md|markdown|csv|json|xml|log|ya?ml|toml)$/i;
+	const TEXT_PREVIEW_LEN = 300;
+	function isTextFile(file: File): boolean {
+		return file.type.startsWith('text/') || TEXT_TYPES.has(file.type) || TEXT_EXT.test(file.name);
+	}
+
+	// Snippets for pending text files, read async on add; plain map keyed by File.
+	const textPreviews = new Map<File, string>();
+	let textPreviewVersion = $state(0);
+	function textPreview(file: File): string | undefined {
+		void textPreviewVersion;
+		return textPreviews.get(file);
+	}
+
+	function addFiles(files: File[]) {
+		for (const f of files) {
+			if (f.type.startsWith('image/') && !previewUrls.has(f)) {
+				previewUrls.set(f, URL.createObjectURL(f));
+			} else if (isTextFile(f) && !textPreviews.has(f)) {
+				textPreviews.set(f, '');
+				void f
+					.text()
+					.then((t) => {
+						let snippet = t.replaceAll('\r\n', '\n').trim();
+						if (snippet.length > TEXT_PREVIEW_LEN)
+							snippet = snippet.slice(0, TEXT_PREVIEW_LEN) + '…';
+						textPreviews.set(f, snippet);
+						textPreviewVersion++;
+					})
+					.catch(() => {
+						textPreviews.delete(f);
+						textPreviewVersion++;
+					});
+			}
+		}
+		selectedFiles = [...selectedFiles, ...files];
+	}
+
+	function removeFile(file: File) {
+		const url = previewUrls.get(file);
+		if (url) {
+			URL.revokeObjectURL(url);
+			previewUrls.delete(file);
+		}
+		textPreviews.delete(file);
+		selectedFiles = selectedFiles.filter((f) => f !== file);
+	}
+
+	function clearFiles() {
+		for (const url of previewUrls.values()) URL.revokeObjectURL(url);
+		previewUrls.clear();
+		textPreviews.clear();
+		selectedFiles = [];
+	}
+
+	function formatBytes(bytes: number): string {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	}
+
+	onMount(() => {
+		return () => {
+			for (const url of previewUrls.values()) URL.revokeObjectURL(url);
+			previewUrls.clear();
+			textPreviews.clear();
+		};
+	});
+
 	function pickFiles() {
 		fileInput?.click();
 	}
 
 	function filesChosen(e: Event) {
 		const target = e.currentTarget as HTMLInputElement;
-		selectedFiles = [...selectedFiles, ...Array.from(target.files ?? [])];
+		addFiles(Array.from(target.files ?? []));
 		target.value = '';
 	}
 </script>
@@ -391,15 +469,53 @@
 		{#if selectedFiles.length > 0}
 			<div class="mb-2 flex flex-wrap gap-2">
 				{#each selectedFiles as file, i (file.name + i)}
-					<Badge variant="secondary" class="flex items-center gap-1">
-						{file.name}
+					{@const snippet = textPreview(file)}
+					<div class="relative w-40">
+						{#if file.type.startsWith('image/')}
+							<img
+								src={previewUrl(file)}
+								alt={file.name}
+								class="max-h-24 w-full rounded-md border object-cover"
+							/>
+						{:else if isTextFile(file)}
+							<div
+								class="flex h-24 flex-col overflow-hidden rounded-md border bg-muted/50 p-1.5"
+								title={file.name}
+							>
+								{#if snippet}
+									<p
+										class="line-clamp-4 flex-1 text-[10px] break-all whitespace-pre-wrap text-muted-foreground"
+									>
+										{snippet}
+									</p>
+								{:else}
+									<div class="flex flex-1 items-center justify-center text-muted-foreground">
+										<FileTextIcon class="size-5" />
+									</div>
+								{/if}
+							</div>
+						{:else}
+							<div
+								class="flex h-24 flex-col items-center justify-center gap-1 rounded-md border bg-muted/50 p-1.5 text-muted-foreground"
+								title={file.name}
+							>
+								<FileIcon class="size-6" />
+								<span class="text-[10px]">{formatBytes(file.size)}</span>
+							</div>
+						{/if}
+						<div
+							class="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+						>
+							{file.name}
+						</div>
 						<button
 							aria-label="Remove {file.name}"
-							onclick={() => (selectedFiles = selectedFiles.filter((_, j) => j !== i))}
+							class="absolute -top-1.5 -right-1.5 rounded-full bg-muted p-0.5 hover:bg-accent"
+							onclick={() => removeFile(file)}
 						>
 							<XIcon class="size-3" />
 						</button>
-					</Badge>
+					</div>
 				{/each}
 			</div>
 		{/if}
