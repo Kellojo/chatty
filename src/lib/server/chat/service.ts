@@ -29,6 +29,7 @@ import {
 import { getAttachment, linkAttachmentsToMessage } from '../db/repo/attachments.js';
 import { getAgent } from '../db/repo/agents.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
+import { getProvider } from '../db/repo/providers.js';
 import { computeCostUsd } from '../proxy/pricing.js';
 import { getGlobalInstructions } from '../db/repo/user-settings.js';
 import { publishServerEvent } from '../events/bus.js';
@@ -168,6 +169,24 @@ export async function handleChatRequest(
 		throw e;
 	}
 
+	const available = targets.filter((t) => {
+		const provider = getProvider(db, t.providerId);
+		if (!provider || provider.enabled !== 1) return false;
+		const model = findModel(db, t.providerId, t.modelId);
+		return model !== undefined && model.enabled === 1;
+	});
+	if (available.length === 0) {
+		const detail = targets
+			.map((t) => {
+				const provider = getProvider(db, t.providerId);
+				if (!provider || provider.enabled !== 1) return `provider "${t.providerId}" is unavailable`;
+				return `model "${t.modelId}" is disabled or unknown`;
+			})
+			.join('; ');
+		throw new ChatRequestError(400, `The selected model is not available: ${detail}`);
+	}
+	targets = available;
+
 	const { tools, close } = await buildTools({
 		userId,
 		memoryEnabled: conversation.memory_enabled === 1,
@@ -212,7 +231,7 @@ export async function handleChatRequest(
 		extraWarning: manualSkillWarning
 	});
 	const modelMessages = await convertToModelMessages(
-		inlineAttachmentParts(db, conversation.id, body.messages)
+		await inlineAttachmentParts(db, conversation.id, body.messages)
 	);
 	const stopWhen = stepCountIs(
 		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5
@@ -223,7 +242,13 @@ export async function handleChatRequest(
 	const stream = createUIMessageStream<UIMessage>({
 		originalMessages: body.messages,
 		generateId: () => randomUUID(),
-		onError: () => errorText ?? 'An error occurred while generating the response',
+		onError: (error) => {
+			log.error('Chat stream error', {
+				conversationId: conversation.id,
+				error: error instanceof Error ? error.message : String(error)
+			});
+			return errorText ?? 'An error occurred while generating the response';
+		},
 		execute: async ({ writer }) => {
 			let lastError: unknown = null;
 			let totalTokensUsed: import('ai').LanguageModelUsage | undefined;
@@ -254,6 +279,12 @@ export async function handleChatRequest(
 							: {}),
 						onError: ({ error }) => {
 							errorText = error instanceof Error ? error.message : String(error);
+							log.error('LLM stream error', {
+								conversationId: conversation.id,
+								providerId: target.providerId,
+								modelId: target.modelId,
+								error: errorText
+							});
 						}
 					});
 					const uiStream = result.toUIMessageStream({

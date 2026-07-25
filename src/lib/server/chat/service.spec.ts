@@ -45,6 +45,8 @@ const { getDb, closeDb } = await import('../db/index.js');
 const { handleChatRequest } = await import('./service.js');
 const { createConversation, getConversation } = await import('../db/repo/conversations.js');
 const { listMessages } = await import('../db/repo/messages.js');
+const { createProvider } = await import('../db/repo/providers.js');
+const { createModel } = await import('../db/repo/models.js');
 
 type Db = ReturnType<typeof getDb>;
 
@@ -52,6 +54,9 @@ function seed(db: Db) {
 	db.prepare(
 		"INSERT INTO \"user\" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u1', 'A', 'a@b.c', 0, 0, 0, 'user')"
 	).run();
+	createProvider(db, { name: 'P', type: 'openai-compatible' });
+	db.prepare("UPDATE providers SET id = 'p1'").run();
+	createModel(db, { providerId: 'p1', modelId: 'm1' });
 	const conversation = createConversation(db, 'u1', { providerId: 'p1', modelId: 'm1' });
 	db.prepare("UPDATE conversations SET title = 't' WHERE id = ?").run(conversation.id);
 	return conversation;
@@ -122,6 +127,9 @@ describe('handleChatRequest', () => {
 		db.prepare(
 			"INSERT INTO \"user\" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u1', 'A', 'a@b.c', 0, 0, 0, 'user')"
 		).run();
+		createProvider(db, { name: 'P', type: 'openai-compatible' });
+		db.prepare("UPDATE providers SET id = 'p1'").run();
+		createModel(db, { providerId: 'p1', modelId: 'm1' });
 		const conversation = createConversation(db, 'u1', { providerId: 'p1', modelId: 'm1' });
 
 		expect(getConversation(db, 'u1', conversation.id)!.title).toBe('');
@@ -145,6 +153,9 @@ describe('handleChatRequest', () => {
 		db.prepare(
 			"INSERT INTO \"user\" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u1', 'A', 'a@b.c', 0, 0, 0, 'user')"
 		).run();
+		createProvider(db, { name: 'P', type: 'openai-compatible' });
+		db.prepare("UPDATE providers SET id = 'p1'").run();
+		createModel(db, { providerId: 'p1', modelId: 'm1' });
 		const conversation = createConversation(db, 'u1', { providerId: 'p1', modelId: 'm1' });
 
 		const longPrompt = Array.from({ length: 20 }, (_, i) => `word${i + 1}`).join(' ');
@@ -188,6 +199,58 @@ describe('handleChatRequest', () => {
 			totalTokens: 3
 		});
 		expect(typeof usage.latencyMs).toBe('number');
+		closeDb();
+	});
+
+	it('rejects with 400 when the selected model is disabled', async () => {
+		const db = getDb();
+		db.prepare(
+			"INSERT INTO \"user\" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u1', 'A', 'a@b.c', 0, 0, 0, 'user')"
+		).run();
+		const provider = createProvider(db, { name: 'P', type: 'openai-compatible' });
+		createModel(db, { providerId: provider.id, modelId: 'm1', enabled: false });
+		const conversation = createConversation(db, 'u1', {
+			providerId: provider.id,
+			modelId: 'm1'
+		});
+
+		await expect(
+			handleChatRequest('u1', {
+				conversationId: conversation.id,
+				messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }]
+			})
+		).rejects.toMatchObject({
+			status: 400,
+			message: expect.stringContaining('disabled')
+		});
+		closeDb();
+	});
+
+	it('rejects with 400 when the selected provider is disabled', async () => {
+		const db = getDb();
+		db.prepare(
+			"INSERT INTO \"user\" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u1', 'A', 'a@b.c', 0, 0, 0, 'user')"
+		).run();
+		const provider = createProvider(db, {
+			name: 'P',
+			type: 'openai-compatible',
+			enabled: false
+		});
+		createModel(db, { providerId: provider.id, modelId: 'm1' });
+		const conversation = createConversation(db, 'u1', {
+			providerId: provider.id,
+			modelId: 'm1'
+		});
+
+		await expect(
+			handleChatRequest('u1', {
+				conversationId: conversation.id,
+				messages: [{ id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }]
+			})
+		).rejects.toMatchObject({
+			status: 400,
+			message: expect.stringContaining('unavailable')
+		});
 		closeDb();
 	});
 });

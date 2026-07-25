@@ -58,6 +58,19 @@ describe('code-exec server', () => {
 		expect(text).toContain('Result: done');
 	});
 
+	it('captures console.log calls', async () => {
+		const res = await callCodeExec({ code: 'console.log("Hello, World!");' });
+		const text = resultText(res);
+		expect(text).toContain('Hello, World!');
+	});
+
+	it('captures console.error and formats objects', async () => {
+		const res = await callCodeExec({ code: 'console.error("oops", { a: 1 });' });
+		const text = resultText(res);
+		expect(text).toContain('oops');
+		expect(text).toContain('{"a":1}');
+	});
+
 	it('handles syntax errors gracefully', async () => {
 		const res = await callCodeExec({ code: 'this is not valid javascript @@' });
 		expect((res as { isError?: boolean }).isError).toBe(true);

@@ -81,14 +81,34 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 			);
 
 			const logs: string[] = [];
+			const formatArg = (a: unknown): string => {
+				if (typeof a === 'string') return a;
+				try {
+					return JSON.stringify(a) ?? String(a);
+				} catch {
+					return String(a);
+				}
+			};
 			await jail.set(
 				'log',
 				new ivm.Callback((...args: unknown[]) => {
-					logs.push(args.map(String).join(' '));
+					logs.push(args.map(formatArg).join(' '));
 				})
 			);
 
 			const script = await isolate.compileScript(code);
+			// Provide console.log/warn/error/etc. inside the sandbox so agents get
+			// terminal-style output without having to know about the bare `log` global.
+			const bootstrap = await isolate.compileScript(`
+			globalThis.console = {
+				log: (...args) => log(...args),
+				info: (...args) => log(...args),
+				warn: (...args) => log(...args),
+				error: (...args) => log(...args),
+				debug: (...args) => log(...args)
+			};
+		`);
+			await bootstrap.run(context);
 			const result = await script.run(context, { timeout: timeoutMs });
 
 			let output = '';
@@ -121,7 +141,8 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'code_exec',
 		{
-			description: 'Execute JavaScript code in a sandbox with workspace file access',
+			description:
+				'Execute JavaScript code in a sandbox with workspace file access. Use console.log()/console.error() for output; the last evaluated expression is returned as the result. Globals: readFile(path), writeFile(path, content).',
 			inputSchema: {
 				code: z.string().describe('JavaScript code to execute'),
 				timeoutMs: z
