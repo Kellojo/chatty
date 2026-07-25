@@ -29,8 +29,8 @@ describe('tools registry', () => {
 			'fetch',
 			'now',
 			'search_chats',
-			'read_document',
-			'ls',
+			'fs_read',
+			'fs_ls',
 			'get_setting',
 			'search_memory',
 			'create_concept'
@@ -38,15 +38,15 @@ describe('tools registry', () => {
 			expect(names).toContain(expected);
 		}
 		expect(built.toolToServer.now).toBe('datetime');
-		expect(built.toolToServer.ls).toBe('bash');
+		expect(built.toolToServer.fs_ls).toBe('fs');
 		expect(built.toolToServer.search_memory).toBe('memory');
 		await built.close();
 	});
 
 	it('skips disabled servers', async () => {
-		repo.updateMcpServer(getDb(), 'builtin-bash', { enabled: false });
+		repo.updateMcpServer(getDb(), 'builtin-fs', { enabled: false });
 		const built = await buildTools({ userId: 'u1', mode: 'chat', memoryEnabled: true });
-		expect(Object.keys(built.tools)).not.toContain('ls');
+		expect(Object.keys(built.tools)).not.toContain('fs_ls');
 		expect(Object.keys(built.tools)).toContain('now');
 		await built.close();
 	});
@@ -66,9 +66,9 @@ describe('tools registry', () => {
 			userId: 'u1',
 			mode: 'agent',
 			memoryEnabled: true,
-			agentAllowlist: ['now', 'ls', 'nonexistent']
+			agentAllowlist: ['now', 'fs_ls', 'nonexistent']
 		});
-		expect(Object.keys(built.tools).sort()).toEqual(['ls', 'now']);
+		expect(Object.keys(built.tools).sort()).toEqual(['fs_ls', 'now']);
 		await built.close();
 	});
 

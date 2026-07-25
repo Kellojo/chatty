@@ -4,8 +4,7 @@ import { createWebfetchServer } from './webfetch.js';
 import { createWebsearchServer } from './websearch.js';
 import { createDatetimeServer } from './datetime.js';
 import { createChatSearchServer } from './chat-search.js';
-import { createDocumentsServer } from './documents.js';
-import { createBashServer } from './bash.js';
+import { createFsServer } from './fs.js';
 import { createSettingsServer } from './settings.js';
 import { createMemoryServer } from './memory.js';
 import { createAgentsServer } from './agents.js';
@@ -18,8 +17,7 @@ export const BUILTIN_SERVERS: Record<string, BuiltinServerFactory> = {
 	websearch: createWebsearchServer,
 	datetime: createDatetimeServer,
 	'chat-search': createChatSearchServer,
-	documents: createDocumentsServer,
-	bash: createBashServer,
+	fs: createFsServer,
 	settings: createSettingsServer,
 	memory: createMemoryServer,
 	agents: createAgentsServer,

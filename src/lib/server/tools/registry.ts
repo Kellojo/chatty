@@ -35,7 +35,7 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		userId: input.userId,
 		role: user?.role ?? 'user',
 		workspaceDir: input.workspaceDir ?? null,
-		documentsDir: path.resolve(config.DOCUMENTS_VOLUME),
+		documentsDir: path.join(path.resolve(config.DOCUMENTS_VOLUME), input.userId),
 		author: input.author,
 		conversationId: input.conversationId,
 		agentRunId: input.agentRunId

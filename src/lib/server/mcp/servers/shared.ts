@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -58,5 +59,41 @@ export function looksTextual(abs: string, maxBytes: number): boolean {
 		return !head.subarray(0, read).includes(0);
 	} finally {
 		fs.closeSync(fd);
+	}
+}
+
+export async function walkAsync(root: string): Promise<WalkEntry[]> {
+	const out: WalkEntry[] = [];
+	const recurse = async (dir: string): Promise<void> => {
+		const entries = await fsp.readdir(dir, { withFileTypes: true });
+		for (const e of entries) {
+			const abs = path.join(dir, e.name);
+			if (e.isDirectory()) {
+				out.push({ abs, rel: toPosix(path.relative(root, abs)), isDir: true });
+				await recurse(abs);
+			} else if (e.isFile()) {
+				out.push({ abs, rel: toPosix(path.relative(root, abs)), isDir: false });
+			}
+		}
+	};
+	await recurse(root);
+	return out;
+}
+
+export async function looksTextualAsync(abs: string, maxBytes: number): Promise<boolean> {
+	let size: number;
+	try {
+		size = (await fsp.stat(abs)).size;
+	} catch {
+		return false;
+	}
+	if (size > maxBytes) return false;
+	const handle = await fsp.open(abs, 'r');
+	try {
+		const head = Buffer.alloc(Math.min(8192, size));
+		const { bytesRead } = await handle.read(head, 0, head.length, 0);
+		return !head.subarray(0, bytesRead).includes(0);
+	} finally {
+		await handle.close();
 	}
 }

@@ -14,18 +14,13 @@ describe('mcp-servers repo', () => {
 		db = openDatabase(':memory:');
 	});
 
-	it('seeds the six bundled servers', () => {
+	it('seeds the bundled servers', () => {
 		const names = repo.listMcpServers(db).map((r) => r.name);
 		expect(names).toEqual(
-			expect.arrayContaining([
-				'webfetch',
-				'datetime',
-				'chat-search',
-				'documents',
-				'bash',
-				'settings'
-			])
+			expect.arrayContaining(['webfetch', 'datetime', 'chat-search', 'fs', 'settings'])
 		);
+		expect(names).not.toContain('bash');
+		expect(names).not.toContain('documents');
 		expect(repo.listMcpServers(db).every((r) => r.builtin === 1)).toBe(true);
 	});
 
@@ -46,37 +41,37 @@ describe('mcp-servers repo', () => {
 	});
 
 	it('refuses to delete builtin servers', () => {
-		expect(repo.deleteMcpServer(db, 'builtin-bash')).toBe(false);
-		expect(repo.getMcpServer(db, 'builtin-bash')).toBeDefined();
+		expect(repo.deleteMcpServer(db, 'builtin-fs')).toBe(false);
+		expect(repo.getMcpServer(db, 'builtin-fs')).toBeDefined();
 	});
 
 	it('updates enabled/scopes on builtin, ignores name/url changes', () => {
-		const updated = repo.updateMcpServer(db, 'builtin-bash', {
+		const updated = repo.updateMcpServer(db, 'builtin-fs', {
 			name: 'renamed',
 			url: 'https://evil.example.com',
 			enabled: false,
 			scopes: ['agent']
 		})!;
-		expect(updated.name).toBe('bash');
+		expect(updated.name).toBe('fs');
 		expect(updated.url).toBeNull();
 		expect(updated.enabled).toBe(0);
 		expect(repo.toPublic(updated).scopes).toEqual(['agent']);
 	});
 
 	it('listEnabledMcpServers filters by enabled and mode', () => {
-		repo.updateMcpServer(db, 'builtin-bash', { enabled: false });
+		repo.updateMcpServer(db, 'builtin-fs', { enabled: false });
 		repo.updateMcpServer(db, 'builtin-settings', { scopes: ['agent'] });
 		const chatNames = repo.listEnabledMcpServers(db, 'chat').map((r) => r.name);
 		const agentNames = repo.listEnabledMcpServers(db, 'agent').map((r) => r.name);
-		expect(chatNames).not.toContain('bash');
+		expect(chatNames).not.toContain('fs');
 		expect(chatNames).not.toContain('settings');
 		expect(agentNames).toContain('settings');
-		expect(agentNames).not.toContain('bash');
+		expect(agentNames).not.toContain('fs');
 	});
 
 	it('rejects duplicate names', () => {
 		expect(() =>
-			repo.createMcpServer(db, { name: 'bash', transport: 'http', url: 'https://x.example.com' })
+			repo.createMcpServer(db, { name: 'fs', transport: 'http', url: 'https://x.example.com' })
 		).toThrow();
 	});
 });
