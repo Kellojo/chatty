@@ -163,6 +163,10 @@ export interface ModelMapping {
 
 export type ProxyRequestStatus = 'running' | 'complete' | 'failed';
 
+export type RequestSource = 'proxy' | 'chat' | 'agent';
+
+export type RequestPurpose = 'completion' | 'title';
+
 export interface ProxyCompression {
 	caveman?: {
 		level: string;
@@ -192,6 +196,12 @@ export interface ProxyRequest {
 	stream: boolean;
 	error: string | null;
 	compression: ProxyCompression | null;
+	source: RequestSource;
+	conversationId: string | null;
+	runId: string | null;
+	messageId: string | null;
+	stepIndex: number;
+	purpose: RequestPurpose;
 }
 
 export interface MessageUsage {

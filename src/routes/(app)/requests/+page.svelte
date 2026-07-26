@@ -63,8 +63,19 @@
 	);
 
 	const hasActiveFilters = $derived(
-		Boolean(data.filters.user || data.filters.key || data.filters.model)
+		Boolean(data.filters.user || data.filters.key || data.filters.model || data.filters.source)
 	);
+
+	function sourceVariant(source: string): 'outline' | 'secondary' | 'default' {
+		if (source === 'chat') return 'default';
+		if (source === 'agent') return 'secondary';
+		return 'outline';
+	}
+
+	function endpointLabel(request: { source: string; endpoint: string; purpose: string }): string {
+		if (request.source === 'proxy') return request.endpoint;
+		return request.purpose === 'title' ? 'title' : request.endpoint;
+	}
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -187,6 +198,22 @@
 			<Tabs.Content value="log" class="flex flex-col gap-4">
 				<form method="GET" class="flex flex-wrap items-end gap-3">
 					<div class="flex flex-col gap-1.5">
+						<Label for="filter-source">Source</Label>
+						<select
+							id="filter-source"
+							name="source"
+							class={selectClass}
+							onchange={(e) => e.currentTarget.form?.requestSubmit()}
+						>
+							<option value="" selected={data.filters.source === ''}>All sources</option>
+							{#each data.filterOptions.sources as source (source)}
+								<option value={source} selected={data.filters.source === source}>
+									{source.charAt(0).toUpperCase() + source.slice(1)}
+								</option>
+							{/each}
+						</select>
+					</div>
+					<div class="flex flex-col gap-1.5">
 						<Label for="filter-user">User</Label>
 						<select
 							id="filter-user"
@@ -238,9 +265,9 @@
 					<Table.Root>
 						<Table.Header>
 							<Table.Head class="pl-4">Model</Table.Head>
+							<Table.Head>Source</Table.Head>
 							<Table.Head>User / Key</Table.Head>
 							<Table.Head>Status</Table.Head>
-							<Table.Head>Endpoint</Table.Head>
 							<Table.Head>Started</Table.Head>
 							<Table.Head class="text-right">Latency</Table.Head>
 							<Table.Head class="text-right">Tokens in / out</Table.Head>
@@ -277,6 +304,16 @@
 											{/if}
 										</div>
 									</Table.Cell>
+									<Table.Cell>
+										<div class="flex flex-col items-start gap-0.5">
+											<Badge variant={sourceVariant(request.source)}>
+												{request.source}
+											</Badge>
+											<span class="text-xs text-muted-foreground">
+												{endpointLabel(request)}
+											</span>
+										</div>
+									</Table.Cell>
 									<Table.Cell class="text-muted-foreground">
 										<div class="flex flex-col gap-0.5">
 											<span class="truncate">{data.users[request.userId] ?? request.userId}</span>
@@ -295,9 +332,6 @@
 											{/if}
 											{request.status}
 										</Badge>
-									</Table.Cell>
-									<Table.Cell>
-										<Badge variant="secondary">{request.endpoint}</Badge>
 									</Table.Cell>
 									<Table.Cell class="whitespace-nowrap text-muted-foreground">
 										<span title={formatDateTime(request.startedAt, data.timeFormat)}>

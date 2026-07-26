@@ -28,6 +28,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const modelFilter = url.searchParams.get('model') ?? '';
 	const statusFilter = url.searchParams.get('status') ?? '';
 	const endpointFilter = url.searchParams.get('endpoint') ?? '';
+	const sourceFilter = url.searchParams.get('source') ?? '';
 	const fromFilter = url.searchParams.get('from') ?? '';
 	const toFilter = url.searchParams.get('to') ?? '';
 
@@ -37,6 +38,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	if (modelFilter) filters.model = modelFilter;
 	if (statusFilter) filters.status = statusFilter;
 	if (endpointFilter) filters.endpoint = endpointFilter;
+	if (sourceFilter) filters.source = sourceFilter;
 	const fromMs = parseDateStart(fromFilter);
 	if (fromMs !== undefined) filters.from = fromMs;
 	const toMs = parseDateStart(toFilter);
@@ -100,6 +102,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 			model: modelFilter,
 			status: statusFilter,
 			endpoint: endpointFilter,
+			source: sourceFilter,
 			from: fromFilter,
 			to: toFilter
 		},
@@ -109,7 +112,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		filterOptions: {
 			users: optionUsers.map((u) => ({ id: u.id, name: u.name || u.email })),
 			keys: optionKeys.map((k) => ({ id: k.id, label: k.label })),
-			models: optionModels.map((m) => m.requested_model)
+			models: optionModels.map((m) => m.requested_model),
+			sources: ['proxy', 'chat', 'agent']
 		}
 	};
 };

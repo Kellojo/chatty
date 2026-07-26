@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCount } from './format.js';
+import { formatCount } from './formats.js';
 
 describe('formatCount', () => {
 	it('formats small numbers plainly', () => {

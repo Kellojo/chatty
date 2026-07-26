@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { ProxyCompression, ProxyRequest, ProxyRequestStatus } from '$lib/types.js';
+import type {
+	ProxyCompression,
+	ProxyRequest,
+	ProxyRequestStatus,
+	RequestPurpose,
+	RequestSource
+} from '$lib/types.js';
 import { publishServerEvent } from '../../events/bus.js';
 import type { Db } from '../index.js';
 
@@ -23,6 +29,12 @@ export interface ProxyRequestRow {
 	stream: number;
 	error: string | null;
 	compression: string | null;
+	source: string;
+	conversation_id: string | null;
+	run_id: string | null;
+	message_id: string | null;
+	step_index: number;
+	purpose: string;
 }
 
 export function toPublic(row: ProxyRequestRow): ProxyRequest {
@@ -45,7 +57,13 @@ export function toPublic(row: ProxyRequestRow): ProxyRequest {
 		costUsd: row.cost_usd,
 		stream: row.stream === 1,
 		error: row.error,
-		compression: row.compression ? (JSON.parse(row.compression) as ProxyCompression) : null
+		compression: row.compression ? (JSON.parse(row.compression) as ProxyCompression) : null,
+		source: row.source as ProxyRequest['source'],
+		conversationId: row.conversation_id,
+		runId: row.run_id,
+		messageId: row.message_id,
+		stepIndex: row.step_index,
+		purpose: row.purpose as ProxyRequest['purpose']
 	};
 }
 
@@ -55,13 +73,19 @@ export interface CreateProxyRequestInput {
 	endpoint: string;
 	requestedModel: string;
 	stream: boolean;
+	source?: RequestSource;
+	conversationId?: string | null;
+	runId?: string | null;
+	messageId?: string | null;
+	stepIndex?: number;
+	purpose?: RequestPurpose;
 }
 
 export function createProxyRequest(db: Db, input: CreateProxyRequestInput): ProxyRequestRow {
 	const id = randomUUID();
 	db.prepare(
-		`INSERT INTO proxy_requests (id, user_id, api_key_id, endpoint, requested_model, status, started_at, stream)
-		 VALUES (?, ?, ?, ?, ?, 'running', ?, ?)`
+		`INSERT INTO proxy_requests (id, user_id, api_key_id, endpoint, requested_model, status, started_at, stream, source, conversation_id, run_id, message_id, step_index, purpose)
+		 VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		input.userId,
@@ -69,7 +93,13 @@ export function createProxyRequest(db: Db, input: CreateProxyRequestInput): Prox
 		input.endpoint,
 		input.requestedModel,
 		Date.now(),
-		input.stream ? 1 : 0
+		input.stream ? 1 : 0,
+		input.source ?? 'proxy',
+		input.conversationId ?? null,
+		input.runId ?? null,
+		input.messageId ?? null,
+		input.stepIndex ?? 0,
+		input.purpose ?? 'completion'
 	);
 	publishServerEvent(input.userId, { type: 'proxy.request.started', requestId: id });
 	return getProxyRequest(db, id)!;
@@ -133,6 +163,7 @@ export interface ProxyRequestFilters {
 	model?: string;
 	status?: string;
 	endpoint?: string;
+	source?: string;
 	from?: number;
 	to?: number;
 }
@@ -159,6 +190,10 @@ function buildWhere(filters: ProxyRequestFilters): { where: string; args: unknow
 	if (filters.endpoint) {
 		clauses.push('endpoint = ?');
 		args.push(filters.endpoint);
+	}
+	if (filters.source) {
+		clauses.push('source = ?');
+		args.push(filters.source);
 	}
 	if (filters.from !== undefined) {
 		clauses.push('started_at >= ?');

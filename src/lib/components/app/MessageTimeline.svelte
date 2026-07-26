@@ -3,7 +3,7 @@
 	import { toast } from 'svelte-sonner';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { formatDateTime, formatMessageTime } from '$lib/datetime.js';
-	import { formatCost, formatLatency, formatTokens } from '$lib/formats.js';
+	import { formatCost, formatLatency, formatToken } from '$lib/formats.js';
 	import { cn } from '$lib/utils.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import { Markdown } from '$lib/components/ai/markdown/index.js';

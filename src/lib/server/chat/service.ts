@@ -36,6 +36,7 @@ import { getAttachment, linkAttachmentsToMessage } from '../db/repo/attachments.
 import { getAgent } from '../db/repo/agents.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
+import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
 import { computeCostUsd } from '../proxy/pricing.js';
 import { getGlobalInstructions } from '../db/repo/user-settings.js';
 import { publishServerEvent } from '../events/bus.js';
@@ -380,6 +381,42 @@ export async function handleChatRequest(
 				try {
 					const model = resolveModel(target);
 					const startedAt = Date.now();
+					let stepIndex = 0;
+					let lastStepAt = startedAt;
+					const priceRow = findModel(db, target.providerId, target.modelId);
+					const recordStep = (patch: {
+						status: 'complete' | 'failed';
+						usage?: { inputTokens?: number | null; outputTokens?: number | null };
+						error?: string | null;
+					}) => {
+						const now = Date.now();
+						const row = createProxyRequest(db, {
+							userId,
+							source: 'chat',
+							conversationId: conversation.id,
+							messageId: assistantMessageId,
+							stepIndex: stepIndex++,
+							endpoint: 'streamText',
+							requestedModel: target.modelId,
+							stream: true
+						});
+						finalizeProxyRequest(db, row.id, {
+							status: patch.status,
+							latencyMs: now - lastStepAt,
+							providerId: target.providerId,
+							modelId: target.modelId,
+							inputTokens: patch.usage?.inputTokens ?? null,
+							outputTokens: patch.usage?.outputTokens ?? null,
+							costUsd: computeCostUsd(
+								priceRow?.price_input ?? null,
+								priceRow?.price_output ?? null,
+								patch.usage?.inputTokens,
+								patch.usage?.outputTokens
+							),
+							error: patch.error ?? null
+						});
+						lastStepAt = now;
+					};
 					log.info('LLM inference started', {
 						conversationId: conversation.id,
 						providerId: target.providerId,
@@ -398,8 +435,9 @@ export async function handleChatRequest(
 						...(conversation.max_tokens != null
 							? { maxOutputTokens: conversation.max_tokens }
 							: {}),
-					onStepEnd: (step) => {
-						for (const tr of step.toolResults) {
+						onStepEnd: (step) => {
+							recordStep({ status: 'complete', usage: step.usage });
+							for (const tr of step.toolResults) {
 								if (tr.toolName !== 'generate_image' && tr.toolName !== 'edit_image') continue;
 								const ids = attachmentIdsFromOutput(tr.output);
 								if (ids.length === 0) continue;
@@ -423,6 +461,7 @@ export async function handleChatRequest(
 								modelId: target.modelId,
 								error: errorText
 							});
+							recordStep({ status: 'failed', error: errorText });
 						}
 					});
 					const uiStream = result.toUIMessageStream({
@@ -448,7 +487,6 @@ export async function handleChatRequest(
 						writer.write(chunk);
 					}
 					totalTokensUsed = await result.usage;
-					const priceRow = findModel(db, target.providerId, target.modelId);
 					usageMeta = {
 						providerId: target.providerId,
 						modelId: target.modelId,

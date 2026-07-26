@@ -18,7 +18,9 @@ import {
 } from '../db/repo/agent-runs.js';
 import { createConversation } from '../db/repo/conversations.js';
 import { createMessage, updateMessage } from '../db/repo/messages.js';
-import { findRoleModel } from '../db/repo/models.js';
+import { findModel, findRoleModel } from '../db/repo/models.js';
+import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
+import { computeCostUsd } from '../proxy/pricing.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { resolveModel } from '../llm/registry.js';
@@ -153,6 +155,43 @@ export async function startAgentRun(
 				modelId: target.modelId
 			});
 			let totalUsage: import('ai').LanguageModelUsage | undefined;
+			const startedAt = Date.now();
+			let stepIndex = 0;
+			let lastStepAt = startedAt;
+			const priceRow = findModel(db, target.providerId, target.modelId);
+			const recordStep = (patch: {
+				status: 'complete' | 'failed';
+				usage?: { inputTokens?: number | null; outputTokens?: number | null };
+				error?: string | null;
+			}) => {
+				const now = Date.now();
+				const row = createProxyRequest(db, {
+					userId: input.userId,
+					source: 'agent',
+					conversationId: conversation.id,
+					runId: run.id,
+					stepIndex: stepIndex++,
+					endpoint: 'streamText',
+					requestedModel: target.modelId,
+					stream: true
+				});
+				finalizeProxyRequest(db, row.id, {
+					status: patch.status,
+					latencyMs: now - lastStepAt,
+					providerId: target.providerId,
+					modelId: target.modelId,
+					inputTokens: patch.usage?.inputTokens ?? null,
+					outputTokens: patch.usage?.outputTokens ?? null,
+					costUsd: computeCostUsd(
+						priceRow?.price_input ?? null,
+						priceRow?.price_output ?? null,
+						patch.usage?.inputTokens,
+						patch.usage?.outputTokens
+					),
+					error: patch.error ?? null
+				});
+				lastStepAt = now;
+			};
 			const result = streamText({
 				model,
 				system,
@@ -161,8 +200,12 @@ export async function startAgentRun(
 				stopWhen: stepCountIs(agent.max_steps ?? config.AGENT_MAX_STEPS),
 				maxRetries: 2,
 				abortSignal: controller.signal,
+				onStepEnd: (step) => {
+					recordStep({ status: 'complete', usage: step.usage });
+				},
 				onError: ({ error }) => {
 					errorText = error instanceof Error ? error.message : String(error);
+					recordStep({ status: 'failed', error: errorText });
 				}
 			});
 			for await (const message of readUIMessageStream({

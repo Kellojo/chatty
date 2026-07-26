@@ -53,7 +53,13 @@
 				</Breadcrumb.List>
 			</Breadcrumb.Root>
 			<div class="flex flex-wrap items-center gap-2">
-				<h1 class="text-xl font-semibold">Proxy request</h1>
+				<h1 class="text-xl font-semibold">
+					{request.source === 'proxy' ? 'Proxy request' : `${request.source} request`}
+				</h1>
+				<Badge variant="outline">{request.source}</Badge>
+				{#if request.purpose === 'title'}
+					<Badge variant="outline">title</Badge>
+				{/if}
 				<Badge variant={statusVariant(request.status)} class={statusClass(request.status)}>
 					{#if request.status === 'running'}
 						<span class="size-2 animate-pulse rounded-full bg-info"></span>
@@ -100,14 +106,37 @@
 							<dt class="text-muted-foreground">Fallback index</dt>
 							<dd>{request.fallbackIndex}</dd>
 						{/if}
+						{#if request.stepIndex > 0 || request.source !== 'proxy'}
+							<dt class="text-muted-foreground">Step</dt>
+							<dd>{request.stepIndex}</dd>
+						{/if}
+						{#if request.conversationId}
+							<dt class="text-muted-foreground">Conversation</dt>
+							<dd>
+								<a
+									class="font-mono text-xs text-primary underline-offset-4 hover:underline"
+									href={resolve(`/chat/${request.conversationId}`)}
+								>
+									{request.conversationId.slice(0, 8)}…
+								</a>
+							</dd>
+						{/if}
+						{#if request.runId}
+							<dt class="text-muted-foreground">Agent run</dt>
+							<dd class="font-mono text-xs">{request.runId.slice(0, 8)}…</dd>
+						{/if}
 						<dt class="text-muted-foreground">Stream</dt>
 						<dd>{request.stream ? 'Yes' : 'No'}</dd>
-						<dt class="text-muted-foreground">HTTP status</dt>
-						<dd>{request.httpStatus ?? '—'}</dd>
+						{#if request.source === 'proxy'}
+							<dt class="text-muted-foreground">HTTP status</dt>
+							<dd>{request.httpStatus ?? '—'}</dd>
+						{/if}
 						<dt class="text-muted-foreground">User</dt>
 						<dd>{data.userName}</dd>
-						<dt class="text-muted-foreground">API key</dt>
-						<dd>{data.keyLabel ?? '—'}</dd>
+						{#if request.source === 'proxy'}
+							<dt class="text-muted-foreground">API key</dt>
+							<dd>{data.keyLabel ?? '—'}</dd>
+						{/if}
 					</dl>
 				</Card.Content>
 			</Card.Root>

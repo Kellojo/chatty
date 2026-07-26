@@ -58,8 +58,84 @@ describe('proxy-requests repo', () => {
 			modelId: 'm1',
 			fallbackIndex: 0,
 			stream: false,
-			compression: null
+			compression: null,
+			source: 'proxy',
+			conversationId: null,
+			runId: null,
+			messageId: null,
+			stepIndex: 0,
+			purpose: 'completion'
 		});
+	});
+
+	it('creates chat/agent rows with source and linkage fields', () => {
+		const chat = createProxyRequest(db, {
+			userId: 'u1',
+			source: 'chat',
+			conversationId: 'conv-1',
+			messageId: 'msg-1',
+			stepIndex: 2,
+			endpoint: 'streamText',
+			requestedModel: 'fast',
+			stream: true
+		});
+		const chatPub = toPublic(getProxyRequest(db, chat.id)!);
+		expect(chatPub).toMatchObject({
+			source: 'chat',
+			conversationId: 'conv-1',
+			messageId: 'msg-1',
+			stepIndex: 2,
+			purpose: 'completion',
+			apiKeyId: null
+		});
+
+		const agent = createProxyRequest(db, {
+			userId: 'u1',
+			source: 'agent',
+			conversationId: 'conv-2',
+			runId: 'run-1',
+			endpoint: 'streamText',
+			requestedModel: 'smart',
+			stream: true
+		});
+		expect(toPublic(getProxyRequest(db, agent.id)!).runId).toBe('run-1');
+
+		const title = createProxyRequest(db, {
+			userId: 'u1',
+			source: 'chat',
+			conversationId: 'conv-1',
+			purpose: 'title',
+			endpoint: 'generateText',
+			requestedModel: 'fast',
+			stream: false
+		});
+		expect(toPublic(getProxyRequest(db, title.id)!).purpose).toBe('title');
+	});
+
+	it('filters by source', () => {
+		logRequest('u1', 'fast');
+		createProxyRequest(db, {
+			userId: 'u1',
+			source: 'chat',
+			conversationId: 'conv-1',
+			endpoint: 'streamText',
+			requestedModel: 'fast',
+			stream: true
+		});
+		createProxyRequest(db, {
+			userId: 'u1',
+			source: 'agent',
+			runId: 'run-1',
+			endpoint: 'streamText',
+			requestedModel: 'fast',
+			stream: true
+		});
+
+		expect(listProxyRequests(db, {}).total).toBe(3);
+		expect(listProxyRequests(db, { source: 'proxy' }).total).toBe(1);
+		expect(listProxyRequests(db, { source: 'chat' }).total).toBe(1);
+		expect(listProxyRequests(db, { source: 'agent' }).total).toBe(1);
+		expect(proxyRequestStats(db, { source: 'chat' }).total).toBe(1);
 	});
 
 	it('stores compression metadata as JSON', () => {
