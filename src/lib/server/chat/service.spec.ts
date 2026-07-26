@@ -48,12 +48,36 @@ vi.mock('../llm/mapped.js', () => ({
 	isRetryableModelError: () => false
 }));
 
+vi.mock('ai', async () => {
+	const actual = await vi.importActual<typeof import('ai')>('ai');
+	return {
+		...actual,
+		generateImage: vi.fn(async () => ({
+			image: {
+				base64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'),
+				mediaType: 'image/png'
+			},
+			images: [
+				{
+					base64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'),
+					mediaType: 'image/png'
+				}
+			],
+			warnings: [],
+			responses: [],
+			providerMetadata: {},
+			usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+		}))
+	};
+});
+
 const { getDb, closeDb } = await import('../db/index.js');
 const { handleChatRequest } = await import('./service.js');
 const { createConversation, getConversation } = await import('../db/repo/conversations.js');
 const { listMessages } = await import('../db/repo/messages.js');
 const { createProvider } = await import('../db/repo/providers.js');
 const { createModel } = await import('../db/repo/models.js');
+const { listAttachmentsByConversation } = await import('../db/repo/attachments.js');
 const registry = (await import('../llm/registry.js')) as unknown as {
 	__setChunks: (chunks: unknown[] | null) => void;
 };
@@ -408,6 +432,75 @@ describe('handleChatRequest', () => {
 			message: expect.stringContaining('disabled')
 		});
 		closeDb();
+	});
+
+	it('emits file parts and links attachments when generate_image runs', async () => {
+		process.env.WORKSPACES_VOLUME = '.test-workspaces-chat';
+		const fsp = await import('node:fs/promises');
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			const { createAttachment } = await import('../db/repo/attachments.js');
+			const pre = createAttachment(db, {
+				kind: 'image',
+				path: `${conversation.id}/attachments/pre-generated.png`,
+				mime: 'image/png',
+				sha256: 'x'
+			});
+			registry.__setChunks([
+				{
+					type: 'tool-call',
+					toolCallId: 'tc1',
+					toolName: 'generate_image',
+					input: { prompt: 'a cat' }
+				},
+				{
+					type: 'tool-result',
+					toolCallId: 'tc1',
+					toolName: 'generate_image',
+					result: {
+						content: [{ type: 'text', text: 'Generated 1 image(s)' }],
+						structuredContent: { attachmentIds: [pre.id] }
+					}
+				},
+				{ type: 'text-start', id: 't1' },
+				{ type: 'text-delta', id: 't1', delta: 'Here is your image' },
+				{ type: 'text-end', id: 't1' },
+				{
+					type: 'finish',
+					finishReason: 'stop',
+					usage: {
+						inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+						outputTokens: { total: 2, text: 2, reasoning: undefined }
+					}
+				}
+			]);
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'draw a cat' }] }
+			});
+			expect(res.status).toBe(200);
+			const body = await res.text();
+			await new Promise((r) => setTimeout(r, 100));
+
+			const attachments = listAttachmentsByConversation(db, conversation.id);
+			expect(attachments).toHaveLength(1);
+			expect(attachments[0].kind).toBe('image');
+			const assistant = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+			expect(attachments[0].message_id).toBe(assistant.id);
+			const parts = JSON.parse(assistant.parts) as { type: string; url?: string }[];
+			const filePart = parts.find((p) => p.type === 'file');
+			expect(filePart).toBeDefined();
+			expect(filePart!.url).toContain(
+				`/api/conversations/${conversation.id}/attachments/${attachments[0].id}`
+			);
+			expect(body).toContain('"type":"file"');
+		} finally {
+			registry.__setChunks(null);
+			await fsp.rm('.test-workspaces-chat', { recursive: true, force: true });
+			delete process.env.WORKSPACES_VOLUME;
+			closeDb();
+		}
 	});
 
 	it('rejects with 400 when the selected provider is disabled', async () => {

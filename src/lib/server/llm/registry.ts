@@ -1,6 +1,6 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import type { LanguageModel } from 'ai';
+import type { ImageModel, LanguageModel } from 'ai';
 import { decryptSecret } from '../crypto.js';
 import { getDb } from '../db/index.js';
 import {
@@ -37,7 +37,7 @@ function buildFactory(provider: ProviderRow): LanguageModelFactory {
 		name: provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
 		apiKey,
 		baseURL: provider.base_url,
-		includeUsage: true,
+		includeUsage: true
 	});
 	return (modelId) => p(modelId);
 }
@@ -55,6 +55,37 @@ function factoryFor(provider: ProviderRow): LanguageModelFactory {
 
 export function invalidateProviderCache(providerId: string): void {
 	cache.delete(providerId);
+}
+
+function buildImageFactory(provider: ProviderRow): (modelId: string) => ImageModel {
+	const apiKey = provider.api_key_enc ? decryptSecret(provider.api_key_enc) : undefined;
+	if (provider.type === 'anthropic') {
+		throw new ModelUnavailableError(
+			`Provider "${provider.name}" does not support image generation`
+		);
+	}
+	if (!provider.base_url) {
+		throw new Error(`Provider "${provider.name}" is missing a base URL`);
+	}
+	const p = createOpenAICompatible({
+		name: provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+		apiKey,
+		baseURL: provider.base_url
+	});
+	return (modelId) => p.imageModel(modelId);
+}
+
+export function resolveImageModel(ref: { providerId: string; modelId: string }): ImageModel {
+	const db = getDb();
+	const provider = getProvider(db, ref.providerId);
+	if (!provider || provider.enabled !== 1) {
+		throw new ModelUnavailableError(`Provider ${ref.providerId} is not available`);
+	}
+	const model = findModel(db, ref.providerId, ref.modelId);
+	if (!model || model.enabled !== 1) {
+		throw new ModelUnavailableError(`Model ${ref.modelId} is not available`);
+	}
+	return buildImageFactory(provider)(ref.modelId);
 }
 
 export { ModelUnavailableError } from './mapped.js';
@@ -132,13 +163,33 @@ async function fetchOpenAICompatibleModels(
 	const res = await fetch(`${provider.base_url.replace(/\/$/, '')}/models`, { headers });
 	if (!res.ok) throw new Error(`Provider /models probe failed: ${res.status} ${await res.text()}`);
 	const body = (await res.json()) as {
-		data?: { id: string; pricing?: { prompt?: unknown; completion?: unknown } }[];
+		data?: {
+			id: string;
+			architecture?: { input_modalities?: unknown; output_modalities?: unknown };
+			pricing?: { prompt?: unknown; completion?: unknown };
+		}[];
 	};
-	return (body.data ?? []).map((m) => ({
-		id: m.id,
-		priceInput: pricePerMillion(m.pricing?.prompt),
-		priceOutput: pricePerMillion(m.pricing?.completion)
-	}));
+	return (body.data ?? []).map((m) => {
+		const inputs = Array.isArray(m.architecture?.input_modalities)
+			? (m.architecture.input_modalities as unknown[]).filter(
+					(x): x is string => typeof x === 'string'
+				)
+			: [];
+		const outputs = Array.isArray(m.architecture?.output_modalities)
+			? (m.architecture.output_modalities as unknown[]).filter(
+					(x): x is string => typeof x === 'string'
+				)
+			: [];
+		const capabilities = ['chat', 'streaming'];
+		if (inputs.includes('image')) capabilities.push('vision');
+		if (outputs.includes('image')) capabilities.push('image');
+		return {
+			id: m.id,
+			capabilities,
+			priceInput: pricePerMillion(m.pricing?.prompt),
+			priceOutput: pricePerMillion(m.pricing?.completion)
+		};
+	});
 }
 
 export function fetchProviderModels(providerId: string): Promise<FetchedModel[]> {

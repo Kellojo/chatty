@@ -9,9 +9,8 @@ Todos:
 - Retire old proxy
 - Switch homelab services to new one
 
+- Support image generation in chat
 - light mode code contrast bad
-- Task 4: Full-history protocol change (Option A)
-- Change password option in account
 - prices seem quite high in the requests tab
 
 - Email integration (gmail)
@@ -19,8 +18,6 @@ Todos:
 
 - switch all sync fs method calls to their async counterparts
 - Improve startup times, sometimes it feels a bit slower
-- Uploading photos to the AI from the phone (i.e. take a photo directly ideally)
-
 Next Steps:
 
 - Code review pass

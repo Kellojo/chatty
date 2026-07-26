@@ -14,6 +14,7 @@
 		placeholder = 'Select model',
 		noneValue,
 		noneLabel = 'Not set',
+		capability,
 		class: className = 'w-64'
 	}: {
 		groups: ModelsByProvider[];
@@ -24,6 +25,7 @@
 		placeholder?: string;
 		noneValue?: string;
 		noneLabel?: string;
+		capability?: string;
 		class?: string;
 	} = $props();
 
@@ -53,10 +55,25 @@
 		return placeholder;
 	});
 
+	const capabilityGroups = $derived.by(() => {
+		if (!capability) return groups;
+		return groups
+			.map((group) => ({
+				provider: group.provider,
+				models: group.models.filter((model) => model.capabilities.includes(capability))
+			}))
+			.filter((group) => group.models.length > 0);
+	});
+
+	const capabilityMappings = $derived.by(() => {
+		if (!capability) return mappings;
+		return mappings.filter((m) => m.capabilities?.includes(capability));
+	});
+
 	const filteredGroups = $derived.by(() => {
 		const q = query.trim().toLowerCase();
-		if (!q) return groups;
-		return groups
+		if (!q) return capabilityGroups;
+		return capabilityGroups
 			.map((group) => ({
 				provider: group.provider,
 				models: group.models.filter(
@@ -71,8 +88,8 @@
 
 	const filteredMappings = $derived.by(() => {
 		const q = query.trim().toLowerCase();
-		if (!q) return mappings;
-		return mappings.filter((m) => m.name.toLowerCase().includes(q));
+		if (!q) return capabilityMappings;
+		return capabilityMappings.filter((m) => m.name.toLowerCase().includes(q));
 	});
 
 	const isEmpty = $derived(filteredGroups.length === 0 && filteredMappings.length === 0);

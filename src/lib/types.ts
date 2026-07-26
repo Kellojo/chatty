@@ -23,7 +23,7 @@ export interface ChatModel {
 	priceOutput: number | null;
 }
 
-export type ModelRole = 'chat' | 'title' | 'memory' | 'research';
+export type ModelRole = 'chat' | 'title' | 'memory' | 'image';
 
 export type RoleDefaults = Partial<Record<ModelRole, string>>;
 
@@ -158,6 +158,7 @@ export interface ModelMapping {
 	targets: ModelMappingTarget[];
 	enabled: boolean;
 	createdAt: number;
+	capabilities?: string[];
 }
 
 export type ProxyRequestStatus = 'running' | 'complete' | 'failed';

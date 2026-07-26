@@ -24,5 +24,6 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	fs_curl: { label: 'Download file', server: 'fs' },
 	get_setting: { label: 'Get setting', server: 'settings' },
 	list_settings: { label: 'List settings', server: 'settings' },
-	update_setting: { label: 'Update setting', server: 'settings' }
+	update_setting: { label: 'Update setting', server: 'settings' },
+	generate_image: { label: 'Generate image', server: 'image' }
 };

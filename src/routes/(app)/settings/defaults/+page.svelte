@@ -26,11 +26,13 @@
 			description: 'Used by the memory extraction job.'
 		},
 		{
-			role: 'research',
-			label: 'Research',
-			description: 'Used for research sessions.'
+			role: 'image',
+			label: 'Image generation',
+			description: 'Used by the generate_image tool. Pick a model with the image capability.'
 		}
 	];
+
+	const roleCapability: Partial<Record<ModelRole, string>> = { image: 'image' };
 
 	let busy = $state<ModelRole | null>(null);
 
@@ -108,6 +110,7 @@
 						disabled={busy !== null}
 						noneValue=""
 						noneLabel="Not set"
+						capability={roleCapability[role]}
 						class="w-72 shrink-0"
 					/>
 				</div>

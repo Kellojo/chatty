@@ -97,7 +97,16 @@ describe('llm registry', () => {
 							data: [
 								{
 									id: 'or-model',
+									architecture: { input_modalities: ['text'], output_modalities: ['text'] },
 									pricing: { prompt: '0.00000015', completion: '0.0000006' }
+								},
+								{
+									id: 'image-model',
+									architecture: { input_modalities: ['text'], output_modalities: ['image'] }
+								},
+								{
+									id: 'vision-model',
+									architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }
 								},
 								{ id: 'free-model', pricing: { prompt: '0', completion: '0' } },
 								{ id: 'plain-model' }
@@ -117,9 +126,36 @@ describe('llm registry', () => {
 		});
 		const fetched = await registry.fetchProviderModels(p.id);
 		expect(fetched).toEqual([
-			{ id: 'or-model', priceInput: 0.15, priceOutput: 0.6 },
-			{ id: 'free-model', priceInput: null, priceOutput: null },
-			{ id: 'plain-model', priceInput: null, priceOutput: null }
+			{
+				id: 'or-model',
+				capabilities: ['chat', 'streaming'],
+				priceInput: 0.15,
+				priceOutput: 0.6
+			},
+			{
+				id: 'image-model',
+				capabilities: ['chat', 'streaming', 'image'],
+				priceInput: null,
+				priceOutput: null
+			},
+			{
+				id: 'vision-model',
+				capabilities: ['chat', 'streaming', 'vision'],
+				priceInput: null,
+				priceOutput: null
+			},
+			{
+				id: 'free-model',
+				capabilities: ['chat', 'streaming'],
+				priceInput: null,
+				priceOutput: null
+			},
+			{
+				id: 'plain-model',
+				capabilities: ['chat', 'streaming'],
+				priceInput: null,
+				priceOutput: null
+			}
 		]);
 	});
 

@@ -13,6 +13,7 @@
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import FileIcon from '@lucide/svelte/icons/file';
+	import DownloadIcon from '@lucide/svelte/icons/download';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import type { MessageUsage, UIMessage } from '$lib/types.js';
@@ -163,7 +164,26 @@
 				{:else if part.type === 'file'}
 					{@const url = fileUrl(part)}
 					{#if part.mediaType?.startsWith('image/')}
-						<img src={url} alt="Attachment" class="max-h-24 max-w-40 rounded-md border" />
+						<div class="group relative inline-block max-w-full">
+							<!-- eslint-disable svelte/no-navigation-without-resolve -->
+							<a href={url} target="_blank" rel="noopener">
+								<img
+									src={url}
+									alt="Attachment"
+									class="max-h-96 w-auto max-w-full rounded-md border sm:max-w-md"
+								/>
+							</a>
+							<a
+								href={url}
+								download
+								title="Download image"
+								aria-label="Download image"
+								class="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100"
+							>
+								<DownloadIcon class="size-4" />
+							</a>
+							<!-- eslint-enable svelte/no-navigation-without-resolve -->
+						</div>
 					{:else}
 						<!-- eslint-disable svelte/no-navigation-without-resolve -->
 						<a

@@ -34,7 +34,8 @@ describe('tools registry', () => {
 			'get_setting',
 			'search_memory',
 			'create_concept',
-			'code_exec'
+			'code_exec',
+			'generate_image'
 		]) {
 			expect(names).toContain(expected);
 		}
@@ -42,6 +43,7 @@ describe('tools registry', () => {
 		expect(built.toolToServer.fs_ls).toBe('fs');
 		expect(built.toolToServer.search_memory).toBe('memory');
 		expect(built.toolToServer.code_exec).toBe('code-exec');
+		expect(built.toolToServer.generate_image).toBe('image');
 		await built.close();
 	});
 

@@ -17,9 +17,9 @@
 	let { data }: { data: PageData } = $props();
 
 	type Model = PageData['models'][number];
-	type Capability = 'chat' | 'vision' | 'tool_use' | 'streaming';
+	type Capability = 'chat' | 'vision' | 'tool_use' | 'streaming' | 'image';
 
-	const allCapabilities: Capability[] = ['chat', 'vision', 'tool_use', 'streaming'];
+	const allCapabilities: Capability[] = ['chat', 'vision', 'tool_use', 'streaming', 'image'];
 
 	let addOpen = $state(false);
 	let addProviderId = $state('');
@@ -186,8 +186,8 @@
 		</Button>
 	</div>
 	<p class="text-sm text-muted-foreground">
-		To pick which model is used for new chats, title generation, memory, and research, see the
-		Defaults page.
+		To pick which model is used for new chats, title generation, memory, and image generation, see
+		the Defaults page.
 	</p>
 
 	{#each data.providers as provider (provider.id)}

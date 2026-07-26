@@ -158,6 +158,15 @@ function upsertUserMessage(db: Db, conversationId: string, message: UIMessage): 
 	return message;
 }
 
+function attachmentIdsFromOutput(output: unknown): string[] {
+	if (typeof output !== 'object' || output === null) return [];
+	const sc = (output as { structuredContent?: unknown }).structuredContent;
+	if (typeof sc !== 'object' || sc === null) return [];
+	const ids = (sc as { attachmentIds?: unknown }).attachmentIds;
+	if (!Array.isArray(ids)) return [];
+	return ids.filter((id): id is string => typeof id === 'string');
+}
+
 const PERSIST_INTERVAL_MS = 500;
 
 // Consumes the tee'd copy of the SSE stream: mirrors every chunk into the
@@ -379,6 +388,23 @@ export async function handleChatRequest(
 						...(conversation.max_tokens != null
 							? { maxOutputTokens: conversation.max_tokens }
 							: {}),
+					onStepEnd: (step) => {
+						for (const tr of step.toolResults) {
+								if (tr.toolName !== 'generate_image') continue;
+								const ids = attachmentIdsFromOutput(tr.output);
+								if (ids.length === 0) continue;
+								linkAttachmentsToMessage(db, assistantMessageId, ids);
+								for (const id of ids) {
+									const row = getAttachment(db, id);
+									if (!row) continue;
+									writer.write({
+										type: 'file',
+										url: `${ATTACHMENT_URL_PREFIX}${conversation.id}/attachments/${id}`,
+										mediaType: row.mime
+									} as UIMessageChunk);
+								}
+							}
+						},
 						onError: ({ error }) => {
 							errorText = error instanceof Error ? error.message : String(error);
 							log.error('LLM stream error', {

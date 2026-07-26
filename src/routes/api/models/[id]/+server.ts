@@ -7,7 +7,7 @@ import type { RequestHandler } from './$types';
 
 const patchSchema = z.object({
 	displayName: z.string().min(1).max(200).optional(),
-	capabilities: z.array(z.enum(['chat', 'vision', 'tool_use', 'streaming'])).optional(),
+	capabilities: z.array(z.enum(['chat', 'vision', 'tool_use', 'streaming', 'image'])).optional(),
 	enabled: z.boolean().optional(),
 	priceInput: z.number().nonnegative().nullable().optional(),
 	priceOutput: z.number().nonnegative().nullable().optional()

@@ -13,7 +13,9 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const db = getDb();
 	if (!getConversation(db, user.id, params.id)) error(404, { message: 'Conversation not found' });
 	const row = getAttachment(db, params.attachmentId);
-	if (!row || !row.path.startsWith(path.join(params.id, 'attachments'))) {
+	const expectedPrefix = `${params.id}/attachments/`;
+	const normalized = row?.path.split(path.sep).join('/');
+	if (!row || !normalized?.startsWith(expectedPrefix)) {
 		error(404, { message: 'Attachment not found' });
 	}
 	let filePath: string;
