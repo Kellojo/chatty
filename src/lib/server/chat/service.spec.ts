@@ -7,7 +7,9 @@ vi.mock('../llm/registry.js', async () => {
 	const { MockLanguageModelV3 } = await import('ai/test');
 	const { simulateReadableStream } = await import('ai');
 	const state = ((
-		globalThis as { __chatChunksState?: { chunks: unknown[] | null } }
+		globalThis as {
+			__chatChunksState?: { chunks: unknown[] | null; lastPrompt?: unknown };
+		}
 	).__chatChunksState ??= { chunks: null });
 	const defaultChunks = [
 		{ type: 'text-start', id: 't1' },
@@ -24,11 +26,14 @@ vi.mock('../llm/registry.js', async () => {
 		}
 	];
 	const model = new MockLanguageModelV3({
-		doStream: async () => ({
-			stream: simulateReadableStream({
-				chunks: (state.chunks ?? defaultChunks) as never[]
-			})
-		})
+		doStream: async (opts) => {
+			state.lastPrompt = opts.prompt;
+			return {
+				stream: simulateReadableStream({
+					chunks: (state.chunks ?? defaultChunks) as never[]
+				})
+			};
+		}
 	});
 	return {
 		resolveModel: () => model,
@@ -36,7 +41,8 @@ vi.mock('../llm/registry.js', async () => {
 		ModelUnavailableError: class ModelUnavailableError extends Error {},
 		__setChunks: (chunks: unknown[] | null) => {
 			state.chunks = chunks;
-		}
+		},
+		__getLastPrompt: () => state.lastPrompt
 	};
 });
 
@@ -80,6 +86,7 @@ const { createModel } = await import('../db/repo/models.js');
 const { listAttachmentsByConversation } = await import('../db/repo/attachments.js');
 const registry = (await import('../llm/registry.js')) as unknown as {
 	__setChunks: (chunks: unknown[] | null) => void;
+	__getLastPrompt: () => unknown;
 };
 
 type Db = ReturnType<typeof getDb>;
@@ -499,6 +506,58 @@ describe('handleChatRequest', () => {
 			registry.__setChunks(null);
 			await fsp.rm('.test-workspaces-chat', { recursive: true, force: true });
 			delete process.env.WORKSPACES_VOLUME;
+			closeDb();
+		}
+	});
+
+	it('injects an attachment-id note before image file parts sent to the model', async () => {
+		const fsp = await import('node:fs/promises');
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			const { createAttachment } = await import('../db/repo/attachments.js');
+			const dir = `workspaces/${conversation.id}/attachments`;
+			await fsp.mkdir(dir, { recursive: true });
+			await fsp.writeFile(`${dir}/photo.jpg`, Buffer.from([0xff, 0xd8, 0xff, 1]));
+			const att = createAttachment(db, {
+				kind: 'image',
+				path: `${conversation.id}/attachments/photo.jpg`,
+				mime: 'image/jpeg',
+				sha256: 'x'
+			});
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: {
+					id: 'msg-1',
+					role: 'user',
+					parts: [
+						{ type: 'text', text: 'edit this' },
+						{
+							type: 'file',
+							url: `/api/conversations/${conversation.id}/attachments/${att.id}`,
+							mediaType: 'image/jpeg',
+							filename: 'photo.jpg'
+						}
+					]
+				}
+			});
+			expect(res.status).toBe(200);
+			await res.text();
+			await new Promise((r) => setTimeout(r, 100));
+
+			const prompt = registry.__getLastPrompt() as {
+				role: string;
+				content: { type: string; text?: string }[];
+			}[];
+			const userMsg = prompt.find((m) => m.role === 'user')!;
+			const note = userMsg.content.find(
+				(c) => c.type === 'text' && c.text?.includes('[attachment id:')
+			);
+			expect(note).toBeDefined();
+			expect(note!.text).toContain(att.id);
+		} finally {
+			registry.__setChunks(null);
+			await fsp.rm('workspaces', { recursive: true, force: true });
 			closeDb();
 		}
 	});

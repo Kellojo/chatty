@@ -5,14 +5,17 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { generateImage, NoImageGeneratedError } from 'ai';
 import { z } from 'zod';
 import { getDb } from '../../db/index.js';
-import { createAttachment } from '../../db/repo/attachments.js';
+import { createAttachment, listAttachmentsByConversation } from '../../db/repo/attachments.js';
 import { findRoleModel } from '../../db/repo/models.js';
 import { resolveImageModel } from '../../llm/registry.js';
-import { ensureAttachmentsDir } from '../../workspaces.js';
+import { ensureAttachmentsDir, resolveAttachment } from '../../workspaces.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
 
 const MAX_N = 4;
+const MAX_BASE64_LEN = 20 * 1024 * 1024;
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 function imageModelRef(): { providerId: string; modelId: string } | null {
 	const row = findRoleModel(getDb(), 'image');
@@ -129,6 +132,119 @@ export function createImageServer(ctx: CallerContext): McpServer {
 					return err(`image generation failed: ${e.message}`);
 				}
 				return err(`image generation failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+		}
+	);
+
+	server.registerTool(
+		'edit_image',
+		{
+			description:
+				'Edit an existing image with a text instruction (e.g. "remove the background", "make it more vibrant"). ' +
+				'For the source image, pass the attachment ID shown next to an image in the conversation ' +
+				'(in a "[attachment id: <uuid>]" note) or a base64-encoded PNG/JPEG string. ' +
+				'The edited image is saved as an attachment and shown inline in the chat.',
+			inputSchema: {
+				prompt: z.string().min(1).describe('What to change in the image'),
+				image: z
+					.string()
+					.min(1)
+					.describe(
+						'Attachment ID of an image in this conversation, or a base64-encoded PNG/JPEG string'
+					)
+			}
+		},
+		async ({ prompt, image }) => {
+			const ref = imageModelRef();
+			if (!ref) {
+				return err(
+					'image generation not configured — ask an admin to pick an image model in Settings → Model Defaults'
+				);
+			}
+			if (!ctx.conversationId) {
+				return err('image editing is only available in a conversation context');
+			}
+
+			const db = getDb();
+			const uuidMatch = image.match(UUID_RE);
+			let normalized: string;
+			if (uuidMatch) {
+				const attachmentId = uuidMatch[0];
+				const available = listAttachmentsByConversation(db, ctx.conversationId).filter((a) =>
+					a.mime.startsWith('image/')
+				);
+				const row = available.find((a) => a.id === attachmentId);
+				if (!row) {
+					const hint =
+						available.length > 0
+							? `available image attachment IDs in this conversation: ${available.map((a) => a.id).join(', ')}`
+							: 'there are no image attachments in this conversation';
+					return err(`no image attachment found with id ${attachmentId} — ${hint}`);
+				}
+				try {
+					const bytes = await fsp.readFile(resolveAttachment(row.path));
+					normalized = bytes.toString('base64');
+				} catch {
+					return err(`could not read attachment ${attachmentId} from disk`);
+				}
+			} else {
+				if (image.length > MAX_BASE64_LEN) {
+					return err('image is too large (max 20MB base64)');
+				}
+				normalized = image.replace(/\s+/g, '');
+				if (!BASE64_RE.test(normalized) || normalized.length % 4 !== 0) {
+					return err(
+						'image must be an attachment ID from this conversation (the UUID at the end of its /api/conversations/.../attachments/<id> URL) or a base64-encoded PNG/JPEG string'
+					);
+				}
+			}
+
+			try {
+				const model = resolveImageModel(ref);
+				const result = await generateImage({
+					model,
+					prompt: { images: [normalized], text: prompt },
+					n: 1,
+					maxImagesPerCall: MAX_N
+				});
+
+				const dir = ensureAttachmentsDir(ctx.conversationId);
+				const attachmentIds: string[] = [];
+				const filenames: string[] = [];
+				for (const img of result.images) {
+					const bytes = Buffer.from(img.base64, 'base64');
+					const filename = `${randomUUID()}-edited.png`;
+					await fsp.writeFile(path.join(dir, filename), bytes);
+					const rel = path.join(ctx.conversationId, 'attachments', filename);
+					const row = createAttachment(db, {
+						kind: 'image',
+						path: rel,
+						mime: 'image/png',
+						sha256: createHash('sha256').update(bytes).digest('hex')
+					});
+					attachmentIds.push(row.id);
+					filenames.push(filename);
+				}
+
+				let out = `Edited ${filenames.length} image(s): ${filenames.join(', ')}`;
+				if (result.warnings.length > 0) {
+					out += `\nWarnings: ${result.warnings
+						.map((w) =>
+							w.type === 'unsupported'
+								? `unsupported: ${w.feature}${w.details ? ` (${w.details})` : ''}`
+								: `${w.type}: ${(w as { message?: string }).message ?? 'unknown'}`
+						)
+						.join('; ')}`;
+				}
+				return {
+					...text(out),
+					structuredContent: { attachmentIds }
+				};
+			} catch (e) {
+				if (NoImageGeneratedError.isInstance(e)) {
+					return err(`image editing failed: ${e.message}`);
+				}
+				return err(`image editing failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
 		}
 	);

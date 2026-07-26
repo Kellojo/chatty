@@ -79,26 +79,36 @@ async function inlineAttachmentParts(
 	return await Promise.all(
 		messages.map(async (message) => ({
 			...message,
-			parts: await Promise.all(
-				message.parts.map(async (part) => {
-					if (part.type !== 'file') return part;
-					const attachmentId = attachmentIdFromUrl(part.url, conversationId);
-					if (!attachmentId) return part;
-					const row = getAttachment(db, attachmentId);
-					if (!row) return part;
-					try {
-						let dataUri = attachmentCache.get(attachmentId);
-						if (dataUri === undefined) {
-							const bytes = await fs.readFile(resolveAttachment(row.path));
-							dataUri = `data:${row.mime};base64,${bytes.toString('base64')}`;
-							attachmentCache.set(attachmentId, dataUri);
+			parts: (
+				await Promise.all(
+					message.parts.map(async (part) => {
+						if (part.type !== 'file') return [part];
+						const attachmentId = attachmentIdFromUrl(part.url, conversationId);
+						if (!attachmentId) return [part];
+						const row = getAttachment(db, attachmentId);
+						if (!row) return [part];
+						const idNote = row.mime.startsWith('image/')
+							? [
+									{
+										type: 'text',
+										text: `[attachment id: ${attachmentId}]`
+									} as UIMessage['parts'][number]
+								]
+							: [];
+						try {
+							let dataUri = attachmentCache.get(attachmentId);
+							if (dataUri === undefined) {
+								const bytes = await fs.readFile(resolveAttachment(row.path));
+								dataUri = `data:${row.mime};base64,${bytes.toString('base64')}`;
+								attachmentCache.set(attachmentId, dataUri);
+							}
+							return [...idNote, { ...part, url: dataUri }];
+						} catch {
+							return [...idNote, part];
 						}
-						return { ...part, url: dataUri };
-					} catch {
-						return part;
-					}
-				})
-			)
+					})
+				)
+			).flat()
 		}))
 	);
 }
@@ -390,7 +400,7 @@ export async function handleChatRequest(
 							: {}),
 					onStepEnd: (step) => {
 						for (const tr of step.toolResults) {
-								if (tr.toolName !== 'generate_image') continue;
+								if (tr.toolName !== 'generate_image' && tr.toolName !== 'edit_image') continue;
 								const ids = attachmentIdsFromOutput(tr.output);
 								if (ids.length === 0) continue;
 								linkAttachmentsToMessage(db, assistantMessageId, ids);

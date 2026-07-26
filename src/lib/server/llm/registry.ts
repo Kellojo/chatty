@@ -1,6 +1,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { ImageModel, LanguageModel } from 'ai';
+import { createOpenRouterImageModel } from './openrouterImage.js';
 import { decryptSecret } from '../crypto.js';
 import { getDb } from '../db/index.js';
 import {
@@ -57,6 +58,13 @@ export function invalidateProviderCache(providerId: string): void {
 	cache.delete(providerId);
 }
 
+function isOpenRouter(provider: ProviderRow): boolean {
+	return (
+		provider.type === 'openai-compatible' &&
+		(provider.base_url ?? '').replace(/\/$/, '').endsWith('openrouter.ai/api/v1')
+	);
+}
+
 function buildImageFactory(provider: ProviderRow): (modelId: string) => ImageModel {
 	const apiKey = provider.api_key_enc ? decryptSecret(provider.api_key_enc) : undefined;
 	if (provider.type === 'anthropic') {
@@ -66,6 +74,15 @@ function buildImageFactory(provider: ProviderRow): (modelId: string) => ImageMod
 	}
 	if (!provider.base_url) {
 		throw new Error(`Provider "${provider.name}" is missing a base URL`);
+	}
+	if (isOpenRouter(provider)) {
+		return (modelId) =>
+			createOpenRouterImageModel({
+				provider: provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+				modelId,
+				baseURL: provider.base_url!,
+				apiKey
+			});
 	}
 	const p = createOpenAICompatible({
 		name: provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),

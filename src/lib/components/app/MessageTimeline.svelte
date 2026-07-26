@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { formatDateTime, formatMessageTime } from '$lib/datetime.js';
 	import { cn } from '$lib/utils.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
@@ -14,6 +14,8 @@
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import DownloadIcon from '@lucide/svelte/icons/download';
+	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import type { MessageUsage, UIMessage } from '$lib/types.js';
@@ -45,6 +47,38 @@
 
 	const openReasoning = new SvelteSet<string>();
 	const openUsage = new SvelteSet<string>();
+	const rotations = new SvelteMap<string, number>();
+	const imgSizes = new SvelteMap<string, { w: number; h: number }>();
+
+	function rotationFor(key: string): number {
+		return rotations.get(key) ?? 0;
+	}
+
+	function rotate(key: string, delta: number) {
+		rotations.set(key, (rotationFor(key) + delta + 360) % 360);
+	}
+
+	function isSideways(key: string): boolean {
+		const r = rotationFor(key);
+		return r === 90 || r === 270;
+	}
+
+	function onImgLoad(key: string, e: Event) {
+		const img = e.currentTarget as HTMLImageElement;
+		if (img.naturalWidth > 0) {
+			imgSizes.set(key, { w: img.naturalWidth, h: img.naturalHeight });
+		}
+	}
+
+	// When rotated 90/270 the image's visual box is width<->height swapped.
+	// Constrain the img by the swapped axis so it fits the same footprint.
+	function rotatedImgClass(key: string): string {
+		if (!isSideways(key)) return 'max-h-96 w-auto max-w-full sm:max-w-md';
+		const size = imgSizes.get(key);
+		if (!size) return 'max-h-96 max-w-96';
+		// visual width = rendered height; keep it within the same max bounds
+		return size.w >= size.h ? 'max-h-96 w-auto max-w-96' : 'max-h-96 w-auto max-w-full';
+	}
 
 	function toggleUsage(key: string) {
 		if (openUsage.has(key)) openUsage.delete(key);
@@ -164,24 +198,52 @@
 				{:else if part.type === 'file'}
 					{@const url = fileUrl(part)}
 					{#if part.mediaType?.startsWith('image/')}
-						<div class="group relative inline-block max-w-full">
+						{@const imgKey = `${message.id}:${partIndex}`}
+						{@const rotation = rotationFor(imgKey)}
+						<div
+							class="group relative grid max-w-full place-items-center overflow-hidden rounded-md"
+						>
 							<!-- eslint-disable svelte/no-navigation-without-resolve -->
-							<a href={url} target="_blank" rel="noopener">
+							<a href={url} target="_blank" rel="noopener" class="grid place-items-center">
 								<img
 									src={url}
 									alt="Attachment"
-									class="max-h-96 w-auto max-w-full rounded-md border sm:max-w-md"
+									onload={(e) => onImgLoad(imgKey, e)}
+									style:transform={rotation ? `rotate(${rotation}deg)` : undefined}
+									class={cn('rounded-md border transition-transform', rotatedImgClass(imgKey))}
 								/>
 							</a>
-							<a
-								href={url}
-								download
-								title="Download image"
-								aria-label="Download image"
-								class="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100"
+							<div
+								class="absolute right-2 bottom-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
 							>
-								<DownloadIcon class="size-4" />
-							</a>
+								<button
+									type="button"
+									title="Rotate left"
+									aria-label="Rotate left"
+									onclick={() => rotate(imgKey, -90)}
+									class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
+								>
+									<RotateCcwIcon class="size-4" />
+								</button>
+								<button
+									type="button"
+									title="Rotate right"
+									aria-label="Rotate right"
+									onclick={() => rotate(imgKey, 90)}
+									class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
+								>
+									<RotateCwIcon class="size-4" />
+								</button>
+								<a
+									href={url}
+									download
+									title="Download image"
+									aria-label="Download image"
+									class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
+								>
+									<DownloadIcon class="size-4" />
+								</a>
+							</div>
 							<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						</div>
 					{:else}
