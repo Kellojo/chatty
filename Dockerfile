@@ -23,10 +23,9 @@ RUN pnpm prune --prod
 COPY --from=build /app/build ./build
 COPY migrations ./migrations
 COPY skills/defaults ./skills/defaults
-COPY scripts/start.mjs ./scripts/start.mjs
 RUN mkdir -p /data /memory /skills /documents /workspaces && chown -R app:app /data /memory /skills /documents /workspaces
 VOLUME ["/data", "/memory", "/skills", "/documents", "/workspaces"]
 EXPOSE 3000
 USER app
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "scripts/start.mjs"]
+CMD ["node", "build"]
