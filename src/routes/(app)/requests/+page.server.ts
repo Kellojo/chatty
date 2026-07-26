@@ -2,7 +2,9 @@ import { requireAdmin } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import {
 	listProxyRequests,
+	proxyRequestDailyCounts,
 	proxyRequestStats,
+	proxyRequestTopModels,
 	toPublic,
 	type ProxyRequestFilters
 } from '$lib/server/db/repo/proxy-requests.js';
@@ -44,6 +46,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const { rows, total } = listProxyRequests(db, filters, PAGE_SIZE, (page - 1) * PAGE_SIZE);
 	const requests = rows.map(toPublic);
 	const stats = proxyRequestStats(db, filters);
+	const dailyCounts = proxyRequestDailyCounts(db, 365, filters);
+	const topModels = proxyRequestTopModels(db, 10, filters);
 
 	const users: Record<string, string> = {};
 	const userIds = [...new Set(requests.map((r) => r.userId))];
@@ -86,6 +90,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	return {
 		requests,
 		stats,
+		dailyCounts,
+		topModels,
 		users,
 		keys,
 		filters: {

@@ -25,7 +25,7 @@
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import { serverActiveChatIds } from '$lib/state/chat-status.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
-	import { formatCount } from '$lib/format.js';
+	import { formatCount } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
 

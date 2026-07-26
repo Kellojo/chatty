@@ -238,6 +238,75 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 	};
 }
 
+export interface DailyCount {
+	day: string;
+	count: number;
+	completed: number;
+	failed: number;
+}
+
+export function proxyRequestDailyCounts(
+	db: Db,
+	days: number,
+	filters: ProxyRequestFilters = {}
+): DailyCount[] {
+	const { where, args } = buildWhere(filters);
+	const from = Date.now() - days * 86400000;
+	const extra = where ? ` AND started_at >= ?` : 'WHERE started_at >= ?';
+	return db
+		.prepare(
+			`SELECT date(started_at / 1000, 'unixepoch') AS day,
+				COUNT(*) AS count,
+				SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS completed,
+				SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+			 FROM proxy_requests ${where}${extra}
+			 GROUP BY day ORDER BY day`
+		)
+		.all(...args, from) as DailyCount[];
+}
+
+export interface ModelUsage {
+	model: string;
+	count: number;
+	totalTokens: number;
+	costUsd: number;
+	avgLatencyMs: number | null;
+}
+
+export function proxyRequestTopModels(
+	db: Db,
+	limit = 10,
+	filters: ProxyRequestFilters = {}
+): ModelUsage[] {
+	const { where, args } = buildWhere(filters);
+	const rows = db
+		.prepare(
+			`SELECT requested_model AS model,
+				COUNT(*) AS count,
+				COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS total_tokens,
+				COALESCE(SUM(cost_usd), 0) AS cost_usd,
+				AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms END) AS avg_latency
+			 FROM proxy_requests ${where}
+			 GROUP BY requested_model
+			 ORDER BY count DESC
+			 LIMIT ?`
+		)
+		.all(...args, limit) as {
+		model: string;
+		count: number;
+		total_tokens: number;
+		cost_usd: number;
+		avg_latency: number | null;
+	}[];
+	return rows.map((r) => ({
+		model: r.model,
+		count: r.count,
+		totalTokens: r.total_tokens,
+		costUsd: r.cost_usd,
+		avgLatencyMs: r.avg_latency
+	}));
+}
+
 export function failRunningProxyRequests(db: Db): number {
 	return db
 		.prepare(

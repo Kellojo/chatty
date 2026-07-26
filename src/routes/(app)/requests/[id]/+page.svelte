@@ -6,7 +6,7 @@
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
-	import { formatCount } from '$lib/format.js';
+	import { formatCount, formatCost } from '$lib/formats.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
 	import type { ProxyRequestStatus } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -35,10 +35,6 @@
 		if (status === 'running') return 'border-info/50 text-info-foreground';
 		if (status === 'complete') return 'text-success-foreground';
 		return '';
-	}
-
-	function formatCost(usd: number): string {
-		return usd >= 0.01 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(5)}`;
 	}
 </script>
 

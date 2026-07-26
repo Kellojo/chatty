@@ -3,6 +3,7 @@
 	import { toast } from 'svelte-sonner';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { formatDateTime, formatMessageTime } from '$lib/datetime.js';
+	import { formatCost, formatLatency, formatTokens } from '$lib/formats.js';
 	import { cn } from '$lib/utils.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import { Markdown } from '$lib/components/ai/markdown/index.js';
@@ -99,21 +100,6 @@
 	function messageUsage(message: UIMessage): MessageUsage | null {
 		const meta = message.metadata as { usage?: MessageUsage } | undefined;
 		return meta?.usage ?? null;
-	}
-
-	function formatTokens(n: number | null): string {
-		return n == null ? '—' : n.toLocaleString();
-	}
-
-	function formatCost(usd: number | null): string {
-		if (usd == null) return '—';
-		if (usd < 0.01) return `$${usd.toFixed(6)}`;
-		return `$${usd.toFixed(4)}`;
-	}
-
-	function formatLatency(ms: number | null): string {
-		if (ms == null) return '—';
-		return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
 	}
 
 	function tokensPerSecond(usage: MessageUsage): string {
@@ -340,15 +326,15 @@
 								<dl class="border-t border-border/60 px-3 py-2">
 									<div class="flex items-baseline justify-between py-0.5">
 										<dt class="text-muted-foreground">Input</dt>
-										<dd class="text-foreground tabular-nums">{formatTokens(usage.inputTokens)}</dd>
+										<dd class="text-foreground tabular-nums">{formatToken(usage.inputTokens)}</dd>
 									</div>
 									<div class="flex items-baseline justify-between py-0.5">
 										<dt class="text-muted-foreground">Output</dt>
-										<dd class="text-foreground tabular-nums">{formatTokens(usage.outputTokens)}</dd>
+										<dd class="text-foreground tabular-nums">{formatToken(usage.outputTokens)}</dd>
 									</div>
 									<div class="flex items-baseline justify-between py-0.5">
 										<dt class="text-muted-foreground">Total</dt>
-										<dd class="text-foreground tabular-nums">{formatTokens(usage.totalTokens)}</dd>
+										<dd class="text-foreground tabular-nums">{formatToken(usage.totalTokens)}</dd>
 									</div>
 								</dl>
 								<dl class="border-t border-border/60 px-3 py-2">
