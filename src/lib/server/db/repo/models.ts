@@ -208,13 +208,18 @@ export function upsertFetchedModels(
 						priceOutput: model.priceOutput ?? null
 					});
 				}
-				added++;
-			} else if (model.priceInput != null || model.priceOutput != null) {
-				updateModel(db, existing.id, {
-					priceInput: model.priceInput ?? existing.price_input,
-					priceOutput: model.priceOutput ?? existing.price_output
-				});
-			}
+			added++;
+		} else {
+			const existingCaps = JSON.parse(existing.capabilities) as string[];
+			const merged = model.capabilities
+				? [...new Set([...existingCaps, ...model.capabilities])]
+				: undefined;
+			updateModel(db, existing.id, {
+				capabilities: merged,
+				priceInput: model.priceInput ?? null,
+				priceOutput: model.priceOutput ?? null
+			});
+		}
 		}
 	})();
 	return { added, total: fetched.length };

@@ -33,20 +33,41 @@ describe('models repo', () => {
 		});
 	});
 
-	it('upsertFetchedModels stores provider pricing without clobbering it when absent', () => {
+	it('upsertFetchedModels fully syncs provider pricing, clearing it when absent', () => {
 		upsertFetchedModels(db, providerId, [{ id: 'a', priceInput: 1.5, priceOutput: 6 }]);
 		let row = findModel(db, providerId, 'a')!;
 		expect(row.price_input).toBe(1.5);
 		expect(row.price_output).toBe(6);
 
-		upsertFetchedModels(db, providerId, [{ id: 'a' }]);
-		row = findModel(db, providerId, 'a')!;
-		expect(row.price_input).toBe(1.5);
-
 		upsertFetchedModels(db, providerId, [{ id: 'a', priceInput: 2 }]);
 		row = findModel(db, providerId, 'a')!;
 		expect(row.price_input).toBe(2);
-		expect(row.price_output).toBe(6);
+		expect(row.price_output).toBeNull();
+
+		upsertFetchedModels(db, providerId, [{ id: 'a' }]);
+		row = findModel(db, providerId, 'a')!;
+		expect(row.price_input).toBeNull();
+		expect(row.price_output).toBeNull();
+	});
+
+	it('upsertFetchedModels unions fetched capabilities into existing ones without removing any', () => {
+		upsertFetchedModels(db, providerId, [{ id: 'a', capabilities: ['chat', 'streaming'] }]);
+		let row = findModel(db, providerId, 'a')!;
+		expect(JSON.parse(row.capabilities)).toEqual(['chat', 'streaming']);
+
+		upsertFetchedModels(db, providerId, [{ id: 'a', capabilities: ['chat', 'vision', 'image'] }]);
+		row = findModel(db, providerId, 'a')!;
+		expect(JSON.parse(row.capabilities)).toEqual(['chat', 'streaming', 'vision', 'image']);
+
+		// A fetch reporting fewer capabilities must not strip ones already stored.
+		upsertFetchedModels(db, providerId, [{ id: 'a', capabilities: ['chat'] }]);
+		row = findModel(db, providerId, 'a')!;
+		expect(JSON.parse(row.capabilities)).toEqual(['chat', 'streaming', 'vision', 'image']);
+
+		// A fetch with no capability info leaves capabilities untouched.
+		upsertFetchedModels(db, providerId, [{ id: 'a' }]);
+		row = findModel(db, providerId, 'a')!;
+		expect(JSON.parse(row.capabilities)).toEqual(['chat', 'streaming', 'vision', 'image']);
 	});
 
 	it('updateModel sets and clears manual pricing', () => {
