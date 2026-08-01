@@ -17,7 +17,7 @@ describe('mcp-servers repo', () => {
 	it('seeds the bundled servers', () => {
 		const names = repo.listMcpServers(db).map((r) => r.name);
 		expect(names).toEqual(
-			expect.arrayContaining(['webfetch', 'datetime', 'chat-search', 'fs', 'settings'])
+			expect.arrayContaining(['webfetch', 'datetime', 'chat-search', 'fs', 'settings', 'wait'])
 		);
 		expect(names).not.toContain('bash');
 		expect(names).not.toContain('documents');
