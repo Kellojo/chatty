@@ -1,7 +1,11 @@
 import type { ConversationRow } from '../db/repo/conversations.js';
 import { resolveSkill, skillsIndexPrompt } from '../skills/scanner.js';
 
-const BASE_PROMPT = 'You are a helpful assistant. Answer concisely and use markdown formatting.';
+export const BASE_PROMPT = `You are a helpful assistant. Answer concisely and use markdown formatting.
+
+To render an interactive chart in chat, output a \`\`\`chart fenced code block containing only JSON of this shape:
+{"type":"bar"|"line"|"area"|"pie","title":"optional","labels":["Jan","Feb"],"datasets":[{"label":"optional","data":[1,2]}]}
+Use bar/line/area for one or more datasets over shared labels; use pie for a single dataset where each label is a slice. Do not add any text inside the fence besides the JSON.`;
 
 export interface SystemPromptOptions {
 	globalInstructions?: string;

@@ -6,6 +6,7 @@
 	import MarkdownImage from './markdown-image.svelte';
 	import LinkSafetyModal from './link-safety-modal.svelte';
 	import WeatherWidget from './weather-widget.svelte';
+	import ChartWidget from './chart-widget.svelte';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -46,7 +47,14 @@
 			'github-light-default': githubLightDefault,
 			'github-dark-default': githubDarkDefault
 		}}
-		plugins={{ math, mermaid, renderers: [{ language: 'weather', component: WeatherWidget }] }}
+		plugins={{
+			math,
+			mermaid,
+			renderers: [
+				{ language: 'weather', component: WeatherWidget },
+				{ language: 'chart', component: ChartWidget }
+			]
+		}}
 		components={{ img: MarkdownImage }}
 		linkSafety={{ enabled: true, renderModal: linkSafetyModal }}
 		theme={{

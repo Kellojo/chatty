@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ConversationRow } from '../db/repo/conversations.js';
-import { buildSystemPrompt } from './systemPrompt.js';
+import { BASE_PROMPT, buildSystemPrompt } from './systemPrompt.js';
 
-const basePrompt = 'You are a helpful assistant. Answer concisely and use markdown formatting.';
+const basePrompt = BASE_PROMPT;
 
 function makeConv(overrides: Partial<ConversationRow> = {}): ConversationRow {
 	return {
