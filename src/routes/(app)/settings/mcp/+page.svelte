@@ -66,6 +66,18 @@
 		return res;
 	}
 
+	function resetAddForm() {
+		addName = '';
+		addTransport = 'http';
+		addUrl = '';
+		addToken = '';
+	}
+
+	function openAdd() {
+		resetAddForm();
+		addOpen = true;
+	}
+
 	async function submitAdd(event: SubmitEvent) {
 		event.preventDefault();
 		addBusy = true;
@@ -78,10 +90,7 @@
 			});
 			toast.success(`Server "${addName}" added`);
 			addOpen = false;
-			addName = '';
-			addTransport = 'http';
-			addUrl = '';
-			addToken = '';
+			resetAddForm();
 			await invalidateAll();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to add server');
@@ -174,7 +183,7 @@
 				Model Context Protocol servers available to chat and agent modes.
 			</p>
 		</div>
-		<Button onclick={() => (addOpen = true)}>Add server</Button>
+		<Button onclick={openAdd}>Add server</Button>
 	</div>
 
 	<Table.Root>
@@ -254,14 +263,7 @@
 		<form onsubmit={submitAdd} class="flex flex-col gap-4">
 			<div class="flex flex-col gap-2">
 				<Label for="add-name">Name</Label>
-				<Input
-					id="add-name"
-					bind:value={addName}
-					required
-					maxlength={64}
-					pattern="[a-z0-9][a-z0-9-]*"
-					placeholder="my-server"
-				/>
+				<Input id="add-name" bind:value={addName} required maxlength={64} placeholder="my-server" />
 			</div>
 			<div class="flex flex-col gap-2">
 				<Label>Transport</Label>
@@ -303,13 +305,7 @@
 		<form onsubmit={submitEdit} class="flex flex-col gap-4">
 			<div class="flex flex-col gap-2">
 				<Label for="edit-name">Name</Label>
-				<Input
-					id="edit-name"
-					bind:value={editName}
-					required
-					maxlength={64}
-					pattern="[a-z0-9][a-z0-9-]*"
-				/>
+				<Input id="edit-name" bind:value={editName} required maxlength={64} />
 			</div>
 			<div class="flex flex-col gap-2">
 				<Label>Transport</Label>

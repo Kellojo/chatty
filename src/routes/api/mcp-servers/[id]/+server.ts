@@ -5,13 +5,29 @@ import { getDb } from '$lib/server/db/index.js';
 import { deleteMcpServer, toPublic, updateMcpServer } from '$lib/server/db/repo/mcp-servers.js';
 import type { RequestHandler } from './$types';
 
+const nameSchema = z
+	.string()
+	.min(1)
+	.max(64)
+	.transform((name) =>
+		name
+			.trim()
+			.toLowerCase()
+			.replace(/[\s_]+/g, '-')
+			.replace(/[^a-z0-9-]/g, '')
+			.replace(/^-+|-+$/g, '')
+			.replace(/-{2,}/g, '-')
+	)
+	.pipe(
+		z
+			.string()
+			.min(1)
+			.max(64)
+			.regex(/^[a-z0-9][a-z0-9-]*$/)
+	);
+
 const patchSchema = z.object({
-	name: z
-		.string()
-		.min(1)
-		.max(64)
-		.regex(/^[a-z0-9][a-z0-9-]*$/)
-		.optional(),
+	name: nameSchema.optional(),
 	transport: z.enum(['http', 'sse']).optional(),
 	url: z.url().nullish(),
 	token: z.string().min(1).nullable().optional(),
