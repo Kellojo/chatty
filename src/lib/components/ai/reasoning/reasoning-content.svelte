@@ -9,7 +9,6 @@
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
 	import githubDarkDefault from '@shikijs/themes/github-dark-default';
-	import { code } from '@streamdown-svelte/code';
 
 	interface Props {
 		children?: Snippet;
@@ -86,7 +85,6 @@
 					'github-dark-default': githubDarkDefault
 				}}
 				baseTheme="shadcn"
-				plugins={{ code }}
 			/>
 		{:else}
 			{@render children?.()}

@@ -8,7 +8,6 @@
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
 	import githubDarkDefault from '@shikijs/themes/github-dark-default';
-	import { code } from '@streamdown-svelte/code';
 	import { math } from '@streamdown-svelte/math';
 	import { mermaid } from '@streamdown-svelte/mermaid';
 	import 'katex/dist/katex.min.css';
@@ -36,7 +35,7 @@
 			'github-light-default': githubLightDefault,
 			'github-dark-default': githubDarkDefault
 		}}
-		plugins={{ code, math, mermaid }}
+		plugins={{ math, mermaid }}
 		components={{ img: MarkdownImage }}
 		theme={{
 			h1: { base: 'mt-8 mb-3 text-3xl font-semibold text-foreground' },
@@ -48,11 +47,12 @@
 			ul: { base: 'ml-0 list-outside list-disc pl-6 whitespace-normal text-foreground' },
 			ol: { base: 'ml-0 list-outside pl-6 whitespace-normal text-foreground' },
 			code: {
-				base: 'relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-sidebar p-2',
+				base: 'relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-white p-2 [--sdm-bg:theme(colors.white)] dark:bg-sidebar dark:[--sdm-bg:transparent]',
 				header: 'flex h-8 items-center justify-between pr-1 text-muted-foreground text-xs',
-				actions: 'absolute top-2 right-2 z-10',
+				actions:
+					'pointer-events-none sticky top-2 right-1 z-10 -mt-10 flex h-8 items-center justify-end',
 				buttons:
-					'pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-sidebar bg-sidebar/80 px-1.5 py-1 supports-[backdrop-filter]:bg-sidebar/70 supports-[backdrop-filter]:backdrop-blur'
+					'pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-border bg-white/80 px-1.5 py-1 supports-[backdrop-filter]:bg-white/70 supports-[backdrop-filter]:backdrop-blur dark:border-sidebar dark:bg-sidebar/80 dark:supports-[backdrop-filter]:bg-sidebar/70'
 			}
 		}}
 	/>
