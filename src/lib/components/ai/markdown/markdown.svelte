@@ -5,6 +5,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import MarkdownImage from './markdown-image.svelte';
 	import LinkSafetyModal from './link-safety-modal.svelte';
+	import WeatherWidget from './weather-widget.svelte';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -45,7 +46,7 @@
 			'github-light-default': githubLightDefault,
 			'github-dark-default': githubDarkDefault
 		}}
-		plugins={{ math, mermaid }}
+		plugins={{ math, mermaid, renderers: [{ language: 'weather', component: WeatherWidget }] }}
 		components={{ img: MarkdownImage }}
 		linkSafety={{ enabled: true, renderModal: linkSafetyModal }}
 		theme={{
