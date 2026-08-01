@@ -98,7 +98,8 @@ describe('llm registry', () => {
 								{
 									id: 'or-model',
 									architecture: { input_modalities: ['text'], output_modalities: ['text'] },
-									pricing: { prompt: '0.00000015', completion: '0.0000006' }
+									pricing: { prompt: '0.00000015', completion: '0.0000006' },
+									context_length: 128000
 								},
 								{
 									id: 'image-model',
@@ -130,31 +131,36 @@ describe('llm registry', () => {
 				id: 'or-model',
 				capabilities: ['chat', 'streaming'],
 				priceInput: 0.15,
-				priceOutput: 0.6
+				priceOutput: 0.6,
+				contextLength: 128000
 			},
 			{
 				id: 'image-model',
 				capabilities: ['chat', 'streaming', 'image'],
 				priceInput: null,
-				priceOutput: null
+				priceOutput: null,
+				contextLength: null
 			},
 			{
 				id: 'vision-model',
 				capabilities: ['chat', 'streaming', 'vision'],
 				priceInput: null,
-				priceOutput: null
+				priceOutput: null,
+				contextLength: null
 			},
 			{
 				id: 'free-model',
 				capabilities: ['chat', 'streaming'],
 				priceInput: null,
-				priceOutput: null
+				priceOutput: null,
+				contextLength: null
 			},
 			{
 				id: 'plain-model',
 				capabilities: ['chat', 'streaming'],
 				priceInput: null,
-				priceOutput: null
+				priceOutput: null,
+				contextLength: null
 			}
 		]);
 	});

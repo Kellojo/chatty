@@ -34,6 +34,7 @@
 	let pricingModel = $state<Model | null>(null);
 	let pricingInput = $state('');
 	let pricingOutput = $state('');
+	let pricingContext = $state('');
 	let pricingBusy = $state(false);
 
 	let deleteId = $state<string | null>(null);
@@ -121,6 +122,7 @@
 		pricingModel = model;
 		pricingInput = model.priceInput !== null ? String(model.priceInput) : '';
 		pricingOutput = model.priceOutput !== null ? String(model.priceOutput) : '';
+		pricingContext = model.contextLength !== null ? String(model.contextLength) : '';
 	}
 
 	function parsePrice(raw: string): number | null {
@@ -132,6 +134,15 @@
 		return value;
 	}
 
+	function parseContext(raw: string): number | null {
+		const trimmed = raw.trim();
+		if (trimmed === '') return null;
+		const value = Number(trimmed);
+		if (!Number.isInteger(value) || value <= 0)
+			throw new Error('Context length must be a positive integer');
+		return value;
+	}
+
 	async function submitPricing(event: SubmitEvent) {
 		event.preventDefault();
 		if (!pricingModel) return;
@@ -139,7 +150,8 @@
 		try {
 			await api(`/api/models/${pricingModel.id}`, 'PATCH', {
 				priceInput: parsePrice(pricingInput),
-				priceOutput: parsePrice(pricingOutput)
+				priceOutput: parsePrice(pricingOutput),
+				contextLength: parseContext(pricingContext)
 			});
 			toast.success('Pricing updated');
 			pricingModel = null;
@@ -258,7 +270,7 @@
 													Capabilities
 												</DropdownMenu.Item>
 												<DropdownMenu.Item onclick={() => openPricing(model)}>
-													Pricing
+													Pricing &amp; context
 												</DropdownMenu.Item>
 												<DropdownMenu.Separator />
 												<DropdownMenu.Item
@@ -352,10 +364,10 @@
 <Dialog.Root open={pricingModel !== null} onOpenChange={(open) => !open && (pricingModel = null)}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Pricing — {pricingModel?.displayName}</Dialog.Title>
+			<Dialog.Title>Pricing &amp; context — {pricingModel?.displayName}</Dialog.Title>
 			<Dialog.Description>
 				USD per 1M tokens. Leave empty when unknown; cost is only reported when both prices are set.
-				Providers like OpenRouter fill these automatically on fetch.
+				Context length drives automatic chat compaction; providers like OpenRouter fill it on fetch.
 			</Dialog.Description>
 		</Dialog.Header>
 		<form onsubmit={submitPricing} class="flex flex-col gap-4">
@@ -381,9 +393,20 @@
 					placeholder="e.g. 0.60"
 				/>
 			</div>
+			<div class="flex flex-col gap-2">
+				<Label for="price-context">Context length (tokens)</Label>
+				<Input
+					id="price-context"
+					bind:value={pricingContext}
+					type="number"
+					min="1"
+					step="1"
+					placeholder="e.g. 200000"
+				/>
+			</div>
 			<Dialog.Footer>
 				<Button type="submit" disabled={pricingBusy}>
-					{pricingBusy ? 'Saving…' : 'Save pricing'}
+					{pricingBusy ? 'Saving…' : 'Save'}
 				</Button>
 			</Dialog.Footer>
 		</form>

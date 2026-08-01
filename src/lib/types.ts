@@ -23,7 +23,7 @@ export interface ChatModel {
 	priceOutput: number | null;
 }
 
-export type ModelRole = 'chat' | 'title' | 'memory' | 'image';
+export type ModelRole = 'chat' | 'title' | 'memory' | 'image' | 'compaction';
 
 export type RoleDefaults = Partial<Record<ModelRole, string>>;
 
@@ -77,6 +77,7 @@ export type ServerEvent =
 	| { type: 'chat.stream.started'; conversationId: string }
 	| { type: 'chat.stream.finished'; conversationId: string }
 	| { type: 'conversation.updated'; conversationId: string }
+	| { type: 'conversation.compacted'; conversationId: string }
 	| {
 			type: 'memory.changed';
 			scope: 'user' | 'shared';
@@ -165,7 +166,7 @@ export type ProxyRequestStatus = 'running' | 'complete' | 'failed';
 
 export type RequestSource = 'proxy' | 'chat' | 'agent';
 
-export type RequestPurpose = 'completion' | 'title';
+export type RequestPurpose = 'completion' | 'title' | 'compaction';
 
 export interface ProxyCompression {
 	caveman?: {

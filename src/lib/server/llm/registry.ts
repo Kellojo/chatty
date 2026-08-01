@@ -149,6 +149,10 @@ export function listModelsGrouped(): ModelsByProvider[] {
 		.filter((g) => g.models.length > 0);
 }
 
+// Anthropic's /v1/models doesn't expose context windows; all current Claude
+// models are 200k. Override per-model in settings if this ever diverges.
+const ANTHROPIC_CONTEXT_LENGTH = 200_000;
+
 async function fetchAnthropicModels(
 	provider: ProviderRow,
 	apiKey: string | undefined
@@ -160,7 +164,7 @@ async function fetchAnthropicModels(
 	});
 	if (!res.ok) throw new Error(`Anthropic /models probe failed: ${res.status} ${await res.text()}`);
 	const body = (await res.json()) as { data?: { id: string }[] };
-	return (body.data ?? []).map((m) => ({ id: m.id }));
+	return (body.data ?? []).map((m) => ({ id: m.id, contextLength: ANTHROPIC_CONTEXT_LENGTH }));
 }
 
 function pricePerMillion(value: unknown): number | null {
@@ -168,6 +172,18 @@ function pricePerMillion(value: unknown): number | null {
 	const perToken = Number(value);
 	if (!Number.isFinite(perToken) || perToken <= 0) return null;
 	return perToken * 1_000_000;
+}
+
+function contextLength(m: {
+	context_length?: unknown;
+	top_provider?: { context_length?: unknown };
+}): number | null {
+	for (const value of [m.context_length, m.top_provider?.context_length]) {
+		if (typeof value !== 'number' && typeof value !== 'string') continue;
+		const n = Number(value);
+		if (Number.isFinite(n) && n > 0) return Math.floor(n);
+	}
+	return null;
 }
 
 async function fetchOpenAICompatibleModels(
@@ -184,6 +200,8 @@ async function fetchOpenAICompatibleModels(
 			id: string;
 			architecture?: { input_modalities?: unknown; output_modalities?: unknown };
 			pricing?: { prompt?: unknown; completion?: unknown };
+			context_length?: unknown;
+			top_provider?: { context_length?: unknown };
 		}[];
 	};
 	return (body.data ?? []).map((m) => {
@@ -204,7 +222,8 @@ async function fetchOpenAICompatibleModels(
 			id: m.id,
 			capabilities,
 			priceInput: pricePerMillion(m.pricing?.prompt),
-			priceOutput: pricePerMillion(m.pricing?.completion)
+			priceOutput: pricePerMillion(m.pricing?.completion),
+			contextLength: contextLength(m)
 		};
 	});
 }

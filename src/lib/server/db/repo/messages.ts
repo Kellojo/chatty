@@ -12,6 +12,7 @@ export interface MessageUsage {
 }
 
 export interface MessageRow {
+	rowid: number;
 	id: string;
 	conversation_id: string;
 	role: string;
@@ -59,7 +60,7 @@ export function extractText(parts: unknown[]): string {
 
 export function listMessages(db: Db, conversationId: string): MessageRow[] {
 	return db
-		.prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid')
+		.prepare('SELECT rowid, * FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid')
 		.all(conversationId) as MessageRow[];
 }
 
@@ -71,7 +72,7 @@ export function countMessages(db: Db, conversationId: string): number {
 }
 
 export function getMessage(db: Db, id: string): MessageRow | undefined {
-	return db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | undefined;
+	return db.prepare('SELECT rowid, * FROM messages WHERE id = ?').get(id) as MessageRow | undefined;
 }
 
 export interface CreateMessageInput {

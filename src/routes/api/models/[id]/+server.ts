@@ -10,7 +10,8 @@ const patchSchema = z.object({
 	capabilities: z.array(z.enum(['chat', 'vision', 'tool_use', 'streaming', 'image'])).optional(),
 	enabled: z.boolean().optional(),
 	priceInput: z.number().nonnegative().nullable().optional(),
-	priceOutput: z.number().nonnegative().nullable().optional()
+	priceOutput: z.number().nonnegative().nullable().optional(),
+	contextLength: z.number().int().positive().nullable().optional()
 });
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {

@@ -24,6 +24,8 @@ const schema = z.object({
 	AUTO_PROMOTE_FIRST_USER: boolFromString('true'),
 	LM_STUDIO_BASE_URL: z.string().default('http://localhost:1234'),
 	AGENT_MAX_STEPS: z.coerce.number().int().min(1).default(25),
+	CHAT_COMPACT_TOKENS: z.coerce.number().int().min(0).default(60000),
+	CHAT_COMPACT_KEEP_MESSAGES: z.coerce.number().int().min(2).default(10),
 	MAX_ATTACHMENT_SIZE_MB: z.coerce.number().int().min(1).default(50),
 	SETTINGS_MCP_WRITE: boolFromString('false'),
 	PORT: z.coerce.number().int().min(1).max(65535).default(3000),

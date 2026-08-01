@@ -29,6 +29,12 @@
 			role: 'image',
 			label: 'Image generation',
 			description: 'Used by the generate_image tool. Pick a model with the image capability.'
+		},
+		{
+			role: 'compaction',
+			label: 'Chat compaction',
+			description:
+				'Summarizes long conversations when they outgrow the context window. Falls back to the conversation model when unset; a cheap model works well.'
 		}
 	];
 

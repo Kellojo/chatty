@@ -34,6 +34,7 @@ import {
 } from '../db/repo/messages.js';
 import { getAttachment, linkAttachmentsToMessage } from '../db/repo/attachments.js';
 import { getAgent } from '../db/repo/agents.js';
+import { latestSummary } from '../db/repo/conversation-summaries.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
@@ -49,6 +50,7 @@ import { resolveSkill } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
 import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
 import { attachmentCache } from './attachmentCache.js';
+import { maybeCompactConversation } from './compact.js';
 import { appendChunk, markDone, registerStream, releaseStream } from './streams.js';
 import { generateConversationTitle } from './title.js';
 
@@ -131,7 +133,10 @@ function ensureModel(db: Db, userId: string, conversation: ConversationRow): Con
 }
 
 function historyFromDb(db: Db, conversationId: string): UIMessage[] {
-	return listMessages(db, conversationId).map((row) => {
+	const rows = listMessages(db, conversationId);
+	const summary = latestSummary(db, conversationId);
+	const visible = summary ? rows.filter((r) => r.rowid > summary.through_rowid) : rows;
+	const messages = visible.map((row) => {
 		const message = toPublic(row);
 		return {
 			id: message.id,
@@ -140,6 +145,20 @@ function historyFromDb(db: Db, conversationId: string): UIMessage[] {
 			metadata: message.usage ? { usage: message.usage } : undefined
 		};
 	});
+	if (!summary) return messages;
+	return [
+		{
+			id: `summary-${summary.id}`,
+			role: 'user' as const,
+			parts: [
+				{
+					type: 'text' as const,
+					text: `[Summary of earlier conversation]\n${summary.summary_text}`
+				}
+			]
+		},
+		...messages
+	];
 }
 
 function upsertUserMessage(db: Db, conversationId: string, message: UIMessage): UIMessage {
@@ -546,6 +565,9 @@ export async function handleChatRequest(
 					generateConversationTitle(conversation.id, userId, ref, userText, assistantText).catch(
 						() => undefined
 					);
+				}
+				if (status === 'complete') {
+					maybeCompactConversation(conversation, userId, ref).catch(() => undefined);
 				}
 			} catch (e) {
 				log.error('Failed to persist assistant message', {

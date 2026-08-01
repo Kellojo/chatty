@@ -33,7 +33,8 @@ describe('db migrations', () => {
 			'agent_user_overrides',
 			'agent_event_counters',
 			'model_mappings',
-			'proxy_requests'
+			'proxy_requests',
+			'conversation_summaries'
 		]) {
 			expect(tables).toContain(expected);
 		}
@@ -41,7 +42,8 @@ describe('db migrations', () => {
 			version: number;
 		}[];
 		expect(versions.map((v) => v.version)).toEqual([
-			1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
+			1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+			27
 		]);
 		db.close();
 	});

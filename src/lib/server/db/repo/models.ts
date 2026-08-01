@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../index.js';
 
-export const MODEL_ROLES = ['chat', 'title', 'memory', 'image'] as const;
+export const MODEL_ROLES = ['chat', 'title', 'memory', 'image', 'compaction'] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
 export interface ModelRow {
@@ -13,6 +13,7 @@ export interface ModelRow {
 	enabled: number;
 	price_input: number | null;
 	price_output: number | null;
+	context_length: number | null;
 }
 
 export interface ChatModel {
@@ -24,6 +25,7 @@ export interface ChatModel {
 	enabled: boolean;
 	priceInput: number | null;
 	priceOutput: number | null;
+	contextLength: number | null;
 }
 
 export function toPublic(row: ModelRow): ChatModel {
@@ -35,7 +37,8 @@ export function toPublic(row: ModelRow): ChatModel {
 		capabilities: JSON.parse(row.capabilities) as string[],
 		enabled: row.enabled === 1,
 		priceInput: row.price_input,
-		priceOutput: row.price_output
+		priceOutput: row.price_output,
+		contextLength: row.context_length
 	};
 }
 
@@ -109,13 +112,14 @@ export interface UpdateModelInput {
 	enabled?: boolean;
 	priceInput?: number | null;
 	priceOutput?: number | null;
+	contextLength?: number | null;
 }
 
 export function updateModel(db: Db, id: string, patch: UpdateModelInput): ModelRow | undefined {
 	const existing = getModel(db, id);
 	if (!existing) return undefined;
 	db.prepare(
-		`UPDATE models SET display_name = ?, capabilities = ?, enabled = ?, price_input = ?, price_output = ?
+		`UPDATE models SET display_name = ?, capabilities = ?, enabled = ?, price_input = ?, price_output = ?, context_length = ?
 		 WHERE id = ?`
 	).run(
 		patch.displayName ?? existing.display_name,
@@ -123,6 +127,7 @@ export function updateModel(db: Db, id: string, patch: UpdateModelInput): ModelR
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
 		patch.priceInput !== undefined ? patch.priceInput : existing.price_input,
 		patch.priceOutput !== undefined ? patch.priceOutput : existing.price_output,
+		patch.contextLength !== undefined ? patch.contextLength : existing.context_length,
 		id
 	);
 	return getModel(db, id);
@@ -167,7 +172,8 @@ export function findRoleModel(db: Db, role: ModelRole): ModelRow | undefined {
 			capabilities: '[]',
 			enabled: 1,
 			price_input: null,
-			price_output: null
+			price_output: null,
+			context_length: null
 		};
 	}
 	return db
@@ -185,6 +191,7 @@ export interface FetchedModel {
 	capabilities?: string[];
 	priceInput?: number | null;
 	priceOutput?: number | null;
+	contextLength?: number | null;
 }
 
 export function upsertFetchedModels(
@@ -202,24 +209,26 @@ export function upsertFetchedModels(
 					modelId: model.id,
 					capabilities: model.capabilities
 				});
-				if (model.priceInput != null || model.priceOutput != null) {
+				if (model.priceInput != null || model.priceOutput != null || model.contextLength != null) {
 					updateModel(db, created.id, {
 						priceInput: model.priceInput ?? null,
-						priceOutput: model.priceOutput ?? null
+						priceOutput: model.priceOutput ?? null,
+						contextLength: model.contextLength ?? null
 					});
 				}
-			added++;
-		} else {
-			const existingCaps = JSON.parse(existing.capabilities) as string[];
-			const merged = model.capabilities
-				? [...new Set([...existingCaps, ...model.capabilities])]
-				: undefined;
-			updateModel(db, existing.id, {
-				capabilities: merged,
-				priceInput: model.priceInput ?? null,
-				priceOutput: model.priceOutput ?? null
-			});
-		}
+				added++;
+			} else {
+				const existingCaps = JSON.parse(existing.capabilities) as string[];
+				const merged = model.capabilities
+					? [...new Set([...existingCaps, ...model.capabilities])]
+					: undefined;
+				updateModel(db, existing.id, {
+					capabilities: merged,
+					priceInput: model.priceInput ?? null,
+					priceOutput: model.priceOutput ?? null,
+					contextLength: model.contextLength ?? undefined
+				});
+			}
 		}
 	})();
 	return { added, total: fetched.length };
