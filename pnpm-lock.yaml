@@ -47,6 +47,9 @@ importers:
       better-sqlite3:
         specifier: ^12.11.1
         version: 12.11.1
+      convert:
+        specifier: ^7.0.2
+        version: 7.0.2
       cron-parser:
         specifier: ^5.6.2
         version: 5.6.2
@@ -2373,6 +2376,9 @@ packages:
 
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
+
+  convert@7.0.2:
+    resolution: {integrity: sha512-vDIDqKYqSxmg3x16wYdB+CyfioYOd70GJBtFeU9eoj7PXzhhsmEut+N9NJ7X4Lc+mp18AHOPL9YgyXyejpDc1A==}
 
   cookie-signature@1.2.2:
     resolution: {integrity: sha512-D76uU73ulSXrD1UXF4KE2TMxVVwhsnCgfAyTg9k8P6KGZjlXKrOLe4dJQKI3Bxi5wjesZoFXJWElNWBjPZMbhg==}
@@ -7180,6 +7186,8 @@ snapshots:
   content-type@2.0.0: {}
 
   convert-source-map@2.0.0: {}
+
+  convert@7.0.2: {}
 
   cookie-signature@1.2.2: {}
 

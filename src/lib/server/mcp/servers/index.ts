@@ -12,6 +12,7 @@ import { createSkillsServer } from './skills.js';
 import { createCodeExecServer } from './code-exec.js';
 import { createImageServer } from './image.js';
 import { createWaitServer } from './wait.js';
+import { createMathServer } from './math.js';
 
 export type BuiltinServerFactory = (ctx: CallerContext) => McpServer;
 
@@ -27,5 +28,6 @@ export const BUILTIN_SERVERS: Record<string, BuiltinServerFactory> = {
 	skills: createSkillsServer,
 	'code-exec': createCodeExecServer,
 	image: createImageServer,
-	wait: createWaitServer
+	wait: createWaitServer,
+	math: createMathServer
 };
