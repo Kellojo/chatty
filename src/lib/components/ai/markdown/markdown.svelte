@@ -4,6 +4,7 @@
 	import { mode } from 'mode-watcher';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import MarkdownImage from './markdown-image.svelte';
+	import LinkSafetyModal from './link-safety-modal.svelte';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -25,6 +26,15 @@
 	);
 </script>
 
+{#snippet linkSafetyModal(props: {
+	url: string;
+	isOpen: boolean;
+	onClose: () => void;
+	onConfirm: () => void;
+})}
+	<LinkSafetyModal {...props} />
+{/snippet}
+
 <div {id} class={cn(className)} {...restProps}>
 	<Streamdown
 		{content}
@@ -37,6 +47,7 @@
 		}}
 		plugins={{ math, mermaid }}
 		components={{ img: MarkdownImage }}
+		linkSafety={{ enabled: true, renderModal: linkSafetyModal }}
 		theme={{
 			h1: { base: 'mt-8 mb-3 text-3xl font-semibold text-foreground' },
 			h2: { base: 'mt-8 mb-3 text-2xl font-semibold text-foreground' },

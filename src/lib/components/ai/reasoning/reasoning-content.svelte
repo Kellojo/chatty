@@ -9,6 +9,7 @@
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
 	import githubDarkDefault from '@shikijs/themes/github-dark-default';
+	import LinkSafetyModal from '../markdown/link-safety-modal.svelte';
 
 	interface Props {
 		children?: Snippet;
@@ -72,6 +73,14 @@
 		bind:this={innerRef}
 		class={cn('prose prose-sm dark:prose-invert text-muted-foreground', contentClass)}
 	>
+		{#snippet linkSafetyModal(props: {
+			url: string;
+			isOpen: boolean;
+			onClose: () => void;
+			onConfirm: () => void;
+		})}
+			<LinkSafetyModal {...props} />
+		{/snippet}
 		{#if content}
 			<!-- Basic -->
 			<!-- <Streamdown {content} /> -->
@@ -85,6 +94,7 @@
 					'github-dark-default': githubDarkDefault
 				}}
 				baseTheme="shadcn"
+				linkSafety={{ enabled: true, renderModal: linkSafetyModal }}
 			/>
 		{:else}
 			{@render children?.()}
