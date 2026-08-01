@@ -13,6 +13,7 @@ import { createCodeExecServer } from './code-exec.js';
 import { createImageServer } from './image.js';
 import { createWaitServer } from './wait.js';
 import { createMathServer } from './math.js';
+import { createWeatherServer } from './weather.js';
 
 export type BuiltinServerFactory = (ctx: CallerContext) => McpServer;
 
@@ -29,5 +30,6 @@ export const BUILTIN_SERVERS: Record<string, BuiltinServerFactory> = {
 	'code-exec': createCodeExecServer,
 	image: createImageServer,
 	wait: createWaitServer,
-	math: createMathServer
+	math: createMathServer,
+	weather: createWeatherServer
 };
