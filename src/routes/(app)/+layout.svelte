@@ -95,7 +95,7 @@
 
 	{#if isDesktop.current ? !sidebarOpen : !mobileOpen}
 		<button
-			class="absolute top-2 left-2 z-20 rounded-lg bg-muted p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			class="fixed top-[calc(0.5rem+env(safe-area-inset-top))] left-[calc(0.5rem+env(safe-area-inset-left))] z-20 rounded-lg bg-muted p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 			onclick={toggleSidebar}
 			aria-label="Open sidebar"
 		>
