@@ -30,10 +30,7 @@
 	let timeFormat = $state<TimeFormat>(data.settings.timeFormat);
 	let timeFormatBusy = $state(false);
 
-	async function putSettings(body: {
-		theme?: Theme;
-		timeFormat?: TimeFormat;
-	}) {
+	async function putSettings(body: { theme?: Theme; timeFormat?: TimeFormat }) {
 		const res = await fetch('/api/user/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
@@ -182,14 +179,17 @@
 	</Card.Root>
 </div>
 
-<Dialog.Root open={passwordDialogOpen} onOpenChange={(open) => {
-	passwordDialogOpen = open;
-	if (!open) {
-		currentPassword = '';
-		newPassword = '';
-		confirmNewPassword = '';
-	}
-}}>
+<Dialog.Root
+	open={passwordDialogOpen}
+	onOpenChange={(open) => {
+		passwordDialogOpen = open;
+		if (!open) {
+			currentPassword = '';
+			newPassword = '';
+			confirmNewPassword = '';
+		}
+	}}
+>
 	<Dialog.Content>
 		<Dialog.Header>
 			<Dialog.Title>Update password</Dialog.Title>

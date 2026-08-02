@@ -166,7 +166,11 @@
 				{/each}
 			</div>
 		{/if}
-		<PromptInput value={displayInput} onValueChange={(v) => (input = v)} onSubmit={() => startChat(displayInput)}>
+		<PromptInput
+			value={displayInput}
+			onValueChange={(v) => (input = v)}
+			onSubmit={() => startChat(displayInput)}
+		>
 			<PromptInputTextarea placeholder="Ask anything…" />
 			<PromptInputActions class="justify-between">
 				<div class="flex items-center gap-1">

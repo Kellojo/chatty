@@ -208,9 +208,7 @@ describe('fs server', () => {
 		});
 
 		it('fs_mkdir creates nested directories and fs_rm deletes recursively', async () => {
-			expect(
-				isErr(await callTool('fs_mkdir', { scope: 'documents', path: 'x/y/z' }))
-			).toBe(false);
+			expect(isErr(await callTool('fs_mkdir', { scope: 'documents', path: 'x/y/z' }))).toBe(false);
 			expect(fs.existsSync(path.join(documentsDir, 'x', 'y', 'z'))).toBe(true);
 
 			expect(
@@ -280,9 +278,9 @@ describe('fs server', () => {
 		await callTool('fs_write', { scope: 'workspace', path: 'only-ws.txt', content: 'ws' });
 		await callTool('fs_write', { scope: 'documents', path: 'only-docs.txt', content: 'docs' });
 
-		expect(
-			isErr(await callTool('fs_read', { scope: 'documents', path: 'only-ws.txt' }))
-		).toBe(true);
+		expect(isErr(await callTool('fs_read', { scope: 'documents', path: 'only-ws.txt' }))).toBe(
+			true
+		);
 		expect(isErr(await callTool('fs_read', { scope: 'workspace', path: 'only-docs.txt' }))).toBe(
 			true
 		);
@@ -331,9 +329,9 @@ describe('fs server', () => {
 			expect(isErr(res)).toBe(true);
 			expect(resultText(res)).toContain('404');
 
-			expect(isErr(await callTool('fs_curl', { scope: 'workspace', url: 'ftp://example.com/x' }))).toBe(
-				true
-			);
+			expect(
+				isErr(await callTool('fs_curl', { scope: 'workspace', url: 'ftp://example.com/x' }))
+			).toBe(true);
 		});
 
 		it('rejects paths escaping the scope root', async () => {

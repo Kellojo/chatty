@@ -133,9 +133,7 @@ describe('skills server create/update/delete', () => {
 		});
 		expect(isError(badRef)).toBe(true);
 		expect(readSkill('user', 'u1', 'ref-escape')).toBeNull();
-		expect(fs.existsSync(path.join(process.env.SKILLS_VOLUME!, 'u1', 'outside.md'))).toBe(
-			false
-		);
+		expect(fs.existsSync(path.join(process.env.SKILLS_VOLUME!, 'u1', 'outside.md'))).toBe(false);
 	});
 
 	it('update shadows a shared skill instead of modifying it', async () => {

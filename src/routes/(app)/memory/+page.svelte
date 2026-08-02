@@ -555,7 +555,11 @@
 
 					<div class="flex flex-col gap-2">
 						<Label for="mem-body">Body</Label>
-						<Textarea id="mem-body" bind:value={editor.body} class="min-h-[40vh] font-mono text-sm" />
+						<Textarea
+							id="mem-body"
+							bind:value={editor.body}
+							class="min-h-[40vh] font-mono text-sm"
+						/>
 					</div>
 
 					<div class="flex gap-2">

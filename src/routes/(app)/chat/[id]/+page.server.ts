@@ -21,14 +21,16 @@ export const load: PageServerLoad = ({ locals, params }) => {
 	if (!user) error(401, { message: 'Unauthorized' });
 	const db = getDb();
 	const conversation = getConversation(db, user.id, params.id);
-	if (!conversation || conversation.kind !== 'chat') redirect(303, '/?error=conversation-not-found');
+	if (!conversation || conversation.kind !== 'chat')
+		redirect(303, '/?error=conversation-not-found');
 	const roleModel = findRoleModel(db, 'chat');
 	let defaultModel: { providerId: string; modelId: string } | null = null;
 	if (roleModel) {
 		defaultModel = { providerId: roleModel.provider_id, modelId: roleModel.model_id };
 	} else {
 		const enabled = listEnabledModels(db);
-		const first = enabled.length > 0 ? findModel(db, enabled[0].provider_id, enabled[0].model_id) : null;
+		const first =
+			enabled.length > 0 ? findModel(db, enabled[0].provider_id, enabled[0].model_id) : null;
 		if (first) {
 			defaultModel = { providerId: first.provider_id, modelId: first.model_id };
 		}

@@ -363,7 +363,9 @@
 			</button>
 		</div>
 	</div>
-	<nav class="flex-1 overflow-y-auto px-2 pb-2 [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)]">
+	<nav
+		class="flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)] px-2 pb-2"
+	>
 		{#each visibleGroups as group (group.label)}
 			<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{group.label}</p>
 			{#each group.items as c (c.id)}
@@ -372,23 +374,18 @@
 						? 'bg-accent text-accent-foreground'
 						: 'hover:bg-accent/50'}"
 				>
-				<a
-					href={resolve(`/chat/${c.id}`)}
-					class="min-w-0 flex-1 truncate px-2 py-1.5"
-					title={c.title || 'New chat'}
-					onclick={handleNavigate}
-				>
-					{c.title || 'New chat'}
-				</a>
+					<a
+						href={resolve(`/chat/${c.id}`)}
+						class="min-w-0 flex-1 truncate px-2 py-1.5"
+						title={c.title || 'New chat'}
+						onclick={handleNavigate}
+					>
+						{c.title || 'New chat'}
+					</a>
 					{#if activeChats.has(c.id) || serverActiveChatIds.has(c.id)}
-						<LoaderCircleIcon
-							class="mr-1 size-3.5 shrink-0 animate-spin text-info-foreground"
-						/>
+						<LoaderCircleIcon class="mr-1 size-3.5 shrink-0 animate-spin text-info-foreground" />
 					{:else if unreadIds.includes(c.id) && page.url.pathname !== '/chat/' + c.id}
-						<span
-							class="size-2 shrink-0 rounded-full bg-info"
-							title="New messages"
-						></span>
+						<span class="size-2 shrink-0 rounded-full bg-info" title="New messages"></span>
 					{/if}
 					<span class="hidden shrink-0 gap-0.5 pr-1 group-hover:flex">
 						<button

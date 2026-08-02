@@ -18,7 +18,7 @@ Todos:
 
 - switch all sync fs method calls to their async counterparts
 - Improve startup times, sometimes it feels a bit slower
-Next Steps:
+  Next Steps:
 
 - Code review pass
 - Security hardening pass

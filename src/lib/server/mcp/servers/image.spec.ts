@@ -19,9 +19,8 @@ const { getDb, closeDb } = await import('../../db/index.js');
 const { setRoleDefault } = await import('../../db/repo/models.js');
 const { createProvider } = await import('../../db/repo/providers.js');
 const { createModel } = await import('../../db/repo/models.js');
-const { getAttachment, createAttachment, linkAttachmentsToMessage } = await import(
-	'../../db/repo/attachments.js'
-);
+const { getAttachment, createAttachment, linkAttachmentsToMessage } =
+	await import('../../db/repo/attachments.js');
 const { createConversation } = await import('../../db/repo/conversations.js');
 const { createMessage } = await import('../../db/repo/messages.js');
 const fsp = await import('node:fs/promises');
@@ -286,7 +285,7 @@ describe('edit_image', () => {
 		const db = getDb();
 		seedModel();
 		db.prepare(
-			'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES (\'u1\', \'A\', \'u1@example.com\', 0, 0, 0, \'user\')'
+			"INSERT INTO \"user\" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u1', 'A', 'u1@example.com', 0, 0, 0, 'user')"
 		).run();
 		const conv = createConversation(db, 'u1', { title: 't' });
 		db.prepare('UPDATE conversations SET id = ? WHERE id = ?').run(CTX.conversationId, conv.id);
@@ -323,7 +322,7 @@ describe('edit_image', () => {
 		const db = getDb();
 		seedModel();
 		db.prepare(
-			'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES (\'u1\', \'A\', \'u1@example.com\', 0, 0, 0, \'user\')'
+			"INSERT INTO \"user\" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u1', 'A', 'u1@example.com', 0, 0, 0, 'user')"
 		).run();
 		const conv = createConversation(db, 'u1', { title: 't' });
 		db.prepare('UPDATE conversations SET id = ? WHERE id = ?').run(CTX.conversationId, conv.id);

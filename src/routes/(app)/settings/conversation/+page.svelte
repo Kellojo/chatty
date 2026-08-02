@@ -17,10 +17,7 @@
 	let savedInstructions = $state(data.settings.globalInstructions);
 	let instructionsBusy = $state(false);
 
-	async function putSettings(body: {
-		suggestions?: string[];
-		globalInstructions?: string;
-	}) {
+	async function putSettings(body: { suggestions?: string[]; globalInstructions?: string }) {
 		const res = await fetch('/api/user/settings', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },

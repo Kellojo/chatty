@@ -1,9 +1,11 @@
 # Code Execution Tool Implementation Plan
 
 ## Overview
+
 Add a code execution capability using `isolated-vm` to safely run JavaScript code in a sandboxed environment with workspace file access.
 
 ## Prerequisites
+
 - Node.js 22+
 - pnpm installed
 - Repository cloned and dependencies installed (`pnpm install`)
@@ -11,14 +13,17 @@ Add a code execution capability using `isolated-vm` to safely run JavaScript cod
 ## Step-by-Step Implementation
 
 ### Step 1: Add Dependency
+
 **File**: `package.json`
 
 Add to `dependencies`:
+
 ```json
 "isolated-vm": "^6.0.0"
 ```
 
 Then run:
+
 ```bash
 pnpm install
 ```
@@ -26,6 +31,7 @@ pnpm install
 ---
 
 ### Step 2: Create Code Execution MCP Server
+
 **File**: `src/lib/server/mcp/servers/code-exec.ts` (NEW)
 
 ```typescript
@@ -54,7 +60,7 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 		memoryMb: number
 	): Promise<CallToolResult> {
 		const isolate = new ivm.Isolate({ memoryLimit: memoryMb });
-		
+
 		try {
 			const context = await isolate.createContext();
 			const jail = context.global;
@@ -150,14 +156,17 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 ---
 
 ### Step 3: Register the Server
+
 **File**: `src/lib/server/mcp/servers/index.ts` (MODIFY)
 
 Add the import at the top:
+
 ```typescript
 import { createCodeExecServer } from './code-exec.js';
 ```
 
 Add to the builtin servers array (find where other servers like `createFsServer` are registered):
+
 ```typescript
 // Inside the function that returns builtin servers
 {
@@ -170,6 +179,7 @@ Add to the builtin servers array (find where other servers like `createFsServer`
 ---
 
 ### Step 4: Add Unit Tests
+
 **File**: `src/lib/server/mcp/servers/code-exec.spec.ts` (NEW)
 
 ```typescript
@@ -206,6 +216,7 @@ describe('code-exec server', () => {
 ```
 
 Run tests:
+
 ```bash
 pnpm test:unit -- --run src/lib/server/mcp/servers/code-exec.spec.ts
 ```
@@ -213,9 +224,11 @@ pnpm test:unit -- --run src/lib/server/mcp/servers/code-exec.spec.ts
 ---
 
 ### Step 5: Verify Integration
+
 **File**: `src/lib/server/tools/registry.spec.ts` (MODIFY)
 
 Add test to verify the tool is registered:
+
 ```typescript
 it('includes code_exec tool when enabled', async () => {
 	const { tools } = await buildTools({
@@ -230,7 +243,9 @@ it('includes code_exec tool when enabled', async () => {
 ---
 
 ### Step 6: Test Manually
+
 1. Start the dev server:
+
    ```bash
    pnpm dev
    ```
@@ -246,6 +261,7 @@ it('includes code_exec tool when enabled', async () => {
 ---
 
 ### Step 7: Run Full Test Suite
+
 ```bash
 pnpm test
 ```
@@ -267,15 +283,19 @@ Before deploying, verify:
 ## Troubleshooting
 
 ### "Cannot find module 'isolated-vm'"
+
 Run `pnpm install` to install dependencies.
 
 ### "path escapes workspace root"
+
 This is expected security behavior. The code tried to access files outside the allowed workspace directory.
 
 ### "Script execution timed out"
+
 The code took longer than the timeout limit. Either optimize the code or increase `timeoutMs` (max 30000).
 
 ### Tests fail with "isolate already disposed"
+
 Make sure you're not reusing the isolate after calling `dispose()`.
 
 ---
@@ -292,6 +312,7 @@ Make sure you're not reusing the isolate after calling `dispose()`.
 ## Questions?
 
 If you get stuck:
+
 1. Check existing MCP servers in `src/lib/server/mcp/servers/` for patterns
 2. Look at `src/lib/server/tools/registry.ts` to understand tool registration
 3. Review `src/lib/server/workspaces.ts` for path safety utilities

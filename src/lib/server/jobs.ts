@@ -1,9 +1,6 @@
 import { config } from './config.js';
 import { getDb, type Db } from './db/index.js';
-import {
-	listSoftDeletedBefore,
-	purgeConversation
-} from './db/repo/conversations.js';
+import { listSoftDeletedBefore, purgeConversation } from './db/repo/conversations.js';
 import { createLogger } from './logger.js';
 import {
 	gcAgentWorkspaces,

@@ -41,9 +41,7 @@
 	}
 </script>
 
-<div
-	class="flex w-full flex-col gap-6 rounded-4xl border bg-card p-8 text-card-foreground"
->
+<div class="flex w-full flex-col gap-6 rounded-4xl border bg-card p-8 text-card-foreground">
 	<h1 class="text-center text-xl font-semibold tracking-tight">Sign in</h1>
 
 	{#if data.authConfig.passwordLogin}
@@ -96,7 +94,10 @@
 
 	{#if data.authConfig.signup}
 		<p class="text-center text-sm text-muted-foreground">
-			No account? <a href={resolve('/signup')} class="text-foreground underline-offset-4 hover:underline">Sign up</a>
+			No account? <a
+				href={resolve('/signup')}
+				class="text-foreground underline-offset-4 hover:underline">Sign up</a
+			>
 		</p>
 	{/if}
 </div>

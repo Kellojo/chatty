@@ -158,11 +158,21 @@
 		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 			<div class="flex flex-col gap-1.5">
 				<Label for="when">When to use (optional)</Label>
-				<Input id="when" placeholder="Free-text guidance for the model" bind:value={when} disabled={!data.canEdit} />
+				<Input
+					id="when"
+					placeholder="Free-text guidance for the model"
+					bind:value={when}
+					disabled={!data.canEdit}
+				/>
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="tools">Expected tools (comma-separated)</Label>
-				<Input id="tools" placeholder="webfetch, search_memory" bind:value={tools} disabled={!data.canEdit} />
+				<Input
+					id="tools"
+					placeholder="webfetch, search_memory"
+					bind:value={tools}
+					disabled={!data.canEdit}
+				/>
 			</div>
 		</div>
 
@@ -173,7 +183,12 @@
 
 		<div class="flex min-h-72 flex-col gap-1.5">
 			<Label for="body">Instructions (markdown)</Label>
-			<Textarea id="body" class="min-h-72 flex-1 font-mono text-sm" bind:value={body} disabled={!data.canEdit} />
+			<Textarea
+				id="body"
+				class="min-h-72 flex-1 font-mono text-sm"
+				bind:value={body}
+				disabled={!data.canEdit}
+			/>
 		</div>
 
 		{#if data.skill.references.length > 0}
@@ -219,7 +234,9 @@
 									<span class="text-muted-foreground">no conversation</span>
 								{/if}
 							</span>
-							<span class="text-muted-foreground">{formatDateTime(inv.created_at, data.timeFormat)}</span>
+							<span class="text-muted-foreground"
+								>{formatDateTime(inv.created_at, data.timeFormat)}</span
+							>
 						</li>
 					{/each}
 				</ul>

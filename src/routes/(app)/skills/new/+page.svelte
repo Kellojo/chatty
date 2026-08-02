@@ -83,7 +83,10 @@
 
 		<div class="flex justify-end gap-2">
 			<Button variant="outline" href={resolve('/skills')}>Cancel</Button>
-			<Button disabled={busy || !nameValid || !title.trim() || !description.trim()} onclick={create}>
+			<Button
+				disabled={busy || !nameValid || !title.trim() || !description.trim()}
+				onclick={create}
+			>
 				{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
 				Create skill
 			</Button>

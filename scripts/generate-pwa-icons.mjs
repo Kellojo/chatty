@@ -39,4 +39,6 @@ await sharp(await scaled(inner))
 	.png()
 	.toFile(out('pwa-maskable-512x512.png'));
 
-console.log('Wrote static/pwa-192x192.png, static/pwa-512x512.png, static/pwa-maskable-512x512.png');
+console.log(
+	'Wrote static/pwa-192x192.png, static/pwa-512x512.png, static/pwa-maskable-512x512.png'
+);

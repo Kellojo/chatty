@@ -208,7 +208,11 @@
 										<span class="text-xs text-muted-foreground">v{skill.version}</span>
 									{/if}
 									{#if shadowed}
-										<Badge variant="outline" class="text-xs" title={`Overrides shared skill: ${shadowed.title}`}>
+										<Badge
+											variant="outline"
+											class="text-xs"
+											title={`Overrides shared skill: ${shadowed.title}`}
+										>
 											shadows shared
 										</Badge>
 									{/if}
@@ -385,8 +389,11 @@
 		<!-- Shadowed Shared Skills (info only) -->
 		{#if data.shadowedSkills.length > 0}
 			<details class="rounded-lg border">
-				<summary class="cursor-pointer px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/50">
-					{data.shadowedSkills.length} shared skill{data.shadowedSkills.length !== 1 ? 's' : ''} overridden by your personal versions
+				<summary
+					class="cursor-pointer px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/50"
+				>
+					{data.shadowedSkills.length} shared skill{data.shadowedSkills.length !== 1 ? 's' : ''} overridden
+					by your personal versions
 				</summary>
 				<div class="border-t px-4 py-2">
 					<Table.Root>
@@ -398,7 +405,9 @@
 											<span class="truncate font-medium" title={skill.name}>{skill.title}</span>
 											<Badge variant="outline" class="text-xs">shadowed</Badge>
 										</div>
-										<p class="line-clamp-1 text-sm" title={skill.description}>{skill.description}</p>
+										<p class="line-clamp-1 text-sm" title={skill.description}>
+											{skill.description}
+										</p>
 									</Table.Cell>
 									<Table.Cell>
 										<Badge variant="secondary">{sourceLabel(skill)}</Badge>

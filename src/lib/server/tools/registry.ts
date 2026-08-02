@@ -45,9 +45,7 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 	const tools: Record<string, Tool> = {};
 	const toolToServer: Record<string, string> = {};
 	const closers: Array<() => Promise<void>> = [];
-	const results = await Promise.allSettled(
-		rows.map((row) => connectServer(row, ctx))
-	);
+	const results = await Promise.allSettled(rows.map((row) => connectServer(row, ctx)));
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
 		const result = results[i];

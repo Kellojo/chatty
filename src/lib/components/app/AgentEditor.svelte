@@ -10,7 +10,13 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import ModelSelect from '$lib/components/app/ModelSelect.svelte';
-	import type { Agent, AgentEventName, AgentTriggerType, ModelMapping, ModelsByProvider } from '$lib/types.js';
+	import type {
+		Agent,
+		AgentEventName,
+		AgentTriggerType,
+		ModelMapping,
+		ModelsByProvider
+	} from '$lib/types.js';
 	import { AGENT_EVENT_NAMES } from '$lib/types.js';
 
 	interface ToolInfo {

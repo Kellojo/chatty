@@ -5,14 +5,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { sanitizeFilename } from '../../workspaces.js';
 import type { CallerContext } from '../types.js';
-import {
-	err,
-	looksTextualAsync,
-	resolveInside,
-	text,
-	toPosix,
-	walkAsync
-} from './shared.js';
+import { err, looksTextualAsync, resolveInside, text, toPosix, walkAsync } from './shared.js';
 
 const MAX_OUT = 64 * 1024;
 const MAX_FILE = 1024 * 1024;
@@ -58,10 +51,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 
 	type Resolved = { ok: true; base: string; abs: string } | { ok: false; error: CallToolResult };
 
-	async function resolveIn(
-		scope: z.infer<typeof SCOPE>,
-		rel: string
-	): Promise<Resolved> {
+	async function resolveIn(scope: z.infer<typeof SCOPE>, rel: string): Promise<Resolved> {
 		const dir = scope === 'workspace' ? ctx.workspaceDir : ctx.documentsDir;
 		if (!dir) return { ok: false, error: err('no workspace available') };
 		await fsp.mkdir(dir, { recursive: true });
@@ -121,7 +111,15 @@ export function createFsServer(ctx: CallerContext): McpServer {
 
 	const headTail =
 		(tail: boolean) =>
-		async ({ scope, path: rel, lines }: { scope: z.infer<typeof SCOPE>; path: string; lines?: number }) => {
+		async ({
+			scope,
+			path: rel,
+			lines
+		}: {
+			scope: z.infer<typeof SCOPE>;
+			path: string;
+			lines?: number;
+		}) => {
 			const r = await resolveIn(scope, rel);
 			if (!r.ok) return r.error;
 			let content: string;
@@ -303,7 +301,9 @@ export function createFsServer(ctx: CallerContext): McpServer {
 				return err(`not a file: ${rel}`);
 			}
 			if (!content.includes(find)) return err(`text not found in ${rel}`);
-			const updated = replaceAll ? content.split(find).join(replacement) : content.replace(find, replacement);
+			const updated = replaceAll
+				? content.split(find).join(replacement)
+				: content.replace(find, replacement);
 			await fsp.writeFile(r.abs, updated, 'utf-8');
 			return text(`edited ${toPosix(rel)}`);
 		}
@@ -344,8 +344,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'fs_curl',
 		{
-			description:
-				'Download a file from a URL. Defaults to a filename derived from the URL.',
+			description: 'Download a file from a URL. Defaults to a filename derived from the URL.',
 			inputSchema: {
 				scope: SCOPE,
 				url: z.string().url(),

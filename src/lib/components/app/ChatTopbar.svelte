@@ -28,9 +28,7 @@
 		sidebar !== undefined && (sidebar.isMobile ? !sidebar.mobileOpen : !sidebar.open)
 	);
 
-	const defaultModelValue = $derived(
-		defaultModel ? encodeModelRef(defaultModel) : ''
-	);
+	const defaultModelValue = $derived(defaultModel ? encodeModelRef(defaultModel) : '');
 	const currentModelValue = $derived(
 		conversation.providerId && conversation.modelId
 			? encodeModelRef({ providerId: conversation.providerId, modelId: conversation.modelId })
@@ -71,7 +69,13 @@
 </script>
 
 <header class="flex items-center gap-3 border-b px-4 py-2 {offsetForSidebar ? 'pl-12' : ''}">
-	<ModelPicker {groups} {mappings} value={currentModelValue} onselect={selectModel} disabled={saving} />
+	<ModelPicker
+		{groups}
+		{mappings}
+		value={currentModelValue}
+		onselect={selectModel}
+		disabled={saving}
+	/>
 
 	{#if personas && conversation.agentId}
 		<span class="text-sm text-muted-foreground">{personaLabel}</span>
