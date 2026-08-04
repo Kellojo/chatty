@@ -328,7 +328,7 @@
 
 	// Object URLs for pending image previews, kept in a plain map (not reactive —
 	// entries are added/removed alongside every selectedFiles mutation below).
-	const previewUrls = new Map<File, string>();
+	const previewUrls = new SvelteMap<File, string>();
 	function previewUrl(file: File): string | undefined {
 		return previewUrls.get(file);
 	}
@@ -341,7 +341,7 @@
 	}
 
 	// Snippets for pending text files, read async on add; plain map keyed by File.
-	const textPreviews = new Map<File, string>();
+	const textPreviews = new SvelteMap<File, string>();
 	let textPreviewVersion = $state(0);
 	function textPreview(file: File): string | undefined {
 		void textPreviewVersion;

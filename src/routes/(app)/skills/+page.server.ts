@@ -1,5 +1,5 @@
 import { requireUser } from '$lib/server/auth/guards.js';
-import { scanSkills, type SkillSummary } from '$lib/server/skills/scanner.js';
+import { scanSkills } from '$lib/server/skills/scanner.js';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {

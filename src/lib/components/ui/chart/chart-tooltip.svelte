@@ -5,8 +5,8 @@
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	function defaultFormatter(value: any, _payload: TooltipPayload[]) {
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	function defaultFormatter(value: unknown, _payload: TooltipPayload[]) {
 		return `${value}`;
 	}
 

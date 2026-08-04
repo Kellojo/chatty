@@ -38,10 +38,6 @@
 		return skill.source;
 	}
 
-	function isShadowed(skillName: string): boolean {
-		return data.shadowedSkills.some((s) => s.name === skillName);
-	}
-
 	function shadowedVersion(skillName: string): SkillSummary | undefined {
 		return data.shadowedSkills.find((s) => s.name === skillName);
 	}

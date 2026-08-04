@@ -29,10 +29,9 @@ if (!building) {
 			log.warn(`Marked ${interruptedProxy} interrupted proxy request(s) as failed`);
 		}
 	} catch (e) {
-		log.error(
-			'Failed to seed builtin agent or clean up runs:',
-			e instanceof Error ? e.message : String(e)
-		);
+		log.error('Failed to seed builtin agent or clean up runs:', {
+			message: e instanceof Error ? e.message : String(e)
+		});
 	}
 	setTimeout(() => {
 		try {
@@ -41,7 +40,9 @@ if (!building) {
 				log.info(`Memory index reconciled: ${upserted} upserted, ${removed} removed`);
 			}
 		} catch (e) {
-			log.error('Failed to reconcile memory FTS:', e instanceof Error ? e.message : String(e));
+			log.error('Failed to reconcile memory FTS:', {
+				message: e instanceof Error ? e.message : String(e)
+			});
 		}
 	}, 0);
 	seedDefaultSkills();

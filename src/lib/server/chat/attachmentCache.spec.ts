@@ -1,7 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { attachmentCache, CACHE_MAX_BYTES } from './attachmentCache.js';
 
 describe('attachmentCache', () => {
@@ -29,7 +26,6 @@ describe('attachmentCache', () => {
 		attachmentCache.get('a'); // access 'a' to make it most recently used
 
 		// Add a new entry that should fit without eviction (small sizes for test)
-		const bigUri = `data:image/png;base64,${'X'.repeat(100)}`;
 		attachmentCache.set('c', uriC);
 
 		expect(attachmentCache.get('a')).toBe(uriA);
@@ -39,7 +35,6 @@ describe('attachmentCache', () => {
 
 	it('evicts oldest entries when cache exceeds 100MB cap', async () => {
 		const uriA = `data:image/png;base64,${'A'.repeat(CACHE_MAX_BYTES * 0.5)}`;
-		const uriB = `data:image/png;base64,${'B'.repeat(CACHE_MAX_BYTES * 0.3)}`;
 		const uriC = `data:image/png;base64,${'C'.repeat(CACHE_MAX_BYTES * 0.8)}`;
 
 		attachmentCache.set('a', uriA);

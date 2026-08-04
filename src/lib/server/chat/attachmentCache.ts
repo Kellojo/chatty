@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('attachment-cache');
@@ -24,7 +23,7 @@ class LruCache {
 
 	set(id: string, dataUri: string): void {
 		const existing = this.cache.get(id);
-		let size = Buffer.byteLength(dataUri, 'utf8');
+		const size = Buffer.byteLength(dataUri, 'utf8');
 
 		if (existing) {
 			this.cache.delete(id);

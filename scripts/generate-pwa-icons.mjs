@@ -1,10 +1,8 @@
 // Rasterizes src/lib/assets/favicon.svg into the PWA PNG icons in static/.
 // Run: node scripts/generate-pwa-icons.mjs
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
-const svg = readFileSync(new URL('../src/lib/assets/favicon.svg', import.meta.url));
 const out = (name) => fileURLToPath(new URL(`../static/${name}`, import.meta.url));
 
 // PNG icons are fixed to the dark-tile variant (stone-900 tile, stone-50 glyph);

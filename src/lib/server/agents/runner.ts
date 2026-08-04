@@ -154,7 +154,6 @@ export async function startAgentRun(
 				providerId: target.providerId,
 				modelId: target.modelId
 			});
-			let totalUsage: import('ai').LanguageModelUsage | undefined;
 			const startedAt = Date.now();
 			let stepIndex = 0;
 			let lastStepAt = startedAt;
@@ -237,7 +236,7 @@ export async function startAgentRun(
 					});
 				}
 			}
-			totalUsage = await result.usage;
+			const totalUsage = await result.usage;
 			log.info('LLM inference finished', {
 				runId: run.id,
 				agentId: agent.id,

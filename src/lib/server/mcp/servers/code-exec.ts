@@ -1,6 +1,5 @@
 import ivm from 'isolated-vm';
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';

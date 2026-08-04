@@ -1,10 +1,48 @@
 import { browser } from '$app/environment';
 
-type SpeechRecognitionInstance = any;
-type SpeechRecognitionEvent = any;
+interface SpeechRecognitionAlternative {
+	transcript: string;
+}
 
-const _w: any = browser ? window : null;
-const SpeechRecognitionImpl = _w?.SpeechRecognition ?? _w?.webkitSpeechRecognition;
+interface SpeechRecognitionResult {
+	readonly isFinal: boolean;
+	readonly [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionEvent {
+	readonly error?: string;
+	readonly resultIndex: number;
+	readonly results: SpeechRecognitionResult[];
+}
+
+type SpeechRecognitionInstance = {
+	continuous: boolean;
+	interimResults: boolean;
+	lang: string;
+	onerror: ((event: SpeechRecognitionEvent) => void) | null;
+	onend: (() => void) | null;
+	onresult: ((event: SpeechRecognitionEvent) => void) | null;
+	start: () => void;
+	stop: () => void;
+	abort: () => void;
+} | null;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const _w = browser ? (window as any) : null;
+type SpeechRecognitionCtor = new () => {
+	continuous: boolean;
+	interimResults: boolean;
+	lang: string;
+	onerror: ((event: SpeechRecognitionEvent) => void) | null;
+	onend: (() => void) | null;
+	onresult: ((event: SpeechRecognitionEvent) => void) | null;
+	start: () => void;
+	stop: () => void;
+	abort: () => void;
+};
+const SpeechRecognitionImpl =
+	((_w?.SpeechRecognition ?? _w?.webkitSpeechRecognition) as unknown as SpeechRecognitionCtor) ??
+	((() => null) as unknown as SpeechRecognitionCtor);
 const supported = !!SpeechRecognitionImpl;
 
 if (browser && !supported) {
@@ -56,7 +94,7 @@ export function createSpeechRecognition() {
 
 	function start(options?: { onError?: (message: string) => void }) {
 		if (!supported || recording) return;
-		const r = new SpeechRecognitionImpl();
+		const r = new SpeechRecognitionImpl()!;
 		r.continuous = true;
 		r.interimResults = true;
 		r.lang = navigator.language ?? 'en';
@@ -99,7 +137,9 @@ export function createSpeechRecognition() {
 		if (recognition) {
 			try {
 				recognition.abort();
-			} catch {}
+			} catch {
+				// isolate already destroyed
+			}
 		}
 	}
 

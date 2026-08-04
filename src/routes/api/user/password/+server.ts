@@ -9,7 +9,7 @@ const bodySchema = z.object({
 });
 
 export const POST = async ({ locals, request }) => {
-	const user = requireUser(locals);
+	requireUser(locals);
 	const body = await request.json().catch(() => null);
 	const parsed = bodySchema.safeParse(body);
 	if (!parsed.success) error(400, { message: 'Invalid request body' });
