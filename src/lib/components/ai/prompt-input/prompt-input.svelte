@@ -7,7 +7,6 @@
 		type PromptInputSchema
 	} from './context.svelte.js';
 	import { untrack } from 'svelte';
-	import { watch } from 'runed';
 
 	let {
 		class: className,
@@ -33,18 +32,18 @@
 
 	setPromptInputContext(contextInstance);
 
-	// Sync props with context
-	// $effect(() => {
-	// 	contextInstance.isLoading = isLoading;
-	// 	contextInstance.disabled = isLoading;
-	// });
-	watch(
-		() => isLoading,
-		() => {
-			contextInstance.isLoading = isLoading;
-			contextInstance.disabled = isLoading;
-		}
-	);
+	$effect(() => {
+		contextInstance.isLoading = isLoading;
+		contextInstance.disabled = isLoading;
+	});
+
+	$effect(() => {
+		contextInstance.onSubmit = onSubmit;
+	});
+
+	$effect(() => {
+		contextInstance.onValueChange = onValueChange;
+	});
 
 	$effect(() => {
 		if (value !== undefined) {
@@ -52,26 +51,9 @@
 		}
 	});
 
-	watch(
-		() => onValueChange,
-		(newValue) => {
-			contextInstance.onValueChange = newValue;
-		}
-	);
-
-	watch(
-		() => maxHeight,
-		() => {
-			contextInstance.maxHeight = maxHeight;
-		}
-	);
-
-	watch(
-		() => onSubmit,
-		() => {
-			contextInstance.onSubmit = onSubmit;
-		}
-	);
+	$effect(() => {
+		contextInstance.maxHeight = maxHeight;
+	});
 
 	function handleClick() {
 		contextInstance.textareaRef?.focus();

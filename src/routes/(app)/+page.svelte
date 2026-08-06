@@ -105,7 +105,7 @@
 			const { conversation } = (await res.json()) as { conversation: Conversation };
 			pendingMessage.set(trimmed, selectedFiles);
 			await invalidateAll();
-			goto(resolve(`/chat/${conversation.id}`));
+			await goto(resolve(`/chat/${conversation.id}`));
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to start chat');
 			busy = false;
