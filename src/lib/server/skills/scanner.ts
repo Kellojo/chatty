@@ -113,7 +113,7 @@ function listReferences(dir: string): string[] {
 	try {
 		return walk(refsDir)
 			.filter((e) => !e.isDir && e.rel.endsWith('.md'))
-			.map((e) => e.rel)
+			.map((e) => `references/${e.rel}`)
 			.sort();
 	} catch {
 		return [];

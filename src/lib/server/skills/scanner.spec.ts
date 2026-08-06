@@ -127,7 +127,7 @@ describe('readSkill', () => {
 		fs.writeFileSync(path.join(dir, 'references', 'ignored.txt'), 'X');
 		scanner.invalidateSkillCache();
 		const skill = scanner.readSkill('user', 'u1', 'with-refs');
-		expect(skill!.references).toEqual(['a.md', 'nested/b.md']);
+		expect(skill!.references).toEqual(['references/a.md', 'references/nested/b.md']);
 	});
 });
 

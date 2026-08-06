@@ -69,8 +69,9 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 		async ({ name, path: relPath }) => {
 			const skill = resolveSkill(ctx.userId, name);
 			if (!skill) return err(`skill not found: ${name}`);
-			if (!skill.references.includes(relPath)) return err(`reference not found: ${relPath}`);
-			const abs = resolveSkillReference(skill.scope, ctx.userId, skill.name, relPath);
+			const refPath = relPath.startsWith('references/') ? relPath : `references/${relPath}`;
+			if (!skill.references.includes(refPath)) return err(`reference not found: ${relPath}`);
+			const abs = resolveSkillReference(skill.scope, ctx.userId, skill.name, refPath);
 			if (!abs) return err('invalid reference path');
 			let content: string;
 			try {

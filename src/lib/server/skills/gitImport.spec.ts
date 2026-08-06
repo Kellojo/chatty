@@ -175,7 +175,7 @@ describe('importSkillsFromGit', () => {
 		const skill = scanner.readSkill('user', 'u1', 'skill-a');
 		expect(skill).not.toBeNull();
 		expect(skill!.source).toBe(`git:${REPO_URL}`);
-		expect(skill!.references).toEqual(['examples.md']);
+		expect(skill!.references).toEqual(['references/examples.md']);
 		const refAbs = path.join(skillsRoot('user', 'u1'), 'skill-a', 'references', 'examples.md');
 		expect(fs.readFileSync(refAbs, 'utf8')).toContain('Examples');
 	});

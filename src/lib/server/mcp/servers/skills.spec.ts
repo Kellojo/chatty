@@ -71,7 +71,7 @@ describe('skills server create/update/delete', () => {
 			fs.existsSync(path.join(skillDir('weekly-report'), 'references', 'template.md')),
 			`dir contents: ${fs.readdirSync(skillDir('weekly-report'), { recursive: true })}`
 		).toBe(true);
-		expect(stored?.references).toEqual(['template.md']);
+		expect(stored?.references).toEqual(['references/template.md']);
 		expect(
 			fs.readFileSync(path.join(skillDir('weekly-report'), 'references', 'template.md'), 'utf8')
 		).toContain('Template');
