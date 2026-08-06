@@ -73,23 +73,32 @@ function searxngProvider(cfg: WebsearchConfig): SearchProvider {
 				signal: AbortSignal.timeout(cfg.timeoutMs)
 			});
 			if (!res.ok) throw new Error(`searxng returned HTTP ${res.status}`);
-			const data = (await res.json()) as {
-				results?: Array<{
-					title?: string;
-					url?: string;
-					content?: string;
-					publishedDate?: string;
-				}>;
-			};
-			const items = (data.results ?? [])
+			const raw = await res.text();
+			let data: Record<string, unknown>;
+			try {
+				data = JSON.parse(raw);
+			} catch {
+				throw new Error(`searxng returned non-JSON response`);
+			}
+			const results = Array.isArray(data.results)
+				? (data.results as Record<string, unknown>[])
+				: [];
+			const items = results
 				.filter((r) => r.url && r.title)
 				.slice(0, opts.limit)
 				.map((r) => ({
-					title: r.title!,
-					url: r.url!,
-					snippet: (r.content ?? '').slice(0, MAX_SNIPPET_CHARS),
-					published: r.publishedDate
+					title: String(r.title),
+					url: String(r.url),
+					snippet: String(r.content ?? '').slice(0, MAX_SNIPPET_CHARS),
+					published: typeof r.publishedDate === 'string' ? r.publishedDate : undefined
 				}));
+			if (items.length === 0 && results.length > 0) {
+				const first = results[0];
+				const keys = Object.keys(first).join(', ');
+				throw new Error(
+					`searxng returned ${results.length} results but none had url+title fields. First result keys: ${keys}`
+				);
+			}
 			return items;
 		}
 	};
