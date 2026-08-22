@@ -59,6 +59,7 @@ export interface OpenAiModelEntry {
 	object: 'model';
 	created: number;
 	owned_by: string;
+	context_length?: number | null;
 }
 
 export function listOpenAiModels(db: Db): { object: 'list'; data: OpenAiModelEntry[] } {
@@ -67,14 +68,26 @@ export function listOpenAiModels(db: Db): { object: 'list'; data: OpenAiModelEnt
 		id: m.model_id,
 		object: 'model',
 		created: 0,
-		owned_by: providerNames.get(m.provider_id) ?? 'unknown'
+		owned_by: providerNames.get(m.provider_id) ?? 'unknown',
+		context_length: m.context_length
 	}));
-	const mappings: OpenAiModelEntry[] = listEnabledModelMappings(db).map((m) => ({
-		id: m.name,
-		object: 'model',
-		created: 0,
-		owned_by: 'ai-chat'
-	}));
+	const mappings: OpenAiModelEntry[] = listEnabledModelMappings(db).map((m) => {
+		const targets = parseTargets(m);
+		const contextLengths = targets
+			.map((t) => findModel(db, t.providerId, t.modelId)?.context_length ?? null)
+			.filter((c): c is number => c !== null);
+		const context_length =
+			contextLengths.length === targets.length && contextLengths.length > 0
+				? Math.min(...contextLengths)
+				: null;
+		return {
+			id: m.name,
+			object: 'model',
+			created: 0,
+			owned_by: 'ai-chat',
+			context_length
+		};
+	});
 	return { object: 'list', data: [...models, ...mappings] };
 }
 
