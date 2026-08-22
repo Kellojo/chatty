@@ -149,7 +149,9 @@
 						p.type === 'text' || p.type === 'reasoning' ? p.text === '' : false
 					)))
 	);
-	const canSend = $derived((input.trim().length > 0 || selectedFiles.length > 0) && !streaming);
+	const canSend = $derived(
+		(displayInput.trim().length > 0 || selectedFiles.length > 0) && !streaming
+	);
 
 	async function markRead() {
 		await fetch(`/api/conversations/${conversation.id}/read`, { method: 'POST' }).catch(
@@ -538,7 +540,12 @@
 						<SquareIcon class="size-4" />
 					</Button>
 				{:else}
-					<Button size="sm" disabled={!canSend} aria-label="Send" onclick={() => send(input)}>
+					<Button
+						size="sm"
+						disabled={!canSend}
+						aria-label="Send"
+						onclick={() => send(displayInput)}
+					>
 						<ArrowUpIcon class="size-4" />
 					</Button>
 				{/if}

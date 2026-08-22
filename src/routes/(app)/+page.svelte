@@ -73,7 +73,7 @@
 	const hasModels = $derived(data.groups.some((g) => g.models.length > 0));
 	const modelMissing = $derived(!hasModels || selectedValue === '');
 	const canSend = $derived(
-		(input.trim().length > 0 || selectedFiles.length > 0) && !busy && !modelMissing
+		(displayInput.trim().length > 0 || selectedFiles.length > 0) && !busy && !modelMissing
 	);
 	const suggestions = $derived(
 		data.suggestions.length > 0 ? data.suggestions : DEFAULT_SUGGESTIONS
@@ -191,7 +191,7 @@
 					aria-label="Send"
 					disabled={!canSend}
 					title={modelMissing ? 'Select a model first' : 'Send'}
-					onclick={() => startChat(input)}
+					onclick={() => startChat(displayInput)}
 				>
 					<ArrowUpIcon class="size-4" />
 				</Button>
