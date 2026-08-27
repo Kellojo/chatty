@@ -52,9 +52,11 @@ describe('MapWidget', () => {
 
 	it('renders a leaflet map with a list entry per marker', async () => {
 		const { container } = render(MapWidget, { code: twoMarkers, isIncomplete: false });
+		// Leaflet injects the map div after the async `import('leaflet')`
+		// resolves, so poll for it instead of querying once (which yields `null`).
 		await expect
-			.element(container.querySelector('div.leaflet-container') as HTMLElement)
-			.toBeInTheDocument();
+			.poll(() => container.querySelector('.leaflet-container'), { timeout: 10000 })
+			.not.toBeNull();
 		expect(container.textContent).toContain('Restaurants near Lisbon');
 		expect(container.textContent).toContain('2 places');
 		const buttons = container.querySelectorAll('li button');

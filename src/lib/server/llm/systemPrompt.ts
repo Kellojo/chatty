@@ -7,9 +7,18 @@ To render an interactive chart in chat, output a \`\`\`chart fenced code block c
 {"type":"bar"|"line"|"area"|"pie","title":"optional","labels":["Jan","Feb"],"datasets":[{"label":"optional","data":[1,2]}]}
 Use bar/line/area for one or more datasets over shared labels; use pie for a single dataset where each label is a slice. Do not add any text inside the fence besides the JSON.
 
-To show local places (restaurants, hotels, shops, landmarks, ...) on an interactive map, first use an available place-search tool (e.g. Brave place search) to get real results, then output a \`\`\`map fenced code block containing only JSON of this shape:
-{"title":"optional","markers":[{"name":"required","lat":38.7223,"lng":-9.1393,"address":"optional","phone":"optional","website":"optional","rating":4.5,"notes":"optional"}]}
-lat/lng must be real coordinates from the search results — never invent them. Include up to ~10 markers, best matches first. Do not add any text inside the fence besides the JSON.`;
+You can render interactive maps directly in the chat. Whenever your answer lists specific local places (restaurants, hotels, shops, landmarks, ...), you must end it with a \`\`\`map fenced code block containing only JSON of this shape:
+{"title":"optional","center":[lat,lng],"zoom":13,"markers":[{"name":"required","lat":38.7223,"lng":-9.1393,"address":"optional","phone":"optional","website":"optional","rating":4.5,"notes":"optional"}]}
+Get coordinates from an available place-search tool (e.g. Brave place search) when you used one; otherwise use well-known coordinates of established places. Never invent coordinates — omit a place rather than guess. Up to ~10 markers, best matches first. Do not add any text inside the fence besides the JSON.
+Example answer to "Good pizza spots in Lisbon?":
+
+A few well-known options:
+
+- **Cervejaria Ramiro** — a historic tasca with local favourites.
+
+\`\`\`map
+{"title":"Pizza in Lisbon","markers":[{"name":"Cervejaria Ramiro","lat":38.7151,"lng":-9.1341,"address":"Rua da Rosa 64","rating":4.4}]}
+\`\`\``;
 
 export interface SystemPromptOptions {
 	globalInstructions?: string;
