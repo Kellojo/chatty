@@ -11,6 +11,7 @@
 	import githubDarkDefault from '@shikijs/themes/github-dark-default';
 	import LinkSafetyModal from '../markdown/link-safety-modal.svelte';
 	import ChartWidget from '../markdown/chart-widget.svelte';
+	import MapWidget from '../markdown/map-widget.svelte';
 
 	interface Props {
 		children?: Snippet;
@@ -95,7 +96,12 @@
 					'github-dark-default': githubDarkDefault
 				}}
 				baseTheme="shadcn"
-				plugins={{ renderers: [{ language: 'chart', component: ChartWidget }] }}
+				plugins={{
+					renderers: [
+						{ language: 'chart', component: ChartWidget },
+						{ language: 'map', component: MapWidget }
+					]
+				}}
 				linkSafety={{ enabled: true, renderModal: linkSafetyModal }}
 			/>
 		{:else}

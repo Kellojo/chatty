@@ -7,6 +7,7 @@
 	import LinkSafetyModal from './link-safety-modal.svelte';
 	import WeatherWidget from './weather-widget.svelte';
 	import ChartWidget from './chart-widget.svelte';
+	import MapWidget from './map-widget.svelte';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -52,7 +53,8 @@
 			mermaid,
 			renderers: [
 				{ language: 'weather', component: WeatherWidget },
-				{ language: 'chart', component: ChartWidget }
+				{ language: 'chart', component: ChartWidget },
+				{ language: 'map', component: MapWidget }
 			]
 		}}
 		components={{ img: MarkdownImage }}

@@ -4,7 +4,7 @@ General Questions:
 
 Todos:
 
-- Switch homelab services to new one
+
 
 - Email integration (gmail)
 - Calendar integration (apple)
@@ -19,4 +19,3 @@ Next Steps:
 - M8 Deep research
 
 - Telegram/Discord Integration?
-- Apple Reminders MCP

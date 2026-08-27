@@ -1,0 +1,29 @@
+.map-widget-pin {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	margin: 2px;
+	border-radius: 50% 50% 50% 0;
+	background: var(--info);
+	border: 2px solid white;
+	box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+	transform: rotate(-45deg);
+}
+
+.map-widget-item-active {
+	background: var(--accent);
+	outline: 2px solid var(--info);
+}
+
+.map-widget .leaflet-popup-content {
+	margin: 10px 12px;
+	font-size: 0.8rem;
+	line-height: 1.5;
+}
+
+.map-widget .leaflet-popup-content a {
+	color: var(--info);
+	font-weight: 500;
+}
