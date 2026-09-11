@@ -4,8 +4,6 @@ General Questions:
 
 Todos:
 
-
-
 - Email integration (gmail)
 - Calendar integration (apple)
 

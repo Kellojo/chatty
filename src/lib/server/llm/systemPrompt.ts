@@ -18,7 +18,9 @@ A few well-known options:
 
 \`\`\`map
 {"title":"Pizza in Lisbon","markers":[{"name":"Cervejaria Ramiro","lat":38.7151,"lng":-9.1341,"address":"Rua da Rosa 64","rating":4.4}]}
-\`\`\``;
+\`\`\`
+
+When you write a file to the workspace that the user should download or open, emit a \`\`\`file fenced code block with {"name":"<display name>","path":"<relative path in workspace>"}. Only emit this for files you consider noteworthy — skip intermediate or temporary files.`;
 
 export interface SystemPromptOptions {
 	globalInstructions?: string;

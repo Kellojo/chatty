@@ -28,6 +28,7 @@
 		messageTimes,
 		onregenerate,
 		onedit,
+		conversationId = null as string | null,
 		class: className
 	}: {
 		messages: UIMessage[];
@@ -36,6 +37,7 @@
 		messageTimes?: ReadonlyMap<string, number>;
 		onregenerate?: (messageId: string) => void;
 		onedit?: (messageId: string, text: string) => void;
+		conversationId?: string | null;
 		class?: string;
 	} = $props();
 
@@ -133,10 +135,6 @@
 			toast.error('Failed to copy');
 		}
 	}
-
-	function fileUrl(part: Part): string {
-		return (part as { url?: string }).url ?? '';
-	}
 </script>
 
 <svelte:window onclick={onWindowClick} onkeydown={onWindowKeydown} />
@@ -149,7 +147,7 @@
 					{#if message.role === 'user'}
 						<MessageContent class="max-w-[85%]">{part.text}</MessageContent>
 					{:else}
-						<Markdown class="w-full max-w-none" content={part.text} />
+						<Markdown class="w-full max-w-none" content={part.text} {conversationId} />
 					{/if}
 				{:else if part.type === 'reasoning'}
 					{@const key = `${message.id}:${partIndex}`}
@@ -182,7 +180,7 @@
 						{/if}
 					</div>
 				{:else if part.type === 'file'}
-					{@const url = fileUrl(part)}
+					{@const url = (part as { url?: string }).url ?? ''}
 					{#if part.mediaType?.startsWith('image/')}
 						{@const imgKey = `${message.id}:${partIndex}`}
 						{@const rotation = rotationFor(imgKey)}

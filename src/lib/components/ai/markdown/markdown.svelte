@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { setContext, untrack } from 'svelte';
 	import { cn } from '$lib/utils';
 	import { Streamdown, type StreamdownProps } from 'streamdown-svelte';
 	import { mode } from 'mode-watcher';
@@ -8,6 +9,7 @@
 	import WeatherWidget from './weather-widget.svelte';
 	import ChartWidget from './chart-widget.svelte';
 	import MapWidget from './map-widget.svelte';
+	import FileWidget from './file-widget.svelte';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -20,10 +22,16 @@
 		content: string;
 		id?: string;
 		class?: string;
+		conversationId?: string | null;
 	} & Omit<StreamdownProps, 'content' | 'class'> &
 		Omit<HTMLAttributes<HTMLDivElement>, 'content'>;
 
-	let { content, id, class: className, ...restProps }: Props = $props();
+	let { content, id, class: className, conversationId, ...restProps }: Props = $props();
+
+	setContext(
+		'conversationId',
+		untrack(() => conversationId)
+	);
 	let currentTheme = $derived(
 		mode.current === 'dark' ? 'github-dark-default' : 'github-light-default'
 	);
@@ -54,7 +62,8 @@
 			renderers: [
 				{ language: 'weather', component: WeatherWidget },
 				{ language: 'chart', component: ChartWidget },
-				{ language: 'map', component: MapWidget }
+				{ language: 'map', component: MapWidget },
+				{ language: 'file', component: FileWidget }
 			]
 		}}
 		components={{ img: MarkdownImage }}

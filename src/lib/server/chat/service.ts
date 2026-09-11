@@ -457,18 +457,19 @@ export async function handleChatRequest(
 						onStepEnd: (step) => {
 							recordStep({ status: 'complete', usage: step.usage });
 							for (const tr of step.toolResults) {
-								if (tr.toolName !== 'generate_image' && tr.toolName !== 'edit_image') continue;
-								const ids = attachmentIdsFromOutput(tr.output);
-								if (ids.length === 0) continue;
-								linkAttachmentsToMessage(db, assistantMessageId, ids);
-								for (const id of ids) {
-									const row = getAttachment(db, id);
-									if (!row) continue;
-									writer.write({
-										type: 'file',
-										url: `${ATTACHMENT_URL_PREFIX}${conversation.id}/attachments/${id}`,
-										mediaType: row.mime
-									} as UIMessageChunk);
+								if (tr.toolName === 'generate_image' || tr.toolName === 'edit_image') {
+									const ids = attachmentIdsFromOutput(tr.output);
+									if (ids.length === 0) continue;
+									linkAttachmentsToMessage(db, assistantMessageId, ids);
+									for (const id of ids) {
+										const row = getAttachment(db, id);
+										if (!row) continue;
+										writer.write({
+											type: 'file',
+											url: `${ATTACHMENT_URL_PREFIX}${conversation.id}/attachments/${id}`,
+											mediaType: row.mime
+										} as UIMessageChunk);
+									}
 								}
 							}
 						},

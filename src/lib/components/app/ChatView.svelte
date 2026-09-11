@@ -449,6 +449,7 @@
 				{streaming}
 				{timeFormat}
 				{messageTimes}
+				conversationId={conversation.id}
 				onregenerate={regenerate}
 				onedit={startEdit}
 			/>

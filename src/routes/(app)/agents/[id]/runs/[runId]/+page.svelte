@@ -154,6 +154,7 @@
 			streaming={run.status === 'running'}
 			timeFormat={data.timeFormat}
 			{messageTimes}
+			conversationId={run.conversationId}
 			class="max-w-7xl px-6"
 		/>
 	{:else}
