@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import {
 	jsonSchema,
 	tool,
+	extractJsonMiddleware,
+	wrapLanguageModel,
 	type ImagePart,
+	type LanguageModel,
+	type LanguageModelMiddleware,
 	type LanguageModelUsage,
 	type ModelMessage,
 	type TextPart,
@@ -63,6 +67,16 @@ export const chatCompletionsSchema = z.object({
 			z.object({
 				type: z.literal('function'),
 				function: z.object({ name: z.string() })
+			})
+		])
+		.optional(),
+	response_format: z
+		.union([
+			z.object({ type: z.literal('text') }),
+			z.object({ type: z.literal('json_object') }),
+			z.object({
+				type: z.literal('json_schema'),
+				json_schema: z.object({ name: z.string(), schema: z.record(z.string(), z.unknown()) })
 			})
 		])
 		.optional()
@@ -188,6 +202,40 @@ export function toSdkToolChoice(
 	if (!choice) return undefined;
 	if (typeof choice === 'string') return choice;
 	return { type: 'tool', toolName: choice.function.name };
+}
+
+export type ResponseFormat = ChatCompletionsRequest['response_format'];
+
+function responseFormatMiddleware(format: NonNullable<ResponseFormat>): LanguageModelMiddleware {
+	return {
+		specificationVersion: 'v4',
+		transformParams: async ({ params }) => {
+			if (format.type === 'json_object') {
+				return { ...params, responseFormat: { type: 'json' } } as typeof params;
+			}
+			if (format.type === 'json_schema') {
+				return {
+					...params,
+					responseFormat: {
+						type: 'json',
+						schema: format.json_schema.schema as Record<string, unknown>,
+						name: format.json_schema.name
+					}
+				} as typeof params;
+			}
+			return params;
+		}
+	};
+}
+
+export function wrapModelForResponseFormat(
+	model: LanguageModel,
+	format: NonNullable<ResponseFormat>
+): LanguageModel {
+	return wrapLanguageModel({
+		model: model as Parameters<typeof wrapLanguageModel>[0]['model'],
+		middleware: [responseFormatMiddleware(format), extractJsonMiddleware()]
+	}) as unknown as LanguageModel;
 }
 
 export interface OpenAiUsage {

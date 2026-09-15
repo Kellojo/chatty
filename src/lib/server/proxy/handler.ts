@@ -43,7 +43,9 @@ import {
 	openAiErrorObject,
 	toModelMessages,
 	toSdkToolChoice,
-	toSdkTools
+	toSdkTools,
+	type ResponseFormat,
+	wrapModelForResponseFormat
 } from './openaiChat.js';
 import {
 	responsesFormats,
@@ -142,6 +144,7 @@ export interface StreamOptions {
 	topP?: number;
 	maxOutputTokens?: number;
 	stopSequences?: string[];
+	responseFormat?: ResponseFormat;
 }
 
 interface PreparedRequest {
@@ -153,8 +156,12 @@ interface PreparedRequest {
 }
 
 function startStream(prepared: PreparedRequest, model: LanguageModel, signal: AbortSignal) {
+	const wrappedModel =
+		prepared.options.responseFormat && prepared.options.responseFormat.type !== 'text'
+			? wrapModelForResponseFormat(model, prepared.options.responseFormat)
+			: model;
 	return streamText({
-		model,
+		model: wrappedModel,
 		instructions: prepared.instructions,
 		messages: prepared.messages,
 		allowSystemInMessages: true,
@@ -548,7 +555,12 @@ export async function handleChatCompletions(request: Request): Promise<Response>
 			topP: input.top_p,
 			maxOutputTokens: input.max_tokens,
 			stopSequences:
-				input.stop === undefined ? undefined : Array.isArray(input.stop) ? input.stop : [input.stop]
+				input.stop === undefined
+					? undefined
+					: Array.isArray(input.stop)
+						? input.stop
+						: [input.stop],
+			responseFormat: input.response_format
 		}
 	};
 	const compression = await prepareCompression(
