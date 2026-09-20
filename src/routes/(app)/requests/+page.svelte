@@ -3,10 +3,12 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
+	import { BarChart } from 'layerchart';
 	import ActivityHistogram from '$lib/components/app/ActivityHistogram.svelte';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
+	import * as Chart from '$lib/components/ui/chart/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
@@ -76,6 +78,33 @@
 		if (request.source === 'proxy') return request.endpoint;
 		return request.purpose === 'title' ? 'title' : request.endpoint;
 	}
+
+	const CHART_COLORS = [
+		'var(--chart-1)',
+		'var(--chart-2)',
+		'var(--chart-3)',
+		'var(--chart-4)',
+		'var(--chart-5)',
+		'var(--chart-other)'
+	];
+
+	const topSeries = $derived(
+		data.stackedSeries.map((s, i) => ({
+			...s,
+			color:
+				s.key === 'Other'
+					? 'hsl(var(--muted-foreground) / 0.5)'
+					: CHART_COLORS[i % CHART_COLORS.length]
+		}))
+	);
+
+	const topChartConfig = $derived.by(() => {
+		const cfg: Record<string, { label?: string; color?: string }> = {};
+		for (const s of topSeries) {
+			cfg[s.key] = { label: s.label, color: s.color };
+		}
+		return cfg;
+	});
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -155,41 +184,20 @@
 					</Card.Content>
 				</Card.Root>
 
-				{#if data.topModels.length > 0}
-					{@const maxCount = data.topModels[0].count}
+				{#if data.stackedRows.length > 0}
 					<Card.Root>
 						<Card.Header>
-							<Card.Title class="text-base">Top models</Card.Title>
-							<Card.Description>By request count</Card.Description>
+							<Card.Title class="text-base">Top overview</Card.Title>
+							<Card.Description>Requests per model, past 7 days</Card.Description>
 						</Card.Header>
 						<Card.Content>
-							<div class="flex flex-col gap-3">
-								{#each data.topModels as model (model.model)}
-									{@const pct = Math.max(2, Math.round((model.count / maxCount) * 100))}
-									<div class="flex flex-col gap-1">
-										<div class="flex items-baseline justify-between gap-2">
-											<span class="truncate text-sm font-medium" title={model.model}>
-												{model.model}
-											</span>
-											<span class="shrink-0 text-xs text-muted-foreground">
-												{formatCount(model.count)} requests
-												{#if model.totalTokens > 0}
-													&middot; {formatCount(model.totalTokens)} tokens
-												{/if}
-												{#if model.costUsd > 0}
-													&middot; {formatCost(model.costUsd)}
-												{/if}
-											</span>
-										</div>
-										<div class="h-2 w-full overflow-hidden rounded-full bg-muted">
-											<div
-												class="h-full rounded-full bg-primary transition-all"
-												style:width="{pct}%"
-											></div>
-										</div>
-									</div>
-								{/each}
-							</div>
+							<Chart.Container config={topChartConfig} class="min-h-[200px] max-h-[200px] w-full">
+								<BarChart data={data.stackedRows} x="day" series={topSeries} seriesLayout="stack">
+									{#snippet tooltip()}
+										<Chart.Tooltip />
+									{/snippet}
+								</BarChart>
+							</Chart.Container>
 						</Card.Content>
 					</Card.Root>
 				{/if}

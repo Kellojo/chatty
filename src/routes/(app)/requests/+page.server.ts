@@ -3,6 +3,7 @@ import { getDb } from '$lib/server/db/index.js';
 import {
 	listProxyRequests,
 	proxyRequestDailyCounts,
+	proxyRequestDailyModelCounts,
 	proxyRequestStats,
 	proxyRequestTopModels,
 	toPublic,
@@ -51,6 +52,40 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const dailyCounts = proxyRequestDailyCounts(db, 365, filters);
 	const topModels = proxyRequestTopModels(db, 10, filters);
 
+	const dailyModelRows = proxyRequestDailyModelCounts(db, 7, filters);
+	const topModelNames = new Set(topModels.map((m) => m.model));
+	const modelCountsByDay = new Map<string, Map<string, number>>();
+	const allModels = new Set<string>();
+	for (const row of dailyModelRows) {
+		if (!modelCountsByDay.has(row.day)) modelCountsByDay.set(row.day, new Map());
+		const dayMap = modelCountsByDay.get(row.day)!;
+		const key = topModelNames.has(row.model) ? row.model : 'Other';
+		dayMap.set(key, (dayMap.get(key) ?? 0) + row.count);
+		allModels.add(key);
+	}
+
+	const days: string[] = [];
+	const now = new Date();
+	for (let i = 6; i >= 0; i--) {
+		const d = new Date(now);
+		d.setDate(d.getDate() - i);
+		days.push(d.toISOString().slice(0, 10));
+	}
+
+	const modelSeries = topModels.slice(0, 5).map((m) => m.model);
+	if (allModels.has('Other')) modelSeries.push('Other');
+
+	const stackedRows = days.map((day) => {
+		const dayMap = modelCountsByDay.get(day) ?? new Map();
+		const row: Record<string, string | number> = { day };
+		for (const model of modelSeries) {
+			row[model] = dayMap.get(model) ?? 0;
+		}
+		return row;
+	});
+
+	const stackedSeries = modelSeries.map((model) => ({ key: model, label: model }));
+
 	const users: Record<string, string> = {};
 	const userIds = [...new Set(requests.map((r) => r.userId))];
 	if (userIds.length > 0) {
@@ -94,6 +129,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		stats,
 		dailyCounts,
 		topModels,
+		stackedRows,
+		stackedSeries,
 		users,
 		keys,
 		filters: {

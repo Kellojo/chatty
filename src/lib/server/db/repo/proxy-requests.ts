@@ -342,6 +342,32 @@ export function proxyRequestTopModels(
 	}));
 }
 
+export interface DailyModelCount {
+	day: string;
+	model: string;
+	count: number;
+}
+
+export function proxyRequestDailyModelCounts(
+	db: Db,
+	days: number,
+	filters: ProxyRequestFilters = {}
+): DailyModelCount[] {
+	const { where, args } = buildWhere(filters);
+	const from = Date.now() - days * 86400000;
+	const extra = where ? ' AND started_at >= ?' : 'WHERE started_at >= ?';
+	return db
+		.prepare(
+			`SELECT date(started_at / 1000, 'unixepoch') AS day,
+			        requested_model AS model,
+			        COUNT(*) AS count
+			 FROM proxy_requests ${where}${extra}
+			 GROUP BY day, requested_model
+			 ORDER BY day, count DESC`
+		)
+		.all(...args, from) as DailyModelCount[];
+}
+
 export function failRunningProxyRequests(db: Db): number {
 	return db
 		.prepare(
