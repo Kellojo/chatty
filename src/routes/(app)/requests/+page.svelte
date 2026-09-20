@@ -105,6 +105,42 @@
 		}
 		return cfg;
 	});
+
+	const allTimeColorMap = $derived.by(() => {
+		const map: Record<string, string> = {};
+		for (const s of topSeries) {
+			map[s.key] = s.color;
+		}
+		return map;
+	});
+
+	const allTimeRows = $derived.by(() => {
+		if (data.topModels.length === 0) return [];
+		const modelKeys = data.topModels.map((m) => m.model);
+		const row: Record<string, string | number> = {};
+		for (const m of data.topModels) {
+			row[m.model] = m.count;
+		}
+		return [{ ...row, _x: '' }];
+	});
+
+	const allTimeSeries = $derived(
+		data.topModels.map((m, i) => ({
+			key: m.model,
+			label: m.model,
+			color:
+				allTimeColorMap[m.model] ??
+				CHART_COLORS[i % CHART_COLORS.length]
+		}))
+	);
+
+	const allTimeConfig = $derived.by(() => {
+		const cfg: Record<string, { label?: string; color?: string }> = {};
+		for (const s of allTimeSeries) {
+			cfg[s.key] = { label: s.label, color: s.color };
+		}
+		return cfg;
+	});
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -191,8 +227,26 @@
 							<Card.Description>Requests per model, past 7 days</Card.Description>
 						</Card.Header>
 						<Card.Content>
-							<Chart.Container config={topChartConfig} class="min-h-[200px] max-h-[200px] w-full">
+							<Chart.Container config={topChartConfig} class="max-h-[200px] min-h-[200px] w-full">
 								<BarChart data={data.stackedRows} x="day" series={topSeries} seriesLayout="stack">
+									{#snippet tooltip()}
+										<Chart.Tooltip />
+									{/snippet}
+								</BarChart>
+							</Chart.Container>
+						</Card.Content>
+					</Card.Root>
+				{/if}
+
+				{#if data.topModels.length > 0}
+					<Card.Root>
+						<Card.Header>
+							<Card.Title class="text-base">All-time usage</Card.Title>
+							<Card.Description>Requests by model</Card.Description>
+						</Card.Header>
+						<Card.Content>
+							<Chart.Container config={allTimeConfig} class="max-h-[240px] min-h-[240px] w-full">
+								<BarChart data={allTimeRows} x="_x" series={allTimeSeries} seriesLayout="group" legend={false}>
 									{#snippet tooltip()}
 										<Chart.Tooltip />
 									{/snippet}
