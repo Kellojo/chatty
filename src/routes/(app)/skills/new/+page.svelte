@@ -7,6 +7,7 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
 
 	let name = $state('');
 	let title = $state('');
@@ -47,49 +48,53 @@
 	<div class="mx-auto flex w-full max-w-7xl flex-col gap-4 p-6">
 		<h1 class="text-xl font-semibold">New skill</h1>
 
-		<div class="flex flex-col gap-1.5">
-			<Label for="name">Name</Label>
-			<Input id="name" placeholder="my-skill" bind:value={name} />
-			{#if name && !nameValid}
-				<p class="text-sm text-destructive">
-					Lowercase letters, digits and dashes; must start with a letter or digit.
-				</p>
-			{/if}
-		</div>
+		<Card.Root>
+			<Card.Content class="flex flex-col gap-4 pt-6">
+				<div class="flex flex-col gap-1.5">
+					<Label for="name">Name</Label>
+					<Input id="name" placeholder="my-skill" bind:value={name} />
+					{#if name && !nameValid}
+						<p class="text-sm text-destructive">
+							Lowercase letters, digits and dashes; must start with a letter or digit.
+						</p>
+					{/if}
+				</div>
 
-		<div class="flex flex-col gap-1.5">
-			<Label for="title">Title</Label>
-			<Input id="title" placeholder="My skill" bind:value={title} />
-		</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="title">Title</Label>
+					<Input id="title" placeholder="My skill" bind:value={title} />
+				</div>
 
-		<div class="flex flex-col gap-1.5">
-			<Label for="description">Description</Label>
-			<Input
-				id="description"
-				placeholder="One-line summary used by the AI to decide when to load this skill"
-				bind:value={description}
-			/>
-		</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="description">Description</Label>
+					<Input
+						id="description"
+						placeholder="One-line summary used by the AI to decide when to load this skill"
+						bind:value={description}
+					/>
+				</div>
 
-		<div class="flex min-h-64 flex-col gap-1.5">
-			<Label for="body">Instructions (markdown)</Label>
-			<Textarea
-				id="body"
-				class="min-h-64 flex-1 font-mono text-sm"
-				placeholder="Instructions the AI follows when this skill is loaded…"
-				bind:value={body}
-			/>
-		</div>
+				<div class="flex min-h-64 flex-col gap-1.5">
+					<Label for="body">Instructions (markdown)</Label>
+					<Textarea
+						id="body"
+						class="min-h-64 flex-1 font-mono text-sm"
+						placeholder="Instructions the AI follows when this skill is loaded…"
+						bind:value={body}
+					/>
+				</div>
 
-		<div class="flex justify-end gap-2">
-			<Button variant="outline" href={resolve('/skills')}>Cancel</Button>
-			<Button
-				disabled={busy || !nameValid || !title.trim() || !description.trim()}
-				onclick={create}
-			>
-				{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-				Create skill
-			</Button>
-		</div>
+				<div class="flex justify-end gap-2">
+					<Button variant="outline" href={resolve('/skills')}>Cancel</Button>
+					<Button
+						disabled={busy || !nameValid || !title.trim() || !description.trim()}
+						onclick={create}
+					>
+						{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
+						Create skill
+					</Button>
+				</div>
+			</Card.Content>
+		</Card.Root>
 	</div>
 </div>

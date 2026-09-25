@@ -8,6 +8,7 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import type { PageData } from './$types';
 
@@ -182,63 +183,69 @@
 		<Button onclick={openAdd}>Add provider</Button>
 	</div>
 
-	<Table.Root>
-		<Table.Header>
-			<Table.Row>
-				<Table.Head>Name</Table.Head>
-				<Table.Head>Type</Table.Head>
-				<Table.Head>Base URL</Table.Head>
-				<Table.Head>API key</Table.Head>
-				<Table.Head>Enabled</Table.Head>
-				<Table.Head class="text-right">Actions</Table.Head>
-			</Table.Row>
-		</Table.Header>
-		<Table.Body>
-			{#each data.providers as provider (provider.id)}
-				<Table.Row>
-					<Table.Cell class="max-w-40 truncate font-medium" title={provider.name}>
-						{provider.name}
-					</Table.Cell>
-					<Table.Cell><Badge variant="outline">{typeLabels[provider.type]}</Badge></Table.Cell>
-					<Table.Cell
-						class="max-w-40 truncate text-muted-foreground"
-						title={provider.baseUrl ?? ''}
-					>
-						{provider.baseUrl ?? '—'}
-					</Table.Cell>
-					<Table.Cell>{provider.hasApiKey ? '••••••' : '—'}</Table.Cell>
-					<Table.Cell>
-						<Switch
-							checked={provider.enabled}
-							onCheckedChange={(checked) => toggleEnabled(provider.id, checked)}
-						/>
-					</Table.Cell>
-					<Table.Cell class="text-right whitespace-nowrap">
-						<div class="flex justify-end gap-2">
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={!provider.enabled}
-								onclick={() => fetchModels(provider.id, provider.name)}
+	<Card.Root>
+		<Card.Content>
+			<Table.Root>
+				<Table.Header>
+					<Table.Row>
+						<Table.Head>Name</Table.Head>
+						<Table.Head>Type</Table.Head>
+						<Table.Head>Base URL</Table.Head>
+						<Table.Head>API key</Table.Head>
+						<Table.Head>Enabled</Table.Head>
+						<Table.Head class="text-right">Actions</Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each data.providers as provider (provider.id)}
+						<Table.Row>
+							<Table.Cell class="max-w-40 truncate font-medium" title={provider.name}>
+								{provider.name}
+							</Table.Cell>
+							<Table.Cell><Badge variant="outline">{typeLabels[provider.type]}</Badge></Table.Cell>
+							<Table.Cell
+								class="max-w-40 truncate text-muted-foreground"
+								title={provider.baseUrl ?? ''}
 							>
-								Fetch models
-							</Button>
-							<Button variant="outline" size="sm" onclick={() => openEdit(provider)}>Edit</Button>
-							<Button variant="destructive" size="sm" onclick={() => (deleteId = provider.id)}>
-								Delete
-							</Button>
-						</div>
-					</Table.Cell>
-				</Table.Row>
-			{:else}
-				<Table.Row>
-					<Table.Cell colspan={6} class="text-center text-muted-foreground">
-						No providers configured.
-					</Table.Cell>
-				</Table.Row>
-			{/each}
-		</Table.Body>
-	</Table.Root>
+								{provider.baseUrl ?? '—'}
+							</Table.Cell>
+							<Table.Cell>{provider.hasApiKey ? '••••••' : '—'}</Table.Cell>
+							<Table.Cell>
+								<Switch
+									checked={provider.enabled}
+									onCheckedChange={(checked) => toggleEnabled(provider.id, checked)}
+								/>
+							</Table.Cell>
+							<Table.Cell class="text-right whitespace-nowrap">
+								<div class="flex justify-end gap-2">
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={!provider.enabled}
+										onclick={() => fetchModels(provider.id, provider.name)}
+									>
+										Fetch models
+									</Button>
+									<Button variant="outline" size="sm" onclick={() => openEdit(provider)}
+										>Edit</Button
+									>
+									<Button variant="destructive" size="sm" onclick={() => (deleteId = provider.id)}>
+										Delete
+									</Button>
+								</div>
+							</Table.Cell>
+						</Table.Row>
+					{:else}
+						<Table.Row>
+							<Table.Cell colspan={6} class="text-center text-muted-foreground">
+								No providers configured.
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		</Card.Content>
+	</Card.Root>
 </div>
 
 <Dialog.Root bind:open={addOpen}>

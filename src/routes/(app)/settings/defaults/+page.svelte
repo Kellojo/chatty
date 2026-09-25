@@ -103,7 +103,7 @@
 	<Card.Root>
 		<Card.Content class="flex flex-col gap-5 pt-6">
 			{#each roleDescriptions as { role, label, description } (role)}
-				<div class="flex items-center justify-between gap-6">
+				<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
 					<div class="flex min-w-0 flex-col gap-1">
 						<Label>{label}</Label>
 						<p class="text-sm text-muted-foreground">{description}</p>
@@ -117,7 +117,7 @@
 						noneValue=""
 						noneLabel="Not set"
 						capability={roleCapability[role]}
-						class="w-72 shrink-0"
+						class="w-full shrink-0 sm:w-72"
 					/>
 				</div>
 			{/each}

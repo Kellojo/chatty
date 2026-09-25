@@ -15,6 +15,7 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import MemoryAuditEntry from '$lib/components/app/MemoryAuditEntry.svelte';
 	import type {
@@ -496,103 +497,114 @@
 		</nav>
 
 		<main class="min-w-0 flex-1">
-			{#if editor.mode === 'none'}
-				<div class="flex h-96 items-center justify-center">
-					<div class="flex flex-col items-center gap-2 text-muted-foreground">
-						<BrainIcon class="size-8" />
-						<p class="text-sm">Select a concept or create a new one</p>
-					</div>
-				</div>
-			{:else if editorLoading}
-				<div class="flex h-96 items-center justify-center">
-					<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
-				</div>
-			{:else}
-				<form onsubmit={save} class="flex w-full flex-col gap-4">
-					<div class="flex items-center justify-between gap-2">
-						<Badge variant="secondary">{scope === 'shared' ? 'Shared' : 'My memory'}</Badge>
-						{#if editor.mode === 'edit' && editor.timestamp}
-							<span class="text-xs text-muted-foreground" title={editor.timestamp}>
-								Updated {new Date(editor.timestamp).toLocaleString()}
-							</span>
-						{/if}
-					</div>
-
-					<div class="flex flex-col gap-2">
-						<Label for="mem-path">Path</Label>
-						<Input
-							id="mem-path"
-							bind:value={editor.path}
-							required
-							placeholder="topics/foo.md"
-							class="font-mono text-sm"
-						/>
-						{#if editor.mode === 'edit'}
-							<p class="text-xs text-muted-foreground">Changing the path renames the concept.</p>
-						{/if}
-					</div>
-
-					<div class="grid grid-cols-2 gap-4">
-						<div class="flex flex-col gap-2">
-							<Label for="mem-title">Title</Label>
-							<Input id="mem-title" bind:value={editor.title} required maxlength={200} />
+			<Card.Root>
+				<Card.Content>
+					{#if editor.mode === 'none'}
+						<div class="flex h-96 items-center justify-center">
+							<div class="flex flex-col items-center gap-2 text-muted-foreground">
+								<BrainIcon class="size-8" />
+								<p class="text-sm">Select a concept or create a new one</p>
+							</div>
 						</div>
-						<div class="flex flex-col gap-2">
-							<Label for="mem-type">Type</Label>
-							<Input id="mem-type" bind:value={editor.type} placeholder="concept" maxlength={50} />
+					{:else if editorLoading}
+						<div class="flex h-96 items-center justify-center">
+							<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
 						</div>
-					</div>
+					{:else}
+						<form onsubmit={save} class="flex w-full flex-col gap-4">
+							<div class="flex items-center justify-between gap-2">
+								<Badge variant="secondary">{scope === 'shared' ? 'Shared' : 'My memory'}</Badge>
+								{#if editor.mode === 'edit' && editor.timestamp}
+									<span class="text-xs text-muted-foreground" title={editor.timestamp}>
+										Updated {new Date(editor.timestamp).toLocaleString()}
+									</span>
+								{/if}
+							</div>
 
-					<div class="flex flex-col gap-2">
-						<Label for="mem-description">Description</Label>
-						<Input id="mem-description" bind:value={editor.description} maxlength={500} />
-					</div>
+							<div class="flex flex-col gap-2">
+								<Label for="mem-path">Path</Label>
+								<Input
+									id="mem-path"
+									bind:value={editor.path}
+									required
+									placeholder="topics/foo.md"
+									class="font-mono text-sm"
+								/>
+								{#if editor.mode === 'edit'}
+									<p class="text-xs text-muted-foreground">
+										Changing the path renames the concept.
+									</p>
+								{/if}
+							</div>
 
-					<div class="flex flex-col gap-2">
-						<Label for="mem-tags">Tags (comma-separated)</Label>
-						<Input id="mem-tags" bind:value={editor.tags} placeholder="people, family" />
-					</div>
-
-					<div class="flex flex-col gap-2">
-						<Label for="mem-body">Body</Label>
-						<Textarea
-							id="mem-body"
-							bind:value={editor.body}
-							class="min-h-[40vh] font-mono text-sm"
-						/>
-					</div>
-
-					<div class="flex gap-2">
-						<Button type="submit" disabled={saveBusy}>
-							{saveBusy ? 'Saving…' : editor.mode === 'new' ? 'Create' : 'Save'}
-						</Button>
-						{#if editor.mode === 'edit'}
-							<Button variant="destructive" onclick={() => (deleteOpen = true)}>Delete</Button>
-						{:else}
-							<Button variant="outline" onclick={clearSelection}>Cancel</Button>
-						{/if}
-					</div>
-				</form>
-
-				{#if editor.mode === 'edit'}
-					<section class="mt-10 w-full">
-						<h2 class="mb-3 text-sm font-semibold">History</h2>
-						<div class="flex flex-col gap-2">
-							{#if writesLoading}
-								<div class="flex justify-center pt-4">
-									<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
+							<div class="grid grid-cols-2 gap-4">
+								<div class="flex flex-col gap-2">
+									<Label for="mem-title">Title</Label>
+									<Input id="mem-title" bind:value={editor.title} required maxlength={200} />
 								</div>
-							{:else}
-								{#each writes as entry (entry.id)}
-									<MemoryAuditEntry {entry} {restoreBusy} onrestore={restore} />
+								<div class="flex flex-col gap-2">
+									<Label for="mem-type">Type</Label>
+									<Input
+										id="mem-type"
+										bind:value={editor.type}
+										placeholder="concept"
+										maxlength={50}
+									/>
+								</div>
+							</div>
+
+							<div class="flex flex-col gap-2">
+								<Label for="mem-description">Description</Label>
+								<Input id="mem-description" bind:value={editor.description} maxlength={500} />
+							</div>
+
+							<div class="flex flex-col gap-2">
+								<Label for="mem-tags">Tags (comma-separated)</Label>
+								<Input id="mem-tags" bind:value={editor.tags} placeholder="people, family" />
+							</div>
+
+							<div class="flex flex-col gap-2">
+								<Label for="mem-body">Body</Label>
+								<Textarea
+									id="mem-body"
+									bind:value={editor.body}
+									class="min-h-[40vh] font-mono text-sm"
+								/>
+							</div>
+
+							<div class="flex gap-2">
+								<Button type="submit" disabled={saveBusy}>
+									{saveBusy ? 'Saving…' : editor.mode === 'new' ? 'Create' : 'Save'}
+								</Button>
+								{#if editor.mode === 'edit'}
+									<Button variant="destructive" onclick={() => (deleteOpen = true)}>Delete</Button>
 								{:else}
-									<p class="text-sm text-muted-foreground">No writes recorded yet.</p>
-								{/each}
-							{/if}
-						</div>
-					</section>
-				{/if}
-			{/if}
+									<Button variant="outline" onclick={clearSelection}>Cancel</Button>
+								{/if}
+							</div>
+						</form>
+
+						{#if editor.mode === 'edit'}
+							<section class="mt-10 w-full">
+								<h2 class="mb-3 text-sm font-semibold">History</h2>
+								<div class="flex flex-col gap-2">
+									{#if writesLoading}
+										<div class="flex justify-center pt-4">
+											<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
+										</div>
+									{:else}
+										{#each writes as entry (entry.id)}
+											<MemoryAuditEntry {entry} {restoreBusy} onrestore={restore} />
+										{:else}
+											<p class="text-sm text-muted-foreground">No writes recorded yet.</p>
+										{/each}
+									{/if}
+								</div>
+							</section>
+						{/if}
+					{/if}
+				</Card.Content>
+			</Card.Root>
 		</main>
 	</div>
 </div>

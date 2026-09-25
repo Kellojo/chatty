@@ -128,9 +128,7 @@
 		data.topModels.map((m, i) => ({
 			key: m.model,
 			label: m.model,
-			color:
-				allTimeColorMap[m.model] ??
-				CHART_COLORS[i % CHART_COLORS.length]
+			color: allTimeColorMap[m.model] ?? CHART_COLORS[i % CHART_COLORS.length]
 		}))
 	);
 
@@ -246,7 +244,13 @@
 						</Card.Header>
 						<Card.Content>
 							<Chart.Container config={allTimeConfig} class="max-h-[240px] min-h-[240px] w-full">
-								<BarChart data={allTimeRows} x="_x" series={allTimeSeries} seriesLayout="group" legend={false}>
+								<BarChart
+									data={allTimeRows}
+									x="_x"
+									series={allTimeSeries}
+									seriesLayout="group"
+									legend={false}
+								>
 									{#snippet tooltip()}
 										<Chart.Tooltip />
 									{/snippet}
@@ -323,103 +327,107 @@
 					{/if}
 				</form>
 
-				<div class="overflow-x-auto rounded-md border">
-					<Table.Root>
-						<Table.Header>
-							<Table.Head class="pl-4">Model</Table.Head>
-							<Table.Head>Source</Table.Head>
-							<Table.Head>User / Key</Table.Head>
-							<Table.Head>Status</Table.Head>
-							<Table.Head>Started</Table.Head>
-							<Table.Head class="text-right">Latency</Table.Head>
-							<Table.Head class="text-right">Tokens in / out</Table.Head>
-							<Table.Head class="pr-4 text-right">Cost</Table.Head>
-						</Table.Header>
-						<Table.Body>
-							{#each data.requests as request (request.id)}
-								<Table.Row
-									class="cursor-pointer"
-									onclick={() => goto(resolve(`/requests/${request.id}`))}
-								>
-									<Table.Cell class="pl-4">
-										<div class="flex flex-col gap-0.5">
-											<span class="truncate font-medium" title={request.requestedModel}>
-												{request.requestedModel}
-											</span>
-											{#if request.modelId && request.modelId !== request.requestedModel}
-												<span
-													class="truncate text-xs text-muted-foreground"
-													title={request.modelId}
-												>
-													{request.modelId}
-													{#if request.fallbackIndex > 0}
-														<Badge variant="outline" class="ml-1">+{request.fallbackIndex}</Badge>
-													{/if}
+				<Card.Root>
+					<Card.Content>
+						<Table.Root>
+							<Table.Header>
+								<Table.Head class="pl-4">Model</Table.Head>
+								<Table.Head>Source</Table.Head>
+								<Table.Head>User / Key</Table.Head>
+								<Table.Head>Status</Table.Head>
+								<Table.Head>Started</Table.Head>
+								<Table.Head class="text-right">Latency</Table.Head>
+								<Table.Head class="text-right">Tokens in / out</Table.Head>
+								<Table.Head class="pr-4 text-right">Cost</Table.Head>
+							</Table.Header>
+							<Table.Body>
+								{#each data.requests as request (request.id)}
+									<Table.Row
+										class="cursor-pointer"
+										onclick={() => goto(resolve(`/requests/${request.id}`))}
+									>
+										<Table.Cell class="pl-4">
+											<div class="flex flex-col gap-0.5">
+												<span class="truncate font-medium" title={request.requestedModel}>
+													{request.requestedModel}
 												</span>
-											{:else if request.providerId}
-												<span
-													class="truncate text-xs text-muted-foreground"
-													title={request.providerId}
-												>
-													{request.providerId}
+												{#if request.modelId && request.modelId !== request.requestedModel}
+													<span
+														class="truncate text-xs text-muted-foreground"
+														title={request.modelId}
+													>
+														{request.modelId}
+														{#if request.fallbackIndex > 0}
+															<Badge variant="outline" class="ml-1">+{request.fallbackIndex}</Badge>
+														{/if}
+													</span>
+												{:else if request.providerId}
+													<span
+														class="truncate text-xs text-muted-foreground"
+														title={request.providerId}
+													>
+														{request.providerId}
+													</span>
+												{/if}
+											</div>
+										</Table.Cell>
+										<Table.Cell>
+											<div class="flex flex-col items-start gap-0.5">
+												<Badge variant={sourceVariant(request.source)}>
+													{request.source}
+												</Badge>
+												<span class="text-xs text-muted-foreground">
+													{endpointLabel(request)}
 												</span>
-											{/if}
-										</div>
-									</Table.Cell>
-									<Table.Cell>
-										<div class="flex flex-col items-start gap-0.5">
-											<Badge variant={sourceVariant(request.source)}>
-												{request.source}
+											</div>
+										</Table.Cell>
+										<Table.Cell class="text-muted-foreground">
+											<div class="flex flex-col gap-0.5">
+												<span class="truncate">{data.users[request.userId] ?? request.userId}</span>
+												<span class="truncate text-xs">
+													{request.apiKeyId
+														? (data.keys[request.apiKeyId] ?? request.apiKeyId)
+														: '—'}
+												</span>
+											</div>
+										</Table.Cell>
+										<Table.Cell>
+											<Badge
+												variant={statusVariant(request.status)}
+												class={statusClass(request.status)}
+											>
+												{#if request.status === 'running'}
+													<span class="size-2 animate-pulse rounded-full bg-info"></span>
+												{/if}
+												{request.status}
 											</Badge>
-											<span class="text-xs text-muted-foreground">
-												{endpointLabel(request)}
+										</Table.Cell>
+										<Table.Cell class="whitespace-nowrap text-muted-foreground">
+											<span title={formatDateTime(request.startedAt, data.timeFormat)}>
+												{formatTimeAgo(request.startedAt)}
 											</span>
-										</div>
-									</Table.Cell>
-									<Table.Cell class="text-muted-foreground">
-										<div class="flex flex-col gap-0.5">
-											<span class="truncate">{data.users[request.userId] ?? request.userId}</span>
-											<span class="truncate text-xs">
-												{request.apiKeyId ? (data.keys[request.apiKeyId] ?? request.apiKeyId) : '—'}
-											</span>
-										</div>
-									</Table.Cell>
-									<Table.Cell>
-										<Badge
-											variant={statusVariant(request.status)}
-											class={statusClass(request.status)}
-										>
-											{#if request.status === 'running'}
-												<span class="size-2 animate-pulse rounded-full bg-info"></span>
-											{/if}
-											{request.status}
-										</Badge>
-									</Table.Cell>
-									<Table.Cell class="whitespace-nowrap text-muted-foreground">
-										<span title={formatDateTime(request.startedAt, data.timeFormat)}>
-											{formatTimeAgo(request.startedAt)}
-										</span>
-									</Table.Cell>
-									<Table.Cell class="text-right whitespace-nowrap text-muted-foreground">
-										{formatLatency(request.latencyMs)}
-									</Table.Cell>
-									<Table.Cell class="text-right whitespace-nowrap text-muted-foreground">
-										{formatTokens(request.inputTokens, request.outputTokens)}
-									</Table.Cell>
-									<Table.Cell class="pr-4 text-right whitespace-nowrap text-muted-foreground">
-										{request.costUsd !== null ? formatCost(request.costUsd) : '—'}
-									</Table.Cell>
-								</Table.Row>
-							{:else}
-								<Table.Row>
-									<Table.Cell colspan={8} class="text-center text-muted-foreground">
-										No requests yet.
-									</Table.Cell>
-								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
-				</div>
+										</Table.Cell>
+										<Table.Cell class="text-right whitespace-nowrap text-muted-foreground">
+											{formatLatency(request.latencyMs)}
+										</Table.Cell>
+										<Table.Cell class="text-right whitespace-nowrap text-muted-foreground">
+											{formatTokens(request.inputTokens, request.outputTokens)}
+										</Table.Cell>
+										<Table.Cell class="pr-4 text-right whitespace-nowrap text-muted-foreground">
+											{request.costUsd !== null ? formatCost(request.costUsd) : '—'}
+										</Table.Cell>
+									</Table.Row>
+								{:else}
+									<Table.Row>
+										<Table.Cell colspan={8} class="text-center text-muted-foreground">
+											No requests yet.
+										</Table.Cell>
+									</Table.Row>
+								{/each}
+							</Table.Body>
+						</Table.Root>
+					</Card.Content>
+				</Card.Root>
 
 				<div class="flex items-center justify-between">
 					<p class="text-sm text-muted-foreground">

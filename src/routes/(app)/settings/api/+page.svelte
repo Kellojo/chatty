@@ -64,6 +64,7 @@
 	let keyBusy = $state(false);
 	let createdKey = $state<string | null>(null);
 	let deleteKeyBusy = $state<string | null>(null);
+	let deleteKeyId = $state<string | null>(null);
 
 	type CavemanLevel = 'off' | 'lite' | 'full' | 'ultra' | 'wenyan';
 
@@ -160,11 +161,16 @@
 	}
 
 	async function deleteKey(id: string) {
-		if (deleteKeyBusy) return;
-		deleteKeyBusy = id;
+		deleteKeyId = id;
+	}
+
+	async function confirmDeleteKey() {
+		if (!deleteKeyId || deleteKeyBusy) return;
+		deleteKeyBusy = deleteKeyId;
 		try {
-			await api(`/api/api-keys/${id}`, 'DELETE');
+			await api(`/api/api-keys/${deleteKeyId}`, 'DELETE');
 			toast.success('API key deleted');
+			deleteKeyId = null;
 			await invalidateAll();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete API key');
@@ -492,5 +498,22 @@
 				</Dialog.Footer>
 			</form>
 		{/if}
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={deleteKeyId !== null} onOpenChange={(open) => !open && (deleteKeyId = null)}>
+	<Dialog.Content>
+		<Dialog.Header>
+			<Dialog.Title>Delete API key?</Dialog.Title>
+			<Dialog.Description>
+				Any service using this key will immediately lose access. This cannot be undone.
+			</Dialog.Description>
+		</Dialog.Header>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (deleteKeyId = null)}>Cancel</Button>
+			<Button variant="destructive" disabled={deleteKeyBusy !== null} onclick={confirmDeleteKey}>
+				{deleteKeyBusy === deleteKeyId ? 'Deleting…' : 'Delete'}
+			</Button>
+		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

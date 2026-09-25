@@ -63,7 +63,7 @@
 				recent conversations into long-term memory concepts. You can also trigger it manually.
 			</Card.Description>
 		</Card.Header>
-		<Card.Content class="flex items-center gap-2">
+		<Card.Content class="flex flex-wrap items-center gap-2">
 			<Button disabled={extractBusy} onclick={extractNow}>
 				{#if extractBusy}
 					<LoaderCircleIcon class="size-4 animate-spin" />

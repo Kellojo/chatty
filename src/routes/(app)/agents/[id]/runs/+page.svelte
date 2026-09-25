@@ -7,6 +7,7 @@
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
 	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
 	import type { AgentRun } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -69,75 +70,82 @@
 			<h1 class="text-xl font-semibold">Runs</h1>
 		</div>
 
-		<Table.Root>
-			<Table.Header>
-				<Table.Row>
-					<Table.Head>Status</Table.Head>
-					<Table.Head>Trigger</Table.Head>
-					{#if data.showUser}
-						<Table.Head>User</Table.Head>
-					{/if}
-					<Table.Head>Started</Table.Head>
-					<Table.Head>Duration</Table.Head>
-					<Table.Head>Error</Table.Head>
-					<Table.Head class="text-right">Actions</Table.Head>
-				</Table.Row>
-			</Table.Header>
-			<Table.Body>
-				{#each data.runs as run (run.id)}
-					<Table.Row
-						class="cursor-pointer"
-						onclick={() => goto(resolve(`/agents/${data.agent.id}/runs/${run.id}`))}
-					>
-						<Table.Cell>
-							<Badge variant={statusVariant(run)} class={statusClass(run)}>
-								{#if run.status === 'running'}
-									<LoaderCircleIcon class="size-3.5 animate-spin" />
-								{/if}
-								{run.status}
-							</Badge>
-						</Table.Cell>
-						<Table.Cell>
-							<Badge variant="secondary">{run.trigger}</Badge>
-						</Table.Cell>
-						{#if data.showUser}
-							<Table.Cell class="whitespace-nowrap text-muted-foreground">
-								{data.users[run.userId] ?? run.userId}
-							</Table.Cell>
-						{/if}
-						<Table.Cell class="whitespace-nowrap text-muted-foreground">
-							<span title={formatDateTime(run.startedAt, data.timeFormat)}>
-								{formatTimeAgo(run.startedAt)}
-							</span>
-						</Table.Cell>
-						<Table.Cell class="text-muted-foreground">{duration(run)}</Table.Cell>
-						<Table.Cell class="max-w-64 truncate text-muted-foreground" title={run.error ?? ''}>
-							{run.error ? truncate(run.error) : '—'}
-						</Table.Cell>
-						<Table.Cell class="text-right">
-							{#if run.status === 'running'}
-								<Button
-									variant="destructive"
-									size="sm"
-									disabled={stopBusy === run.id}
-									onclick={(e) => {
-										e.stopPropagation();
-										stopRun(run);
-									}}
-								>
-									{stopBusy === run.id ? 'Stopping…' : 'Stop'}
-								</Button>
+		<Card.Root>
+			<Card.Content>
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head>Status</Table.Head>
+							<Table.Head>Trigger</Table.Head>
+							{#if data.showUser}
+								<Table.Head>User</Table.Head>
 							{/if}
-						</Table.Cell>
-					</Table.Row>
-				{:else}
-					<Table.Row>
-						<Table.Cell colspan={data.showUser ? 7 : 6} class="text-center text-muted-foreground">
-							No runs yet.
-						</Table.Cell>
-					</Table.Row>
-				{/each}
-			</Table.Body>
-		</Table.Root>
+							<Table.Head>Started</Table.Head>
+							<Table.Head>Duration</Table.Head>
+							<Table.Head>Error</Table.Head>
+							<Table.Head class="text-right">Actions</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each data.runs as run (run.id)}
+							<Table.Row
+								class="cursor-pointer"
+								onclick={() => goto(resolve(`/agents/${data.agent.id}/runs/${run.id}`))}
+							>
+								<Table.Cell>
+									<Badge variant={statusVariant(run)} class={statusClass(run)}>
+										{#if run.status === 'running'}
+											<LoaderCircleIcon class="size-3.5 animate-spin" />
+										{/if}
+										{run.status}
+									</Badge>
+								</Table.Cell>
+								<Table.Cell>
+									<Badge variant="secondary">{run.trigger}</Badge>
+								</Table.Cell>
+								{#if data.showUser}
+									<Table.Cell class="whitespace-nowrap text-muted-foreground">
+										{data.users[run.userId] ?? run.userId}
+									</Table.Cell>
+								{/if}
+								<Table.Cell class="whitespace-nowrap text-muted-foreground">
+									<span title={formatDateTime(run.startedAt, data.timeFormat)}>
+										{formatTimeAgo(run.startedAt)}
+									</span>
+								</Table.Cell>
+								<Table.Cell class="text-muted-foreground">{duration(run)}</Table.Cell>
+								<Table.Cell class="max-w-64 truncate text-muted-foreground" title={run.error ?? ''}>
+									{run.error ? truncate(run.error) : '—'}
+								</Table.Cell>
+								<Table.Cell class="text-right">
+									{#if run.status === 'running'}
+										<Button
+											variant="destructive"
+											size="sm"
+											disabled={stopBusy === run.id}
+											onclick={(e) => {
+												e.stopPropagation();
+												stopRun(run);
+											}}
+										>
+											{stopBusy === run.id ? 'Stopping…' : 'Stop'}
+										</Button>
+									{/if}
+								</Table.Cell>
+							</Table.Row>
+						{:else}
+							<Table.Row>
+								<Table.Cell
+									colspan={data.showUser ? 7 : 6}
+									class="text-center text-muted-foreground"
+								>
+									No runs yet.
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			</Card.Content>
+		</Card.Root>
 	</div>
 </div>

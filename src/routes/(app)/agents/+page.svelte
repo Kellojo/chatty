@@ -11,6 +11,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
 	import { describeCron } from '$lib/cron.js';
 	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
@@ -128,135 +129,142 @@
 			<Button href={resolve('/agents/new')}>New agent</Button>
 		</div>
 
-		<Table.Root>
-			<Table.Header>
-				<Table.Row>
-					<Table.Head>Agent</Table.Head>
-					<Table.Head>Trigger</Table.Head>
-					<Table.Head>Status</Table.Head>
-					<Table.Head>Next run</Table.Head>
-					<Table.Head>Last run</Table.Head>
-					<Table.Head class="text-right">Actions</Table.Head>
-				</Table.Row>
-			</Table.Header>
-			<Table.Body>
-				{#each data.agents as agent (agent.id)}
-					<Table.Row>
-						<Table.Cell class="max-w-72">
-							<div class="flex items-center gap-2">
-								<span class="truncate font-medium" title={agent.name}>{agent.name}</span>
-								{#if data.runningAgentIds.includes(agent.id)}
-									<LoaderCircleIcon
-										class="size-3.5 shrink-0 animate-spin text-info-foreground"
-										title="Running"
-									/>
-								{/if}
-								{#if agent.userId === null}
-									<Badge variant="outline">Built-in</Badge>
-								{/if}
-							</div>
-							{#if agent.description}
-								<p class="line-clamp-2 text-sm text-muted-foreground" title={agent.description}>
-									{agent.description}
-								</p>
-							{/if}
-						</Table.Cell>
-						<Table.Cell>
-							{#if agent.triggerType === 'schedule'}
-								{@const schedule = describeCron(agent.triggerConfig.cron, data.timeFormat)}
-								{#if schedule}
-									<Badge variant="secondary">{schedule}</Badge>
-								{:else}
-									<Badge variant="secondary">{agent.triggerType}</Badge>
-								{/if}
-							{:else if agent.triggerType === 'event'}
-								<Badge variant="secondary"
-									>{@const every = agent.triggerConfig.every ?? 1}
-									{every > 1
-										? `Every ${ordinal(every)} ${agent.triggerConfig.event}`
-										: `On ${agent.triggerConfig.event}`}</Badge
-								>
-							{:else}
-								<Badge variant="secondary">{agent.triggerType}</Badge>
-							{/if}
-						</Table.Cell>
-						<Table.Cell>
-							<div class="flex items-center gap-2">
-								<Switch
-									checked={agent.enabled}
-									disabled={toggleBusy !== null}
-									onCheckedChange={(checked) => toggleAgent(agent, checked)}
-								/>
-								<span class="text-sm text-muted-foreground">
-									{agent.enabled ? 'Enabled' : 'Disabled'}
-								</span>
-							</div>
-						</Table.Cell>
-						<Table.Cell class="whitespace-nowrap text-muted-foreground">
-							{agent.nextRunAt ? formatDateTime(agent.nextRunAt, data.timeFormat) : '—'}
-						</Table.Cell>
-						<Table.Cell class="whitespace-nowrap text-muted-foreground">
-							{#if agent.lastRunAt}
-								<span title={formatDateTime(agent.lastRunAt, data.timeFormat)}>
-									{formatTimeAgo(agent.lastRunAt)}
-								</span>
-							{:else}
-								—
-							{/if}
-						</Table.Cell>
-						<Table.Cell class="text-right whitespace-nowrap">
-							<DropdownMenu.Root>
-								<DropdownMenu.Trigger>
-									{#snippet child({ props })}
-										<Button
-											{...props}
-											variant="ghost"
-											size="icon"
-											title="Actions"
-											aria-label="Actions"
-										>
-											<EllipsisIcon class="size-4" />
-										</Button>
-									{/snippet}
-								</DropdownMenu.Trigger>
-								<DropdownMenu.Content align="end">
-									<DropdownMenu.Item disabled={runBusy !== null} onclick={() => runNow(agent)}>
-										{#if runBusy === agent.id}
-											<LoaderCircleIcon class="size-4 animate-spin" />
-											Starting…
-										{:else}
-											Run now
+		<Card.Root>
+			<Card.Content>
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head>Agent</Table.Head>
+							<Table.Head>Trigger</Table.Head>
+							<Table.Head>Status</Table.Head>
+							<Table.Head>Next run</Table.Head>
+							<Table.Head>Last run</Table.Head>
+							<Table.Head class="text-right">Actions</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each data.agents as agent (agent.id)}
+							<Table.Row>
+								<Table.Cell class="max-w-72">
+									<div class="flex items-center gap-2">
+										<span class="truncate font-medium" title={agent.name}>{agent.name}</span>
+										{#if data.runningAgentIds.includes(agent.id)}
+											<LoaderCircleIcon
+												class="size-3.5 shrink-0 animate-spin text-info-foreground"
+												title="Running"
+											/>
 										{/if}
-									</DropdownMenu.Item>
-									<DropdownMenu.Item>
-										{#snippet child({ props })}
-											<a href={resolve(`/agents/${agent.id}/runs`)} {...props}>Runs</a>
-										{/snippet}
-									</DropdownMenu.Item>
-									{#if agent.userId !== null}
-										<DropdownMenu.Separator />
-										<DropdownMenu.Item>
-											{#snippet child({ props })}
-												<a href={resolve(`/agents/${agent.id}`)} {...props}>Edit</a>
-											{/snippet}
-										</DropdownMenu.Item>
-										<DropdownMenu.Item variant="destructive" onclick={() => (deleteTarget = agent)}>
-											Delete
-										</DropdownMenu.Item>
+										{#if agent.userId === null}
+											<Badge variant="outline">Built-in</Badge>
+										{/if}
+									</div>
+									{#if agent.description}
+										<p class="line-clamp-2 text-sm text-muted-foreground" title={agent.description}>
+											{agent.description}
+										</p>
 									{/if}
-								</DropdownMenu.Content>
-							</DropdownMenu.Root>
-						</Table.Cell>
-					</Table.Row>
-				{:else}
-					<Table.Row>
-						<Table.Cell colspan={6} class="text-center text-muted-foreground">
-							No agents yet. Create one to get started.
-						</Table.Cell>
-					</Table.Row>
-				{/each}
-			</Table.Body>
-		</Table.Root>
+								</Table.Cell>
+								<Table.Cell>
+									{#if agent.triggerType === 'schedule'}
+										{@const schedule = describeCron(agent.triggerConfig.cron, data.timeFormat)}
+										{#if schedule}
+											<Badge variant="secondary">{schedule}</Badge>
+										{:else}
+											<Badge variant="secondary">{agent.triggerType}</Badge>
+										{/if}
+									{:else if agent.triggerType === 'event'}
+										<Badge variant="secondary"
+											>{@const every = agent.triggerConfig.every ?? 1}
+											{every > 1
+												? `Every ${ordinal(every)} ${agent.triggerConfig.event}`
+												: `On ${agent.triggerConfig.event}`}</Badge
+										>
+									{:else}
+										<Badge variant="secondary">{agent.triggerType}</Badge>
+									{/if}
+								</Table.Cell>
+								<Table.Cell>
+									<div class="flex items-center gap-2">
+										<Switch
+											checked={agent.enabled}
+											disabled={toggleBusy !== null}
+											onCheckedChange={(checked) => toggleAgent(agent, checked)}
+										/>
+										<span class="text-sm text-muted-foreground">
+											{agent.enabled ? 'Enabled' : 'Disabled'}
+										</span>
+									</div>
+								</Table.Cell>
+								<Table.Cell class="whitespace-nowrap text-muted-foreground">
+									{agent.nextRunAt ? formatDateTime(agent.nextRunAt, data.timeFormat) : '—'}
+								</Table.Cell>
+								<Table.Cell class="whitespace-nowrap text-muted-foreground">
+									{#if agent.lastRunAt}
+										<span title={formatDateTime(agent.lastRunAt, data.timeFormat)}>
+											{formatTimeAgo(agent.lastRunAt)}
+										</span>
+									{:else}
+										—
+									{/if}
+								</Table.Cell>
+								<Table.Cell class="text-right whitespace-nowrap">
+									<DropdownMenu.Root>
+										<DropdownMenu.Trigger>
+											{#snippet child({ props })}
+												<Button
+													{...props}
+													variant="ghost"
+													size="icon"
+													title="Actions"
+													aria-label="Actions"
+												>
+													<EllipsisIcon class="size-4" />
+												</Button>
+											{/snippet}
+										</DropdownMenu.Trigger>
+										<DropdownMenu.Content align="end">
+											<DropdownMenu.Item disabled={runBusy !== null} onclick={() => runNow(agent)}>
+												{#if runBusy === agent.id}
+													<LoaderCircleIcon class="size-4 animate-spin" />
+													Starting…
+												{:else}
+													Run now
+												{/if}
+											</DropdownMenu.Item>
+											<DropdownMenu.Item>
+												{#snippet child({ props })}
+													<a href={resolve(`/agents/${agent.id}/runs`)} {...props}>Runs</a>
+												{/snippet}
+											</DropdownMenu.Item>
+											{#if agent.userId !== null}
+												<DropdownMenu.Separator />
+												<DropdownMenu.Item>
+													{#snippet child({ props })}
+														<a href={resolve(`/agents/${agent.id}`)} {...props}>Edit</a>
+													{/snippet}
+												</DropdownMenu.Item>
+												<DropdownMenu.Item
+													variant="destructive"
+													onclick={() => (deleteTarget = agent)}
+												>
+													Delete
+												</DropdownMenu.Item>
+											{/if}
+										</DropdownMenu.Content>
+									</DropdownMenu.Root>
+								</Table.Cell>
+							</Table.Row>
+						{:else}
+							<Table.Row>
+								<Table.Cell colspan={6} class="text-center text-muted-foreground">
+									No agents yet. Create one to get started.
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			</Card.Content>
+		</Card.Root>
 	</div>
 </div>
 

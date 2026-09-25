@@ -7,6 +7,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
@@ -139,81 +140,85 @@
 			<span class="text-sm text-muted-foreground">{enabled ? 'Enabled' : 'Disabled'}</span>
 		</div>
 
-		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-			<div class="flex flex-col gap-1.5">
-				<Label for="title">Title</Label>
-				<Input id="title" bind:value={title} disabled={!data.canEdit} />
-			</div>
-			<div class="flex flex-col gap-1.5">
-				<Label for="version">Version</Label>
-				<Input id="version" placeholder="1.0.0" bind:value={version} disabled={!data.canEdit} />
-			</div>
-		</div>
+		<Card.Root>
+			<Card.Content class="flex flex-col gap-4 pt-6">
+				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+					<div class="flex flex-col gap-1.5">
+						<Label for="title">Title</Label>
+						<Input id="title" bind:value={title} disabled={!data.canEdit} />
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<Label for="version">Version</Label>
+						<Input id="version" placeholder="1.0.0" bind:value={version} disabled={!data.canEdit} />
+					</div>
+				</div>
 
-		<div class="flex flex-col gap-1.5">
-			<Label for="description">Description</Label>
-			<Input id="description" bind:value={description} disabled={!data.canEdit} />
-		</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="description">Description</Label>
+					<Input id="description" bind:value={description} disabled={!data.canEdit} />
+				</div>
 
-		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-			<div class="flex flex-col gap-1.5">
-				<Label for="when">When to use (optional)</Label>
-				<Input
-					id="when"
-					placeholder="Free-text guidance for the model"
-					bind:value={when}
-					disabled={!data.canEdit}
-				/>
-			</div>
-			<div class="flex flex-col gap-1.5">
-				<Label for="tools">Expected tools (comma-separated)</Label>
-				<Input
-					id="tools"
-					placeholder="webfetch, search_memory"
-					bind:value={tools}
-					disabled={!data.canEdit}
-				/>
-			</div>
-		</div>
+				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+					<div class="flex flex-col gap-1.5">
+						<Label for="when">When to use (optional)</Label>
+						<Input
+							id="when"
+							placeholder="Free-text guidance for the model"
+							bind:value={when}
+							disabled={!data.canEdit}
+						/>
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<Label for="tools">Expected tools (comma-separated)</Label>
+						<Input
+							id="tools"
+							placeholder="webfetch, search_memory"
+							bind:value={tools}
+							disabled={!data.canEdit}
+						/>
+					</div>
+				</div>
 
-		<div class="flex flex-col gap-1.5">
-			<Label for="author">Author</Label>
-			<Input id="author" bind:value={author} disabled={!data.canEdit} />
-		</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="author">Author</Label>
+					<Input id="author" bind:value={author} disabled={!data.canEdit} />
+				</div>
 
-		<div class="flex min-h-72 flex-col gap-1.5">
-			<Label for="body">Instructions (markdown)</Label>
-			<Textarea
-				id="body"
-				class="min-h-72 flex-1 font-mono text-sm"
-				bind:value={body}
-				disabled={!data.canEdit}
-			/>
-		</div>
+				<div class="flex min-h-72 flex-col gap-1.5">
+					<Label for="body">Instructions (markdown)</Label>
+					<Textarea
+						id="body"
+						class="min-h-72 flex-1 font-mono text-sm"
+						bind:value={body}
+						disabled={!data.canEdit}
+					/>
+				</div>
 
-		{#if data.skill.references.length > 0}
-			<div class="flex flex-col gap-1.5">
-				<Label>Reference files</Label>
-				<ul class="text-sm text-muted-foreground">
-					{#each data.skill.references as ref (ref)}
-						<li class="font-mono">{ref}</li>
-					{/each}
-				</ul>
-				<p class="text-xs text-muted-foreground">
-					Reference files live on disk next to skill.md and can only be edited there.
-				</p>
-			</div>
-		{/if}
+				{#if data.skill.references.length > 0}
+					<div class="flex flex-col gap-1.5">
+						<Label>Reference files</Label>
+						<ul class="text-sm text-muted-foreground">
+							{#each data.skill.references as ref (ref)}
+								<li class="font-mono">{ref}</li>
+							{/each}
+						</ul>
+						<p class="text-xs text-muted-foreground">
+							Reference files live on disk next to skill.md and can only be edited there.
+						</p>
+					</div>
+				{/if}
 
-		{#if data.canEdit}
-			<div class="flex justify-end gap-2">
-				<Button variant="outline" href={resolve('/skills')}>Cancel</Button>
-				<Button disabled={busy || !title.trim() || !description.trim()} onclick={save}>
-					{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-					Save
-				</Button>
-			</div>
-		{/if}
+				{#if data.canEdit}
+					<div class="flex justify-end gap-2">
+						<Button variant="outline" href={resolve('/skills')}>Cancel</Button>
+						<Button disabled={busy || !title.trim() || !description.trim()} onclick={save}>
+							{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
+							Save
+						</Button>
+					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
 
 		{#if data.invocations.length > 0}
 			<div class="mt-4 flex flex-col gap-2">

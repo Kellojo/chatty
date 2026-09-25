@@ -123,7 +123,7 @@
 			<Card.Description>Choose how the app looks.</Card.Description>
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-4">
-			<div class="flex items-center justify-between gap-6">
+			<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
 				<div class="flex min-w-0 flex-col gap-1">
 					<Label>Theme</Label>
 					<p class="text-sm text-muted-foreground">Light, dark, or follow your system setting.</p>
@@ -133,7 +133,7 @@
 					value={theme}
 					onValueChange={(value) => changeTheme(value as Theme)}
 				>
-					<Select.Trigger class="w-48 shrink-0" disabled={themeBusy}>
+					<Select.Trigger class="w-full shrink-0 sm:w-48" disabled={themeBusy}>
 						{themeLabels[theme]}
 					</Select.Trigger>
 					<Select.Content>
@@ -143,7 +143,7 @@
 					</Select.Content>
 				</Select.Root>
 			</div>
-			<div class="flex items-center justify-between gap-6">
+			<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
 				<div class="flex min-w-0 flex-col gap-1">
 					<Label>Time format</Label>
 					<p class="text-sm text-muted-foreground">
@@ -155,7 +155,7 @@
 					value={timeFormat}
 					onValueChange={(value) => changeTimeFormat(value as TimeFormat)}
 				>
-					<Select.Trigger class="w-48 shrink-0" disabled={timeFormatBusy}>
+					<Select.Trigger class="w-full shrink-0 sm:w-48" disabled={timeFormatBusy}>
 						{timeFormatLabels[timeFormat]}
 					</Select.Trigger>
 					<Select.Content>

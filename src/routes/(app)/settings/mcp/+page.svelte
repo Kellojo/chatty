@@ -9,6 +9,7 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import type { McpServerInfo } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -186,70 +187,76 @@
 		<Button onclick={openAdd}>Add server</Button>
 	</div>
 
-	<Table.Root>
-		<Table.Header>
-			<Table.Row>
-				<Table.Head>Name</Table.Head>
-				<Table.Head>Transport</Table.Head>
-				<Table.Head>URL</Table.Head>
-				<Table.Head>Enabled</Table.Head>
-				<Table.Head class="text-right">Actions</Table.Head>
-			</Table.Row>
-		</Table.Header>
-		<Table.Body>
-			{#each data.servers as server (server.id)}
-				<Table.Row>
-					<Table.Cell class="max-w-40 font-medium" title={server.name}>
-						<div class="flex items-center gap-2">
-							<span class="truncate">{server.name}</span>
-							{#if server.builtin}
-								<Badge variant="secondary" class="shrink-0">bundled</Badge>
-							{/if}
-						</div>
-					</Table.Cell>
-					<Table.Cell><Badge variant="outline">{server.transport}</Badge></Table.Cell>
-					<Table.Cell class="max-w-48 truncate text-muted-foreground" title={server.url ?? ''}>
-						{server.url ?? '—'}
-					</Table.Cell>
-					<Table.Cell>
-						<Switch
-							checked={enabledOverride[server.id] ?? server.enabled}
-							onCheckedChange={(checked) => toggleEnabled(server, checked)}
-						/>
-					</Table.Cell>
-					<Table.Cell class="text-right whitespace-nowrap">
-						<div class="flex justify-end gap-2">
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={testBusyId === server.id}
-								onclick={() => runTest(server)}
-							>
-								{#if testBusyId === server.id}
-									<Loader2Icon class="size-4 animate-spin" />
-									Testing…
-								{:else}
-									Test
-								{/if}
-							</Button>
-							{#if !server.builtin}
-								<Button variant="outline" size="sm" onclick={() => openEdit(server)}>Edit</Button>
-								<Button variant="destructive" size="sm" onclick={() => openDelete(server)}>
-									Delete
-								</Button>
-							{/if}
-						</div>
-					</Table.Cell>
-				</Table.Row>
-			{:else}
-				<Table.Row>
-					<Table.Cell colspan={5} class="text-center text-muted-foreground">
-						No MCP servers configured.
-					</Table.Cell>
-				</Table.Row>
-			{/each}
-		</Table.Body>
-	</Table.Root>
+	<Card.Root>
+		<Card.Content>
+			<Table.Root>
+				<Table.Header>
+					<Table.Row>
+						<Table.Head>Name</Table.Head>
+						<Table.Head>Transport</Table.Head>
+						<Table.Head>URL</Table.Head>
+						<Table.Head>Enabled</Table.Head>
+						<Table.Head class="text-right">Actions</Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each data.servers as server (server.id)}
+						<Table.Row>
+							<Table.Cell class="max-w-40 font-medium" title={server.name}>
+								<div class="flex items-center gap-2">
+									<span class="truncate">{server.name}</span>
+									{#if server.builtin}
+										<Badge variant="secondary" class="shrink-0">bundled</Badge>
+									{/if}
+								</div>
+							</Table.Cell>
+							<Table.Cell><Badge variant="outline">{server.transport}</Badge></Table.Cell>
+							<Table.Cell class="max-w-48 truncate text-muted-foreground" title={server.url ?? ''}>
+								{server.url ?? '—'}
+							</Table.Cell>
+							<Table.Cell>
+								<Switch
+									checked={enabledOverride[server.id] ?? server.enabled}
+									onCheckedChange={(checked) => toggleEnabled(server, checked)}
+								/>
+							</Table.Cell>
+							<Table.Cell class="text-right whitespace-nowrap">
+								<div class="flex justify-end gap-2">
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={testBusyId === server.id}
+										onclick={() => runTest(server)}
+									>
+										{#if testBusyId === server.id}
+											<Loader2Icon class="size-4 animate-spin" />
+											Testing…
+										{:else}
+											Test
+										{/if}
+									</Button>
+									{#if !server.builtin}
+										<Button variant="outline" size="sm" onclick={() => openEdit(server)}
+											>Edit</Button
+										>
+										<Button variant="destructive" size="sm" onclick={() => openDelete(server)}>
+											Delete
+										</Button>
+									{/if}
+								</div>
+							</Table.Cell>
+						</Table.Row>
+					{:else}
+						<Table.Row>
+							<Table.Cell colspan={5} class="text-center text-muted-foreground">
+								No MCP servers configured.
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		</Card.Content>
+	</Card.Root>
 </div>
 
 <Dialog.Root bind:open={addOpen}>

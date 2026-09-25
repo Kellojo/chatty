@@ -67,7 +67,7 @@
 {:else}
 	<div class="h-full [scrollbar-gutter:stable] overflow-y-auto">
 		<nav
-			class="sticky top-0 z-10 flex items-center gap-0.5 overflow-x-auto border-b bg-background px-12 py-2"
+			class="sticky top-0 z-10 flex items-center gap-1 overflow-x-auto border-b bg-background px-12 py-2"
 		>
 			<SettingsIcon class="size-4 shrink-0 text-muted-foreground" />
 			{#each visibleSections as section (section.href)}
