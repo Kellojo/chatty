@@ -21,6 +21,6 @@
 	<link rel="apple-touch-icon" href="/pwa-192x192.png" />
 	{#if registerSw}<script src="/registerSW.js"></script>{/if}
 </svelte:head>
-<ModeWatcher defaultMode={data.theme} />
+<ModeWatcher defaultMode={data.theme} disableHeadScriptInjection />
 {@render children()}
 <Toaster />
