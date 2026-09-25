@@ -55,16 +55,18 @@
 		contextInstance.maxHeight = maxHeight;
 	});
 
-	function handleClick() {
+	function focusTextarea(e?: MouseEvent) {
+		if (e) {
+			const target = e.target as HTMLElement;
+			if (target.closest('button, a, [role="button"], input, select')) return;
+		}
 		contextInstance.textareaRef?.focus();
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
-		// Only handle Enter key to focus textarea from wrapper
-		// Don't intercept Space key as it prevents typing spaces in the textarea
 		if (e.key === 'Enter') {
 			e.preventDefault();
-			handleClick();
+			focusTextarea();
 		}
 	}
 </script>
@@ -73,7 +75,7 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div
 		class={cn('cursor-text rounded-3xl border border-input bg-background p-2 shadow-xs', className)}
-		onclick={handleClick}
+		onclick={focusTextarea}
 		role="button"
 		tabindex="-1"
 	>
