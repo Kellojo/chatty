@@ -84,7 +84,7 @@
 						y={28 - h}
 						width={barW}
 						height={h < MIN_HEIGHT ? MIN_HEIGHT : h}
-						rx="0.5"
+						rx="2"
 						fill="currentColor"
 						opacity={0.3 + 0.7 * (i / (HISTORY - 1))}
 					/>
@@ -101,8 +101,8 @@
 <style>
 	.recording {
 		color: rgb(30 30 30);
-		dark {
-			color: rgb(220 220 220);
-		}
+	}
+	:global(.dark) .recording {
+		color: rgb(220 220 220);
 	}
 </style>

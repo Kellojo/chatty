@@ -91,13 +91,13 @@
 			case 0:
 				return 'bg-muted';
 			case 1:
-				return 'bg-emerald-200 dark:bg-emerald-900';
+				return 'bg-emerald-200 dark:bg-emerald-800';
 			case 2:
-				return 'bg-emerald-400 dark:bg-emerald-700';
+				return 'bg-emerald-400 dark:bg-emerald-600';
 			case 3:
-				return 'bg-emerald-500 dark:bg-emerald-500';
+				return 'bg-emerald-500 dark:bg-emerald-400';
 			default:
-				return 'bg-emerald-600 dark:bg-emerald-400';
+				return 'bg-emerald-600 dark:bg-emerald-300';
 		}
 	}
 
@@ -137,7 +137,7 @@
 							{#each week as cell, di (di)}
 								{#if cell}
 									<div
-										class="size-[14px] rounded-[3px] {levelClass(cell.level)}"
+										class="size-[14px] rounded-md {levelClass(cell.level)}"
 										title="{MONTHS[cell.month]} {cell.dateNum}: {cell.count} request{cell.count !==
 										1
 											? 's'
@@ -157,10 +157,10 @@
 	<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
 		<span>Less</span>
 		<div class="size-[10px] rounded-[2px] bg-muted"></div>
-		<div class="size-[10px] rounded-[2px] bg-emerald-200 dark:bg-emerald-900"></div>
-		<div class="size-[10px] rounded-[2px] bg-emerald-400 dark:bg-emerald-700"></div>
-		<div class="size-[10px] rounded-[2px] bg-emerald-500 dark:bg-emerald-500"></div>
-		<div class="size-[10px] rounded-[2px] bg-emerald-600 dark:bg-emerald-400"></div>
+		<div class="size-[10px] rounded-[2px] bg-emerald-200 dark:bg-emerald-800"></div>
+		<div class="size-[10px] rounded-[2px] bg-emerald-400 dark:bg-emerald-600"></div>
+		<div class="size-[10px] rounded-[2px] bg-emerald-500 dark:bg-emerald-400"></div>
+		<div class="size-[10px] rounded-[2px] bg-emerald-600 dark:bg-emerald-300"></div>
 		<span>More</span>
 	</div>
 </div>
