@@ -146,6 +146,7 @@
 	async function copyMessage(message: UIMessage) {
 		try {
 			await navigator.clipboard.writeText(messageText(message));
+			toast.success('Copied to clipboard');
 		} catch {
 			toast.error('Failed to copy');
 		}
