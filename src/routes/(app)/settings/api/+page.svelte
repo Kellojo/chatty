@@ -4,6 +4,10 @@
 	import { toast } from 'svelte-sonner';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import CheckIcon from '@lucide/svelte/icons/check';
+	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
+	import CodeIcon from '@lucide/svelte/icons/code';
+	import BotIcon from '@lucide/svelte/icons/bot';
+	import SquarePiIcon from '@lucide/svelte/icons/square-pi';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -11,6 +15,7 @@
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
+	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
@@ -40,7 +45,7 @@
 			{
 				$schema: 'https://opencode.ai/config.json',
 				provider: {
-					'ai-chat': {
+					chatty: {
 						npm: '@ai-sdk/openai-compatible',
 						options: {
 							baseURL: `${origin}/api/v1`,
@@ -49,6 +54,23 @@
 						models: {
 							'<model>': {}
 						}
+					}
+				}
+			},
+			null,
+			2
+		)
+	);
+
+	const piSnippet = $derived(
+		JSON.stringify(
+			{
+				providers: {
+					chatty: {
+						baseUrl: `${origin}/api/v1`,
+						api: 'openai-completions',
+						apiKey: 'aic_...',
+						models: [{ id: '<model>' }]
 					}
 				}
 			},
@@ -309,73 +331,114 @@
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>curl</Card.Title>
+			<Card.Title>Provider setups</Card.Title>
 			<Card.Description>
-				Call the chat completions endpoint with an API key that has the
+				Point your tools at the OpenAI-compatible proxy. Each call needs an API key with the
 				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> scope.
 			</Card.Description>
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-3">
-			<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{curlSnippet}</pre>
-			<div>
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={() => copyText('curl', curlSnippet)}
-					aria-label="Copy curl snippet"
-				>
-					{#if copiedId === 'curl'}
-						<CheckIcon class="size-4" />
-					{:else}
-						<CopyIcon class="size-4" />
-					{/if}
-					Copy
-				</Button>
-			</div>
-		</Card.Content>
-	</Card.Root>
+			<Tabs.Root value="curl">
+				<Tabs.List class="flex-wrap">
+					<Tabs.Trigger value="curl">
+						<SquareTerminalIcon class="size-4" aria-hidden="true" />Curl
+					</Tabs.Trigger>
+					<Tabs.Trigger value="opencode">
+						<CodeIcon class="size-4" aria-hidden="true" />OpenCode
+					</Tabs.Trigger>
+					<Tabs.Trigger value="claude-code">
+						<BotIcon class="size-4" aria-hidden="true" />Claude Code
+					</Tabs.Trigger>
+					<Tabs.Trigger value="pi">
+						<SquarePiIcon class="size-4" aria-hidden="true" />pi
+					</Tabs.Trigger>
+				</Tabs.List>
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>opencode</Card.Title>
-			<Card.Description>
-				Add this provider entry to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
-					>opencode.json</code
-				>.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-3">
-			<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{opencodeSnippet}</pre>
-			<div>
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={() => copyText('opencode', opencodeSnippet)}
-					aria-label="Copy opencode config"
-				>
-					{#if copiedId === 'opencode'}
-						<CheckIcon class="size-4" />
-					{:else}
-						<CopyIcon class="size-4" />
-					{/if}
-					Copy
-				</Button>
-			</div>
-		</Card.Content>
-	</Card.Root>
+				<Tabs.Content value="curl" class="flex flex-col gap-3">
+					<p class="text-sm text-muted-foreground">
+						Call the chat completions endpoint with an API key that has the
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> scope.
+					</p>
+					<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{curlSnippet}</pre>
+					<div>
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={() => copyText('curl', curlSnippet)}
+							aria-label="Copy curl snippet"
+						>
+							{#if copiedId === 'curl'}
+								<CheckIcon class="size-4" />
+							{:else}
+								<CopyIcon class="size-4" />
+							{/if}
+							Copy
+						</Button>
+					</div>
+				</Tabs.Content>
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Claude Code</Card.Title>
-		</Card.Header>
-		<Card.Content>
-			<p class="text-sm text-muted-foreground">
-				Claude Code speaks the Anthropic Messages API. Point an OpenAI-compatible shim such as
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">claude-code-router</code> at
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">{origin}/api/v1</code> with an
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key. Native
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">/v1/messages</code> support is planned.
-			</p>
+				<Tabs.Content value="opencode" class="flex flex-col gap-3">
+					<p class="text-sm text-muted-foreground">
+						Add this provider entry to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
+							>opencode.json</code
+						>.
+					</p>
+					<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{opencodeSnippet}</pre>
+					<div>
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={() => copyText('opencode', opencodeSnippet)}
+							aria-label="Copy opencode config"
+						>
+							{#if copiedId === 'opencode'}
+								<CheckIcon class="size-4" />
+							{:else}
+								<CopyIcon class="size-4" />
+							{/if}
+							Copy
+						</Button>
+					</div>
+				</Tabs.Content>
+
+				<Tabs.Content value="claude-code" class="flex flex-col gap-3">
+					<p class="text-sm text-muted-foreground">
+						Claude Code speaks the Anthropic Messages API. Point an OpenAI-compatible shim such as
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">claude-code-router</code> at
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">{origin}/api/v1</code> with an
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key. Native
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">/v1/messages</code> support is planned.
+					</p>
+				</Tabs.Content>
+
+				<Tabs.Content value="pi" class="flex flex-col gap-3">
+					<p class="text-sm text-muted-foreground">
+						Add this provider to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
+							>models.json</code
+						>
+						in pi's agent directory. Replace
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">&lt;model&gt;</code>
+						with any model id from
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">GET {origin}/api/v1/models</code>.
+					</p>
+					<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{piSnippet}</pre>
+					<div>
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={() => copyText('pi', piSnippet)}
+							aria-label="Copy pi config"
+						>
+							{#if copiedId === 'pi'}
+								<CheckIcon class="size-4" />
+							{:else}
+								<CopyIcon class="size-4" />
+							{/if}
+							Copy
+						</Button>
+					</div>
+				</Tabs.Content>
+			</Tabs.Root>
 		</Card.Content>
 	</Card.Root>
 
