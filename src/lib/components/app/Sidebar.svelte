@@ -334,7 +334,7 @@
 				</g>
 			</svg>
 			<a
-				href="https://github.com/Kellojo/ai-chat"
+				href="https://github.com/Kellojo/chatty"
 				target="_blank"
 				rel="noopener noreferrer"
 				class="px-1 text-sm font-semibold hover:underline"
