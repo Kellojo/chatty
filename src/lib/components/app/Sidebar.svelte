@@ -36,7 +36,7 @@
 		unreadIds,
 		onclose
 	}: {
-		user: { name: string; email: string; role: string };
+		user: { name: string; email: string; image: string | null; role: string };
 		conversations: Conversation[];
 		hasMore: boolean;
 		unreadIds: string[];
@@ -214,6 +214,15 @@
 	});
 
 	const currentId = $derived(page.params.id ?? '');
+
+	const initials = $derived(
+		user.name
+			.split(/\s+/)
+			.filter(Boolean)
+			.slice(0, 2)
+			.map((part) => part[0]?.toUpperCase() ?? '')
+			.join('')
+	);
 
 	type Group = { label: string; items: Conversation[] };
 
@@ -518,7 +527,18 @@
 	</div>
 
 	<div class="flex items-center justify-between gap-2 border-t p-3">
-		<span class="min-w-0 truncate text-sm" title={user.email}>{user.name}</span>
+		<div class="flex min-w-0 items-center gap-2">
+			{#if user.image}
+				<img src={user.image} alt="" class="size-7 shrink-0 rounded-full object-cover" />
+			{:else if initials}
+				<span
+					class="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground"
+				>
+					{initials}
+				</span>
+			{/if}
+			<span class="min-w-0 truncate text-sm" title={user.email}>{user.name}</span>
+		</div>
 		<div class="flex shrink-0 gap-1">
 			<Button
 				variant="ghost"

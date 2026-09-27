@@ -17,6 +17,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		user: {
 			name: locals.user.name,
 			email: locals.user.email,
+			image: locals.user.image ?? null,
 			role: (locals.user as { role?: string }).role ?? 'user'
 		},
 		conversations: rows.slice(0, CONVERSATIONS_PAGE_SIZE).map(toPublic),
