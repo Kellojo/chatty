@@ -116,7 +116,6 @@
 
 	const allTimeRows = $derived.by(() => {
 		if (data.topModels.length === 0) return [];
-		const modelKeys = data.topModels.map((m) => m.model);
 		const row: Record<string, string | number> = {};
 		for (const m of data.topModels) {
 			row[m.model] = m.count;

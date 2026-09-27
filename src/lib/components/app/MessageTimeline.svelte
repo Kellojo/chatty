@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { formatDateTime, formatMessageTime } from '$lib/datetime.js';
 	import { formatCost, formatLatency, formatToken } from '$lib/formats.js';
 	import { cn } from '$lib/utils.js';
@@ -19,7 +20,7 @@
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
-	import type { MessageUsage, UIMessage } from '$lib/types.js';
+	import type { MessageUsage, PromptCharBreakdown, UIMessage } from '$lib/types.js';
 
 	let {
 		messages,
@@ -49,7 +50,7 @@
 	type Part = UIMessage['parts'][number];
 
 	const openReasoning = new SvelteSet<string>();
-	const openUsage = new SvelteSet<string>();
+	let usageMessageId = $state<string | null>(null);
 	const rotations = new SvelteMap<string, number>();
 	const imgSizes = new SvelteMap<string, { w: number; h: number }>();
 
@@ -83,20 +84,8 @@
 		return size.w >= size.h ? 'max-h-96 w-auto max-w-96' : 'max-h-96 w-auto max-w-full';
 	}
 
-	function toggleUsage(key: string) {
-		if (openUsage.has(key)) openUsage.delete(key);
-		else openUsage.add(key);
-	}
-
-	function onWindowClick(event: MouseEvent) {
-		if (openUsage.size === 0) return;
-		const target = event.target as HTMLElement | null;
-		if (target?.closest('[data-usage-popover]')) return;
-		openUsage.clear();
-	}
-
-	function onWindowKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') openUsage.clear();
+	function handleUsageOpenChange(open: boolean) {
+		if (!open) usageMessageId = null;
 	}
 
 	function messageUsage(message: UIMessage): MessageUsage | null {
@@ -107,6 +96,32 @@
 	function tokensPerSecond(usage: MessageUsage): string {
 		if (usage.outputTokens == null || usage.latencyMs == null || usage.latencyMs <= 0) return '—';
 		return (usage.outputTokens / (usage.latencyMs / 1000)).toFixed(1);
+	}
+
+	interface PromptShare {
+		label: string;
+		color: string;
+		pct: number;
+	}
+
+	// Relative share of each prompt contributor, as a percentage of the
+	// accounted-for prompt characters (rough, character-based estimate).
+	function promptShares(usage: MessageUsage): PromptShare[] | null {
+		const chars = usage.promptChars as PromptCharBreakdown | undefined;
+		if (!chars) return null;
+		const total = chars.system + chars.skills + chars.tools + chars.messages;
+		if (total <= 0) return null;
+		const share = (label: string, color: string, value: number): PromptShare => ({
+			label,
+			color,
+			pct: Math.round((value / total) * 100)
+		});
+		return [
+			share('Messages', 'bg-chart-1', chars.messages),
+			share('Tools', 'bg-chart-2', chars.tools),
+			share('Skills', 'bg-chart-3', chars.skills),
+			share('System', 'bg-chart-4', chars.system)
+		].filter((s) => s.pct > 0);
 	}
 
 	function toggleReasoning(key: string) {
@@ -136,8 +151,6 @@
 		}
 	}
 </script>
-
-<svelte:window onclick={onWindowClick} onkeydown={onWindowKeydown} />
 
 <div class={cn('mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6', className)}>
 	{#each messages as message, index (message.id)}
@@ -289,69 +302,89 @@
 					</button>
 				{/if}
 				{#if message.role === 'assistant' && messageUsage(message)}
-					{@const usage = messageUsage(message)!}
-					{@const open = openUsage.has(message.id)}
-					<div class="relative" data-usage-popover>
-						<button
-							title="Generation info"
-							aria-label="Generation info"
-							aria-expanded={open}
-							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-							onclick={() => toggleUsage(message.id)}
-						>
-							<InfoIcon class="size-3.5" />
-						</button>
-						{#if open}
-							<div
-								class="absolute bottom-full left-0 z-20 mb-1.5 w-60 overflow-hidden rounded-lg border border-border bg-popover text-xs shadow-lg shadow-black/5 dark:shadow-black/40"
-							>
-								<div class="border-b border-border/60 px-3 py-2">
-									<div class="truncate font-mono text-[11px] text-foreground" title={usage.modelId}>
-										{usage.modelId}
-									</div>
-									<div class="mt-0.5 text-[10px] tracking-wide text-muted-foreground uppercase">
-										Generation info
-									</div>
-								</div>
-								<dl class="px-3 py-2">
-									<div class="flex items-baseline justify-between py-0.5">
-										<dt class="text-muted-foreground">Cost</dt>
-										<dd class="text-sm font-medium text-foreground tabular-nums">
-											{formatCost(usage.costUsd)}
-										</dd>
-									</div>
-								</dl>
-								<dl class="border-t border-border/60 px-3 py-2">
-									<div class="flex items-baseline justify-between py-0.5">
-										<dt class="text-muted-foreground">Input</dt>
-										<dd class="text-foreground tabular-nums">{formatToken(usage.inputTokens)}</dd>
-									</div>
-									<div class="flex items-baseline justify-between py-0.5">
-										<dt class="text-muted-foreground">Output</dt>
-										<dd class="text-foreground tabular-nums">{formatToken(usage.outputTokens)}</dd>
-									</div>
-									<div class="flex items-baseline justify-between py-0.5">
-										<dt class="text-muted-foreground">Total</dt>
-										<dd class="text-foreground tabular-nums">{formatToken(usage.totalTokens)}</dd>
-									</div>
-								</dl>
-								<dl class="border-t border-border/60 px-3 py-2">
-									<div class="flex items-baseline justify-between py-0.5">
-										<dt class="text-muted-foreground">Latency</dt>
-										<dd class="text-foreground tabular-nums">{formatLatency(usage.latencyMs)}</dd>
-									</div>
-									<div class="flex items-baseline justify-between py-0.5">
-										<dt class="text-muted-foreground">Throughput</dt>
-										<dd class="text-foreground tabular-nums">{tokensPerSecond(usage)} tok/s</dd>
-									</div>
-								</dl>
-							</div>
-						{/if}
-					</div>
+					<button
+						title="Generation info"
+						aria-label="Generation info"
+						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+						onclick={() => (usageMessageId = message.id)}
+					>
+						<InfoIcon class="size-3.5" />
+					</button>
 				{/if}
 			</MessageActions>
 		</Message>
 	{/each}
+
+	{#if usageMessageId}
+		{@const usageMessage = messages.find((m) => m.id === usageMessageId)}
+		{@const usage = usageMessage ? messageUsage(usageMessage) : null}
+		{#if usage}
+			<Dialog.Root open={usageMessageId !== null} onOpenChange={handleUsageOpenChange}>
+				<Dialog.Content class="sm:max-w-xs">
+					<Dialog.Header>
+						<Dialog.Title class="truncate font-mono text-sm" title={usage.modelId}>
+							{usage.modelId}
+						</Dialog.Title>
+						<Dialog.Description class="text-xs">Generation info</Dialog.Description>
+					</Dialog.Header>
+					{#if promptShares(usage)}
+						{@const shares = promptShares(usage)!}
+						<div class="-mt-3 rounded-lg border border-border/60 bg-muted/40 px-3 py-2">
+							<div class="mb-1.5 text-[10px] tracking-wide text-muted-foreground uppercase">
+								Input share (approx.)
+							</div>
+							<div class="flex h-1.5 w-full overflow-hidden rounded-full">
+								{#each shares as s (s.label)}
+									<div class={s.color} style:width="{s.pct}%" />
+								{/each}
+							</div>
+							<div class="mt-1.5">
+								{#each shares as s (s.label)}
+									<div class="flex items-center justify-between py-0.5">
+										<span class="flex items-center gap-1.5 text-muted-foreground">
+											<span class="size-2 rounded-[2px] {s.color}" />
+											{s.label}
+										</span>
+										<span class="text-foreground tabular-nums">{s.pct}%</span>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+					<dl class="rounded-lg border border-border/60 px-3 py-2">
+						<div class="flex items-baseline justify-between py-0.5">
+							<dt class="text-muted-foreground">Cost</dt>
+							<dd class="font-medium text-foreground tabular-nums">{formatCost(usage.costUsd)}</dd>
+						</div>
+					</dl>
+					<dl class="rounded-lg border border-border/60 px-3 py-2">
+						<div class="flex items-baseline justify-between py-0.5">
+							<dt class="text-muted-foreground">Input</dt>
+							<dd class="text-foreground tabular-nums">{formatToken(usage.inputTokens)}</dd>
+						</div>
+						<div class="flex items-baseline justify-between py-0.5">
+							<dt class="text-muted-foreground">Output</dt>
+							<dd class="text-foreground tabular-nums">{formatToken(usage.outputTokens)}</dd>
+						</div>
+						<div class="flex items-baseline justify-between py-0.5">
+							<dt class="text-muted-foreground">Total</dt>
+							<dd class="text-foreground tabular-nums">{formatToken(usage.totalTokens)}</dd>
+						</div>
+					</dl>
+					<dl class="rounded-lg border border-border/60 px-3 py-2">
+						<div class="flex items-baseline justify-between py-0.5">
+							<dt class="text-muted-foreground">Latency</dt>
+							<dd class="text-foreground tabular-nums">{formatLatency(usage.latencyMs)}</dd>
+						</div>
+						<div class="flex items-baseline justify-between py-0.5">
+							<dt class="text-muted-foreground">Throughput</dt>
+							<dd class="text-foreground tabular-nums">{tokensPerSecond(usage)} tok/s</dd>
+						</div>
+					</dl>
+				</Dialog.Content>
+			</Dialog.Root>
+		{/if}
+	{/if}
 </div>
 
 <style>

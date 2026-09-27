@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../index.js';
 
+export interface PromptCharBreakdown {
+	system: number;
+	skills: number;
+	tools: number;
+	messages: number;
+}
+
 export interface MessageUsage {
 	providerId: string;
 	modelId: string;
@@ -9,6 +16,7 @@ export interface MessageUsage {
 	totalTokens: number | null;
 	latencyMs: number | null;
 	costUsd: number | null;
+	promptChars?: PromptCharBreakdown;
 }
 
 export interface MessageRow {

@@ -205,6 +205,22 @@ export interface ProxyRequest {
 	purpose: RequestPurpose;
 }
 
+/**
+ * Rough character sizes of the prompt contributors, captured at generation
+ * time. Only used to show each one's relative share of the input (percentages
+ * in the UI) — not token counts and not for billing.
+ */
+export interface PromptCharBreakdown {
+	/** Conversation prompt + global instructions. */
+	system: number;
+	/** Bound skill bodies + the available-skills index. */
+	skills: number;
+	/** Serialized tool definitions (MCP + builtin). */
+	tools: number;
+	/** Conversation history (messages, tool results, attachments). */
+	messages: number;
+}
+
 export interface MessageUsage {
 	providerId: string;
 	modelId: string;
@@ -213,6 +229,8 @@ export interface MessageUsage {
 	totalTokens: number | null;
 	latencyMs: number | null;
 	costUsd: number | null;
+	/** Present on newer messages; absent on pre-breakdown rows. */
+	promptChars?: PromptCharBreakdown;
 }
 
 export interface ChatMessage {

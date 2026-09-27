@@ -45,7 +45,8 @@ import { createLogger } from '../logger.js';
 import { recordSkillInvocation } from '../db/repo/skill-invocations.js';
 import { resolveModel, ModelUnavailableError } from '../llm/registry.js';
 import { isRetryableModelError, resolveRefTargets } from '../llm/mapped.js';
-import { buildSystemPrompt } from '../llm/systemPrompt.js';
+import { buildSystemPromptParts } from '../llm/systemPrompt.js';
+import { estimateMessagesChars, estimateToolChars } from '../llm/promptBreakdown.js';
 import { resolveSkill } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
 import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
@@ -363,13 +364,16 @@ export async function handleChatRequest(
 			});
 		}
 	}
-	const system = buildSystemPrompt(conversation, {
+	const promptParts = buildSystemPromptParts(conversation, {
 		globalInstructions: getGlobalInstructions(db, userId),
 		userId,
 		boundSkillNames,
 		includeSkillsIndex: 'load_skill' in tools,
 		extraWarning: manualSkillWarning
 	});
+	const system = [promptParts.base, promptParts.skills, promptParts.system]
+		.filter(Boolean)
+		.join('\n\n');
 	const history = historyFromDb(db, conversation.id);
 	const modelMessages = await convertToModelMessages(
 		await inlineAttachmentParts(db, conversation.id, history)
@@ -519,7 +523,13 @@ export async function handleChatRequest(
 							priceRow?.price_output ?? null,
 							totalTokensUsed?.inputTokens,
 							totalTokensUsed?.outputTokens
-						)
+						),
+						promptChars: {
+							system: promptParts.base.length + promptParts.system.length,
+							skills: promptParts.skills.length,
+							tools: estimateToolChars(tools),
+							messages: estimateMessagesChars(history)
+						}
 					};
 					writer.write({
 						type: 'message-metadata',

@@ -33,16 +33,29 @@ export interface SystemPromptOptions {
 	extraWarning?: string | null;
 }
 
-export function buildSystemPrompt(
+/**
+ * The system prompt split into its contributors, so each piece's size can be
+ * reported in the prompt breakdown. Empty strings mean "absent".
+ */
+export interface SystemPromptParts {
+	/** Conversation prompt (or BASE_PROMPT). */
+	base: string;
+	/** Bound skills + the available-skills index. */
+	skills: string;
+	/** Global instructions + per-turn note. */
+	system: string;
+}
+
+export function buildSystemPromptParts(
 	conversation: ConversationRow,
 	globalInstructionsOrOpts: string | SystemPromptOptions = ''
-): string {
+): SystemPromptParts {
 	const opts: SystemPromptOptions =
 		typeof globalInstructionsOrOpts === 'string'
 			? { globalInstructions: globalInstructionsOrOpts }
 			: globalInstructionsOrOpts;
-	const sections: string[] = [conversation.system_prompt ?? BASE_PROMPT];
 
+	let skills = '';
 	if (opts.userId && opts.boundSkillNames && opts.boundSkillNames.length > 0) {
 		const loaded: string[] = [];
 		for (const name of opts.boundSkillNames) {
@@ -50,19 +63,28 @@ export function buildSystemPrompt(
 			if (skill && skill.enabled) loaded.push(`### Skill: ${skill.title}\n${skill.body}`);
 		}
 		if (loaded.length > 0) {
-			sections.push(
-				`## Bound skills\nThe following skills are pre-loaded for this conversation.\n\n${loaded.join('\n\n')}`
-			);
+			skills += `## Bound skills\nThe following skills are pre-loaded for this conversation.\n\n${loaded.join('\n\n')}`;
 		}
 	}
-
 	if (opts.userId && opts.includeSkillsIndex !== false) {
 		const index = skillsIndexPrompt(opts.userId);
-		if (index) sections.push(index);
+		if (index) skills += `${skills ? '\n\n' : ''}${index}`;
 	}
 
 	const extra = opts.globalInstructions?.trim() ?? '';
-	if (extra) sections.push(extra);
-	if (opts.extraWarning) sections.push(`Note for this turn: ${opts.extraWarning}`);
+	const warning = opts.extraWarning ? `Note for this turn: ${opts.extraWarning}` : '';
+	const system = [extra, warning].filter(Boolean).join('\n\n');
+
+	return { base: conversation.system_prompt ?? BASE_PROMPT, skills, system };
+}
+
+export function buildSystemPrompt(
+	conversation: ConversationRow,
+	globalInstructionsOrOpts: string | SystemPromptOptions = ''
+): string {
+	const parts = buildSystemPromptParts(conversation, globalInstructionsOrOpts);
+	const sections = [parts.base];
+	if (parts.skills) sections.push(parts.skills);
+	if (parts.system) sections.push(parts.system);
 	return sections.join('\n\n');
 }
