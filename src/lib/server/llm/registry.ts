@@ -193,34 +193,67 @@ async function fetchOpenAICompatibleModels(
 	if (!provider.base_url) throw new Error(`Provider "${provider.name}" is missing a base URL`);
 	const headers: Record<string, string> = {};
 	if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-	const res = await fetch(`${provider.base_url.replace(/\/$/, '')}/models`, { headers });
+
+	// OpenRouter's /models only returns text models by default. Ask for the
+	// modalities the app actually supports so transcription/speech/etc. show up.
+	const isOR = isOpenRouter(provider);
+	const url = new URL(`${provider.base_url.replace(/\/$/, '')}/models`);
+	if (isOR) url.searchParams.set('output_modalities', 'text,image,video,audio,speech,transcription,decisions');
+
+	const res = await fetch(url.toString(), { headers });
 	if (!res.ok) throw new Error(`Provider /models probe failed: ${res.status} ${await res.text()}`);
 	const body = (await res.json()) as {
 		data?: {
 			id: string;
 			architecture?: { input_modalities?: unknown; output_modalities?: unknown };
+			modalities?: unknown;
 			pricing?: { prompt?: unknown; completion?: unknown };
 			context_length?: unknown;
 			top_provider?: { context_length?: unknown };
 		}[];
 	};
 	return (body.data ?? []).map((m) => {
-		const inputs = Array.isArray(m.architecture?.input_modalities)
-			? (m.architecture.input_modalities as unknown[]).filter(
-					(x): x is string => typeof x === 'string'
-				)
-			: [];
-		const outputs = Array.isArray(m.architecture?.output_modalities)
+		// OpenRouter returns a flat `modalities` array; other providers use
+		// `architecture.input_modalities` / `architecture.output_modalities`. Try both.
+		const rawModalities: string[] = Array.isArray(m.modalities)
+			? (m.modalities as unknown[]).filter((x): x is string => typeof x === 'string')
+			: Array.isArray(m.architecture?.input_modalities)
+				? (m.architecture.input_modalities as unknown[]).filter(
+						(x): x is string => typeof x === 'string'
+					)
+				: [];
+
+		const outputs: string[] = Array.isArray(m.architecture?.output_modalities)
 			? (m.architecture.output_modalities as unknown[]).filter(
 					(x): x is string => typeof x === 'string'
 				)
 			: [];
-		const capabilities = ['chat', 'streaming'];
-		if (inputs.includes('image')) capabilities.push('vision');
-		if (outputs.includes('image')) capabilities.push('image');
+
+		// Map each modality to a capability tag. Unmapped modalities are kept as-is.
+		const modalityToCapability: Record<string, string | undefined> = {
+			audio: 'transcription',
+			speech: 'speech',
+			text: 'chat',
+			image: 'image',
+			video: 'video',
+			decisions: 'decisions'
+		};
+
+		const capabilities = new Set<string>(['streaming']);
+		for (const mod of rawModalities) {
+			const cap = modalityToCapability[mod] ?? mod;
+			capabilities.add(cap);
+		}
+		// Output-image models also get 'vision' for the image model picker filter
+		if (outputs.includes('image')) capabilities.add('vision');
+		// Audio-input models also get 'vision' for the image model picker filter (chat models that see images)
+		if (rawModalities.includes('image')) capabilities.add('vision');
+		// Ensure 'chat' is always present (default capability)
+		capabilities.add('chat');
+
 		return {
 			id: m.id,
-			capabilities,
+			capabilities: [...capabilities],
 			priceInput: pricePerMillion(m.pricing?.prompt),
 			priceOutput: pricePerMillion(m.pricing?.completion),
 			contextLength: contextLength(m)

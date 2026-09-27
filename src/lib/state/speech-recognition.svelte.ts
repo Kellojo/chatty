@@ -51,11 +51,16 @@ if (browser && !supported) {
 
 export function createSpeechRecognition() {
 	let recording = $state(false);
+	let busy = $state(false);
 	let finalTranscript = $state('');
 	let interim = $state('');
 	const display: string = $derived((finalTranscript + ' ' + interim).trim());
 
 	let recognition: SpeechRecognitionInstance | null = null;
+	let audioCtx: AudioContext | null = null;
+	let analyser: AnalyserNode | null = null;
+	let freqData = new Uint8Array(0);
+	let freqStream: MediaStream | null = null;
 
 	function onResult(event: SpeechRecognitionEvent) {
 		let interimAccum = '';
@@ -68,6 +73,19 @@ export function createSpeechRecognition() {
 			}
 		}
 		interim = interimAccum.trim();
+	}
+
+	function cleanupAudio() {
+		if (freqStream) {
+			freqStream.getTracks().forEach((t) => t.stop());
+			freqStream = null;
+		}
+		if (audioCtx) {
+			audioCtx.close().catch(() => {});
+			audioCtx = null;
+			analyser = null;
+			freqData = new Uint8Array(0);
+		}
 	}
 
 	function onError(event: SpeechRecognitionEvent): string | undefined {
@@ -83,16 +101,27 @@ export function createSpeechRecognition() {
 			message = 'Speech recognition failed';
 		}
 		recording = false;
+		busy = false;
+		cleanupAudio();
 		interim = '';
 		return message;
 	}
 
 	function onEnd() {
 		recording = false;
+		busy = false;
+		cleanupAudio();
 		interim = '';
 	}
 
-	function start(options?: { onError?: (message: string) => void }) {
+	function readFrequencyData(): Uint8Array {
+		if (analyser) {
+			analyser.getByteFrequencyData(freqData);
+		}
+		return freqData;
+	}
+
+	async function start(options?: { onError?: (message: string) => void }) {
 		if (!supported || recording) return;
 		const r = new SpeechRecognitionImpl()!;
 		r.continuous = true;
@@ -115,10 +144,29 @@ export function createSpeechRecognition() {
 
 		try {
 			recording = true;
+			busy = true;
+
+			// Open a parallel audio stream just for live waveform visualization.
+			// Browser SpeechRecognition manages its own audio internally.
+			try {
+				freqStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+				audioCtx = new AudioContext();
+				const source = audioCtx.createMediaStreamSource(freqStream);
+				analyser = audioCtx.createAnalyser();
+				analyser.fftSize = 256;
+				analyser.smoothingTimeConstant = 0.7;
+				source.connect(analyser);
+				freqData = new Uint8Array(analyser.frequencyBinCount);
+			} catch {
+				// fine — waveform just won't render
+			}
+
 			r.start();
 		} catch (e) {
 			console.error('Speech recognition start failed:', e);
 			recording = false;
+			busy = false;
+			cleanupAudio();
 		}
 	}
 
@@ -141,12 +189,16 @@ export function createSpeechRecognition() {
 				// isolate already destroyed
 			}
 		}
+		cleanupAudio();
 	}
 
 	return {
 		supported,
 		get recording() {
 			return recording;
+		},
+		get busy() {
+			return busy;
 		},
 		get finalTranscript() {
 			return finalTranscript;
@@ -160,6 +212,7 @@ export function createSpeechRecognition() {
 		start,
 		stop,
 		reset,
-		destroy
+		destroy,
+		readFrequencyData
 	};
 }

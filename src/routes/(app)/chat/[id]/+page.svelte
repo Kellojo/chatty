@@ -12,6 +12,7 @@
 		groups={data.groups}
 		mappings={data.mappings}
 		defaultModel={data.defaultModel}
+		sttModel={data.sttModel}
 		timeFormat={data.timeFormat}
 		personas={data.personas}
 		initiallyGenerating={data.generating}

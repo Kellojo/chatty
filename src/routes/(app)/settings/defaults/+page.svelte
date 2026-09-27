@@ -35,10 +35,19 @@
 			label: 'Chat compaction',
 			description:
 				'Summarizes long conversations when they outgrow the context window. Falls back to the conversation model when unset; a cheap model works well.'
+		},
+		{
+			role: 'speech-to-text',
+			label: 'Speech to text',
+			description:
+				'Transcribes voice input via the selected provider. When unset, the browser built-in speech recognition is used instead.'
 		}
 	];
 
-	const roleCapability: Partial<Record<ModelRole, string>> = { image: 'image' };
+	const roleCapability: Partial<Record<ModelRole, string>> = {
+		image: 'image',
+		'speech-to-text': 'transcription'
+	};
 
 	let busy = $state<ModelRole | null>(null);
 

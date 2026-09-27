@@ -26,6 +26,7 @@
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
 	import MicButton from '$lib/components/app/MicButton.svelte';
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
+	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import {
 		chatMessageToUIMessage,
 		type Agent,
@@ -45,6 +46,7 @@
 		defaultModel,
 		timeFormat = 'auto',
 		personas,
+		sttModel = null,
 		initiallyGenerating = false
 	}: {
 		conversation: Conversation;
@@ -52,6 +54,7 @@
 		groups: ModelsByProvider[];
 		mappings?: ModelMapping[];
 		defaultModel?: { providerId: string; modelId: string } | null;
+		sttModel?: { providerId: string; modelId: string } | null;
 		timeFormat?: TimeFormat;
 		personas?: Agent[];
 		initiallyGenerating?: boolean;
@@ -60,7 +63,7 @@
 	// svelte-ignore state_referenced_locally
 	let conversation = $state(initialConversation);
 	let input = $state('');
-	const speech = createSpeechRecognition();
+	const speech = sttModel ? createServerSpeechRecognition(sttModel) : createSpeechRecognition();
 	let selectedFiles = $state<File[]>([]);
 	let fileInput: HTMLInputElement | undefined = $state();
 

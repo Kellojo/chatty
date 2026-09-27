@@ -26,10 +26,16 @@ export const load: PageServerLoad = ({ locals }) => {
 			defaultModel = { providerId: first.provider_id, modelId: first.model_id };
 		}
 	}
+	const sttRoleModel = findRoleModel(db, 'speech-to-text');
+	let sttModel: { providerId: string; modelId: string } | null = null;
+	if (sttRoleModel) {
+		sttModel = { providerId: sttRoleModel.provider_id, modelId: sttRoleModel.model_id };
+	}
 	return {
 		groups: listModelsGrouped(),
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		defaultModel,
+		sttModel,
 		suggestions: getUserSettings(db, user.id).suggestions,
 		personas: listPersonaAgents(db, user.id).map(toPublic)
 	};

@@ -18,6 +18,7 @@
 	import ModelPicker from '$lib/components/app/ModelPicker.svelte';
 	import MicButton from '$lib/components/app/MicButton.svelte';
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
+	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import { decodeModelRef } from '$lib/model-ref.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
@@ -28,7 +29,9 @@
 	let { data }: { data: PageData } = $props();
 
 	let input = $state('');
-	const speech = createSpeechRecognition();
+	const speech = data.sttModel
+		? createServerSpeechRecognition(data.sttModel)
+		: createSpeechRecognition();
 	const displayInput = $derived(speech.recording ? (input + ' ' + speech.display).trim() : input);
 
 	$effect(() => {

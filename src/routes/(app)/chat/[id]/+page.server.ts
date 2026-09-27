@@ -35,12 +35,18 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			defaultModel = { providerId: first.provider_id, modelId: first.model_id };
 		}
 	}
+	const sttRoleModel = findRoleModel(db, 'speech-to-text');
+	let sttModel: { providerId: string; modelId: string } | null = null;
+	if (sttRoleModel) {
+		sttModel = { providerId: sttRoleModel.provider_id, modelId: sttRoleModel.model_id };
+	}
 	return {
 		conversation: conversationToPublic(conversation),
 		messages: listMessages(db, conversation.id).map(messageToPublic),
 		groups: listModelsGrouped(),
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		defaultModel,
+		sttModel,
 		timeFormat: getTimeFormat(db, user.id),
 		personas: listPersonaAgents(db, user.id).map(agentToPublic),
 		generating: hasActiveStream(conversation.id)

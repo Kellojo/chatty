@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../index.js';
 
-export const MODEL_ROLES = ['chat', 'title', 'memory', 'image', 'compaction'] as const;
+export const MODEL_ROLES = [
+	'chat',
+	'title',
+	'memory',
+	'image',
+	'compaction',
+	'speech-to-text'
+] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
 export interface ModelRow {
