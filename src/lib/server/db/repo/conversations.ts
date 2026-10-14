@@ -263,3 +263,29 @@ export function searchConversations(db: Db, userId: string, query: string): Conv
 		)
 		.all(ftsQuery, userId, `%${query}%`) as ConversationRow[];
 }
+
+export function countConversations(db: Db): number {
+	return (
+		db.prepare('SELECT COUNT(*) AS n FROM conversations WHERE deleted_at IS NULL').get() as {
+			n: number;
+		}
+	).n;
+}
+
+export interface ConversationDailyCount {
+	date: string;
+	count: number;
+}
+
+export function conversationDailyCounts(db: Db, days: number): ConversationDailyCount[] {
+	const from = Date.now() - days * 86400000;
+	return db
+		.prepare(
+			`SELECT date(created_at / 1000, 'unixepoch') AS date,
+			        COUNT(*) AS count
+			 FROM conversations
+			 WHERE deleted_at IS NULL AND created_at >= ?
+			 GROUP BY date ORDER BY date`
+		)
+		.all(from) as ConversationDailyCount[];
+}
