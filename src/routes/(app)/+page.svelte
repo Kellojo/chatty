@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
@@ -107,7 +107,6 @@
 			if (!res.ok) throw new Error('Failed to create conversation');
 			const { conversation } = (await res.json()) as { conversation: Conversation };
 			pendingMessage.set(trimmed, selectedFiles);
-			await invalidateAll();
 			await goto(resolve(`/chat/${conversation.id}`));
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to start chat');
