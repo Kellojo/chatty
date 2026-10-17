@@ -6,6 +6,8 @@ import {
 	DecisionsError,
 	forwardDecisions
 } from '$lib/server/decisions/handler.js';
+import { resolveTargets } from '$lib/server/proxy/handler.js';
+import { ModelUnavailableError } from '$lib/server/llm/mapped.js';
 import type { RequestHandler } from './$types';
 
 function openAiError(status: number, message: string, type: string): Response {
@@ -35,6 +37,11 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 	const input = parsed.data;
 
+	const resolved = resolveTargets(db, input.model);
+	if (!resolved) {
+		return openAiError(404, `The model '${input.model}' does not exist`, 'not_found_error');
+	}
+
 	const log = createProxyRequest(db, {
 		userId: identity.userId,
 		apiKeyId: identity.keyId,
@@ -51,19 +58,22 @@ export const POST: RequestHandler = async ({ request }) => {
 		finalizeProxyRequest(db, log.id, {
 			status: 'complete',
 			httpStatus: response.status,
-			latencyMs: Date.now() - startedAt
+			latencyMs: Date.now() - startedAt,
+			mappingId: resolved.mappingId
 		});
 
 		return response;
 	} catch (e) {
 		const message = e instanceof Error ? e.message : 'Decisions request failed';
-		const status = e instanceof DecisionsError ? e.status : 502;
+		const isModelError = e instanceof ModelUnavailableError;
+		const status = e instanceof DecisionsError ? e.status : isModelError ? 404 : 502;
+		const type = isModelError ? 'not_found_error' : 'server_error';
 		finalizeProxyRequest(db, log.id, {
 			status: 'failed',
 			httpStatus: status,
 			latencyMs: Date.now() - startedAt,
 			error: message
 		});
-		return openAiError(status, `Upstream error: ${message}`, 'server_error');
+		return openAiError(status, `Upstream error: ${message}`, type);
 	}
 };
