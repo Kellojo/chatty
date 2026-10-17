@@ -41,12 +41,19 @@
 			label: 'Speech to text',
 			description:
 				'Transcribes voice input via the selected provider. When unset, the browser built-in speech recognition is used instead.'
+		},
+		{
+			role: 'decisions',
+			label: 'Decisions',
+			description:
+				'Used by the /v1/decisions API. Pick a model with the decisions capability. No model is assigned by default — the API errors until one is configured.'
 		}
 	];
 
 	const roleCapability: Partial<Record<ModelRole, string>> = {
 		image: 'image',
-		'speech-to-text': 'transcription'
+		'speech-to-text': 'transcription',
+		decisions: 'decisions'
 	};
 
 	let busy = $state<ModelRole | null>(null);

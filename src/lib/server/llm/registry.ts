@@ -198,7 +198,11 @@ async function fetchOpenAICompatibleModels(
 	// modalities the app actually supports so transcription/speech/etc. show up.
 	const isOR = isOpenRouter(provider);
 	const url = new URL(`${provider.base_url.replace(/\/$/, '')}/models`);
-	if (isOR) url.searchParams.set('output_modalities', 'text,image,video,audio,speech,transcription,decisions');
+	if (isOR)
+		url.searchParams.set(
+			'output_modalities',
+			'text,image,video,audio,speech,transcription,decisions'
+		);
 
 	const res = await fetch(url.toString(), { headers });
 	if (!res.ok) throw new Error(`Provider /models probe failed: ${res.status} ${await res.text()}`);

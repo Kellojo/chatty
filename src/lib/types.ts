@@ -23,7 +23,8 @@ export interface ChatModel {
 	priceOutput: number | null;
 }
 
-export type ModelRole = 'chat' | 'title' | 'memory' | 'image' | 'compaction' | 'speech-to-text';
+export type ModelRole =
+	'chat' | 'title' | 'memory' | 'image' | 'compaction' | 'speech-to-text' | 'decisions';
 
 export type RoleDefaults = Partial<Record<ModelRole, string>>;
 

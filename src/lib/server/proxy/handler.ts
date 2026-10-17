@@ -98,7 +98,7 @@ interface ResolvedModel {
 	targets: ModelMappingTarget[];
 }
 
-function resolveTargets(db: Db, model: string): ResolvedModel | null {
+export function resolveTargets(db: Db, model: string): ResolvedModel | null {
 	const mapping = getModelMappingByName(db, model);
 	if (mapping && mapping.enabled === 1) {
 		const targets = parseTargets(mapping);

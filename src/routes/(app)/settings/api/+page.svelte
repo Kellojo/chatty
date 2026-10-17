@@ -79,6 +79,13 @@
 		)
 	);
 
+	const decisionsCurlSnippet = $derived(
+		`curl ${origin}/api/v1/decisions \\
+  -H "Authorization: Bearer aic_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"<model>","input":"I was charged twice for my order.","questions":[{"type":"choice","name":"department","instructions":"Which department should handle this complaint?","choices":[{"value":"billing","description":"Payments, invoices, and refunds."},{"value":"technical","description":"Problems using the product."},{"value":"shipping","description":"Delivery and tracking."},{"value":"other","description":"Requests outside these categories."}]}]}'`
+	);
+
 	let keyDialogOpen = $state(false);
 	let keyLabel = $state('');
 	let scopeAgentsRun = $state(false);
@@ -439,6 +446,38 @@
 					</div>
 				</Tabs.Content>
 			</Tabs.Root>
+		</Card.Content>
+	</Card.Root>
+
+	<Card.Root>
+		<Card.Header>
+			<Card.Title>Decisions</Card.Title>
+			<Card.Description>
+				Classify content, route requests, and score inputs with the Decisions API. Supports
+				predicate, choice, and score question types. Assign a model with the
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">decisions</code> capability on the
+				Defaults page — by default no model is assigned and the endpoint returns an error.
+				Requires an API key with the
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> scope.
+			</Card.Description>
+		</Card.Header>
+		<Card.Content class="flex flex-col gap-3">
+			<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{decisionsCurlSnippet}</pre>
+			<div>
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={() => copyText('decisions', decisionsCurlSnippet)}
+					aria-label="Copy decisions snippet"
+				>
+					{#if copiedId === 'decisions'}
+						<CheckIcon class="size-4" />
+					{:else}
+						<CopyIcon class="size-4" />
+					{/if}
+					Copy
+				</Button>
+			</div>
 		</Card.Content>
 	</Card.Root>
 

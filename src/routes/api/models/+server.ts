@@ -16,7 +16,9 @@ const createSchema = z.object({
 	providerId: z.string().min(1),
 	modelId: z.string().min(1).max(200),
 	displayName: z.string().min(1).max(200).optional(),
-	capabilities: z.array(z.enum(['chat', 'vision', 'tool_use', 'streaming', 'image'])).optional()
+	capabilities: z
+		.array(z.enum(['chat', 'vision', 'tool_use', 'streaming', 'image', 'decisions']))
+		.optional()
 });
 
 export const POST: RequestHandler = async ({ locals, request }) => {

@@ -1,10 +1,8 @@
 import { resolveApiKeyIdentity } from '$lib/server/auth/apiKey.js';
 import { getDb } from '$lib/server/db/index.js';
-import { getModelMappingByName, parseTargets } from '$lib/server/db/repo/model-mappings.js';
-import { findEnabledModelByModelId } from '$lib/server/db/repo/models.js';
 import { createProxyRequest, finalizeProxyRequest } from '$lib/server/db/repo/proxy-requests.js';
+import { resolveTargets } from '$lib/server/proxy/handler.js';
 import { transcribeAudio, TranscriptionError } from '$lib/server/speech/transcriber.js';
-import type { ModelMappingTarget } from '$lib/types.js';
 import type { RequestHandler } from './$types';
 
 function openAiError(status: number, message: string, type: string): Response {
@@ -12,25 +10,6 @@ function openAiError(status: number, message: string, type: string): Response {
 		status,
 		headers: { 'content-type': 'application/json' }
 	});
-}
-
-interface ResolvedModel {
-	mappingId: string | null;
-	targets: ModelMappingTarget[];
-}
-
-function resolveTargets(db: ReturnType<typeof getDb>, model: string): ResolvedModel | null {
-	const mapping = getModelMappingByName(db, model);
-	if (mapping && mapping.enabled === 1) {
-		const targets = parseTargets(mapping);
-		if (targets.length > 0) return { mappingId: mapping.id, targets };
-	}
-	const row = findEnabledModelByModelId(db, model);
-	if (!row) return null;
-	return {
-		mappingId: null,
-		targets: [{ providerId: row.provider_id, modelId: row.model_id }]
-	};
 }
 
 export const POST: RequestHandler = async ({ request }) => {

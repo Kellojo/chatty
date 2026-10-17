@@ -19,7 +19,9 @@
 - Since Jev has been released, this would also be super useful to have this kind of model be exposed via the API.
 - Add a new capability decision to the models page and pull it from the providers where available.
 - Add a new model mapping for it, which by default is empty and should error, if no model is assigned on usage
-- Add this to the OpenAI Compatible API endpoints, to that Users can access this via their API keys as well.
+- Add this to the OpenAI Compatible API endpoints, to that Users can access this via their API keys as well:
+  https://developers.openai.com/api/docs/guides/decisions
+  https://developers.openai.com/api/reference/resources/decisions/methods/create
 - Add a new mcp server, which can be used to perform decisions by AI agents.
 
 ## LM Studio Context Length parsing

@@ -7,7 +7,8 @@ export const MODEL_ROLES = [
 	'memory',
 	'image',
 	'compaction',
-	'speech-to-text'
+	'speech-to-text',
+	'decisions'
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 

@@ -17,9 +17,16 @@
 	let { data }: { data: PageData } = $props();
 
 	type Model = PageData['models'][number];
-	type Capability = 'chat' | 'vision' | 'tool_use' | 'streaming' | 'image';
+	type Capability = 'chat' | 'vision' | 'tool_use' | 'streaming' | 'image' | 'decisions';
 
-	const allCapabilities: Capability[] = ['chat', 'vision', 'tool_use', 'streaming', 'image'];
+	const allCapabilities: Capability[] = [
+		'chat',
+		'vision',
+		'tool_use',
+		'streaming',
+		'image',
+		'decisions'
+	];
 
 	let addOpen = $state(false);
 	let addProviderId = $state('');
