@@ -2,914 +2,1343 @@
 
 ## Architecture
 
-### Three components
+### Two components, GitHub Actions model
 
 ```
-┌─ Chatty ──────────────────────────────────────────────┐
-│                                                        │
-│  Regular chats: streamText (unchanged)                 │
-│  All agents: dispatch to Runner                        │
-│  MCP Gateway: expose tools to OpenCode                 │
-│  Proxy: serve LLM for OpenCode                         │
-│  UI: conversations, streaming, settings                │
-│                                                        │
-└──────────────────────┬─────────────────────────────────┘
-                       │ HTTP
-                       ▼
-┌─ Runner (systemd service, Docker socket) ──────────────┐
-│                                                        │
-│  Manages persistent OpenCode containers                │
-│  One container per agent run                            │
-│  Routes Chatty sessions → OpenCode API                  │
-│  Docker isolation, local or remote host                 │
-│                                                        │
-└──────────────────────┬─────────────────────────────────┘
-                       │ docker exec / docker API
-                       ▼
-┌─ Container (ephemeral, per agent run) ──────────────────┐
-│                                                        │
-│  OpenCode V2 in server mode (opencode serve)             │
-│  Workspace = /workspace (bind-mount, shared store)       │
-│  State = /root/.local/share/opencode (persistent)        │
-│  MCP → Chatty's gateway (HTTP)                           │
-│  LLM → Chatty's proxy (temp API key)                     │
-│  All tools isolated: shell, fs, git                       │
-│                                                        │
-└────────────────────────────────────────────────────────┘
+┌─ Chatty (control plane) ──────────────────────────────────────────┐
+│                                                                     │
+│  Regular chats: streamText (unchanged)                              │
+│  Agent sessions: dispatch to chatty-agent runner                    │
+│  MCP Gateway: expose tools to harnesses                            │
+│  Proxy: serve LLM for harnesses                                    │
+│  UI: conversation view + session dashboard + git panel              │
+│                                                                     │
+│  Existing agent system (streamText agents): REMOVED                 │
+│  All agents run on chatty-agent runners in Docker containers        │
+│                                                                     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │ WebSocket (persistent, runner→Chatty)
+                                │ "Any jobs for me?"
+                                ▼
+┌─ chatty-agent (compute plane) ──────────────────────────────────────┐
+│  Headless daemon. Runs on YOUR machine — laptop, server, VM.        │
+│                                                                     │
+│  Connects to Chatty via WebSocket. Registers capabilities.          │
+│  Receives jobs, spawns harnesses in Docker containers.              │
+│  Streams events back to Chatty for storage + display.               │
+│                                                                     │
+│  Multiple runners can connect to one Chatty instance.               │
+│  Chatty routes jobs to the best available runner.                   │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### What runs where
+### Comparison with previous plan
 
-| Concern | Engine | Why |
+| Concern | Previous plan | New plan |
 |---|---|---|
-| Regular chat | Chatty `streamText` | No Docker needed for casual use |
-| Persona agents | **OpenCode** (Runner) | Isolation, coding tools, unified engine |
-| Coding agents | **OpenCode** (Runner) | Same as persona — coding is just a persona |
-| Scheduled agents | **OpenCode** (Runner) | Container overhead irrelevant (<1/min) |
-| Event agents | **OpenCode** (Runner) | Same — rare triggers |
-| MCP tools | Chatty MCP Gateway | Expose memory, search, fs, etc. to OpenCode |
-| LLM calls | Chatty Proxy | OpenCode uses it via temp API key |
-
-### Regular chats stay on Chatty's streamText
-
-Regular chat conversations need instant responses and zero Docker dependency. They
-continue using Chatty's existing `streamText` + MCP tool system. The runner is
-optional — only needed for agent execution.
+| Runner | Standalone service, shared storage, same Docker host | chatty-agent daemon, any machine, no shared storage |
+| Runner ↔ Chatty | Chatty pushes via HTTP to known URL | Runner connects via WebSocket, polls for jobs |
+| Agent execution | Chatty's streamText for non-coding, Runner for coding | ALL agents run on chatty-agent runners |
+| Existing agent system | Kept (persona, scheduled, HTTP triggers) | **Removed entirely** — replaced by chatty-agent sessions |
+| Container isolation | Docker on same host as Chatty | Docker on runner's host (any machine) |
+| Multi-harness | OpenCode only | OpenCode (Phase 1), Claude Code (Phase 2), Pi (Phase 3) |
+| Workspaces | Shared NFS volume | Ephemeral per-session dirs on runner |
+| Session resume | Recreate container with same mounts | Re-clone repo, continue OpenCode session |
+| Harness config | Runner generates opencode.json | Runner generates opencode.json with Chatty proxy + MCP gateway |
+| Git | Runner handles git ops | Runner handles git ops, streams diffs to Chatty for display |
 
 ---
 
-## Phase 1 — Database Schema
+## Phase 0 — Rip Out Existing Agent System
 
-### Migration `0030_coding_config.sql`
+Before building anything new, remove the old agent infrastructure that's being replaced.
 
-```sql
--- Per-user git service config — exactly one service active at a time.
--- PAT is AES-256-GCM encrypted (same scheme as provider keys in crypto.ts).
-CREATE TABLE coding_config (
-  user_id        TEXT PRIMARY KEY REFERENCES "user"(id) ON DELETE CASCADE,
-  service        TEXT NOT NULL,               -- 'github' | 'gitea' | 'gitlab' | 'bitbucket'
-  url            TEXT NOT NULL,               -- service base URL
-  pat_encrypted  TEXT NOT NULL,               -- encrypted personal access token
-  default_branch TEXT NOT NULL DEFAULT 'main',
-  created_at     INTEGER NOT NULL,
-  updated_at     INTEGER NOT NULL
-);
+### What gets removed
+
+```
+src/lib/server/agents/
+├── builtin.ts          # Builtin agent definitions → removed
+├── builtin.spec.ts
+├── runner.ts           # streamText-based agent dispatch → removed
+├── runner.spec.ts
+├── scheduler.ts        # Cron-based agent scheduler → removed
+├── scheduler.spec.ts
+├── events.ts           # Agent SSE events → removed
+├── events.spec.ts
+
+src/routes/(app)/agents/                          # Agent editor UI → removed
+src/routes/api/agents/[id]/run/+server.ts         # HTTP trigger → removed
+
+migrations/  (drop agents, agent_runs tables)     # New migration to drop
+
+DB: DROP TABLE agent_runs, DROP TABLE agents       # or mark deprecated
 ```
 
-### Migration `0031_coding_repos.sql`
+### What stays (repurposed)
+
+- `conversations` table — reused for agent sessions (a session has a conversation)
+- `messages` table with `tool_calls`, `tool_results` — stays, stores harness messages
+- `api_keys` table — stays, used for runner keys + temp harness proxy keys
+- `src/lib/server/workspaces.ts` — workspaces concept stays, now managed by runner
+- MCP gateway — stays, extended to serve harnesses
+- LLM proxy — stays, harnesses use it via temp API keys
+
+### What the rip-out migration looks like
 
 ```sql
-CREATE TABLE coding_repos (
-  id          TEXT PRIMARY KEY,
-  user_id     TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
-  name        TEXT NOT NULL,                  -- user-chosen label
-  clone_url   TEXT NOT NULL,                  -- https://github.com/owner/repo.git
-  repo_owner  TEXT NOT NULL,
-  repo_name   TEXT NOT NULL,
-  created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL,
-  UNIQUE(user_id, clone_url)
-);
+-- migration: 0034_remove_legacy_agents.sql
+DROP TABLE IF EXISTS agent_runs;
+DROP TABLE IF EXISTS agents;
+DROP TABLE IF EXISTS agent_skill_bindings;
+
+-- Remove agent-related columns from api_keys if they exist
+-- (these were planned but may not be created yet)
 ```
 
-### Migration `0032_coding_workspaces.sql`
+---
+
+## Phase 1 — Chatty: Runner Registry & Connection Endpoint
+
+### Database
 
 ```sql
-CREATE TABLE coding_workspaces (
+-- migration: 0035_runners.sql
+CREATE TABLE runners (
   id              TEXT PRIMARY KEY,
   user_id         TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
-  repo_id         TEXT REFERENCES coding_repos(id) ON DELETE SET NULL,  -- NULL = blank project
-  agent_id        TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  agent_run_id    TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-  runner_id       TEXT,                        -- which runner handled this (informational)
-  container_id    TEXT,                        -- current Docker container ID (NULL when stopped)
-  opencode_data_path TEXT,                     -- path to OpenCode's persistent data dir for this run
-  opencode_session_id TEXT,                    -- OpenCode session ID (set after first prompt)
-  branch          TEXT NOT NULL,
-  base_branch     TEXT NOT NULL,
-  status          TEXT NOT NULL DEFAULT 'active',
-  pr_url          TEXT,
-  preview_url     TEXT,
-  preview_port    INTEGER,
-  workspace_path  TEXT NOT NULL,
+  name            TEXT NOT NULL,               -- "gaming-pc", "cloud-vm-1"
+  labels          TEXT,                         -- JSON: ["docker","linux","gpu"]
+  harnesses       TEXT NOT NULL,                -- JSON: ["opencode@2.1.3"]
+  status          TEXT NOT NULL DEFAULT 'offline',  -- online | offline
+  last_heartbeat  INTEGER,
+  version         TEXT,                         -- chatty-agent version
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL
 );
-```
 
-### Migration `0033_api_key_expiry.sql`
+-- migration: 0036_runner_sessions.sql
+CREATE TABLE runner_sessions (
+  id              TEXT PRIMARY KEY,
+  user_id         TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  runner_id       TEXT REFERENCES runners(id) ON DELETE SET NULL,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+  job_id          TEXT UNIQUE,
+  label           TEXT,                         -- user-given name
+  project_url     TEXT NOT NULL,                -- git clone URL
+  project_label   TEXT,                         -- display name for the project
+  harness         TEXT NOT NULL,                -- "opencode" | "claude-code" | "pi"
+  model           TEXT,
+  branch          TEXT NOT NULL,
+  base_branch     TEXT NOT NULL DEFAULT 'main',
+  status          TEXT NOT NULL DEFAULT 'queued',
+    -- queued | starting | active | awaiting_input | completed | errored | archived
+  auto_commit     INTEGER NOT NULL DEFAULT 0,
+  pr_url          TEXT,
+  exit_code       INTEGER,
+  error_message   TEXT,
+  created_at      INTEGER NOT NULL,
+  last_touched_at INTEGER NOT NULL,
+  completed_at    INTEGER
+);
 
-```sql
--- Extend api_keys to support temporary keys for agent runs.
--- agent_run_id links to the agent run that owns this key.
--- expires_at caps the lifetime (max 24h, enforced at auth time).
-ALTER TABLE api_keys ADD COLUMN agent_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL;
+-- migration: 0037_runner_api_keys.sql
+-- Extend api_keys to support runner-scoped keys
+ALTER TABLE api_keys ADD COLUMN runner_id TEXT REFERENCES runners(id) ON DELETE SET NULL;
+ALTER TABLE api_keys ADD COLUMN session_id TEXT REFERENCES runner_sessions(id) ON DELETE SET NULL;
 ALTER TABLE api_keys ADD COLUMN expires_at INTEGER;
+ALTER TABLE api_keys ADD COLUMN scopes TEXT;  -- JSON: ["runner:connect", "proxy:chat", "mcp:read"]
 ```
 
-### No schema changes for existing tables
-
-- `agents` — no change; coding uses `trigger_type = 'persona'`
-- `conversations` — reuse `kind = 'agent-run'`, `mode = 'agent'`
-- `role_defaults` — new `coding` role is just convention
-- `api_keys` — two new columns added above; no new table needed
-
----
-
-## Phase 2 — Runner
-
-### What the runner is
-
-A separate Node process (~300 lines) that runs as a systemd service (or Docker
-container on bare-metal). It owns the Docker socket and manages persistent
-OpenCode containers. Chatty never touches Docker.
-
-### Runner lifecycle
+### Runner WebSocket Endpoint
 
 ```
-1. Chatty needs agent execution → POST /api/runners/start
-2. Runner creates Docker container with OpenCode:
-   - Mounts workspace dir (working tree) and OpenCode data dir (persistent session state)
-3. Runner generates opencode.json in the workspace:
-   - Provider: points at Chatty proxy with temp API key
-   - MCP: Chatty's MCP gateway URL
-   - Model: from agent config
-4. Runner starts OpenCode in server mode
-5. Runner exposes the container's port (mapped to host)
-6. Chatty connects @opencode/client → container
-7. Chatty creates (or reconnects to) the session, sends prompt, streams events
-8. Agent completes → Chatty calls POST /api/runners/stop
-9. Runner stops + removes container (state survives in the mounts)
+GET /api/runners/connect   → WebSocket upgrade
+  Query: ?token=cr_abc123  → runner API key
 ```
 
-### Resume (continuation)
-
-Resuming a conversation is *starting the same mount* again, then continuing the
-existing session instead of creating a new one:
-
-```
-POST /api/runners/start  { workspaceId, dataPath, resume: true, ... }
-  → runner recreates the container with the same two mounts
-  → Chatty does GET /session/:id  (id from coding_workspaces.opencode_session_id)
-  → then  POST /session/:id/message  { parts: [...] }  to continue
-```
-
-There is no export/import. The session lives in OpenCode's data dir on shared
-storage; a fresh container pointing at it is indistinguishable from the original.
-
-### Multiple runners and shared storage
-
-`runner_id` and `container_id` in `coding_workspaces` are **informational only** —
-Chatty never hard-routes a resume back to the same runner. Instead, the workspace
-dir and OpenCode data dir live on a **shared volume** (NFS or a volume plugin) that
-every runner mounts. Any runner can recreate any conversation's container and resume
-its session. This makes resume work regardless of which runner handled the original
-run, and survives a runner going down or being replaced.
-
-### Runner API
-
-```
-POST /api/runners/start    { workspaceId, workspacePath, dataPath, agentId, modelConfig, mcpGatewayUrl, proxyUrl, proxyToken }
-  → { containerId, port, opencodeUrl }
-
-DELETE /api/runners/stop    { workspaceId }
-  → { success }
-
-GET  /api/runners/status   { workspaceId }
-  → { status, containerId, port }
-
-GET  /api/runners/health
-  → { status: "ok", labels: ["gaming-pc"] }
-```
-
-### Container spec
-
-```dockerfile
-# chatty-runner-image (built once, reused)
-FROM node:22-alpine
-RUN apk add --no-cache git openssh
-RUN npm install -g opencode@latest
-# OpenCode handles everything: shell, fs, git, LLM calls
-```
-
-```bash
-# Runner creates:
-docker create --name coding-<id> \
-  --network bridge \
-  --security-opt no-new-privileges \
-  --cap-drop ALL \
-  -v ${workspacePath}:/workspace \
-  -v ${dataPath}:/root/.local/share/opencode \
-  -w /workspace \
-  -p ${port}:4096 \
-  chatty-runner-image \
-  opencode serve --port 4096 --hostname 0.0.0.0
-```
-
-Two persistent mounts per run, both on the shared store:
-
-- `${workspacePath}` → `/workspace` — the agent's working tree (git clone)
-- `${dataPath}` → `/root/.local/share/opencode` — OpenCode's sessions/messages DB
-
-Because both live on shared storage, the container can be started fresh later and
-OpenCode will find its prior sessions. `docker rm -f` on stop is safe — state lives
-outside the container.
-
-### Docker-in-Docker? No.
-
-The runner runs as a regular process with access to the host's Docker socket
-(via `docker.sock` mount if the runner itself is in Docker, or directly if running
-on bare metal). It spawns sibling containers — not containers inside containers.
-
-If Chatty runs in Docker and the runner is on the same host, they're siblings:
-
-```
-┌─ Host Docker Daemon ────────────────────────────┐
-│                                                  │
-│  ┌─ Chatty Container ──┐  ┌─ Runner Container ──┐│
-│  │  No Docker socket    │  │  Has Docker socket  ││
-│  │  HTTP → runner:3001  │  │  spawns agent       ││
-│  └──────────────────────┘  │  containers         ││
-│                            └─────────────────────┘│
-│                                      │            │
-│                    ┌─────────────────┘            │
-│                    ▼                              │
-│  ┌─ Agent Container ──────────────────────────┐  │
-│  │  OpenCode (opencode serve)                  │  │
-│  │  /workspace = host bind mount (shared)      │  │
-│  │  ~/.local/share/opencode = shared (persist) │  │
-│  │  MCP → Chatty gateway                       │  │
-│  │  LLM → Chatty proxy                         │  │
-│  └─────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────┘
-```
-
----
-
-## Phase 3 — Chatty MCP Gateway
-
-### `src/lib/server/mcp/gateway.ts`
-
-Exposes Chatty's existing MCP servers as HTTP endpoints that OpenCode can consume.
-Each enabled MCP server gets an endpoint:
-
-```
-GET  /api/mcp/:serverName/          → Server info
-GET  /api/mcp/:serverName/sse       → SSE connection (OpenCode's MCP transport)
-POST /api/mcp/:serverName/messages  → MCP JSON-RPC messages
-```
-
-OpenCode connects to `http://chatty:3000/api/mcp/fs`, `http://chatty:3000/api/mcp/memory`, etc.
-as remote MCP servers configured in the generated `opencode.json`.
-
-The gateway authenticates requests using the temporary API key (same `aic_` key
-used for the proxy). The key's scopes include `mcp:read`/`mcp:write`, validated
-by `resolveApiKeyIdentity()`. The key is auto-deleted when the agent run completes.
-
-### What tools OpenCode gets
-
-| MCP Server | Tools | Notes |
-|---|---|---|
-| `fs` | fs_read, fs_write, fs_list | Scoped to workspace dir |
-| `memory` | search_memory, read_concept, create_concept, ... | User's memory bundle |
-| `chat-search` | search_chats, read_chat | Agent can reference past conversations |
-| `webfetch` | webfetch | Fetch external URLs |
-| `websearch` | websearch | SearXNG integration |
-| `datetime` | datetime | Current time, timezone |
-| `code-exec` | code_exec | JS sandbox (isolated-vm) |
-| `weather` | weather | Open-Meteo |
-| `math` | math | Math evaluation |
-| `image` | image | Image generation |
-
-Additional coding-specific tools stay in OpenCode (shell, git) — those are
-OpenCode's built-in tools and don't need Chatty's MCP.
-
----
-
-## Phase 4 — Chatty: Agent Dispatch
-
-### `src/lib/server/agents/runner.ts` changes
-
-The existing `startAgentRun()` becomes a dispatch layer. Instead of running
-`streamText` locally, it:
-
-```typescript
-export async function startAgentRun(input: StartAgentRunInput): Promise<StartedAgentRun> {
-  // 1. Create conversation + agent_run row (unchanged)
-  const conversation = createConversation(...);
-  const run = createAgentRun(...);
-
-  // 2. Create workspace dir (unchanged)
-  const workspaceDir = ensureAgentWorkspace(agent.id, run.id);
-
-  // 3. Create temporary API key for this run
-  const { rawKey } = await createApiKey(db, {
-    userId: input.userId,
-    label: `agent-run:${run.id}`,
-    scopes: ['proxy:chat', 'mcp:read', 'mcp:write'],
-    agentRunId: run.id,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-  });
-
-  // 4. Dispatch to runner
-  const { containerId, port } = await runner.start({
-    workspaceId: workspaceDir,
-    workspacePath: path.resolve(config.WORKSPACES_VOLUME, workspaceDir),
-    dataPath: path.resolve(config.CODING_DATA_VOLUME, run.id, 'opencode'),
-    agentConfig: {
-      systemPrompt: agent.system_prompt,
-      model: { providerId: agent.provider_id, modelId: agent.model_id },
-      skillNames: JSON.parse(agent.skill_names),
-    },
-    mcpGatewayUrl: `http://localhost:${config.PORT}/api/mcp`,
-    proxyUrl: `http://localhost:${config.PORT}/api/v1`,
-    proxyToken: rawKey,    // temp API key — valid for proxy + MCP gateway
-  });
-
-  // 5. Connect OpenCode client to container
-  const opencode = OpenCode.make({ baseUrl: `http://localhost:${port}` });
-  const session = await opencode.session.create({
-    location: { directory: '/workspace' },
-  });
-
-  // 6. Send instructions as first message
-  const stream = opencode.session.prompt({
-    sessionID: session.id,
-    text: instructions,
-  });
-
-  // 7. Stream OpenCode events → conversation messages
-  const done = streamAgentEvents(stream, conversation.id, run.id, db, input.userId);
-
-  // 8. Cleanup on completion
-  done.then(() => runner.stop(workspaceDir));
-
-  return { run, done };
-}
-
-// Continuation (resume) — called from /api/coding/workspaces/[id]/continue
-export async function continueAgentRun(input: { workspaceId: string; text: string }) {
-  const ws = getCodingWorkspace(db, input.workspaceId);   // has opencode_session_id, paths
-
-  // 1. Ensure a container is running (recreate if it was stopped/expired)
-  const { port } = await runner.start({
-    workspaceId: ws.workspaceDir,
-    workspacePath: ...,
-    dataPath: ws.opencode_data_path,     // SAME data dir → session history persists
-    resume: true,
-    ...
-  });
-
-  // 2. Reconnect the OpenCode client and continue the existing session
-  const opencode = OpenCode.make({ baseUrl: `http://localhost:${port}` });
-  const stream = opencode.session.prompt({
-    sessionID: ws.opencode_session_id,    // existing session, not a new create()
-    text: input.text,
-  });
-
-  // 3. Stream events into the same conversation as before
-  await streamAgentEvents(stream, ws.conversation_id, ws.agent_run_id, db, ws.user_id);
+**Runner → Chatty (registration):**
+```json
+{
+  "type": "register",
+  "runnerId": "c7a3f8e2-...",
+  "name": "gaming-pc",
+  "labels": ["docker", "linux", "gpu-a6000"],
+  "harnesses": ["opencode@2.1.3"],
+  "version": "0.1.0"
 }
 ```
 
-### What changes in `agent/runner.ts`
+**Chatty → Runner (ack):**
+```json
+{ "type": "registered", "runnerId": "c7a3f8e2-..." }
+```
 
-| Change | Scope |
-|---|---|
-| Remove `streamText` block | ~60 lines removed |
-| Add runner dispatch | ~40 lines added |
-| Add OpenCode event streaming | ~80 lines new (`streamAgentEvents`) |
-| SSE events (agent.run.started/progress/finished) | Kept, published during streaming |
+Runner is now idle, waiting for jobs.
 
-### `streamAgentEvents` — translating OpenCode → Chatty
+### Session Event WebSocket Endpoint
 
-```typescript
-async function streamAgentEvents(
-  stream: AsyncIterable<OpenCodeEvent>,
-  conversationId: string,
-  runId: string,
-  db: Db,
-  userId: string,
-): Promise<void> {
-  for await (const event of stream) {
-    switch (event.type) {
-      case 'message':
-        // OpenCode assistant message → Chatty message
-        upsertMessage(db, conversationId, {
-          role: 'assistant',
-          parts: event.parts,
-          status: event.final ? 'complete' : 'partial',
-        });
-        break;
+```
+GET /api/runners/sessions/:sessionId/events   → WebSocket upgrade
+  Query: ?token=cr_abc123                      → runner API key
+```
 
-      case 'tool_call':
-        // OpenCode tool invocation → Chatty tool result
-        upsertToolResult(db, conversationId, event);
-        break;
+**Runner → Chatty (events):**
+```json
+{ "type": "status", "status": "cloning" }
+{ "type": "status", "status": "container_starting" }
+{ "type": "status", "status": "running" }
+{ "type": "message", "message": { "role": "assistant", "parts": [...] } }
+{ "type": "tool_call", "tool": "read_file", "input": { "path": "src/auth.ts" } }
+{ "type": "tool_result", "tool": "read_file", "output": "import..." }
+{ "type": "git_diff", "diff": "diff --git a/src/auth.ts\n..." }
+{ "type": "pr_created", "url": "https://github.com/user/repo/pull/42" }
+{ "type": "form_created", "form": { "id": "...", "title": "...", "fields": [...] } }
+{ "type": "form_answered", "formId": "...", "answer": { ... } }
+{ "type": "completed", "exitCode": 0 }
+{ "type": "error", "message": "Container crashed" }
+```
 
-      case 'error':
-        // Report to agent_run
-        break;
-    }
+### Runner API Key Generation
 
-    publishServerEvent(userId, {
-      type: 'agent.run.progress',
-      agentId: run.agentId,
-      runId: run.id,
-    });
+**Endpoint:** `POST /api/settings/runners/keys`
+
+Creates a long-lived API key with scopes `["runner:connect"]`. The response includes a **joining URL**:
+
+```json
+{
+  "key": {
+    "id": "key_abc",
+    "label": "gaming-pc",
+    "token": "cr_...",           // shown once
+    "scopes": ["runner:connect"],
+    "joiningUrl": "http://localhost:3000/api/runners/join?token=cr_..."
   }
-
-  finishAgentRun(db, runId, 'success');
-  publishServerEvent(userId, {
-    type: 'agent.run.finished',
-    agentId: run.agentId,
-    runId: run.id,
-    status: 'success',
-  });
 }
 ```
 
----
+The user runs `chatty-agent join http://localhost:3000/api/runners/join?token=cr_...` on the runner machine.
 
-## Phase 5 — Git Config & PR
+### Runner Management UI
 
-### `src/lib/server/coding/config.ts`
+**Route:** `/settings/runners`
 
-Same as before — centralized git service config with encrypted PAT.
-
-### `src/lib/server/coding/repos.ts`
-
-Lightweight repo references — auth resolved at runtime from config.
-
-### `src/lib/server/coding/service.ts`
-
-Thin orchestration for coding agents. When a coding persona is selected from
-the UI, this handles the repo setup and dispatches to the runner.
-
-```typescript
-export async function startCodingRun(input: StartCodingRunInput) {
-  // 1. Load git config
-  const config = getCodingConfig(db, input.userId);
-  const repo = input.repoId ? getRepo(db, input.repoId, input.userId) : null;
-
-  // 2. Determine agent from persona selection
-  const agent = getAgent(db, input.agentId);
-
-  // 3. Build coding-specific instructions
-  const instructions = buildCodingInstructions({
-    task: input.task,
-    repoUrl: repo?.clone_url,
-    repoName: repo?.name,
-    branch: `chatty/coding-${Date.now().toString(36)}`,
-    baseBranch: repo?.defaultBranch ?? 'main',
-  });
-
-  // 4. Dispatch to runner (same as any agent)
-  const { run, done } = await startAgentRun({
-    agentId: agent.id,
-    trigger: 'chat',           // persona trigger from UI
-    userId: input.userId,
-    instructions,
-  });
-
-  // 5. Inject git credentials into workspace
-  //    Write .gitconfig with extraHeader or GIT_CONFIG env
-  //    so OpenCode can clone/push without seeing PAT
-  injectGitCredentials(path.join(config.WORKSPACES_VOLUME, run.workspaceDir), config, repo);
-
-  // 6. Track in coding_workspaces
-  createCodingWorkspace(db, { ... });
-
-  // 7. Monitor for PR creation
-  done.then(() => checkAndLinkPr(db, workspaceId));
-
-  return { conversationId: run.conversationId, runId: run.id };
-}
-```
-
-### `src/lib/server/coding/pr.ts`
-
-REST API calls per service. When the agent creates a PR (via `git push` + REST
-call), Chatty detects the PR URL in the conversation output or via a dedicated
-OpenCode form and stores it in `coding_workspaces.pr_url`.
-
-The PR creation itself happens inside OpenCode — the agent runs `git push` and
-uses `gh` CLI or direct REST calls to create the PR. Since OpenCode has network
-access inside its container, it can make these calls directly. Alternatively,
-Chatty exposes a lightweight `create_pr` MCP tool that OpenCode can call.
+- List connected runners (name, status badge, labels, harnesses, last heartbeat)
+- Generate new runner key / joining URL
+- Revoke runner keys
+- Delete offline runners
 
 ---
 
-## Phase 6 — Human Input Flow (OpenCode Forms)
+## Phase 2 — Chatty: Session Dashboard
 
-OpenCode has a **built-in Forms system**. When the agent needs input, it creates
-a form via `POST /api/session/{id}/form`. The session pauses automatically — no
-hacks, no polling, no custom MCP tools needed.
+### New Routes
 
-### Flow
-
-```
-1. Agent runs in OpenCode container:
-   "I need to know which auth library to use."
-
-2. OpenCode creates a form:
-   POST /api/session/{id}/form
-   → {
-       title: "Auth library choice",
-       fields: [
-         { key: "library", type: "multiselect", title: "Library",
-           options: [{value:"bcrypt",label:"bcrypt"},{value:"argon2",label:"argon2"}] },
-         { key: "reason", type: "string", title: "Why?", required: false }
-       ]
-     }
-   → Form state: pending
-   → Session PAUSED — OpenCode waits
-
-3. Chatty detects form-created event (via OpenCode SSE):
-   - Renders inline form in conversation UI
-   - coding_workspaces.status = 'awaiting_input'
-
-4. User fills in form → Chatty calls OpenCode:
-   POST /api/session/{id}/form/{formId}/reply
-   → { answer: { library: "argon2", reason: "More secure against GPU attacks" } }
-
-   → Form state: answered → Session RESUMES
-   → OpenCode continues where it left off
-```
-
-### How Chatty subscribes to form events
-
-Chatty already connects to OpenCode's event stream to receive messages. Form
-events arrive through the same stream. Chatty detects `form.created` events and
-renders the form inline in the conversation timeline (between messages).
-
-### Form types OpenCode supports
-
-| Type | Usage |
+| Route | Purpose |
 |---|---|
-| `string` | Free-text response, optional validation (email, URI, regex pattern) |
-| `number` | Numeric input with min/max |
-| `integer` | Whole number with min/max |
-| `boolean` | Yes/no checkbox |
-| `multiselect` | One or more options from a list (dropdown/checkboxes) |
-| `external` | Custom URL — Chatty can provide a custom form renderer |
+| `/dashboard` | Session dashboard — sidebar + chat/git panels |
+| `/dashboard/sessions/[id]` | Single session view |
+| `/dashboard/new` | New session dialog |
 
-### Requesting input vs OpenCode forms
-
-Since OpenCode has native forms, we don't need a `request_input` MCP tool.
-OpenCode already knows how to ask for user input when it's stuck or needs
-clarification. The form system handles everything: structured input fields,
-validation, conditional display, and session pause/resume.
-
----
-
-## Phase 6b — Resuming Conversations
-
-### Short-term resume (same container)
-
-When a form pauses the agent and the user responds within the container's lifetime:
-
-- The persistent Docker container stays alive
-- OpenCode holds the session in memory
-- User's form reply arrives → OpenCode continues instantly
-- No container restart, no session rebuild
-
-### Long-term resume (days later — genuine resume)
-
-This is now a **real resume**, not a new task. Because the workspace and OpenCode's
-data dir both live on shared storage, a conversation can be continued by any runner
-at any time:
+### Session Dashboard Layout
 
 ```
-Day 1: User starts coding task → container created → agent runs, creates PR
-       → container stopped (state in shared mounts), conversation in Chatty DB
-
-Day 3: User opens the conversation, types a follow-up
-       → Chatty sees no live container, calls POST /api/runners/start { resume: true }
-       → runner recreates a container with the SAME two mounts
-       → Chatty GET /session/:id (from coding_workspaces.opencode_session_id)
-       → POST /session/:id/message { parts: [user's follow-up] }
-       → OpenCode continues with full history + the workspace still on disk
-       → Follow-up lands in the SAME conversation thread in the UI
+┌──────────┬─────────────────────────┬─────────────────┐
+│ Sidebar  │                         │                 │
+│          │                         │                 │
+│ Sessions │     Chat Panel          │   Git Panel     │
+│ List     │     (message stream)    │   (diff,        │
+│          │                         │    commit,       │
+│ ● active │                         │    push)         │
+│ ○ idle   │                         │                 │
+│ ✓ done   │                         │                 │
+│ ✗ error  │                         │                 │
+│          │                         │                 │
+│ [+ New]  │                         │                 │
+│          ├─────────────────────────┴─────────────────┤
+│          │  Chat Input                          [Send]│
+└──────────┴───────────────────────────────────────────┘
 ```
-
-The agent understands context from the actual session history (messages, tool
-calls, compaction state) plus the working tree, git log, and any PR. No
-export/import, no "describe the task again."
-
-### When resume is a new task instead
-
-The user can still **choose** a fresh start rather than resume — e.g. they want a
-different base branch, a different agent, or a clean slate. That's just the normal
-"start" path (new workspace, new session, new conversation). Resume is the default
-for "ask a follow-up in an existing conversation."
-
-### Paused / interrupted recovery
-
-```
-Scenario: Agent paused or was interrupted, container gone (TTL expired, server restart, crash)
-
-1. hooks.server.ts on startup / content on container-loss:
-   - Find coding_workspaces with status = 'awaiting_input' or 'running'
-   - Their session state is safe in the shared OpenCode data dir
-   - Attempt resume: start container with same mounts → check session/status
-
-2. Form TTL:
-   - Pending forms have a configurable TTL (default: 24h)
-   - Expired form → cancel the form, mark run 'needs_attention'
-   - User can re-prompt the same session to continue anyway
-
-3. Container TTL (idle, no form):
-   - Idle containers are stopped after a configurable TTL to free resources
-   - Stopping is cheap because state is in the mounts — resume recreates it
-```
-
-### What "resume" means from Chatty's perspective
-
-| Scenario | Action |
-|---|---|
-| Form pending, <TTL | User fills form → container resumes |
-| Form pending, >TTL | Form cancelled; same session can be re-prompted |
-| Completed, user follows up | Resume: recreate container → `POST /session/:id/message` |
-| Server restart while running | Restart container with same mounts → check status, continue |
-| User wants fresh start | Normal start (new workspace, new session) |
-| Different repo/agent/base branch | Normal start (new conversation) |
-
-### No session export/import needed
-
-The OpenCode session is stored in the per-run data dir on shared storage. A fresh
-container mounting that dir is byte-for-byte identical to the original, so resume
-and continuation are seamless. The same dir also holds the working tree, so the
-agent sees uncommitted work, git state, and prior session history together.
-
----
-
-## Phase 7 — API Routes
-
-### Git Config & Repos
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/coding/config` | Get config (without PAT) |
-| `PUT` | `/api/coding/config` | Create/update config |
-| `DELETE` | `/api/coding/config` | Remove config |
-| `GET` | `/api/coding/repos` | List repos |
-| `POST` | `/api/coding/repos` | Add repo |
-| `PATCH` | `/api/coding/repos/[id]` | Update repo name |
-| `DELETE` | `/api/coding/repos/[id]` | Remove repo |
-
-### Coding Runs
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/api/coding/start` | Start coding task (new workspace + session) |
-| `POST` | `/api/coding/workspaces/[id]/continue` | Resume or continue an existing session |
-| `GET` | `/api/coding/workspaces` | List workspaces |
-| `GET` | `/api/coding/workspaces/[id]` | Workspace detail |
-| `POST` | `/api/coding/workspaces/[id]/form-reply` | Submit OpenCode form answer |
-| `POST` | `/api/coding/workspaces/[id]/stop` | Stop run |
-
-### MCP Gateway (OpenCode consumes these)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/mcp/:server/sse` | SSE transport |
-| `POST` | `/api/mcp/:server/messages` | JSON-RPC messages |
-
-### Preview
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/coding/preview/[id]/[...path]` | Preview proxy |
-
----
-
-## Phase 8 — UI Changes
-
-### Settings → Coding (`/settings/coding/`)
-
-Same as before — git service config + connected repos.
-
-### Agent Editor (`/agents/[id]`)
-
-Add a preset button: "Coding Agent" — pre-fills system prompt with coding
-persona template.
-
-### Chat Drafting Page (`/`)
-
-The existing persona selector includes coding agents. When a coding persona
-is selected:
-
-- Repo picker appears (connected repos + "Blank project")
-- Placeholder changes to "Describe what to build…"
-- Send button routes to `/api/coding/start` instead of `/api/conversations`
-
-### Conversation View (`/chat/[id]`)
-
-When the conversation is linked to a coding workspace (join `coding_workspaces` on
-`agent_run_id` or `conversation_id`):
-
-**Header bar**: Shows repo name • branch • PR badge (clickable) • Preview button.
-Data loaded from `coding_workspaces` row in `+page.server.ts`.
-
-**Tool calls**: OpenCode tool invocations stream as Chatty messages. `ToolCallCard`
-renders them exactly as it does for chat tool calls. No special handling needed.
-
-**Forms**: When OpenCode creates a form (`form.created` event), a new `FormCard`
-component renders inline between messages. On submit, Chatty forwards the reply to
-OpenCode's `POST /api/session/{id}/form/{formId}/reply`. The form ID and session ID
-are stored in `coding_workspaces` so the form survives page reloads.
-
-**Resume after days**: When a user types a follow-up into a completed or idle
-coding conversation, Chatty resumes the session (see Phase 6b) rather than starting
-a new task:
-
-- No live container → Chatty calls the runner to recreate it with the same mounts
-- The follow-up goes to `POST /session/:id/message` on the existing session
-- Response appears as the next message in the same thread
-
-**Fresh start button**: The header also offers a "New task" button for the same
-repo when the user wants a clean slate (new workspace, new session, new
-conversation) instead of resuming.
-
-### Agent Run View (`/agents/[id]/runs/[runId]`)
-
-Shows agent run transcripts (existing page). For coding runs, additionally shows
-repo, branch, PR badge, and preview button. Same data source as conversation view.
 
 ### Sidebar
 
-Coding conversations get a `Code2` (Lucide) icon prefix.
+- Session list grouped by status: Active, Completed, Archived
+- Each item: label, harness icon, model, branch, time since last activity
+- Status badge: running (green pulse), awaiting_input (yellow), completed (gray), errored (red)
+- Click to switch session view
+- Right-click context menu: Complete, Archive, Delete
+- "New Session" button at top
 
----
+### Chat Panel
 
-## Phase 9 — Cleanup
+Reuses Chatty's existing `MessageTimeline`, `ToolCallCard`, `Markdown` components from sv-prompt-kit. Messages stream in via SSE from Chatty's server (which receives them from the runner via WebSocket).
 
-- **Workspace GC**: `jobs.ts` removes stale coding workspaces + cleans up runner
-  containers via runner API
-- **Startup recovery**: `hooks.server.ts` marks running agent runs as failed,
-  instructs runner to stop orphaned containers, and deletes temporary API keys
-  for failed runs (`DELETE FROM api_keys WHERE agent_run_id IN (SELECT id FROM agent_runs WHERE status IN ('running'))`)
-- **API key GC**: `jobs.ts` deletes expired keys
-  (`DELETE FROM api_keys WHERE expires_at IS NOT NULL AND expires_at < ?`)
-- **Runner health**: Chatty pings runner health endpoint; warns in UI if runner
-  is unavailable (agents disabled, chats still work)
+No changes to the chat rendering stack — the timeline components are already built. The only difference is messages come from a runner session instead of a `streamText` conversation.
 
----
+### Git Panel
 
-## File Inventory
+Shows diff received from the runner. Features:
+- Changed files list with syntax-highlighted diff
+- Stage/unstage checkboxes (if manual review toggled)
+- Commit message input
+- "Commit" / "Commit & Push" button
+- PR URL badge (appears after push + PR creation)
 
-### New Files
+Git operations are sent as messages back to the runner on the session event WebSocket:
 
-```
-runner/                              # Separate directory, not in Chatty source
-├── package.json                     # Deps: @opencode/client, dockerode
-├── Dockerfile
-├── src/
-│   ├── index.ts                     # Main server (express/fastify)
-│   ├── container.ts                 # Docker container lifecycle
-│   ├── config.ts                    # opencode.json generation
-│   └── routes.ts                    # /start, /stop, /status, /health
-
-src/lib/server/coding/
-├── config.ts                        # Git service config CRUD
-├── config.spec.ts
-├── repos.ts                         # Repo references
-├── repos.spec.ts
-├── service.ts                       # Coding orchestration
-├── service.spec.ts
-├── pr.ts                            # PR creation (REST calls)
-└── pr.spec.ts
-
-src/lib/server/mcp/
-├── gateway.ts                       # MCP HTTP gateway for OpenCode
-└── gateway.spec.ts
-
-src/lib/server/db/repo/
-├── coding-config.ts
-├── coding-config.spec.ts
-├── coding-repos.ts
-├── coding-repos.spec.ts
-├── coding-workspaces.ts
-└── coding-workspaces.spec.ts
-
-src/routes/api/
-├── coding/config/+server.ts
-├── coding/repos/+server.ts
-├── coding/repos/[id]/+server.ts
-├── coding/start/+server.ts
-├── coding/workspaces/+server.ts
-├── coding/workspaces/[id]/+server.ts
-├── coding/workspaces/[id]/continue/+server.ts
-├── coding/workspaces/[id]/form-reply/+server.ts
-├── coding/workspaces/[id]/stop/+server.ts
-├── coding/preview/[id]/[...path]/+server.ts
-├── mcp/[server]/sse/+server.ts
-└── mcp/[server]/messages/+server.ts
-
-src/routes/(app)/settings/coding/
-├── +page.svelte
-└── +page.server.ts
-
-migrations/
-├── 0030_coding_config.sql
-├── 0031_coding_repos.sql
-├── 0032_coding_workspaces.sql
-└── 0033_api_key_expiry.sql
+```json
+{ "type": "git_action", "action": "commit", "message": "Refactor auth module" }
+{ "type": "git_action", "action": "push" }
 ```
 
-### Modified Files
+### New Session Dialog
+
+Steps:
+1. **Project** — Enter git URL + label, or pick from project registry (future)
+2. **Harness** — Dropdown showing harnesses available on connected runners (OpenCode shown as ✓ or ✗ based on runner capabilities)
+3. **Model** — Text input or dropdown (model IDs supported by Chatty's proxy)
+4. **Branch** — Branch name pattern (default: `chatty/{date}-{label}`)
+5. **Base branch** — main, master, or custom
+6. **Auto-commit** — Checkbox: "Auto-commit & push on completion" (default off)
+7. **Initial prompt** — Text area (optional, can send after start)
+
+On submit: creates `runner_sessions` row (status=queued), sends job to an available runner.
+
+### Message Flow
 
 ```
-src/lib/types.ts                            # + CodingConfig, CodingRepo, CodingWorkspace types
-src/lib/server/agents/runner.ts             # Replace streamText with runner dispatch
-src/lib/server/jobs.ts                      # + gcCodingWorkspaces + token cleanup
-src/lib/server/config.ts                    # + RUNNER_URL, CODING_DATA_VOLUME (env vars)
-src/hooks.server.ts                         # Runner health check on startup
-src/routes/(app)/+page.svelte               # Coding persona → repo picker + task input
-src/routes/(app)/+page.server.ts            # + coding config + repos data
-src/lib/components/app/ChatView.svelte      # + coding header, PR badge, preview btn
-src/lib/components/app/MessageTimeline.svelte  # + OpenCode form rendering
-src/lib/components/app/FormCard.svelte      # NEW: renders OpenCode forms inline
-src/routes/(app)/settings/+layout.svelte    # + "Coding" nav item
-src/lib/components/app/AgentEditor.svelte   # + "Coding Agent" preset button (optional)
+1. User creates session → Chatty DB: runner_sessions (queued)
+2. Chatty finds available runner (harness match, online)
+3. Chatty → Runner (job dispatch on control WebSocket):
+   { type: "job", jobId, sessionId, harness, model, projectUrl, branch, proxyConfig, initialPrompt }
+4. Runner accepts → Chatty DB: session status = "starting"
+5. Runner opens session event WebSocket
+6. Runner streams: status "cloning" → "container_starting" → "running"
+7. Runner streams: messages, tool_calls, tool_results
+8. Chatty stores each message in DB, pushes SSE to user browser
+9. Chatty UI renders messages in chat panel
+10. User sends follow-up → Chatty sends { type: "user_message", content } to runner
+11. Runner forwards to harness (POST /api/session/{id}/prompt)
+12. Agent completes → Runner streams git diff, status "completed"
+13. Chatty shows notification, renders diff in git panel
 ```
 
 ---
 
-## Agent Execution — Final Summary
+## Phase 3 — Chatty: Project Registry, Notifications, Cleanup
 
-```
-┌─ Agent triggers ─────────────────────────────────────┐
-│                                                      │
-│  Persona (user selects from dropdown)                 │
-│  Schedule (cron: every 30min)                        │
-│  Event (memory.changed, chat.created)                 │
-│                                                      │
-│  All → agents/runner.ts → dispatch to Runner          │
-│                                                      │
-└──────────────────────┬───────────────────────────────┘
-                       │
-                       ▼
-┌─ Runner ─────────────────────────────────────────────┐
-│  Docker: persistent container per agent run           │
-│  OpenCode V2 in server mode                           │
-│  ┌─────────────────────────────────────────────────┐ │
-│  │  LLM → Chatty Proxy (temp API key)              │ │
-│  │  Tools → Chatty MCP Gateway (HTTP transport)     │ │
-│  │  Shell/Git → OpenCode builtins (in container)    │ │
-│  │  Files → /workspace (bind-mount, shared store)   │ │
-│  │  State → /root/.local/share/opencode (persistent)│ │
-│  └─────────────────────────────────────────────────┘ │
-│                                                      │
-│  Events streamed → Chatty → conversation messages     │
-│  Resume = recreate container, continue same session   │
-└──────────────────────────────────────────────────────┘
+### Project Registry
 
-Regular chats: Chatty streamText (unchanged, no Docker needed)
+```sql
+-- migration: 0038_projects.sql
+CREATE TABLE projects (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  git_url       TEXT NOT NULL,
+  default_branch TEXT NOT NULL DEFAULT 'main',
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  UNIQUE(user_id, git_url)
+);
 ```
 
-OpenCode handles the agent loop (tool use, shell, git, thinking). Chatty
-handles orchestration (conversations, messaging, auth, settings, proxy).
-The runner provides Docker isolation and can run on a different machine.
+**UI:** `/settings/projects` — list saved projects with quick "New Session" button.
 
-A conversation can be resumed at any time — the workspace and OpenCode's session
-state both live on shared storage, so a fresh container mounting them continues
-the same session (`POST /session/:id/message`).
+### Notifications
+
+When a session completes:
+
+1. Chatty stores notification event
+2. Browser plays sound via HTML5 Audio API (bundled completion.wav)
+3. Browser Notification API: `new Notification("Chatty", { body: "Session 'refactor-auth' completed" })`
+4. On macOS: `osascript -e 'display notification "Session completed" with title "Chatty"'` (server-side)
+5. Configurable in Settings: notification toggle, sound toggle, sound selection
+
+### Cleanup Scheduler
+
+Cron job in `src/lib/server/jobs.ts`:
+
+```
+Every 1 hour:
+  1. Query runner_sessions WHERE status IN ('active','awaiting_input')
+     AND last_touched_at < now - settings.staleTimeoutDays
+  2. Auto-complete them (status = 'completed')
+  3. Optionally auto-archive (status = 'archived')
+  4. Send cleanup command to runner (clean up workspace dir)
+```
+
+Configurable in Settings:
+- Stale timeout (days, default 7)
+- Auto-archive stale: yes/no
+- Auto-delete workspaces: yes/no
+
+---
+
+## Phase 4 — Chatty: Runner Job Dispatch
+
+### `src/lib/server/runners/dispatch.ts`
+
+```typescript
+import type { Db } from "$lib/server/db";
+import type { Runner, RunnerSession } from "$lib/types";
+import crypto from "node:crypto";
+
+interface DispatchJobInput {
+  session: RunnerSession;
+  projectUrl: string;
+  harness: string;
+  model: string;
+  branch: string;
+  baseBranch: string;
+  initialPrompt?: string;
+  proxyBaseUrl: string;
+  mcpGatewayUrl: string;
+}
+
+export async function dispatchJob(input: DispatchJobInput): Promise<{ jobId: string }> {
+  // 1. Find available runner that supports this harness
+  const runner = findRunner(db, { harness: input.harness, status: "online" });
+  if (!runner) throw new Error("No available runner for this harness");
+
+  // 2. Create temp API key for this session (proxy + MCP access)
+  const { rawKey } = await createApiKey(db, {
+    userId: input.session.user_id,
+    label: `session:${input.session.id}`,
+    scopes: ["proxy:chat", "mcp:read", "mcp:write"],
+    sessionId: input.session.id,
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+  });
+
+  // 3. Assign session to runner
+  const jobId = crypto.randomUUID();
+  await db.run(
+    `UPDATE runner_sessions SET runner_id = ?, job_id = ?, status = 'queued' WHERE id = ?`,
+    [runner.id, jobId, input.session.id],
+  );
+
+  // 4. Dispatch job via runner's control WebSocket
+  const ws = getRunnerConnection(runner.id);
+  ws.send(JSON.stringify({
+    type: "job",
+    jobId,
+    sessionId: input.session.id,
+    harness: input.harness,
+    model: input.model,
+    projectUrl: input.projectUrl,
+    branch: input.branch,
+    baseBranch: input.baseBranch,
+    initialPrompt: input.initialPrompt,
+    proxyConfig: {
+      baseUrl: input.proxyBaseUrl,
+      apiKey: rawKey,
+    },
+    mcpGatewayUrl: input.mcpGatewayUrl,
+  }));
+
+  return { jobId };
+}
+```
+
+### Runner Connection Manager
+
+```typescript
+// src/lib/server/runners/connections.ts
+import { WebSocketServer } from "ws";
+
+const runnerConnections = new Map<string, WebSocket>();  // runnerId → WS
+
+export function getRunnerConnection(runnerId: string): WebSocket | undefined {
+  return runnerConnections.get(runnerId);
+}
+
+export function registerRunnerConnection(runnerId: string, ws: WebSocket): void {
+  runnerConnections.set(runnerId, ws);
+
+  ws.on("message", async (data) => {
+    const msg = JSON.parse(data.toString());
+    switch (msg.type) {
+      case "job_accepted":
+        await handleJobAccepted(msg);
+        break;
+      case "job_rejected":
+        await handleJobRejected(msg);
+        break;
+      case "heartbeat":
+        await updateHeartbeat(runnerId);
+        break;
+    }
+  });
+
+  ws.on("close", () => {
+    runnerConnections.delete(runnerId);
+    markRunnerOffline(runnerId);
+    // Re-queue any running sessions for this runner
+    requeueRunnerSessions(runnerId);
+  });
+}
+```
+
+### Session Event Handler
+
+```typescript
+// src/lib/server/runners/events.ts
+import type { Db } from "$lib/server/db";
+import { publishServerEvent } from "$lib/server/events";
+import { upsertMessage, updateSessionStatus } from "$lib/server/sessions/manager";
+
+export async function handleRunnerEvent(
+  db: Db,
+  sessionId: string,
+  event: RunnerEvent,
+): Promise<void> {
+  switch (event.type) {
+    case "status":
+      await updateSessionStatus(db, sessionId, event.status);
+      publishServerEvent(session.userId, {
+        type: "session.status",
+        sessionId,
+        status: event.status,
+      });
+      break;
+
+    case "message":
+      await upsertMessage(db, sessionId, event.message);
+      publishServerEvent(session.userId, {
+        type: "session.message",
+        sessionId,
+        message: event.message,
+      });
+      break;
+
+    case "tool_call":
+      await upsertToolCall(db, sessionId, event);
+      break;
+
+    case "tool_result":
+      await upsertToolResult(db, sessionId, event);
+      break;
+
+    case "git_diff":
+      await updateSessionGitDiff(db, sessionId, event.diff);
+      publishServerEvent(session.userId, {
+        type: "session.git_diff",
+        sessionId,
+        diff: event.diff,
+      });
+      break;
+
+    case "pr_created":
+      await updateSessionPrUrl(db, sessionId, event.url);
+      break;
+
+    case "form_created":
+      await updateSessionStatus(db, sessionId, "awaiting_input");
+      publishServerEvent(session.userId, {
+        type: "session.form_created",
+        sessionId,
+        form: event.form,
+      });
+      break;
+
+    case "completed":
+      await completeSession(db, sessionId, event.exitCode);
+      break;
+
+    case "error":
+      await failSession(db, sessionId, event.message);
+      break;
+  }
+}
+```
+
+---
+
+## Phase 5 — chatty-agent: Core Daemon
+
+### Project location
+
+The chatty-agent daemon lives in `runner/` at the Chatty repo root (same monorepo, pnpm workspace).
+
+```
+runner/
+├── package.json
+├── tsconfig.json
+├── Dockerfile                  # Docker image for the runner itself (optional)
+└── src/
+    ├── index.ts                # CLI entry point
+    ├── cli/
+    │   └── commands.ts         # join, start, stop, status, logs, config
+    ├── transport/
+    │   ├── connection.ts       # WebSocket to Chatty
+    │   └── events.ts           # Per-session event streaming WS
+    ├── dispatch/
+    │   ├── dispatcher.ts       # Job queue + concurrency guard
+    │   └── job.ts              # Job → session lifecycle
+    ├── harness/
+    │   ├── adapter.ts          # HarnessAdapter interface
+    │   ├── registry.ts         # HarnessRegistry
+    │   └── opencode.ts         # OpenCodeAdapter
+    ├── runtime/
+    │   └── docker.ts           # DockerRuntime (dockerode)
+    ├── git/
+    │   └── service.ts          # Clone, branch, diff, push, PR detection
+    ├── events/
+    │   └── streamer.ts         # Harness events → Chatty WebSocket
+    └── health/
+        └── monitor.ts          # Container health, stall detection, heartbeat
+```
+
+### CLI
+
+```bash
+# Join Chatty
+chatty-agent join https://chatty.example.com/api/runners/join?token=cr_abc123
+
+# Start daemon
+chatty-agent start                 # foreground
+chatty-agent start --detach        # background (systemd/launchd)
+chatty-agent stop                  # graceful shutdown
+chatty-agent status                # connection status, active sessions
+chatty-agent logs                  # tail logs
+
+# Config
+chatty-agent config show
+chatty-agent config edit           # $EDITOR
+```
+
+### Config file
+
+```yaml
+# ~/.chatty-agent/config.yaml
+chatty:
+  url: "https://chatty.example.com"
+  token: "cr_abc123..."
+
+runner:
+  name: "gaming-pc"
+  labels: ["docker", "linux", "gpu-a6000"]
+  maxConcurrentSessions: 4
+
+docker:
+  socketPath: "/var/run/docker.sock"
+```
+
+### Transport: Connecting to Chatty
+
+```typescript
+// runner/src/transport/connection.ts
+import WebSocket from "ws";
+
+export class ChattyConnection {
+  private ws: WebSocket | null = null;
+  private reconnectDelay = 1000;  // exponential backoff
+  private runnerId: string;
+
+  async connect(url: string, token: string): Promise<void> {
+    this.ws = new WebSocket(`${url}?token=${token}`);
+
+    this.ws.on("open", () => {
+      this.reconnectDelay = 1000;
+      this.register();
+    });
+
+    this.ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      switch (msg.type) {
+        case "registered":
+          this.runnerId = msg.runnerId;
+          console.log(`Registered as ${this.runnerId}`);
+          break;
+        case "job":
+          this.dispatcher.enqueue(msg);
+          break;
+      }
+    });
+
+    this.ws.on("close", () => {
+      setTimeout(() => this.connect(url, token), this.reconnectDelay);
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
+    });
+  }
+
+  private register(): void {
+    this.ws!.send(JSON.stringify({
+      type: "register",
+      runnerId: config.runnerId,
+      name: config.runner.name,
+      labels: config.runner.labels,
+      harnesses: this.registry.listInstalled(),
+      version: "0.1.0",
+    }));
+  }
+
+  send(msg: object): void {
+    this.ws?.send(JSON.stringify(msg));
+  }
+}
+```
+
+---
+
+## Phase 6 — chatty-agent: OpenCode Adapter
+
+### Adapter Interface
+
+```typescript
+// runner/src/harness/adapter.ts
+export interface HarnessAdapter {
+  readonly name: string;
+  readonly version: string;
+
+  /** Check if harness image is available (docker pull if needed) */
+  ensureImage(): Promise<void>;
+
+  /** Create and start a container for a session */
+  startSession(opts: StartSessionOpts): Promise<HarnessSession>;
+
+  /** Send a user message to the running session */
+  sendMessage(session: HarnessSession, message: string): Promise<void>;
+
+  /** Get events from the session (SSE stream) */
+  streamEvents(session: HarnessSession): AsyncIterable<HarnessEvent>;
+
+  /** Respond to a form */
+  answerForm(session: HarnessSession, formId: string, answer: Record<string, unknown>): Promise<void>;
+
+  /** Stop the session (stop + remove container) */
+  stopSession(session: HarnessSession): Promise<void>;
+}
+
+export interface HarnessSession {
+  sessionId: string;
+  containerId: string;
+  port: number;
+  workspacePath: string;
+}
+```
+
+### OpenCode Adapter
+
+```typescript
+// runner/src/harness/opencode.ts
+import Docker from "dockerode";
+import { execSync } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const IMAGE = "ghcr.io/anomalyco/opencode:2.0.0";
+const PORT = 4096;
+
+export class OpenCodeAdapter implements HarnessAdapter {
+  readonly name = "opencode";
+  readonly version = "2.0.0";
+
+  constructor(private docker: Docker) {}
+
+  async ensureImage(): Promise<void> {
+    const images = await this.docker.listImages();
+    const exists = images.some(img =>
+      img.RepoTags?.includes(IMAGE) || img.RepoTags?.includes(`${IMAGE}-latest`)
+    );
+    if (!exists) {
+      console.log(`Pulling ${IMAGE}...`);
+      await new Promise<void>((resolve, reject) => {
+        this.docker.pull(IMAGE, (err: Error | null, stream: NodeJS.ReadableStream) => {
+          if (err) return reject(err);
+          this.docker.modem.followProgress(stream, (err) => err ? reject(err) : resolve());
+        });
+      });
+    }
+  }
+
+  async startSession(opts: StartSessionOpts): Promise<HarnessSession> {
+    // 1. Write opencode.json into workspace
+    const configPath = path.join(opts.workspacePath, "opencode.json");
+    await fs.writeFile(configPath, JSON.stringify({
+      "$schema": "https://opencode.ai/config.json",
+      "provider": {
+        "chatty": {
+          "npm": "@ai-sdk/openai-compatible",
+          "options": {
+            "baseURL": opts.proxyConfig.baseUrl,
+            "apiKey": opts.proxyConfig.apiKey,
+          },
+          "models": { [opts.model]: {} },
+        },
+      },
+      "mcp": {
+        "chatty-memory": { "url": `${opts.mcpGatewayUrl}/memory` },
+        "chatty-webfetch": { "url": `${opts.mcpGatewayUrl}/webfetch` },
+      },
+      "model": `chatty/${opts.model}`,
+    }, null, 2));
+
+    // 2. Create container
+    const containerName = `chatty-${opts.sessionId.slice(0, 12)}`;
+    const container = await this.docker.createContainer({
+      Image: IMAGE,
+      name: containerName,
+      Cmd: ["opencode", "serve", "--port", String(PORT), "--hostname", "0.0.0.0"],
+      WorkingDir: "/workspace",
+      HostConfig: {
+        Binds: [`${opts.workspacePath}:/workspace:rw`],
+        PortBindings: { [`${PORT}/tcp`]: [{ HostPort: String(opts.hostPort) }] },
+        Memory: opts.memoryLimit || 4 * 1024 * 1024 * 1024,  // 4GB default
+        NanoCpus: opts.cpuLimit ? opts.cpuLimit * 1e9 : undefined,
+        SecurityOpt: ["no-new-privileges"],
+        CapDrop: ["ALL"],
+      },
+    });
+
+    await container.start();
+
+    // 3. Wait for OpenCode to be ready
+    const opencodeUrl = `http://localhost:${opts.hostPort}`;
+    await this.waitForReady(opencodeUrl);
+
+    // 4. Create session
+    const sessionResp = await fetch(`${opencodeUrl}/api/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ location: { directory: "/workspace" } }),
+    });
+    const session = await sessionResp.json();
+
+    // 5. Send initial prompt if provided
+    if (opts.initialPrompt) {
+      await fetch(`${opencodeUrl}/api/session/${session.id}/prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: opts.initialPrompt }),
+      });
+    }
+
+    return {
+      sessionId: session.id,
+      containerId: container.id,
+      port: opts.hostPort,
+      workspacePath: opts.workspacePath,
+    };
+  }
+
+  async sendMessage(session: HarnessSession, message: string): Promise<void> {
+    await fetch(`http://localhost:${session.port}/api/session/${session.sessionId}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: message }),
+    });
+  }
+
+  async *streamEvents(session: HarnessSession): AsyncIterable<HarnessEvent> {
+    const response = await fetch(`http://localhost:${session.port}/api/event`, {
+      headers: { Accept: "text/event-stream" },
+    });
+
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6);
+          if (data === "[DONE]") continue;
+          try {
+            const event = JSON.parse(data);
+            yield this.translateEvent(event);
+          } catch { /* skip unparseable lines */ }
+        }
+      }
+    }
+  }
+
+  async answerForm(session: HarnessSession, formId: string, answer: Record<string, unknown>): Promise<void> {
+    await fetch(`http://localhost:${session.port}/api/session/${session.sessionId}/form/${formId}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answer }),
+    });
+  }
+
+  async stopSession(session: HarnessSession): Promise<void> {
+    const container = this.docker.getContainer(session.containerId);
+    try {
+      await container.stop({ t: 10 });  // 10s grace period
+      await container.remove();
+    } catch { /* container already gone */ }
+  }
+
+  private async waitForReady(url: string, timeout = 30000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      try {
+        const resp = await fetch(`${url}/api/info`);
+        if (resp.ok) return;
+      } catch {}
+      await new Promise(r => setTimeout(r, 500));
+    }
+    throw new Error("OpenCode did not become ready within timeout");
+  }
+
+  private translateEvent(raw: unknown): HarnessEvent {
+    // Map OpenCode event structure to our HarnessEvent type
+    // ...
+    return raw as HarnessEvent;
+  }
+}
+```
+
+---
+
+## Phase 7 — chatty-agent: Docker Runtime
+
+### Why Docker API, not Docker specifically
+
+We target the Docker-compatible HTTP API via `dockerode`. This means:
+
+| Runtime | Socket | Notes |
+|---|---|---|
+| Docker Engine | `/var/run/docker.sock` | Standard, universal |
+| OrbStack (macOS) | Same socket | Free for personal use, faster |
+| Podman | `podman system service unix:///run/podman/podman.sock` | Free, daemonless |
+| colima (macOS) | `~/.colima/default/docker.sock` | Free, Lima VM |
+
+One code path (`dockerode`), all runtimes. No Docker-specific features (no `AutoRemove`, no complex networking).
+
+### Runtime Interface
+
+```typescript
+// runner/src/runtime/docker.ts
+import Docker from "dockerode";
+import { randomBytes } from "node:crypto";
+
+export class DockerRuntime {
+  private docker: Docker;
+  private workspacesDir: string;
+
+  constructor(socketPath: string, workspacesDir: string) {
+    this.docker = new Docker({ socketPath });
+    this.workspacesDir = workspacesDir;
+  }
+
+  async ensureImage(image: string): Promise<void> {
+    // docker pull if not cached
+  }
+
+  async createContainer(opts: ContainerOpts): Promise<ContainerInfo> {
+    const hostPort = this.findAvailablePort();
+    const container = await this.docker.createContainer({
+      Image: opts.image,
+      name: `chatty-${opts.sessionId.slice(0, 12)}`,
+      Cmd: opts.command,
+      WorkingDir: "/workspace",
+      HostConfig: {
+        Binds: [`${opts.workspacePath}:/workspace:rw`],
+        PortBindings: { [`${opts.internalPort}/tcp`]: [{ HostPort: String(hostPort) }] },
+        Memory: opts.memoryBytes,
+      },
+    });
+
+    await container.start();
+    return { containerId: container.id, hostPort };
+  }
+
+  async stopContainer(containerId: string): Promise<void> {
+    const container = this.docker.getContainer(containerId);
+    await container.stop({ t: 10 });
+    await container.remove();
+  }
+}
+```
+
+---
+
+## Phase 8 — chatty-agent: Git Service
+
+```typescript
+// runner/src/git/service.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const exec = promisify(execFile);
+
+export class GitService {
+  constructor(private pat?: string) {}
+
+  async clone(url: string, path: string, branch: string): Promise<void> {
+    await exec("git", ["clone", "--branch", this.baseBranch(url), "--single-branch", url, path]);
+    await exec("git", ["checkout", "-b", branch], { cwd: path });
+  }
+
+  async configureAuth(workspacePath: string): Promise<void> {
+    if (!this.pat) return;
+    // Set git config to use PAT for push
+    // git config --local http.https://github.com/.extraheader "Authorization: Bearer $PAT"
+  }
+
+  async diff(workspacePath: string): Promise<string> {
+    const { stdout } = await exec("git", ["diff", "--stat"], { cwd: workspacePath });
+    return stdout;
+  }
+
+  async diffFull(workspacePath: string): Promise<string> {
+    const { stdout } = await exec("git", ["diff"], { cwd: workspacePath });
+    return stdout;
+  }
+
+  async commit(workspacePath: string, message: string): Promise<void> {
+    await exec("git", ["add", "-A"], { cwd: workspacePath });
+    await exec("git", ["commit", "-m", message], { cwd: workspacePath });
+  }
+
+  async push(workspacePath: string, branch: string): Promise<string | null> {
+    const { stdout } = await exec("git", ["push", "origin", branch], { cwd: workspacePath });
+    // Parse push output for PR URL
+    return this.extractPrUrl(stdout);
+  }
+
+  private baseBranch(url: string): string {
+    // Detected or configured base branch
+    return "main";
+  }
+
+  private extractPrUrl(pushOutput: string): string | null {
+    // Parse git push output for PR creation URL
+    const match = pushOutput.match(/https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/);
+    return match?.[0] ?? null;
+  }
+}
+```
+
+---
+
+## Phase 9 — UI: Session Dashboard & Git Panel
+
+### `/dashboard` — Session Dashboard Page
+
+SvelteKit `+page.svelte`:
+
+- Left sidebar: `SessionList` component with status badges
+- Main area: `ChatPanel` (reuses existing `MessageTimeline` + `ChatInput`)
+- Right panel: `GitPanel` (conditionally shown when session is completed or user expands)
+- Top bar: session info (harness icon, model, branch) + action buttons (complete, archive)
+
+### `SessionList.svelte`
+
+```svelte
+<!-- Props: sessions (loaded from +page.server.ts) -->
+<div class="flex flex-col gap-1 p-2">
+  <Button onclick={openNewSession}>+ New Session</Button>
+  <Separator />
+  {#each activeSessions as session}
+    <SessionItem {session} />
+  {/each}
+  <Separator />
+  <Collapsible title="Completed">
+    {#each completedSessions as session}
+      <SessionItem {session} />
+    {/each}
+  </Collapsible>
+</div>
+```
+
+### `ChatPanel.svelte`
+
+Reuses `MessageTimeline` from the existing chat view. Messages come from a Svelte store populated by SSE events from the server.
+
+### `GitPanel.svelte`
+
+```svelte
+<script lang="ts">
+  let { sessionId }: { sessionId: string } = $props();
+  let diff = $state<string | null>(null);
+  let prUrl = $state<string | null>(null);
+
+  // Subscribe to git events from the session
+  onMount(() => {
+    const unsub = subscribeToSessionEvents(sessionId, (event) => {
+      if (event.type === "git_diff") diff = event.diff;
+      if (event.type === "pr_created") prUrl = event.url;
+    });
+    return unsub;
+  });
+</script>
+
+<div class="flex flex-col h-full">
+  <h3 class="font-semibold p-2">Changes</h3>
+  {#if prUrl}
+    <a href={prUrl} target="_blank" class="px-2 text-primary hover:underline">
+      View PR #{extractPrNumber(prUrl)}
+    </a>
+  {/if}
+  {#if diff}
+    <ScrollArea class="flex-1">
+      <pre class="text-sm p-2"><code>{diff}</code></pre>
+    </ScrollArea>
+  {/if}
+  <div class="p-2 border-t">
+    <Input placeholder="Commit message" />
+    <Button>Commit & Push</Button>
+  </div>
+</div>
+```
+
+### New Session Dialog
+
+Uses `Dialog` (shadcn-svelte):
+
+```
+┌─────────────────────────────────────┐
+│  New Agent Session                  │
+│                                     │
+│  Project URL                        │
+│  ┌─────────────────────────────────┐│
+│  │ https://github.com/user/repo   ││
+│  └─────────────────────────────────┘│
+│                                     │
+│  Label (optional)                   │
+│  ┌─────────────────────────────────┐│
+│  │ refactor-auth                   ││
+│  └─────────────────────────────────┘│
+│                                     │
+│  Harness          Model             │
+│  [OpenCode ▼]     [claude-sonnet  ] │
+│                                     │
+│  Branch name       Base branch      │
+│  [chatty/refactor ] [main      ▼]   │
+│                                     │
+│  ☐ Auto-commit & push on completion │
+│                                     │
+│  Initial prompt (optional)          │
+│  ┌─────────────────────────────────┐│
+│  │ Refactor auth to use JWT       ││
+│  └─────────────────────────────────┘│
+│                                     │
+│  [Cancel]                    [Start]│
+└─────────────────────────────────────┘
+```
+
+---
+
+## Phase 10 — Cleanup & Recovery
+
+### Chatty-side cleanup (`src/lib/server/jobs.ts`)
+
+```typescript
+// Daily job
+export async function cleanupSessions(db: Db): Promise<void> {
+  const staleTimeout = getSetting(db, "staleTimeoutDays") ?? 7;
+  const cutoff = Date.now() - staleTimeout * 24 * 60 * 60 * 1000;
+
+  // 1. Auto-complete stale sessions
+  const stale = db.prepare(`
+    SELECT id FROM runner_sessions
+    WHERE status IN ('active', 'awaiting_input')
+      AND last_touched_at < ?
+  `).all(cutoff);
+
+  for (const { id } of stale) {
+    db.run(`UPDATE runner_sessions SET status = 'completed', completed_at = ? WHERE id = ?`, [Date.now(), id]);
+    // Notify runner to clean up workspace
+    sendRunnerCommand(runnerId, { type: "cleanup", sessionId: id });
+  }
+
+  // 2. Delete temp API keys for completed/failed sessions
+  db.run(`
+    DELETE FROM api_keys
+    WHERE session_id IN (
+      SELECT id FROM runner_sessions WHERE status IN ('completed', 'errored', 'archived')
+    )
+    AND expires_at IS NOT NULL AND expires_at < ?
+  `, [Date.now()]);
+}
+```
+
+### Startup recovery (`hooks.server.ts`)
+
+```typescript
+// On Chatty startup
+export async function recoverOnStartup(db: Db): Promise<void> {
+  // 1. Mark running sessions as errored (runner is gone)
+  db.run(`
+    UPDATE runner_sessions
+    SET status = 'errored', error_message = 'Server restarted — session lost'
+    WHERE status IN ('queued', 'starting', 'active', 'awaiting_input')
+  `);
+
+  // 2. Delete temp API keys for errored sessions
+  db.run(`
+    DELETE FROM api_keys
+    WHERE session_id IN (
+      SELECT id FROM runner_sessions WHERE status = 'errored'
+    )
+  `);
+}
+```
+
+### Runner-side recovery
+
+Runner handles its own recovery on startup:
+- Checks for orphaned Docker containers → stops + removes them
+- Cleans up workspace directories for sessions that no longer exist
+- Reconnects to Chatty, re-registers
 
 ---
 
 ## Implementation Order
 
-| Phase | Scope | Size |
-|---|---|---|
-| 1 | Database schema (4 migrations) | Small |
-| 2 | Runner (Docker + OpenCode container lifecycle) | Large |
-| 3 | Chatty MCP Gateway (HTTP transport for existing servers) | Medium |
-| 4 | Agent dispatch (replace streamText with runner dispatch) | Large |
-| 5 | Git config + repos + PR creation | Medium |
-| 6 | Human input flow | Small |
-| 7 | API routes | Medium |
-| 8 | UI (settings, drafting, conversation, sidebar) | Large |
-| 9 | Cleanup & polish | Small |
+| Phase | Scope | Size | Dependencies |
+|---|---|---|---|
+| 0 | Rip out existing agent system | Small | None |
+| 1 | Chatty: runner registry + WebSocket endpoint | Medium | Phase 0 |
+| 2 | Chatty: session dashboard + git panel | Large | Phase 1 |
+| 3 | Chatty: project registry, notifications, cleanup | Medium | Phase 2 |
+| 4 | Chatty: job dispatch logic | Medium | Phase 1 |
+| 5 | chatty-agent: core daemon (CLI, transport, dispatch) | Large | Phase 1 |
+| 6 | chatty-agent: OpenCode adapter | Large | Phase 5 |
+| 7 | chatty-agent: Docker runtime | Medium | Phase 5 |
+| 8 | chatty-agent: Git service | Small | Phase 5 |
+| 9 | Chatty UI: new session dialog, form rendering | Medium | Phase 2 |
+| 10 | Cleanup & recovery (both sides) | Small | All |
+
+Phases 1-4 (Chatty) and 5-8 (chatty-agent) can be developed in parallel.
+
+---
+
+## File Inventory
+
+### New Files in Chatty
+
+```
+src/lib/server/runners/
+├── connections.ts          # WebSocket connection manager
+├── dispatch.ts             # Job dispatch to runners
+├── events.ts               # Handle incoming runner events
+├── keys.ts                 # Runner API key management
+├── registry.ts             # Runner CRUD
+├── connections.spec.ts
+├── dispatch.spec.ts
+├── events.spec.ts
+└── registry.spec.ts
+
+src/lib/server/sessions/
+├── manager.ts              # Session CRUD, lifecycle
+├── cleanup.ts              # Staleness scheduler
+├── manager.spec.ts
+└── cleanup.spec.ts
+
+src/lib/server/projects/
+├── registry.ts             # Project CRUD
+└── registry.spec.ts
+
+src/lib/server/notifications/
+├── service.ts              # System notifications + sound
+└── service.spec.ts
+
+src/lib/server/git/
+└── proxy.ts                # Proxy git ops to runner
+
+src/routes/api/runners/
+├── connect/+server.ts      # WebSocket upgrade for runner connections
+├── sessions/[id]/events/+server.ts  # WebSocket for session events
+└── join/[token]/+server.ts          # Joining URL handler
+
+src/routes/(app)/
+├── dashboard/
+│   ├── +page.svelte        # Session dashboard
+│   ├── +page.server.ts
+│   └── sessions/[id]/
+│       ├── +page.svelte    # Session detail (chat + git)
+│       └── +page.server.ts
+└── settings/
+    ├── runners/
+    │   ├── +page.svelte    # Runner management
+    │   └── +page.server.ts
+    └── projects/
+        ├── +page.svelte    # Project registry
+        └── +page.server.ts
+
+src/lib/components/app/
+├── SessionList.svelte       # Sidebar session list
+├── SessionItem.svelte       # Single session row
+├── SessionStatusBadge.svelte
+├── NewSessionDialog.svelte  # Session creation wizard
+├── GitPanel.svelte          # Diff viewer + commit UI
+└── FormCard.svelte          # OpenCode form renderer
+
+migrations/
+├── 0034_remove_legacy_agents.sql
+├── 0035_runners.sql
+├── 0036_runner_sessions.sql
+├── 0037_runner_api_keys.sql
+└── 0038_projects.sql
+```
+
+### New Files in chatty-agent (`runner/`)
+
+```
+runner/
+├── package.json
+├── tsconfig.json
+├── Dockerfile             # Optional: run the runner itself in Docker
+└── src/
+    ├── index.ts
+    ├── cli/
+    │   └── commands.ts
+    ├── transport/
+    │   ├── connection.ts
+    │   ├── events.ts
+    │   ├── connection.spec.ts
+    │   └── events.spec.ts
+    ├── dispatch/
+    │   ├── dispatcher.ts
+    │   ├── job.ts
+    │   ├── dispatcher.spec.ts
+    │   └── job.spec.ts
+    ├── harness/
+    │   ├── adapter.ts
+    │   ├── registry.ts
+    │   ├── opencode.ts
+    │   ├── registry.spec.ts
+    │   └── opencode.spec.ts
+    ├── runtime/
+    │   ├── docker.ts
+    │   └── docker.spec.ts
+    ├── git/
+    │   ├── service.ts
+    │   └── service.spec.ts
+    ├── events/
+    │   ├── streamer.ts
+    │   └── streamer.spec.ts
+    ├── health/
+    │   ├── monitor.ts
+    │   └── monitor.spec.ts
+    └── config.ts
+```
+
+### Removed Files in Chatty
+
+```
+src/lib/server/agents/          # Entire directory removed
+src/routes/(app)/agents/        # Agent editor UI removed
+src/routes/api/agents/          # HTTP trigger removed
+```
+
+### Files Modified in Chatty
+
+```
+src/lib/types.ts                # + Runner, RunnerSession, Project types
+src/lib/server/jobs.ts          # + cleanupSessions, deleteExpiredKeys
+src/hooks.server.ts             # + recoverOnStartup, runner startup logic
+src/lib/server/events.ts        # Extend for session events
+src/routes/(app)/+page.svelte   # Link to dashboard
+src/routes/(app)/settings/      # + "Runners" + "Projects" nav items
+pnpm-workspace.yaml             # + "runner" package
+```
