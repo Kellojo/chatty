@@ -78,6 +78,8 @@ export async function maybeCompactConversation(
 	const threshold = compactThreshold(conversation, model, keep);
 	if (threshold === null) return;
 
+	// 'partial' is a response still being generated; dead ones are settled at
+	// startup by finalizeInterruptedMessages.
 	const messages = listMessages(db, conversation.id).filter((m) => m.status !== 'partial');
 	if (messages.length <= keep) return;
 

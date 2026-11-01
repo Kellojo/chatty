@@ -8,10 +8,12 @@ import { startAgentEventDispatcher } from '$lib/server/agents/events.js';
 import { startAgentScheduler } from '$lib/server/agents/scheduler.js';
 import { getDb } from '$lib/server/db/index.js';
 import { failRunningAgentRuns } from '$lib/server/db/repo/agent-runs.js';
+import { finalizeInterruptedMessages } from '$lib/server/db/repo/messages.js';
 import { failRunningProxyRequests } from '$lib/server/db/repo/proxy-requests.js';
 import { startDailyJobs } from '$lib/server/jobs.js';
 import { createLogger } from '$lib/server/logger.js';
 import { reconcileMemoryFts } from '$lib/server/memory/fts.js';
+import { registerShutdownHandlers } from '$lib/server/shutdown.js';
 import { seedDefaultSkills } from '$lib/server/skills/defaults.js';
 
 const log = createLogger('server');
@@ -27,6 +29,10 @@ if (!building) {
 		const interruptedProxy = failRunningProxyRequests(getDb());
 		if (interruptedProxy > 0) {
 			log.warn(`Marked ${interruptedProxy} interrupted proxy request(s) as failed`);
+		}
+		const interruptedMessages = finalizeInterruptedMessages(getDb());
+		if (interruptedMessages > 0) {
+			log.warn(`Settled ${interruptedMessages} interrupted message(s)`);
 		}
 	} catch (e) {
 		log.error('Failed to seed builtin agent or clean up runs:', {
@@ -49,6 +55,7 @@ if (!building) {
 	startAgentEventDispatcher();
 	startAgentScheduler(getDb());
 	startDailyJobs(getDb());
+	registerShutdownHandlers();
 }
 
 const authRoutes: Handle = ({ event, resolve }) =>

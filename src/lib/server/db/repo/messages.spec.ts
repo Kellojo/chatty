@@ -5,6 +5,7 @@ import {
 	createMessage,
 	deleteMessagesFrom,
 	extractText,
+	finalizeInterruptedMessages,
 	listMessages,
 	toPublic,
 	updateMessage
@@ -19,6 +20,34 @@ beforeEach(() => {
 		'INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role) VALUES (\'u1\', \'a@b.c\', \'A\', 0, 0, 0, \'user\')'
 	).run();
 	conversationId = createConversation(db, 'u1').id;
+});
+
+describe('finalizeInterruptedMessages', () => {
+	it('fails partial messages with output and removes empty ones', () => {
+		const done = createMessage(db, {
+			conversationId,
+			role: 'user',
+			parts: [{ type: 'text', text: 'q' }]
+		});
+		const withOutput = createMessage(db, {
+			conversationId,
+			role: 'assistant',
+			parts: [{ type: 'text', text: 'half an ans' }],
+			status: 'partial'
+		});
+		createMessage(db, { conversationId, role: 'assistant', parts: [], status: 'partial' });
+
+		expect(finalizeInterruptedMessages(db)).toBe(2);
+
+		const rows = listMessages(db, conversationId);
+		expect(rows.map((r) => r.id)).toEqual([done.id, withOutput.id]);
+		expect(rows[0].status).toBe('complete');
+		expect(rows[0].error).toBeNull();
+		expect(rows[1].status).toBe('failed');
+		expect(rows[1].error).toBe('Interrupted before completion');
+		expect(rows[1].content_text).toBe('half an ans');
+		expect(finalizeInterruptedMessages(db)).toBe(0);
+	});
 });
 
 describe('messages repo', () => {

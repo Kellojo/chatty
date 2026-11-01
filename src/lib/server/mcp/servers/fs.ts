@@ -21,7 +21,12 @@ function cap(out: string): string {
 }
 
 function globToRegExp(glob: string): RegExp {
-	const g = glob.replace(/\\/g, '/');
+	// Collapse repeated wildcards: patterns come from the model, and stacked
+	// `.*` groups backtrack badly on long paths.
+	const g = glob
+		.replace(/\\/g, '/')
+		.replace(/(?:\*\*\/)+/g, '**/')
+		.replace(/\*{3,}/g, '**');
 	let out = '';
 	for (let i = 0; i < g.length; i++) {
 		const c = g[i];
@@ -231,21 +236,17 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		async ({ scope, pattern }) => {
 			const r = await resolveIn(scope, '.');
 			if (!r.ok) return r.error;
-			const base = r.base;
+			const normalized = path.posix.normalize(pattern.replace(/\\/g, '/')).replace(/\/$/, '');
+			if (/^(?:\/|[a-z]:|\.\.(?:\/|$))/i.test(normalized)) {
+				return err(`pattern escapes ${scope} root`);
+			}
+			// Walk the root and match against it rather than using fs.glob, which
+			// follows `..` and absolute patterns out of its cwd.
+			const re = globToRegExp(normalized);
 			const matches: string[] = [];
-			if (typeof fsp.glob === 'function') {
-				for await (const p of fsp.glob(pattern.replace(/\\/g, '/'), { cwd: base })) {
-					const posix = toPosix(String(p));
-					if (posix === '.') continue;
-					matches.push(posix);
-					if (matches.length >= MAX_GLOB) break;
-				}
-			} else {
-				const re = globToRegExp(pattern);
-				for (const e of await walkAsync(base)) {
-					if (re.test(e.rel)) matches.push(e.rel);
-					if (matches.length >= MAX_GLOB) break;
-				}
+			for (const e of await walkAsync(r.base)) {
+				if (re.test(e.rel)) matches.push(e.rel);
+				if (matches.length >= MAX_GLOB) break;
 			}
 			matches.sort();
 			return text(JSON.stringify(matches));

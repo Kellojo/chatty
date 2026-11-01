@@ -58,7 +58,8 @@ vi.mock('../tools/registry.js', () => ({
 }));
 
 const { getDb, closeDb } = await import('../db/index.js');
-const { startAgentRun, stopAgentRun } = await import('./runner.js');
+const { startAgentRun, stopAgentRun, stopAllAgentRuns } = await import('./runner.js');
+const { getAgentRun } = await import('../db/repo/agent-runs.js');
 const { createAgent, getAgent } = await import('../db/repo/agents.js');
 const { getConversation } = await import('../db/repo/conversations.js');
 const { listMessages } = await import('../db/repo/messages.js');
@@ -175,6 +176,31 @@ describe('stopAgentRun', () => {
 		expect(finished.ended_at).not.toBeNull();
 
 		expect(stopAgentRun(run.id)).toBe(false);
+		behavior = 'ok';
+		closeDb();
+	});
+});
+
+// Keep last: shutting down permanently stops this module instance accepting runs.
+describe('stopAllAgentRuns', () => {
+	it('fails running runs with a shutdown reason, then refuses new ones', async () => {
+		behavior = 'hang';
+		const db = getDb();
+		const agent = seed(db);
+		const input = { agentId: agent.id, trigger: 'manual' as const, userId: 'u1' };
+
+		const { run, done } = await startAgentRun(input);
+		await stopAllAgentRuns(5000);
+
+		const finished = getAgentRun(db, run.id)!;
+		expect(finished.status).toBe('failed');
+		expect(finished.error).toBe('Interrupted by server shutdown');
+		await expect(done).resolves.toMatchObject({ status: 'failed' });
+
+		const messages = listMessages(db, finished.conversation_id!);
+		expect(messages.map((m) => m.status)).not.toContain('partial');
+
+		await expect(startAgentRun(input)).rejects.toThrow('shutting down');
 		behavior = 'ok';
 		closeDb();
 	});

@@ -84,6 +84,11 @@ export async function tickAgents(
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
+export function stopAgentScheduler(): void {
+	if (timer) clearInterval(timer);
+	timer = null;
+}
+
 export function startAgentScheduler(db: Db = getDb()): void {
 	if (timer) return;
 	timer = setInterval(() => {
