@@ -25,16 +25,16 @@
 		});
 	});
 
-	function statusVariant(status: ProxyRequestStatus): 'outline' | 'secondary' | 'destructive' {
-		if (status === 'running') return 'outline';
-		if (status === 'complete') return 'secondary';
-		return 'destructive';
+	function statusTone(status: ProxyRequestStatus): string {
+		if (status === 'running') return 'border-info/40 text-info-foreground';
+		if (status === 'complete') return 'border-success/30 text-success-foreground';
+		return 'border-destructive/30 text-destructive';
 	}
 
-	function statusClass(status: ProxyRequestStatus): string {
-		if (status === 'running') return 'border-info/50 text-info-foreground';
-		if (status === 'complete') return 'text-success-foreground';
-		return '';
+	function statusDot(status: ProxyRequestStatus): string {
+		if (status === 'running') return 'bg-info animate-pulse';
+		if (status === 'complete') return 'bg-success';
+		return 'bg-destructive';
 	}
 </script>
 
@@ -60,12 +60,14 @@
 				{#if request.purpose === 'title'}
 					<Badge variant="outline">title</Badge>
 				{/if}
-				<Badge variant={statusVariant(request.status)} class={statusClass(request.status)}>
-					{#if request.status === 'running'}
-						<span class="size-2 animate-pulse rounded-full bg-info"></span>
-					{/if}
+				<span
+					class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {statusTone(
+						request.status
+					)}"
+				>
+					<span class="size-1.5 rounded-full {statusDot(request.status)}"></span>
 					{request.status}
-				</Badge>
+				</span>
 			</div>
 		</div>
 
@@ -87,7 +89,13 @@
 						<dt class="text-muted-foreground">ID</dt>
 						<dd class="font-mono text-xs">{request.id}</dd>
 						<dt class="text-muted-foreground">Endpoint</dt>
-						<dd><Badge variant="secondary">{request.endpoint}</Badge></dd>
+						<dd>
+							<span
+								class="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-0.5 font-mono text-xs"
+							>
+								{request.endpoint}
+							</span>
+						</dd>
 						<dt class="text-muted-foreground">Requested model</dt>
 						<dd>{request.requestedModel}</dd>
 						<dt class="text-muted-foreground">Served provider / model</dt>

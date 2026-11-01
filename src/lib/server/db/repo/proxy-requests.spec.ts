@@ -112,6 +112,24 @@ describe('proxy-requests repo', () => {
 		expect(toPublic(getProxyRequest(db, title.id)!).purpose).toBe('title');
 	});
 
+	it('filters by search across model, endpoint, provider, and error', () => {
+		const a = logRequest('u1', 'fast');
+		finalizeProxyRequest(db, a.id, {
+			status: 'failed',
+			providerId: 'acme',
+			modelId: 'gpt-x',
+			error: 'upstream timeout'
+		});
+		logRequest('u1', 'smart', true);
+
+		expect(listProxyRequests(db, { search: 'fast' }).total).toBe(1);
+		expect(listProxyRequests(db, { search: 'chat.completions' }).total).toBe(2);
+		expect(listProxyRequests(db, { search: 'acme' }).total).toBe(1);
+		expect(listProxyRequests(db, { search: 'gpt-x' }).total).toBe(1);
+		expect(listProxyRequests(db, { search: 'timeout' }).total).toBe(1);
+		expect(listProxyRequests(db, { search: 'nomatch' }).total).toBe(0);
+	});
+
 	it('filters by source', () => {
 		logRequest('u1', 'fast');
 		createProxyRequest(db, {
