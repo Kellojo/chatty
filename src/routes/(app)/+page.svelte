@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { beforeNavigate, goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
@@ -85,6 +85,11 @@
 		personaId === '' ? 'I' : (data.personas.find((p) => p.id === personaId)?.name ?? 'I')
 	);
 
+	let latestNavigation: string | undefined;
+	beforeNavigate(({ to }) => {
+		latestNavigation = to?.url.pathname;
+	});
+
 	async function startChat(text: string) {
 		speech.stop();
 		speech.reset();
@@ -106,9 +111,16 @@
 			});
 			if (!res.ok) throw new Error('Failed to create conversation');
 			const { conversation } = (await res.json()) as { conversation: Conversation };
-			pendingMessage.set(trimmed, selectedFiles);
-			await goto(resolve(`/chat/${conversation.id}`));
+			pendingMessage.set(conversation.id, trimmed, selectedFiles);
+			const target = resolve(`/chat/${conversation.id}`);
+			await goto(target);
+			// goto() also resolves when the navigation was cancelled. Unless the user
+			// has since gone elsewhere, hand the input back rather than staying stuck.
+			if (page.url.pathname !== target && latestNavigation === target) {
+				throw new Error('Could not open the new chat, please try again');
+			}
 		} catch (e) {
+			pendingMessage.clear();
 			toast.error(e instanceof Error ? e.message : 'Failed to start chat');
 			busy = false;
 		}

@@ -1,5 +1,5 @@
-import { invalidateAll } from '$app/navigation';
 import { SvelteSet } from 'svelte/reactivity';
+import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
 import type { ServerEvent } from '$lib/types.js';
 
 type Listener = (event: ServerEvent) => void;
@@ -30,7 +30,7 @@ export function startServerEvents(): () => void {
 	events.onopen = () => {
 		if (source !== events) return;
 		if (connectedOnce) {
-			void invalidateAll();
+			void invalidateWhenIdle();
 			for (const listener of [...resyncListeners]) {
 				try {
 					listener();
