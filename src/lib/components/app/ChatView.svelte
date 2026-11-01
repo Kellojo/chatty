@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
 	import { Chat } from '@ai-sdk/svelte';
 	import { DefaultChatTransport } from 'ai';
 	import { onMount, tick, untrack } from 'svelte';
@@ -22,6 +21,7 @@
 	import MessageTimeline from './MessageTimeline.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
+	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
 	import MicButton from '$lib/components/app/MicButton.svelte';
@@ -152,15 +152,15 @@
 						p.type === 'text' || p.type === 'reasoning' ? p.text === '' : false
 					)))
 	);
-	const canSend = $derived(
-		(displayInput.trim().length > 0 || selectedFiles.length > 0) && !streaming
-	);
+	const hasContent = $derived(displayInput.trim().length > 0 || selectedFiles.length > 0);
+	let sending = $state(false);
+	const canSend = $derived(hasContent && !sending);
 
 	async function markRead() {
 		await fetch(`/api/conversations/${conversation.id}/read`, { method: 'POST' }).catch(
 			() => undefined
 		);
-		await invalidateAll();
+		await invalidateWhenIdle();
 	}
 
 	onMount(() => {
@@ -173,7 +173,7 @@
 				.finally(() => {
 					if (chat.status !== 'streaming' && chat.status !== 'submitted') {
 						remoteGenerating = false;
-						void invalidateAll();
+						void invalidateWhenIdle();
 					}
 				});
 		} else {
@@ -182,10 +182,12 @@
 	});
 
 	$effect(() => {
-		const pending = pendingMessage.consume();
+		const pending = pendingMessage.consume(conversation.id);
 		if (!pending) return;
-		if (pending.files.length > 0) addFiles(pending.files);
-		send(pending.text);
+		untrack(() => {
+			if (pending.files.length > 0) addFiles(pending.files);
+			void send(pending.text);
+		});
 	});
 
 	$effect(() => {
@@ -202,7 +204,7 @@
 			if (finishing || !remoteGenerating) return;
 			finishing = true;
 			remoteGenerating = false;
-			await invalidateAll();
+			await invalidateWhenIdle();
 			await tick();
 			chat.messages = initialMessages.map(chatMessageToUIMessage);
 			await markRead();
@@ -264,12 +266,14 @@
 	}
 
 	const SKILL_CMD = /^\/skill\s+([a-z0-9][a-z0-9-]{0,63})\s*/i;
+	const INTERRUPT_TIMEOUT_MS = 2000;
 
 	async function send(text: string) {
 		speech.stop();
 		speech.reset();
 		let trimmed = text.trim();
-		if ((!trimmed && selectedFiles.length === 0) || streaming) return;
+		if ((!trimmed && selectedFiles.length === 0) || sending) return;
+		sending = true;
 		let skill: string | undefined;
 		const skillMatch = trimmed.match(SKILL_CMD);
 		if (skillMatch) {
@@ -280,7 +284,9 @@
 		try {
 			const body = skill ? { body: { skill } } : undefined;
 			if (selectedFiles.length > 0) {
+				// Upload first: if this fails the running response is left untouched.
 				const fileParts = await uploadFiles();
+				await interruptResponse();
 				clearFiles();
 				chat.sendMessage(
 					{
@@ -289,12 +295,28 @@
 					body
 				);
 			} else {
+				await interruptResponse();
 				chat.sendMessage({ text: trimmed }, body);
 			}
 			activeChats.set(conversation.id, chat);
 			input = '';
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to send message');
+		} finally {
+			sending = false;
+		}
+	}
+
+	// Stops the response being received so a new message can take over. The Chat
+	// can't start a request until the aborted one has settled. The server aborts
+	// its side when the new message arrives; calling the abort endpoint here could
+	// reach it after that message and kill the new response instead.
+	async function interruptResponse() {
+		remoteGenerating = false;
+		await chat.stop();
+		const deadline = Date.now() + INTERRUPT_TIMEOUT_MS;
+		while ((chat.status === 'streaming' || chat.status === 'submitted') && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 20));
 		}
 	}
 
@@ -528,10 +550,11 @@
 		<PromptInput
 			value={displayInput}
 			onValueChange={(v) => (input = v)}
-			isLoading={streaming}
 			onSubmit={() => send(displayInput)}
 		>
-			<PromptInputTextarea placeholder="Ask anything…" />
+			<PromptInputTextarea
+				placeholder={streaming ? 'Send a message to interrupt and redirect…' : 'Ask anything…'}
+			/>
 			<PromptInputActions class="justify-between">
 				<div class="flex items-center gap-1">
 					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
@@ -539,7 +562,7 @@
 					</Button>
 					<MicButton {speech} />
 				</div>
-				{#if streaming}
+				{#if streaming && !hasContent}
 					<Button size="sm" variant="destructive" aria-label="Stop" onclick={stop}>
 						<SquareIcon class="size-4" />
 					</Button>

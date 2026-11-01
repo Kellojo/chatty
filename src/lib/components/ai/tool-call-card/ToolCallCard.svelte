@@ -17,13 +17,16 @@
 		errorText?: string;
 	};
 
-	let { part }: { part: ToolPart } = $props();
+	// `active`: the response this call belongs to is still being generated. If not,
+	// a call without a result was interrupted and will never finish.
+	let { part, active = true }: { part: ToolPart; active?: boolean } = $props();
 
 	let open = $state(false);
 
 	const name = $derived(getToolOrDynamicToolName(part as never));
 	const meta = $derived(TOOL_META[name]);
-	const running = $derived(part.state === 'input-streaming' || part.state === 'input-available');
+	const incomplete = $derived(part.state === 'input-streaming' || part.state === 'input-available');
+	const running = $derived(incomplete && active);
 	const failed = $derived(part.state === 'output-error');
 
 	function asPrettyJson(value: unknown): string {
@@ -74,7 +77,7 @@
 				<Loader2Icon class="size-4 animate-spin text-muted-foreground" />
 			{:else if failed}
 				<TriangleAlertIcon class="size-4 text-destructive" />
-			{:else}
+			{:else if !incomplete}
 				<CheckIcon class="size-4 text-muted-foreground" />
 			{/if}
 			<ChevronDownIcon

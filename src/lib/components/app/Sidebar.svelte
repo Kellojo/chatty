@@ -25,6 +25,7 @@
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import { serverActiveChatIds } from '$lib/state/chat-status.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
+	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
 	import { formatCount } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
@@ -145,7 +146,7 @@
 		}
 		serverActiveChatIds.clear();
 		for (const id of next) serverActiveChatIds.add(id);
-		if (completed) await invalidateAll();
+		if (completed) await invalidateWhenIdle();
 	}
 
 	function onGlobalKeydown(event: KeyboardEvent) {
@@ -167,7 +168,7 @@
 			if (invalidateTimer) return;
 			invalidateTimer = setTimeout(() => {
 				invalidateTimer = null;
-				void invalidateAll();
+				void invalidateWhenIdle();
 			}, 200);
 		};
 		const offEvents = onServerEvent((event) => {

@@ -258,7 +258,7 @@
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					{/if}
 				{:else if part.type.startsWith('tool-') || part.type === 'dynamic-tool'}
-					<ToolCallCard part={part as never} />
+					<ToolCallCard part={part as never} active={streaming && isLastAssistant(index)} />
 				{/if}
 			{/each}
 

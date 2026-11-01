@@ -52,7 +52,13 @@ import { buildTools } from '../tools/registry.js';
 import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
 import { attachmentCache } from './attachmentCache.js';
 import { maybeCompactConversation } from './compact.js';
-import { appendChunk, markDone, registerStream, releaseStream } from './streams.js';
+import {
+	abortStreamAndWait,
+	appendChunk,
+	markDone,
+	registerStream,
+	releaseStream
+} from './streams.js';
 import { generateConversationTitle } from './title.js';
 
 const log = createLogger('chat');
@@ -206,7 +212,8 @@ const PERSIST_INTERVAL_MS = 500;
 async function consumeStreamCopy(
 	conversationId: string,
 	messageId: string,
-	sseStream: ReadableStream<string>
+	sseStream: ReadableStream<string>,
+	controller: AbortController
 ): Promise<void> {
 	const db = getDb();
 	let lastPersist = 0;
@@ -230,7 +237,7 @@ async function consumeStreamCopy(
 		});
 		const mirror = (async () => {
 			for await (const parsed of rawChunks) {
-				if (parsed.success) appendChunk(conversationId, parsed.value as UIMessageChunk);
+				if (parsed.success) appendChunk(conversationId, parsed.value as UIMessageChunk, controller);
 			}
 		})();
 
@@ -254,7 +261,7 @@ async function consumeStreamCopy(
 	} catch {
 		// the main response stream failing is handled by onEnd/onError
 	} finally {
-		markDone(conversationId);
+		markDone(conversationId, controller);
 	}
 }
 
@@ -266,6 +273,10 @@ export async function handleChatRequest(
 	let conversation = getConversation(db, userId, body.conversationId);
 	if (!conversation) throw new ChatRequestError(404, 'Conversation not found');
 	if (conversation.kind !== 'chat') throw new ChatRequestError(400, 'Not a chat conversation');
+
+	// A new message takes over from a response that is still running. Its partial
+	// output has to be persisted first so that it is part of the history below.
+	await abortStreamAndWait(conversation.id);
 
 	conversation = ensureModel(db, userId, conversation);
 	const agent = conversation.agent_id ? getAgent(db, conversation.agent_id) : undefined;
@@ -375,8 +386,11 @@ export async function handleChatRequest(
 		.filter(Boolean)
 		.join('\n\n');
 	const history = historyFromDb(db, conversation.id);
+	// An interrupted response can leave tool calls without results, which providers
+	// reject, so they are left out of the prompt.
 	const modelMessages = await convertToModelMessages(
-		await inlineAttachmentParts(db, conversation.id, history)
+		await inlineAttachmentParts(db, conversation.id, history),
+		{ ignoreIncompleteToolCalls: true }
 	);
 	const stopWhen = stepCountIs(
 		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5
@@ -554,7 +568,7 @@ export async function handleChatRequest(
 		onEnd: async ({ responseMessage, isAborted }) => {
 			try {
 				const status = isAborted ? 'partial' : errorText ? 'failed' : 'complete';
-				if (responseMessage.parts.length > 0 || status !== 'failed') {
+				if (responseMessage.parts.length > 0 || status === 'complete') {
 					updateMessage(db, assistantMessageId, {
 						parts: responseMessage.parts,
 						status,
@@ -599,7 +613,7 @@ export async function handleChatRequest(
 	return createUIMessageStreamResponse({
 		stream,
 		consumeSseStream: ({ stream: sseStream }) => {
-			void consumeStreamCopy(conversation.id, assistantMessageId, sseStream);
+			void consumeStreamCopy(conversation.id, assistantMessageId, sseStream, controller);
 		}
 	});
 }
