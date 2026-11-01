@@ -24,6 +24,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const user = requireAdmin(locals);
 	const db = getDb();
 
+	const searchFilter = url.searchParams.get('search') ?? '';
 	const userFilter = url.searchParams.get('user') ?? '';
 	const keyFilter = url.searchParams.get('key') ?? '';
 	const modelFilter = url.searchParams.get('model') ?? '';
@@ -40,6 +41,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	if (statusFilter) filters.status = statusFilter;
 	if (endpointFilter) filters.endpoint = endpointFilter;
 	if (sourceFilter) filters.source = sourceFilter;
+	if (searchFilter) filters.search = searchFilter;
 	const fromMs = parseDateStart(fromFilter);
 	if (fromMs !== undefined) filters.from = fromMs;
 	const toMs = parseDateStart(toFilter);
@@ -123,6 +125,9 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const optionModels = db
 		.prepare('SELECT DISTINCT requested_model FROM proxy_requests ORDER BY 1')
 		.all() as { requested_model: string }[];
+	const optionEndpoints = db
+		.prepare('SELECT DISTINCT endpoint FROM proxy_requests ORDER BY 1')
+		.all() as { endpoint: string }[];
 
 	return {
 		requests,
@@ -134,6 +139,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		users,
 		keys,
 		filters: {
+			search: searchFilter,
 			user: userFilter,
 			key: keyFilter,
 			model: modelFilter,
@@ -145,12 +151,16 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		},
 		page,
 		totalPages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+		pageSize: PAGE_SIZE,
+		totalResults: total,
 		timeFormat: getTimeFormat(db, user.id),
 		filterOptions: {
 			users: optionUsers.map((u) => ({ id: u.id, name: u.name || u.email })),
 			keys: optionKeys.map((k) => ({ id: k.id, label: k.label })),
 			models: optionModels.map((m) => m.requested_model),
-			sources: ['proxy', 'chat', 'agent']
+			endpoints: optionEndpoints.map((e) => e.endpoint),
+			sources: ['proxy', 'chat', 'agent'],
+			statuses: ['complete', 'failed', 'running']
 		}
 	};
 };

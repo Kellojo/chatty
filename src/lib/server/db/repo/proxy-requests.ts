@@ -164,6 +164,7 @@ export interface ProxyRequestFilters {
 	status?: string;
 	endpoint?: string;
 	source?: string;
+	search?: string;
 	from?: number;
 	to?: number;
 }
@@ -194,6 +195,13 @@ function buildWhere(filters: ProxyRequestFilters): { where: string; args: unknow
 	if (filters.source) {
 		clauses.push('source = ?');
 		args.push(filters.source);
+	}
+	if (filters.search) {
+		const term = `%${filters.search}%`;
+		clauses.push(
+			'(requested_model LIKE ? OR endpoint LIKE ? OR provider_id LIKE ? OR model_id LIKE ? OR error LIKE ?)'
+		);
+		args.push(term, term, term, term, term);
 	}
 	if (filters.from !== undefined) {
 		clauses.push('started_at >= ?');
