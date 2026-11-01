@@ -143,6 +143,25 @@ export function updateMessage(
 	return getMessage(db, id);
 }
 
+/**
+ * Settles responses whose generation died with the previous process. Call at
+ * startup only, while nothing can be streaming. Responses that never produced
+ * any output are removed, as they are when a live stream ends empty.
+ */
+export function finalizeInterruptedMessages(db: Db): number {
+	return db.transaction(() => {
+		const removed = db
+			.prepare("DELETE FROM messages WHERE status = 'partial' AND parts = '[]'")
+			.run().changes;
+		const failed = db
+			.prepare(
+				"UPDATE messages SET status = 'failed', error = 'Interrupted before completion' WHERE status = 'partial'"
+			)
+			.run().changes;
+		return removed + failed;
+	})();
+}
+
 export function deleteMessage(db: Db, id: string): boolean {
 	return db.prepare('DELETE FROM messages WHERE id = ?').run(id).changes > 0;
 }

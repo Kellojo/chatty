@@ -111,6 +111,26 @@ describe('fs server', () => {
 		expect(matches).toContain('src/a.md');
 	});
 
+	it('fs_glob accepts a leading ./ and matches single-level wildcards', async () => {
+		const res = await callTool('fs_glob', { scope: 'workspace', pattern: './src/*.md' });
+		expect(JSON.parse(resultText(res))).toEqual(['src/a.md']);
+	});
+
+	it.each(['../*', '../../**', 'src/../../*', '..', '/*', '/etc/*', 'C:/*', '..\\*'])(
+		'fs_glob rejects the escaping pattern %s',
+		async (pattern) => {
+			const res = await callTool('fs_glob', { scope: 'workspace', pattern });
+			expect(isErr(res)).toBe(true);
+			expect(resultText(res)).toContain('escapes workspace root');
+		}
+	);
+
+	it('fs_glob cannot leave the root through brace expansion', async () => {
+		fs.writeFileSync(path.join(workspaceDir, '..', 'outside.txt'), 'secret');
+		const res = await callTool('fs_glob', { scope: 'workspace', pattern: '{..,src}/*' });
+		expect(resultText(res)).not.toContain('outside.txt');
+	});
+
 	it('rejects paths escaping the scope root', async () => {
 		expect(isErr(await callTool('fs_read', { scope: 'workspace', path: '../outside.txt' }))).toBe(
 			true

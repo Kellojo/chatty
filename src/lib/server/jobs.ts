@@ -57,6 +57,11 @@ export function runDailyJobs(db: Db = getDb()): void {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
+export function stopDailyJobs(): void {
+	if (timer) clearInterval(timer);
+	timer = null;
+}
+
 export function startDailyJobs(db: Db = getDb()): void {
 	runDailyJobs(db);
 	if (timer) return;

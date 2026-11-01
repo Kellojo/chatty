@@ -52,10 +52,32 @@ export function stopAgentRun(runId: string): boolean {
 	return true;
 }
 
+const SHUTDOWN_MESSAGE = 'Interrupted by server shutdown';
+const activeRuns = new Set<Promise<unknown>>();
+let shuttingDown = false;
+
+/**
+ * Stops every running agent and refuses new runs for the rest of the process's
+ * life. The wait is bounded so a stuck run can't hold up shutdown.
+ */
+export async function stopAllAgentRuns(timeoutMs: number): Promise<void> {
+	shuttingDown = true;
+	for (const controller of runControllers.values()) {
+		controller.abort(new Error(SHUTDOWN_MESSAGE));
+	}
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<void>((resolve) => {
+		timer = setTimeout(resolve, timeoutMs);
+	});
+	await Promise.race([Promise.allSettled(activeRuns), timeout]);
+	clearTimeout(timer);
+}
+
 export async function startAgentRun(
 	input: StartAgentRunInput,
 	db: Db = getDb()
 ): Promise<StartedAgentRun> {
+	if (shuttingDown) throw new Error('Server is shutting down');
 	const agent = getAgent(db, input.agentId);
 	if (!agent) throw new Error('Agent not found');
 
@@ -137,6 +159,8 @@ export async function startAgentRun(
 
 	const controller = new AbortController();
 	runControllers.set(run.id, controller);
+	// Shutdown may have begun during the awaits above, after its abort sweep.
+	if (shuttingDown) controller.abort(new Error(SHUTDOWN_MESSAGE));
 	publishServerEvent(input.userId, { type: 'agent.run.started', agentId: agent.id, runId: run.id });
 
 	const done = (async (): Promise<AgentRunRow> => {
@@ -272,7 +296,10 @@ export async function startAgentRun(
 		} catch (e) {
 			if (!errorText) errorText = e instanceof Error ? e.message : String(e);
 		} finally {
-			if (controller.signal.aborted) errorText = 'Stopped by user';
+			if (controller.signal.aborted) {
+				const reason: unknown = controller.signal.reason;
+				errorText = reason instanceof Error ? reason.message : 'Stopped by user';
+			}
 			runControllers.delete(run.id);
 			for (const id of assistantMessageIds) {
 				updateMessage(db, id, {
@@ -304,6 +331,9 @@ export async function startAgentRun(
 		}
 		return getAgentRun(db, run.id)!;
 	});
+
+	activeRuns.add(done);
+	void done.finally(() => activeRuns.delete(done));
 
 	return { run, done };
 }

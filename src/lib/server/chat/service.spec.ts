@@ -8,7 +8,11 @@ vi.mock('../llm/registry.js', async () => {
 	const { simulateReadableStream } = await import('ai');
 	const state = ((
 		globalThis as {
-			__chatChunksState?: { chunks: unknown[] | null; lastPrompt?: unknown };
+			__chatChunksState?: {
+				chunks: unknown[] | null;
+				lastPrompt?: unknown;
+				chunkDelayMs?: number;
+			};
 		}
 	).__chatChunksState ??= { chunks: null });
 	const defaultChunks = [
@@ -30,7 +34,8 @@ vi.mock('../llm/registry.js', async () => {
 			state.lastPrompt = opts.prompt;
 			return {
 				stream: simulateReadableStream({
-					chunks: (state.chunks ?? defaultChunks) as never[]
+					chunks: (state.chunks ?? defaultChunks) as never[],
+					chunkDelayInMs: state.chunkDelayMs ?? 0
 				})
 			};
 		}
@@ -42,7 +47,10 @@ vi.mock('../llm/registry.js', async () => {
 		__setChunks: (chunks: unknown[] | null) => {
 			state.chunks = chunks;
 		},
-		__getLastPrompt: () => state.lastPrompt
+		__getLastPrompt: () => state.lastPrompt,
+		__setChunkDelay: (ms: number) => {
+			state.chunkDelayMs = ms;
+		}
 	};
 });
 
@@ -87,6 +95,7 @@ const { listAttachmentsByConversation } = await import('../db/repo/attachments.j
 const registry = (await import('../llm/registry.js')) as unknown as {
 	__setChunks: (chunks: unknown[] | null) => void;
 	__getLastPrompt: () => unknown;
+	__setChunkDelay: (ms: number) => void;
 };
 
 type Db = ReturnType<typeof getDb>;
@@ -512,11 +521,13 @@ describe('handleChatRequest', () => {
 
 	it('injects an attachment-id note before image file parts sent to the model', async () => {
 		const fsp = await import('node:fs/promises');
+		let createdDir = '';
 		try {
 			const db = getDb();
 			const conversation = seed(db);
 			const { createAttachment } = await import('../db/repo/attachments.js');
-			const dir = `workspaces/${conversation.id}/attachments`;
+			createdDir = `workspaces/${conversation.id}`;
+			const dir = `${createdDir}/attachments`;
 			await fsp.mkdir(dir, { recursive: true });
 			await fsp.writeFile(`${dir}/photo.jpg`, Buffer.from([0xff, 0xd8, 0xff, 1]));
 			const att = createAttachment(db, {
@@ -557,7 +568,115 @@ describe('handleChatRequest', () => {
 			expect(note!.text).toContain(att.id);
 		} finally {
 			registry.__setChunks(null);
-			await fsp.rm('workspaces', { recursive: true, force: true });
+			if (createdDir) await fsp.rm(createdDir, { recursive: true, force: true });
+			closeDb();
+		}
+	});
+
+	it('ignores attachments stored under another conversation', async () => {
+		const fsp = await import('node:fs/promises');
+		registry.__setChunks(null);
+		let createdDir = '';
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			const victim = createConversation(db, 'u1', { providerId: 'p1', modelId: 'm1' });
+			const { createAttachment, getAttachment } = await import('../db/repo/attachments.js');
+			createdDir = `workspaces/${victim.id}`;
+			const dir = `${createdDir}/attachments`;
+			await fsp.mkdir(dir, { recursive: true });
+			const secret = Buffer.from('victim-secret-bytes');
+			await fsp.writeFile(`${dir}/secret.png`, secret);
+			const att = createAttachment(db, {
+				kind: 'image',
+				path: `${victim.id}/attachments/secret.png`,
+				mime: 'image/png',
+				sha256: 'x'
+			});
+
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: {
+					id: 'msg-1',
+					role: 'user',
+					parts: [
+						{ type: 'text', text: 'describe this' },
+						{
+							type: 'file',
+							url: `/api/conversations/${conversation.id}/attachments/${att.id}`,
+							mediaType: 'image/png',
+							filename: 'secret.png'
+						}
+					]
+				}
+			});
+			expect(res.status).toBe(200);
+			await res.text();
+			await new Promise((r) => setTimeout(r, 100));
+
+			const prompt = JSON.stringify(registry.__getLastPrompt());
+			expect(prompt).toContain('describe this');
+			expect(prompt).not.toContain(att.id);
+			expect(prompt).not.toContain(secret.toString('base64'));
+			expect(getAttachment(db, att.id)!.message_id).toBeNull();
+		} finally {
+			if (createdDir) await fsp.rm(createdDir, { recursive: true, force: true });
+			closeDb();
+		}
+	});
+
+	it('saves output while streaming, and keeps the full text once finished', async () => {
+		registry.__setChunkDelay(400);
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+			});
+			const reading = res.text();
+
+			const assistant = () =>
+				listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+			await vi.waitFor(
+				() => {
+					expect(assistant().status).toBe('partial');
+					expect(assistant().content_text).toContain('Hi');
+				},
+				{ timeout: 3000 }
+			);
+
+			await reading;
+			await new Promise((r) => setTimeout(r, 700));
+			expect(assistant().status).toBe('complete');
+			expect(assistant().content_text).toBe('Hi there');
+		} finally {
+			registry.__setChunkDelay(0);
+			closeDb();
+		}
+	});
+
+	it('marks an aborted response as failed, not partial', async () => {
+		registry.__setChunks([
+			{ type: 'text-start', id: 't1' },
+			{ type: 'text-delta', id: 't1', delta: 'Hi ' }
+		]);
+		const { abortStream } = await import('./streams.js');
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+			});
+			abortStream(conversation.id);
+			await res.text();
+			await new Promise((r) => setTimeout(r, 100));
+
+			const statuses = listMessages(db, conversation.id).map((m) => m.status);
+			expect(statuses).not.toContain('partial');
+		} finally {
+			registry.__setChunks(null);
 			closeDb();
 		}
 	});

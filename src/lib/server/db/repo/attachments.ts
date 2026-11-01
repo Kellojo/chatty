@@ -25,6 +25,22 @@ export function getAttachment(db: Db, id: string): AttachmentRow | undefined {
 	return db.prepare('SELECT * FROM attachments WHERE id = ?').get(id) as AttachmentRow | undefined;
 }
 
+/**
+ * Looks up an attachment by id, but only if it is stored under the given
+ * conversation. Use this for any id that comes from a client or a model.
+ */
+export function getConversationAttachment(
+	db: Db,
+	conversationId: string,
+	id: string
+): AttachmentRow | undefined {
+	const row = getAttachment(db, id);
+	if (!row) return undefined;
+	return row.path.replace(/\\/g, '/').startsWith(`${conversationId}/attachments/`)
+		? row
+		: undefined;
+}
+
 export function linkAttachmentsToMessage(db: Db, messageId: string, ids: string[]): void {
 	if (ids.length === 0) return;
 	const placeholders = ids.map(() => '?').join(', ');

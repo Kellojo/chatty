@@ -1,10 +1,9 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { error } from '@sveltejs/kit';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getConversation } from '$lib/server/db/repo/conversations.js';
-import { getAttachment } from '$lib/server/db/repo/attachments.js';
+import { getConversationAttachment } from '$lib/server/db/repo/attachments.js';
 import { resolveAttachment } from '$lib/server/workspaces.js';
 import type { RequestHandler } from './$types';
 
@@ -12,12 +11,8 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const user = requireUser(locals);
 	const db = getDb();
 	if (!getConversation(db, user.id, params.id)) error(404, { message: 'Conversation not found' });
-	const row = getAttachment(db, params.attachmentId);
-	const expectedPrefix = `${params.id}/attachments/`;
-	const normalized = row?.path.split(path.sep).join('/');
-	if (!row || !normalized?.startsWith(expectedPrefix)) {
-		error(404, { message: 'Attachment not found' });
-	}
+	const row = getConversationAttachment(db, params.id, params.attachmentId);
+	if (!row) error(404, { message: 'Attachment not found' });
 	let filePath: string;
 	try {
 		filePath = resolveAttachment(row.path);

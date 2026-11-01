@@ -32,7 +32,11 @@ import {
 	updateMessage,
 	type MessageUsage
 } from '../db/repo/messages.js';
-import { getAttachment, linkAttachmentsToMessage } from '../db/repo/attachments.js';
+import {
+	getAttachment,
+	getConversationAttachment,
+	linkAttachmentsToMessage
+} from '../db/repo/attachments.js';
 import { getAgent } from '../db/repo/agents.js';
 import { latestSummary } from '../db/repo/conversation-summaries.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
@@ -95,8 +99,9 @@ async function inlineAttachmentParts(
 						if (part.type !== 'file') return [part];
 						const attachmentId = attachmentIdFromUrl(part.url, conversationId);
 						if (!attachmentId) return [part];
-						const row = getAttachment(db, attachmentId);
-						if (!row) return [part];
+						const row = getConversationAttachment(db, conversationId, attachmentId);
+						// An internal URL means nothing to the provider, so leave the part out.
+						if (!row) return [];
 						const idNote = row.mime.startsWith('image/')
 							? [
 									{
@@ -190,7 +195,8 @@ function upsertUserMessage(db: Db, conversationId: string, message: UIMessage): 
 	const attachmentIds = message.parts
 		.filter((p) => p.type === 'file')
 		.map((p) => attachmentIdFromUrl((p as { url: string }).url, conversationId))
-		.filter((id): id is string => id !== null);
+		.filter((id): id is string => id !== null)
+		.filter((id) => getConversationAttachment(db, conversationId, id) !== undefined);
 	linkAttachmentsToMessage(db, message.id, attachmentIds);
 	return message;
 }
@@ -219,6 +225,9 @@ async function consumeStreamCopy(
 	let lastPersist = 0;
 	const persist = (parts: unknown[]) => {
 		try {
+			// This copy of the stream can lag behind the response. Once onEnd has
+			// settled the message, a late snapshot must not overwrite its final parts.
+			if (getMessage(db, messageId)?.status !== 'partial') return;
 			updateMessage(db, messageId, { parts });
 		} catch (e) {
 			log.error('Failed to persist streaming assistant message', {
@@ -244,9 +253,15 @@ async function consumeStreamCopy(
 		const messageChunks = parseJsonEventStream({
 			stream: messageBranch.pipeThrough(new TextEncoderStream()),
 			schema: uiMessageChunkSchema
-		});
+		}).pipeThrough(
+			new TransformStream<{ success: boolean; value?: unknown }, UIMessageChunk>({
+				transform(parsed, out) {
+					if (parsed.success) out.enqueue(parsed.value as UIMessageChunk);
+				}
+			})
+		);
 		const uiStream = readUIMessageStream<UIMessage>({
-			stream: messageChunks as unknown as ReadableStream<UIMessageChunk>,
+			stream: messageChunks,
 			onError: () => undefined
 		});
 		for await (const message of uiStream) {
@@ -567,12 +582,14 @@ export async function handleChatRequest(
 		},
 		onEnd: async ({ responseMessage, isAborted }) => {
 			try {
-				const status = isAborted ? 'partial' : errorText ? 'failed' : 'complete';
+				// 'partial' only ever means "still being generated", so that anything
+				// left in that state after a restart is known to be a dead response.
+				const status = isAborted || errorText ? 'failed' : 'complete';
 				if (responseMessage.parts.length > 0 || status === 'complete') {
 					updateMessage(db, assistantMessageId, {
 						parts: responseMessage.parts,
 						status,
-						error: errorText,
+						error: isAborted ? 'Response interrupted' : errorText,
 						usage: usageMeta
 					});
 				} else {
