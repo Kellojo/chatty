@@ -16,7 +16,7 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 		'search_chats',
 		{
 			description:
-				"Search the current user's chat conversations by title and message content, and/or list chats updated since a timestamp",
+				"Search the current user's chat conversations by title and message content, and/or list chats updated since a timestamp. Coding threads (T3 sessions) include a `coding` field with their project and status.",
 			inputSchema: {
 				query: z.string().optional(),
 				since: z
@@ -45,7 +45,14 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 			const filtered = sinceMs !== null ? rows.filter((r) => r.updated_at >= sinceMs) : rows;
 			return text(
 				JSON.stringify(
-					filtered.slice(0, n).map((r) => ({ id: r.id, title: r.title, updatedAt: r.updated_at }))
+					filtered.slice(0, n).map((r) => ({
+						id: r.id,
+						title: r.title,
+						updatedAt: r.updated_at,
+						...(r.coding_status
+							? { coding: { project: r.coding_project_title ?? '', status: r.coding_status } }
+							: {})
+					}))
 				)
 			);
 		}

@@ -37,7 +37,7 @@
 			role: 'compaction',
 			label: 'Chat compaction',
 			description:
-				'Summarizes long conversations when they outgrow the context window. Falls back to the conversation model when unset; a cheap model works well.'
+				'Summarizes long chats near the context limit. Uses the conversation model when unset; a cheap model works well.'
 		},
 		{
 			role: 'speech-to-text',
@@ -131,9 +131,9 @@
 	</SettingsSection>
 {/if}
 
-<SettingsSection contentClass="gap-0 divide-y divide-border/60">
+<SettingsSection>
 	{#each roleDescriptions as { role, label, description } (role)}
-		<SettingsRow {label} {description} class="py-4 first:pt-0 last:pb-0" stack>
+		<SettingsRow {label} {description} stack>
 			<ModelSelect
 				groups={enabledGroups}
 				mappings={data.mappings}

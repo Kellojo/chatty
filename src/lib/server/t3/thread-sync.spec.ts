@@ -181,6 +181,40 @@ describe('importCodingConversation', () => {
 		expect(importBudget(db, environmentId)).toBe(1);
 	});
 
+	it("knows the owner's threads on their other environments, but not other users' threads", () => {
+		importOne();
+		const second = createCodingEnvironment(db, 'u1', {
+			name: 'Same server',
+			baseUrl: 'http://192.168.0.2:3773',
+			token: 'token'
+		}).id;
+		expect(coding.listKnownThreadIds(db, second)).toEqual(new Set(['t1']));
+		db.prepare(
+			`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u2', 'u2', 'u2@example.com', 0, 0, 0, 'user')`
+		).run();
+		const foreign = createCodingEnvironment(db, 'u2', {
+			name: 'T3',
+			baseUrl: 'http://t3.test',
+			token: 'token'
+		}).id;
+		expect(coding.listKnownThreadIds(db, foreign)).toEqual(new Set());
+	});
+
+	it('relinks conversations of a removed environment to one serving their thread', () => {
+		const id = importOne();
+		db.prepare('DELETE FROM coding_environments WHERE id = ?').run(environmentId);
+		expect(coding.getCodingConversation(db, id)?.environment_id).toBeNull();
+		const readded = createCodingEnvironment(db, 'u1', {
+			name: 'T3',
+			baseUrl: 'http://t3.test',
+			token: 'token'
+		}).id;
+		expect(coding.relinkOrphanedThreads(db, readded, new Set(['other']))).toEqual([]);
+		expect(coding.relinkOrphanedThreads(db, readded, new Set(['t1']))).toEqual([id]);
+		expect(coding.getCodingConversation(db, id)?.environment_id).toBe(readded);
+		expect(coding.listKnownThreadIds(db, readded)).toEqual(new Set(['t1']));
+	});
+
 	it('remembers the thread after its conversation is purged', () => {
 		const id = importOne();
 		conversations.purgeConversation(db, id);

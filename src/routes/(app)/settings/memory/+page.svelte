@@ -63,13 +63,13 @@
 	{/snippet}
 </SettingsHeader>
 
-<SettingsSection title="Extraction">
+<SettingsSection title="Extraction" description="Turns past chats into memory concepts.">
 	<SettingsRow
 		label="Extract memory"
 		description="Runs automatically after every 5th new chat and distills recent conversations into memory concepts. Run it now to catch up right away."
 		stack
 	>
-		<Button class="w-full sm:w-auto" disabled={extractBusy} onclick={extractNow}>
+		<Button variant="outline" class="w-full sm:w-auto" disabled={extractBusy} onclick={extractNow}>
 			{#if extractBusy}
 				<LoaderCircleIcon class="size-4 animate-spin" />
 				Starting…
@@ -78,11 +78,16 @@
 			{/if}
 		</Button>
 	</SettingsRow>
-	{#if isAdmin}
+</SettingsSection>
+
+{#if isAdmin}
+	<SettingsSection
+		title="Search index"
+		description="Full-text search over memory. Only admins can rebuild it."
+	>
 		<SettingsRow
-			class="border-t pt-4"
-			label="Search index"
-			description="Rebuild the full-text index over all memory bundles after changing memory files outside the app."
+			label="Full-text index"
+			description="Covers all memory bundles. Rebuild it after changing memory files outside the app."
 			stack
 		>
 			<Button variant="outline" class="w-full sm:w-auto" disabled={reindexBusy} onclick={reindex}>
@@ -94,5 +99,5 @@
 				{/if}
 			</Button>
 		</SettingsRow>
-	{/if}
-</SettingsSection>
+	</SettingsSection>
+{/if}

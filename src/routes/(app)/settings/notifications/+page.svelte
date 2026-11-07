@@ -126,11 +126,13 @@
 		}
 	}
 
+	const canTest = $derived(prefs.sound || (prefs.desktop && permission === 'granted'));
+	const desktopBlocked = $derived(permission === 'unsupported' || permission === 'denied');
 	const desktopHint = $derived(
 		permission === 'unsupported'
 			? "This browser doesn't support notifications."
 			: permission === 'denied'
-				? 'Blocked for this site. Allow notifications in your browser settings, then turn this on.'
+				? 'Blocked for this site. Allow notifications in your browser settings, then come back to this tab.'
 				: 'Pop up a system notification when no Chatty tab is focused.'
 	);
 </script>
@@ -142,10 +144,12 @@
 	description="How Chatty gets your attention when a reply lands or a task needs you. Nothing alerts while you're looking at the conversation."
 >
 	{#snippet actions()}
-		<Button variant="outline" onclick={sendTest}>
-			<BellRingIcon class="size-4" />
-			Send test
-		</Button>
+		<span title={canTest ? undefined : 'Turn on desktop notifications or a sound first'}>
+			<Button variant="outline" onclick={sendTest} disabled={!canTest}>
+				<BellRingIcon class="size-4" />
+				Send test
+			</Button>
+		</span>
 	{/snippet}
 </SettingsHeader>
 
@@ -167,11 +171,16 @@
 </SettingsSection>
 
 <SettingsSection title="On this device" description="Saved in this browser only.">
-	<SettingsRow label="Desktop notifications" for="pref-desktop" description={desktopHint}>
+	<SettingsRow label="Desktop notifications" for="pref-desktop">
+		{#snippet description()}
+			<span class={desktopBlocked ? 'text-amber-700 dark:text-amber-400' : undefined}
+				>{desktopHint}</span
+			>
+		{/snippet}
 		<Switch
 			id="pref-desktop"
 			checked={prefs.desktop && permission === 'granted'}
-			disabled={permission === 'unsupported'}
+			disabled={desktopBlocked}
 			onCheckedChange={setDesktop}
 		/>
 	</SettingsRow>
@@ -198,7 +207,6 @@
 		/>
 	</SettingsRow>
 	<SettingsRow
-		class="border-t pt-4"
 		label="Play a sound"
 		for="pref-sound"
 		description="A short sound when something needs your attention. Off by default."

@@ -149,9 +149,9 @@ export function countSettledConversations(db: Db, userId: string): number {
 export function listConversationsSince(db: Db, userId: string, since: number): ConversationRow[] {
 	return db
 		.prepare(
-			`SELECT * FROM conversations
-			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND updated_at >= ?
-			 ORDER BY updated_at DESC`
+			`${SIDEBAR_SELECT}
+			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.updated_at >= ?
+			 ORDER BY c.updated_at DESC`
 		)
 		.all(userId, since) as ConversationRow[];
 }

@@ -236,20 +236,33 @@
 <SettingsHeader
 	title="API"
 	description="Run agents over HTTP or call models through the OpenAI-compatible proxy. API keys act as you, so treat them like passwords."
-/>
+>
+	{#snippet actions()}
+		<Button onclick={openKeyDialog}><PlusIcon class="size-4" />Create key</Button>
+	{/snippet}
+</SettingsHeader>
 
 <SettingsSection title="API keys" flush>
-	{#snippet action()}
-		<Button size="sm" onclick={openKeyDialog}><PlusIcon class="size-4" />Create key</Button>
-	{/snippet}
 	{#snippet description()}
 		Scope a key to <code class="rounded bg-muted px-1 py-0.5 text-xs">agents:run</code>,
 		<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> or both.
 	{/snippet}
 	{#if data.apiKeys.length === 0}
-		<p class="border-t border-border/60 px-6 pt-4 pb-2 text-sm text-muted-foreground">
-			No API keys yet.
-		</p>
+		<div
+			class="flex flex-col items-center gap-3 border-t border-border/60 px-6 pt-6 pb-4 text-center"
+		>
+			<div
+				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+			>
+				<KeyRoundIcon class="size-5" />
+			</div>
+			<div class="flex flex-col gap-1">
+				<p class="text-sm font-medium">No API keys yet</p>
+				<p class="text-sm text-muted-foreground">
+					Create one to start agent runs or call models from scripts and other tools.
+				</p>
+			</div>
+		</div>
 	{:else}
 		<ul class="divide-y divide-border/60 border-t border-border/60" aria-label="API keys">
 			{#each data.apiKeys as key (key.id)}
@@ -292,7 +305,7 @@
 		scope and returns
 		<code class="rounded bg-muted px-1 py-0.5 text-xs">202 Accepted</code> with the created run.
 	{/snippet}
-	<CodeBlock code={agentRunSnippet} label="agent run snippet" />
+	<CodeBlock code={agentRunSnippet} label="curl" />
 </SettingsSection>
 
 <SettingsSection title="Model inference">
@@ -300,9 +313,11 @@
 		Point your tools at the OpenAI-compatible proxy with an <code
 			class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code
 		>
-		key.
-		<code class="rounded bg-muted px-1 py-0.5 text-xs">GET {origin}/api/v1/models</code> lists model ids
-		without auth.
+		key. Listing model ids needs no key:
+		<code
+			class="inline-block max-w-full overflow-x-auto rounded bg-muted px-1 py-0.5 align-bottom text-xs whitespace-nowrap"
+			>GET {origin}/api/v1/models</code
+		>
 	{/snippet}
 	<Tabs.Root value="curl" class="gap-3">
 		<Tabs.List class="flex-wrap">
@@ -321,7 +336,7 @@
 		</Tabs.List>
 		<Tabs.Content value="curl" class="flex flex-col gap-3">
 			<p class="text-sm text-muted-foreground">Stream a chat completion.</p>
-			<CodeBlock code={curlSnippet} label="curl snippet" />
+			<CodeBlock code={curlSnippet} label="curl" />
 		</Tabs.Content>
 		<Tabs.Content value="opencode" class="flex flex-col gap-3">
 			<p class="text-sm text-muted-foreground">
@@ -364,7 +379,7 @@
 			href={resolve('/settings/defaults')}>Defaults</a
 		>; until then the endpoint returns an error.
 	{/snippet}
-	<CodeBlock code={decisionsCurlSnippet} label="decisions snippet" />
+	<CodeBlock code={decisionsCurlSnippet} label="curl" />
 </SettingsSection>
 
 <SettingsSection

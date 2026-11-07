@@ -29,11 +29,11 @@
 	} = $props();
 </script>
 
-<li class="flex items-center gap-3 px-6 py-3">
+<li class={cn('flex items-center gap-3 px-6', meta || children ? 'py-3' : 'py-2')}>
 	{#if leading}
 		<div
 			class={cn(
-				'flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground',
+				'flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground empty:bg-transparent',
 				muted && 'opacity-60'
 			)}
 		>
@@ -42,7 +42,10 @@
 	{/if}
 	<div class={cn('flex min-w-0 flex-1 flex-col gap-0.5', muted && 'opacity-60')}>
 		<div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-			<span class="min-w-0 truncate text-sm font-medium" title={titleAttr ?? title}>{title}</span>
+			<span
+				class="line-clamp-2 min-w-0 text-sm font-medium wrap-break-word"
+				title={titleAttr ?? title}>{title}</span
+			>
 			{@render badges?.()}
 		</div>
 		{#if meta}

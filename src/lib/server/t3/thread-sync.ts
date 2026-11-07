@@ -16,7 +16,8 @@ import {
 	countThreadCodingConversations,
 	importCodingConversation,
 	listKnownThreadIds,
-	listThreadCodingConversations
+	listThreadCodingConversations,
+	relinkOrphanedThreads
 } from '../db/repo/coding-conversations.js';
 import {
 	listEnabledCodingEnvironments,
@@ -151,6 +152,14 @@ export function importBudget(db: Db, environmentId: string): number {
 const capWarned = new Set<string>();
 
 function importThreads(db: Db, env: CodingEnvironmentRow, shell: unknown): void {
+	const threadIds = new Set<string>();
+	for (const entry of list(rec(shell)?.threads)) {
+		const id = str(rec(entry)?.id);
+		if (id) threadIds.add(id);
+	}
+	for (const conversationId of relinkOrphanedThreads(db, env.id, threadIds)) {
+		publishServerEvent(env.user_id, { type: 'conversation.updated', conversationId });
+	}
 	const budget = importBudget(db, env.id);
 	const importable = importableThreads(shell, {
 		known: listKnownThreadIds(db, env.id),

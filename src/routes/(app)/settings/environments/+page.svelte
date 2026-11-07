@@ -8,6 +8,7 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -212,7 +213,16 @@
 					{#snippet leading()}<ServerIcon class="size-4" />{/snippet}
 					{#snippet badges()}<EnvironmentStatusBadge environment={env} />{/snippet}
 					{#snippet meta()}
-						<span title={env.baseUrl}>{env.baseUrl}</span>
+						<!-- External T3 Code server, not an app route. -->
+						<!-- eslint-disable svelte/no-navigation-without-resolve -->
+						<a
+							href={env.baseUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="rounded-sm hover:text-foreground hover:underline hover:underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+							title="Open {env.name} in T3 Code">{env.baseUrl}</a
+						>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					{/snippet}
 					<p class="text-xs text-muted-foreground">
 						{#if env.serverVersion}T3 Code {env.serverVersion} ·{/if}
@@ -228,21 +238,9 @@
 						</p>
 					{/if}
 					{#snippet trailing()}
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							class="hidden sm:inline-flex"
-							title="Sync now"
-							aria-label="Sync {env.name} now"
-							disabled={syncBusyId === env.id || !env.enabled}
-							onclick={() => sync(env)}
-						>
-							{#if syncBusyId === env.id}
-								<Loader2Icon class="size-4 animate-spin" />
-							{:else}
-								<RefreshCwIcon class="size-4" />
-							{/if}
-						</Button>
+						{#if syncBusyId === env.id}
+							<Loader2Icon class="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+						{/if}
 						<Switch
 							checked={enabled}
 							aria-label="Enable {env.name}"
@@ -251,6 +249,12 @@
 						<RowMenu
 							label="Actions for {env.name}"
 							items={[
+								{
+									label: 'Open in T3 Code',
+									icon: ExternalLinkIcon,
+									onSelect: () => window.open(env.baseUrl, '_blank', 'noopener,noreferrer')
+								},
+								'separator',
 								{
 									label: 'Sync now',
 									icon: RefreshCwIcon,

@@ -24,21 +24,22 @@
 	}
 </script>
 
-<div class="group/code relative">
-	<pre
-		class="overflow-x-auto rounded-xl border border-border/60 bg-muted/50 p-3 pr-12 font-mono text-xs leading-relaxed">{code}</pre>
-	<Button
-		variant="ghost"
-		size="icon-sm"
-		class="absolute top-1.5 right-1.5 bg-background/80 backdrop-blur"
-		onclick={copy}
-		aria-label={copied ? 'Copied' : `Copy ${label}`}
-		title={copied ? 'Copied' : 'Copy'}
-	>
-		{#if copied}
-			<CheckIcon class="size-4" />
-		{:else}
-			<CopyIcon class="size-4" />
-		{/if}
-	</Button>
+<div class="overflow-hidden rounded-xl border border-border/60 bg-muted/50">
+	<div class="flex items-center justify-between gap-2 border-b border-border/60 py-1 pr-1 pl-3">
+		<span class="text-xs text-muted-foreground">{label}</span>
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			onclick={copy}
+			aria-label={copied ? 'Copied' : `Copy ${label}`}
+			title={copied ? 'Copied' : 'Copy'}
+		>
+			{#if copied}
+				<CheckIcon class="size-4" />
+			{:else}
+				<CopyIcon class="size-4" />
+			{/if}
+		</Button>
+	</div>
+	<pre class="overflow-x-auto p-3 font-mono text-xs leading-relaxed">{code}</pre>
 </div>

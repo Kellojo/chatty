@@ -17,6 +17,16 @@
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 
+	// Keep the active phone tab in view; later sections sit past the right edge.
+	let tabStrip = $state<HTMLElement | null>(null);
+	$effect(() => {
+		void page.url.pathname;
+		const active = tabStrip?.querySelector<HTMLElement>('[aria-current="page"]');
+		if (!tabStrip || !active) return;
+		const left = active.offsetLeft - (tabStrip.clientWidth - active.offsetWidth) / 2;
+		tabStrip.scrollTo({ left: Math.max(0, left) });
+	});
+
 	const sections = [
 		{
 			href: '/settings/account',
@@ -111,7 +121,8 @@
 
 		<!-- Phones and tablets: one scrollable row of tabs, like the Usage page. -->
 		<nav
-			class="-mx-4 flex [scrollbar-width:none] gap-1 overflow-x-auto overflow-y-hidden border-b px-4 md:hidden"
+			bind:this={tabStrip}
+			class="relative -mx-4 flex [scrollbar-width:none] gap-1 overflow-x-auto overflow-y-hidden border-b [mask-image:linear-gradient(to_right,transparent,black_1rem,black_calc(100%-2.5rem),transparent)] pr-10 pl-4 md:hidden"
 			aria-label="Settings sections"
 		>
 			{#each visibleSections as section (section.href)}

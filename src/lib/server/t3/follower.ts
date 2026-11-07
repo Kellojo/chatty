@@ -405,7 +405,7 @@ export class CodingFollower {
 		// A reply still streaming for an earlier message keeps updating in the
 		// DB; only its live stream is handed over to the new turn.
 		if (this.live) this.endLive({ interrupted: false });
-		this.openLive(`${userMessageId}:reply`, userMessageId, null);
+		this.openLive(this.localMessageId(`${userMessageId}:reply`), userMessageId, null);
 	}
 
 	/** Ends a turn that never started remotely (e.g. launch failed). */
@@ -435,6 +435,20 @@ export class CodingFollower {
 	private isForeignMessage(id: string): boolean {
 		const row = getMessage(this.db, id);
 		return !!row && row.conversation_id !== this.conversationId;
+	}
+
+	/**
+	 * The row id for a message id derived from the thread. Several conversations
+	 * can follow the same thread (e.g. two users connected to one T3 server), and
+	 * message ids are global: once another conversation holds the plain id, this
+	 * one stores the message under an id scoped to itself instead. A scoped row
+	 * that already exists wins, so the choice stays stable when the other
+	 * conversation goes away.
+	 */
+	private localMessageId(remoteId: string): string {
+		const scoped = `${this.conversationId}:${remoteId}`;
+		if (this.ownMessage(scoped)) return scoped;
+		return this.isForeignMessage(remoteId) ? scoped : remoteId;
 	}
 
 	private openLive(messageId: string, userMessageId: string | null, runId: string | null): void {
@@ -638,14 +652,9 @@ export class CodingFollower {
 				if (isRunActive(run)) this.interruptRun(String(run.id));
 			}
 		}
-		if (
-			!this.live &&
-			active &&
-			!hasActiveStream(this.conversationId) &&
-			!shuttingDown &&
-			!this.isForeignMessage(replyMessageId(active))
-		) {
-			this.openLive(replyMessageId(active), null, String(active.id));
+		if (!this.live && active && !hasActiveStream(this.conversationId) && !shuttingDown) {
+			const replyId = this.localMessageId(replyMessageId(active));
+			if (!this.isForeignMessage(replyId)) this.openLive(replyId, null, String(active.id));
 		}
 
 		for (const run of runs) {
@@ -653,11 +662,12 @@ export class CodingFollower {
 			if (!allDirty && !dirty.has(runId) && this.live?.runId !== runId) continue;
 			const userMessageId = typeof run.userMessageId === 'string' ? run.userMessageId : null;
 			// Mirror user messages that were sent from T3 itself.
-			if (userMessageId && !getMessage(db, userMessageId)) {
+			const localUserMessageId = userMessageId && this.localMessageId(userMessageId);
+			if (userMessageId && localUserMessageId && !getMessage(db, localUserMessageId)) {
 				const text = messageText(this.state, userMessageId);
 				if (text) {
 					createMessage(db, {
-						id: userMessageId,
+						id: localUserMessageId,
 						conversationId: this.conversationId,
 						role: 'user',
 						parts: [{ type: 'text', text }],
@@ -669,7 +679,8 @@ export class CodingFollower {
 
 			const entries = renderRun(this.state, run, this.commandOutputs);
 			const parts = entries.map((e) => e.part);
-			const messageId = this.live?.runId === runId ? this.live.messageId : replyMessageId(run);
+			const messageId =
+				this.live?.runId === runId ? this.live.messageId : this.localMessageId(replyMessageId(run));
 			if (this.isForeignMessage(messageId)) continue;
 			if (this.live?.runId === runId) this.emitDiff(this.live, entries);
 

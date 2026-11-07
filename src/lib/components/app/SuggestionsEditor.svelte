@@ -100,10 +100,14 @@
 		<Button variant="ghost" size="sm" onclick={addRow} disabled={rows.length >= MAX_SUGGESTIONS}>
 			<PlusIcon class="size-4" />
 			Add suggestion
-			<span class="text-muted-foreground tabular-nums">{rows.length}/{MAX_SUGGESTIONS}</span>
 		</Button>
-		<Button size="sm" onclick={onSave} disabled={busy || !dirty}>
-			{busy ? 'Saving…' : 'Save'}
-		</Button>
+		<div class="flex items-center gap-3">
+			<span class="text-xs text-muted-foreground tabular-nums"
+				>{rows.length} of {MAX_SUGGESTIONS}</span
+			>
+			<Button size="sm" onclick={onSave} disabled={busy || !dirty}>
+				{busy ? 'Saving…' : 'Save'}
+			</Button>
+		</div>
 	</div>
 </SettingsSection>

@@ -53,11 +53,9 @@
 		};
 	}
 
+	/** Only a name that names a vendor gets its logo; targets are listed in the row itself. */
 	function mappingBrand(mapping: Mapping) {
-		return (
-			resolveBrand(mapping.name) ??
-			(mapping.targets[0] ? describeTarget(mapping.targets[0]).brand : null)
-		);
+		return resolveBrand(mapping.name);
 	}
 
 	const modelGroups = $derived.by<ModelsByProvider[]>(() => {

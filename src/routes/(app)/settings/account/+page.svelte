@@ -164,7 +164,7 @@
 	</SettingsRow>
 </SettingsSection>
 
-<SettingsSection title="Security">
+<SettingsSection title="Security" description="How you sign in to Chatty.">
 	<SettingsRow label="Password" description="Change the password you sign in with." stack>
 		<Button variant="outline" class="w-full sm:w-auto" onclick={openPasswordDialog}>
 			Change password

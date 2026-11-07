@@ -219,17 +219,51 @@ export function listThreadCodingConversations(
 }
 
 /**
- * Thread ids on `environmentId` Chatty already knows: linked to a conversation
- * (even a deleted one) or dismissed after its conversation was purged.
+ * Thread ids the owner of `environmentId` already has: linked to one of their
+ * conversations (even a deleted one, or one on another of their environments,
+ * e.g. the same T3 server added twice) or dismissed on this environment after
+ * its conversation was purged.
  */
 export function listKnownThreadIds(db: Db, environmentId: string): Set<string> {
 	const rows = db
 		.prepare(
-			`SELECT thread_id FROM coding_conversations WHERE environment_id = ? AND thread_id IS NOT NULL
+			`SELECT cc.thread_id FROM coding_conversations cc
+			 JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE cc.thread_id IS NOT NULL
+			   AND c.user_id = (SELECT user_id FROM coding_environments WHERE id = ?)
 			 UNION SELECT thread_id FROM coding_dismissed_threads WHERE environment_id = ?`
 		)
 		.all(environmentId, environmentId) as { thread_id: string }[];
 	return new Set(rows.map((r) => r.thread_id));
+}
+
+/**
+ * Links the owner's coding conversations whose environment was removed back to
+ * `environmentId` when it serves their thread (the environment was added
+ * again), instead of importing the thread once more. Returns their ids.
+ */
+export function relinkOrphanedThreads(
+	db: Db,
+	environmentId: string,
+	threadIds: ReadonlySet<string>
+): string[] {
+	const orphans = db
+		.prepare(
+			`SELECT cc.conversation_id, cc.thread_id FROM coding_conversations cc
+			 JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE cc.environment_id IS NULL AND cc.thread_id IS NOT NULL
+			   AND c.user_id = (SELECT user_id FROM coding_environments WHERE id = ?)`
+		)
+		.all(environmentId) as { conversation_id: string; thread_id: string }[];
+	const relinked = orphans.filter((o) => threadIds.has(o.thread_id)).map((o) => o.conversation_id);
+	const update = db.prepare(
+		'UPDATE coding_conversations SET environment_id = ?, updated_at = ? WHERE conversation_id = ?'
+	);
+	const now = Date.now();
+	db.transaction(() => {
+		for (const id of relinked) update.run(environmentId, now, id);
+	})();
+	return relinked;
 }
 
 export interface ImportCodingConversationInput extends Omit<

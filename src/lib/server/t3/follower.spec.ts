@@ -181,3 +181,42 @@ describe('CodingFollower stop', () => {
 		expect(callSpy).not.toHaveBeenCalled();
 	});
 });
+
+describe('CodingFollower message ids', () => {
+	it('scopes a reply id that another conversation following the thread already holds', async () => {
+		const { createMessage, getMessage } = await import('../db/repo/messages.js');
+		const db = getDb();
+		db.prepare(
+			`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u2', 'u2', 'u2@example.com', 0, 0, 0, 'user')`
+		).run();
+		const other = createConversation(db, 'u2', { kind: 'chat', mode: 'agent', title: 'Task' }).id;
+		createMessage(db, {
+			id: 'm1:reply',
+			conversationId: other,
+			role: 'assistant',
+			parts: [{ type: 'text', text: 'theirs' }],
+			status: 'complete'
+		});
+
+		follower.beginTurn('m1');
+
+		expect(getMessage(db, 'm1:reply')).toMatchObject({
+			conversation_id: other,
+			status: 'complete'
+		});
+		expect(getMessage(db, `${conversationId}:m1:reply`)).toMatchObject({
+			conversation_id: conversationId,
+			status: 'partial'
+		});
+		// Stays on the scoped id once it has it, even when the plain id frees up.
+		db.prepare('DELETE FROM messages WHERE id = ?').run('m1:reply');
+		follower.beginTurn('m1');
+		expect(getMessage(db, 'm1:reply')).toBeUndefined();
+	});
+
+	it('keeps the plain id when no other conversation holds it', async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		follower.beginTurn('m1');
+		expect(getMessage(getDb(), 'm1:reply')).toMatchObject({ conversation_id: conversationId });
+	});
+});

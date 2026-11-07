@@ -3,6 +3,7 @@
 	import { toast } from 'svelte-sonner';
 	import { resolve } from '$app/paths';
 	import BoxesIcon from '@lucide/svelte/icons/boxes';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import CoinsIcon from '@lucide/svelte/icons/coins';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SearchIcon from '@lucide/svelte/icons/search';
@@ -62,18 +63,31 @@
 	let query = $state('');
 	const needle = $derived(query.trim().toLowerCase());
 
+	type StatusFilter = 'all' | 'enabled' | 'disabled';
+	let status = $state<StatusFilter>('all');
+	const filtering = $derived(needle !== '' || status !== 'all');
+
+	/** Long provider lists start collapsed; searching or filtering shows every match. */
+	const COLLAPSED_ROWS = 25;
+	let expanded = $state<Record<string, boolean>>({});
+
+	/** Capabilities nearly every model has; listing them on each row is noise. */
+	const COMMON_CAPS: ReadonlySet<string> = new Set<Capability>(['chat', 'streaming']);
+
 	function modelsFor(providerId: string): Model[] {
-		const models = data.models.filter((m) => m.providerId === providerId);
-		if (!needle) return models;
-		return models.filter(
+		return data.models.filter(
 			(m) =>
-				m.displayName.toLowerCase().includes(needle) || m.modelId.toLowerCase().includes(needle)
+				m.providerId === providerId &&
+				(status === 'all' || m.enabled === (status === 'enabled')) &&
+				(!needle ||
+					m.displayName.toLowerCase().includes(needle) ||
+					m.modelId.toLowerCase().includes(needle))
 		);
 	}
 
 	const enabledCount = $derived(data.models.filter((m) => m.enabled).length);
 	const visibleProviders = $derived(
-		needle ? data.providers.filter((p) => modelsFor(p.id).length > 0) : data.providers
+		filtering ? data.providers.filter((p) => modelsFor(p.id).length > 0) : data.providers
 	);
 
 	async function api(path: string, method: string, body?: unknown): Promise<Response> {
@@ -197,11 +211,22 @@
 		return `$${Number(value.toPrecision(6))}`;
 	}
 
-	function formatPrice(model: Model): string {
-		if (model.priceInput === null && model.priceOutput === null) return '—';
-		const input = model.priceInput !== null ? formatUsdPerMillion(model.priceInput) : '?';
-		const output = model.priceOutput !== null ? formatUsdPerMillion(model.priceOutput) : '?';
-		return `${input} / ${output}`;
+	/** Secondary line: the API id (when it differs from the name), price and context window. */
+	function modelDetails(model: Model): { text: string; title?: string; mono?: boolean }[] {
+		const parts: { text: string; title?: string; mono?: boolean }[] = [];
+		if (model.modelId !== model.displayName) parts.push({ text: model.modelId, mono: true });
+		if (model.priceInput !== null || model.priceOutput !== null) {
+			const input = model.priceInput !== null ? formatUsdPerMillion(model.priceInput) : '?';
+			const output = model.priceOutput !== null ? formatUsdPerMillion(model.priceOutput) : '?';
+			parts.push({
+				text: `${input} / ${output} per 1M`,
+				title: 'Input / output price per 1M tokens (USD)'
+			});
+		}
+		if (model.contextLength !== null) {
+			parts.push({ text: `${formatCount(model.contextLength)} context` });
+		}
+		return parts;
 	}
 
 	async function confirmDelete() {
@@ -224,12 +249,14 @@
 
 <SettingsHeader title="Models">
 	{#snippet description()}
-		Models offered in the model picker. {enabledCount} of {data.models.length} enabled. Choose which one
-		serves new chats, titles and memory in
-		<a
-			class="underline underline-offset-4 hover:text-foreground"
-			href={resolve('/settings/defaults')}>Defaults</a
-		>.
+		Models offered in the model picker. {enabledCount} of {data.models.length} enabled.
+		<span class="max-md:hidden"
+			>Choose which one serves new chats, titles and memory in
+			<a
+				class="underline underline-offset-4 hover:text-foreground"
+				href={resolve('/settings/defaults')}>Defaults</a
+			>.</span
+		>
 	{/snippet}
 	{#snippet actions()}
 		<Button onclick={() => (addOpen = true)} disabled={data.providers.length === 0}>
@@ -239,23 +266,46 @@
 </SettingsHeader>
 
 {#if data.models.length > 8}
-	<div class="relative">
-		<SearchIcon
-			class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-		/>
-		<Input
-			type="search"
-			bind:value={query}
-			placeholder="Search models"
-			aria-label="Search models"
-			class="pl-9"
-		/>
+	<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+		<div class="relative min-w-0 flex-1">
+			<SearchIcon
+				class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+			/>
+			<Input
+				type="search"
+				bind:value={query}
+				placeholder="Search models"
+				aria-label="Search models"
+				class="h-9 pl-9"
+			/>
+		</div>
+		<div
+			class="flex h-9 shrink-0 items-stretch self-start rounded-full border p-0.5 sm:self-auto"
+			role="group"
+			aria-label="Show"
+		>
+			{#each [['all', 'All'], ['enabled', 'Enabled'], ['disabled', 'Disabled']] as [value, label] (value)}
+				<button
+					type="button"
+					class="rounded-full px-3 text-xs {status === value
+						? 'bg-accent font-medium text-accent-foreground'
+						: 'text-muted-foreground hover:text-foreground'}"
+					aria-pressed={status === value}
+					onclick={() => (status = value as StatusFilter)}
+				>
+					{label}
+				</button>
+			{/each}
+		</div>
 	</div>
 {/if}
 
 {#each visibleProviders as provider (provider.id)}
 	{@const models = modelsFor(provider.id)}
+	{@const collapsed = !filtering && !expanded[provider.id] && models.length > COLLAPSED_ROWS}
+	{@const shown = collapsed ? models.slice(0, COLLAPSED_ROWS) : models}
 	{@const providerBrand = resolveProviderBrand(provider)}
+	{@const showBrandIcons = models.some((m) => resolveModelBrand(m, provider) !== providerBrand)}
 	<SettingsSection
 		title={provider.name}
 		description={provider.enabled
@@ -278,29 +328,36 @@
 				class="divide-y divide-border/60 border-t border-border/60"
 				aria-label="{provider.name} models"
 			>
-				{#each models as model (model.id)}
+				{#each shown as model (model.id)}
 					{@const brand = resolveModelBrand(model, provider)}
-					<SettingsListItem title={model.displayName} muted={!model.enabled}>
-						{#snippet leading()}
+					{@const details = modelDetails(model)}
+					{#snippet modelIcon()}
+						{#if brand !== providerBrand}
 							{#if brand}<ProviderIcon {brand} class="size-4" />{:else}<BoxesIcon
 									class="size-4"
 								/>{/if}
-						{/snippet}
-						{#snippet meta()}
-							<span class="font-mono" title={model.modelId}>{model.modelId}</span>
-						{/snippet}
-						<div class="mt-1 flex flex-wrap items-center gap-1">
-							{#each model.capabilities as cap (cap)}
+						{/if}
+					{/snippet}
+					{#snippet modelMeta()}
+						{#each details as part, i (i)}
+							{#if i > 0}<span aria-hidden="true"> · </span>{/if}<span
+								class={part.mono ? 'font-mono' : 'tabular-nums'}
+								title={part.title}>{part.text}</span
+							>
+						{/each}
+					{/snippet}
+					<SettingsListItem
+						title={model.displayName}
+						titleAttr={model.modelId}
+						muted={!model.enabled}
+						leading={showBrandIcons ? modelIcon : undefined}
+						meta={details.length > 0 ? modelMeta : undefined}
+					>
+						{#snippet badges()}
+							{#each model.capabilities.filter((c) => !COMMON_CAPS.has(c)) as cap (cap)}
 								<Badge variant="secondary" class="font-normal">{cap}</Badge>
 							{/each}
-							<span
-								class="ml-1 text-xs text-muted-foreground tabular-nums"
-								title="Input / output price per 1M tokens (USD)"
-							>
-								{formatPrice(model)}{#if model.contextLength !== null}
-									· {formatCount(model.contextLength)} context{/if}
-							</span>
-						</div>
+						{/snippet}
 						{#snippet trailing()}
 							<Switch
 								checked={model.enabled}
@@ -330,6 +387,19 @@
 					</SettingsListItem>
 				{/each}
 			</ul>
+			{#if collapsed}
+				<div class="border-t border-border/60 px-6 pt-2">
+					<Button
+						variant="ghost"
+						size="sm"
+						class="-ml-2.5"
+						onclick={() => (expanded[provider.id] = true)}
+					>
+						<ChevronDownIcon class="size-4" />
+						Show all {models.length}
+					</Button>
+				</div>
+			{/if}
 		{/if}
 	</SettingsSection>
 {:else}
@@ -340,8 +410,11 @@
 			>
 				<BoxesIcon class="size-5" />
 			</div>
-			{#if needle}
-				<p class="text-sm text-muted-foreground">No models match “{query.trim()}”.</p>
+			{#if filtering}
+				<p class="text-sm text-muted-foreground">
+					{#if needle}No {status === 'all' ? '' : `${status} `}models match “{query.trim()}”.{:else}No
+						{status} models.{/if}
+				</p>
 			{:else}
 				<div class="flex flex-col gap-1">
 					<p class="text-sm font-medium">No providers yet</p>

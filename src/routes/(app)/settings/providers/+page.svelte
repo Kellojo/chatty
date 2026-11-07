@@ -13,7 +13,6 @@
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import { Badge } from '$lib/components/ui/badge/index.js';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
@@ -227,26 +226,19 @@
 								class="size-4"
 							/>{/if}
 					{/snippet}
-					{#snippet badges()}
-						<Badge variant="outline">{typeLabels[provider.type]}</Badge>
-					{/snippet}
 					{#snippet meta()}
-						<span title={provider.baseUrl ?? undefined}
-							>{provider.baseUrl ?? 'Default endpoint'}</span
-						>
-						· {provider.hasApiKey ? 'API key set' : 'No API key'}
+						{typeLabels[provider.type]}{#if !provider.hasApiKey}
+							· <span class="text-amber-700 dark:text-amber-400">No API key</span>{/if}
 					{/snippet}
+					<p
+						class="min-w-0 truncate text-xs text-muted-foreground {provider.baseUrl
+							? 'font-mono'
+							: ''}"
+						title={provider.baseUrl ?? undefined}
+					>
+						{provider.baseUrl ?? 'Default endpoint'}
+					</p>
 					{#snippet trailing()}
-						<Button
-							variant="ghost"
-							size="sm"
-							class="hidden sm:inline-flex"
-							disabled={!provider.enabled}
-							onclick={() => fetchModels(provider.id, provider.name)}
-						>
-							<DownloadIcon class="size-4" />
-							Fetch models
-						</Button>
 						<Switch
 							checked={provider.enabled}
 							aria-label="Enable {provider.name}"

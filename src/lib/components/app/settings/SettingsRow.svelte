@@ -24,7 +24,7 @@
 
 <div
 	class={cn(
-		'flex justify-between gap-x-6 gap-y-2',
+		'flex justify-between gap-x-6 gap-y-2 border-t border-border/60 pt-4 first:border-t-0 first:pt-0',
 		stack ? 'flex-col sm:flex-row sm:items-center' : 'items-center',
 		className
 	)}
