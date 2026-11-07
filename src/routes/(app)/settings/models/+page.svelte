@@ -1,16 +1,24 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
-	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import { resolve } from '$app/paths';
+	import BoxesIcon from '@lucide/svelte/icons/boxes';
+	import CoinsIcon from '@lucide/svelte/icons/coins';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import SearchIcon from '@lucide/svelte/icons/search';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
+	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
+	import { formatCount } from '$lib/formats.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
 	import { resolveModelBrand, resolveProviderBrand } from '$lib/provider-brand.js';
@@ -51,9 +59,22 @@
 
 	const providersById = $derived(new Map(data.providers.map((p) => [p.id, p])));
 
+	let query = $state('');
+	const needle = $derived(query.trim().toLowerCase());
+
 	function modelsFor(providerId: string): Model[] {
-		return data.models.filter((m) => m.providerId === providerId);
+		const models = data.models.filter((m) => m.providerId === providerId);
+		if (!needle) return models;
+		return models.filter(
+			(m) =>
+				m.displayName.toLowerCase().includes(needle) || m.modelId.toLowerCase().includes(needle)
+		);
 	}
+
+	const enabledCount = $derived(data.models.filter((m) => m.enabled).length);
+	const visibleProviders = $derived(
+		needle ? data.providers.filter((p) => modelsFor(p.id).length > 0) : data.providers
+	);
 
 	async function api(path: string, method: string, body?: unknown): Promise<Response> {
 		const res = await fetch(path, {
@@ -199,121 +220,138 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<div class="flex items-center justify-between">
-		<h2 class="text-xl font-semibold">Models</h2>
-		<Button onclick={() => (addOpen = true)} disabled={data.providers.length === 0}>
-			Add model
-		</Button>
-	</div>
-	<p class="text-sm text-muted-foreground">
-		To pick which model is used for new chats, title generation, memory, and image generation, see
-		the Defaults page.
-	</p>
+<svelte:head><title>Models · Settings · Chatty</title></svelte:head>
 
-	{#each data.providers as provider (provider.id)}
-		{@const models = modelsFor(provider.id)}
-		<Card.Root class={provider.enabled ? '' : 'opacity-60'}>
-			<Card.Header>
-				<Card.Title class="flex items-center gap-2">
-					{@const providerBrand = resolveProviderBrand(provider)}
-					{#if providerBrand}<ProviderIcon brand={providerBrand} class="size-4 shrink-0" />{/if}
-					{provider.name}
-					{#if !provider.enabled}<Badge variant="outline">disabled</Badge>{/if}
-				</Card.Title>
-			</Card.Header>
-			<Card.Content>
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head>Display name</Table.Head>
-							<Table.Head>Model ID</Table.Head>
-							<Table.Head>Capabilities</Table.Head>
-							<Table.Head>Price / 1M tok</Table.Head>
-							<Table.Head>Enabled</Table.Head>
-							<Table.Head class="text-right">Actions</Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#each models as model (model.id)}
-							<Table.Row>
-								<Table.Cell class="max-w-40 font-medium" title={model.displayName}>
-									{@const brand = resolveModelBrand(model, provider)}
-									<span class="flex min-w-0 items-center gap-2">
-										{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
-										<span class="truncate">{model.displayName}</span>
-									</span>
-								</Table.Cell>
-								<Table.Cell class="max-w-48 truncate text-muted-foreground" title={model.modelId}>
-									{model.modelId}
-								</Table.Cell>
-								<Table.Cell class="whitespace-normal">
-									<div class="flex flex-wrap gap-1">
-										{#each model.capabilities as cap (cap)}
-											<Badge variant="secondary">{cap}</Badge>
-										{/each}
-									</div>
-								</Table.Cell>
-								<Table.Cell class="whitespace-nowrap text-muted-foreground">
-									<span title="Input / output price per 1M tokens (USD)">{formatPrice(model)}</span>
-								</Table.Cell>
-								<Table.Cell>
-									<Switch
-										checked={model.enabled}
-										onCheckedChange={(checked) =>
-											patch(model.id, { enabled: checked }, 'Model updated')}
-									/>
-								</Table.Cell>
-								<Table.Cell class="text-right whitespace-nowrap">
-									<div class="flex justify-end">
-										<DropdownMenu.Root>
-											<DropdownMenu.Trigger>
-												{#snippet child({ props })}
-													<Button
-														{...props}
-														variant="ghost"
-														size="icon-sm"
-														title="Actions"
-														aria-label="Actions"
-													>
-														<EllipsisIcon class="size-4" />
-													</Button>
-												{/snippet}
-											</DropdownMenu.Trigger>
-											<DropdownMenu.Content align="end">
-												<DropdownMenu.Item onclick={() => openCaps(model)}>
-													Capabilities
-												</DropdownMenu.Item>
-												<DropdownMenu.Item onclick={() => openPricing(model)}>
-													Pricing &amp; context
-												</DropdownMenu.Item>
-												<DropdownMenu.Separator />
-												<DropdownMenu.Item
-													variant="destructive"
-													onclick={() => (deleteId = model.id)}
-												>
-													Delete
-												</DropdownMenu.Item>
-											</DropdownMenu.Content>
-										</DropdownMenu.Root>
-									</div>
-								</Table.Cell>
-							</Table.Row>
-						{:else}
-							<Table.Row>
-								<Table.Cell colspan={6} class="text-center text-muted-foreground">
-									No models. Use "Fetch models" on the Providers page or add one manually.
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
-			</Card.Content>
-		</Card.Root>
-	{:else}
-		<p class="text-muted-foreground">No providers configured yet.</p>
-	{/each}
-</div>
+<SettingsHeader title="Models">
+	{#snippet description()}
+		Models offered in the model picker. {enabledCount} of {data.models.length} enabled. Choose which one
+		serves new chats, titles and memory in
+		<a
+			class="underline underline-offset-4 hover:text-foreground"
+			href={resolve('/settings/defaults')}>Defaults</a
+		>.
+	{/snippet}
+	{#snippet actions()}
+		<Button onclick={() => (addOpen = true)} disabled={data.providers.length === 0}>
+			<PlusIcon class="size-4" />Add model
+		</Button>
+	{/snippet}
+</SettingsHeader>
+
+{#if data.models.length > 8}
+	<div class="relative">
+		<SearchIcon
+			class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+		/>
+		<Input
+			type="search"
+			bind:value={query}
+			placeholder="Search models"
+			aria-label="Search models"
+			class="pl-9"
+		/>
+	</div>
+{/if}
+
+{#each visibleProviders as provider (provider.id)}
+	{@const models = modelsFor(provider.id)}
+	{@const providerBrand = resolveProviderBrand(provider)}
+	<SettingsSection
+		title={provider.name}
+		description={provider.enabled
+			? `${models.filter((m) => m.enabled).length} of ${models.length} enabled`
+			: 'Provider disabled, so its models are hidden from the picker.'}
+		flush
+		class={provider.enabled ? '' : 'opacity-70'}
+	>
+		{#snippet icon()}
+			{#if providerBrand}<ProviderIcon brand={providerBrand} class="size-4 shrink-0" />{/if}
+		{/snippet}
+		{#if models.length === 0}
+			<p class="px-6 pb-4 text-sm text-muted-foreground">
+				No models yet. Use “Fetch models” on
+				<a class="underline underline-offset-4" href={resolve('/settings/providers')}>Providers</a>
+				or add one manually.
+			</p>
+		{:else}
+			<ul
+				class="divide-y divide-border/60 border-t border-border/60"
+				aria-label="{provider.name} models"
+			>
+				{#each models as model (model.id)}
+					{@const brand = resolveModelBrand(model, provider)}
+					<SettingsListItem title={model.displayName} muted={!model.enabled}>
+						{#snippet leading()}
+							{#if brand}<ProviderIcon {brand} class="size-4" />{:else}<BoxesIcon
+									class="size-4"
+								/>{/if}
+						{/snippet}
+						{#snippet meta()}
+							<span class="font-mono" title={model.modelId}>{model.modelId}</span>
+						{/snippet}
+						<div class="mt-1 flex flex-wrap items-center gap-1">
+							{#each model.capabilities as cap (cap)}
+								<Badge variant="secondary" class="font-normal">{cap}</Badge>
+							{/each}
+							<span
+								class="ml-1 text-xs text-muted-foreground tabular-nums"
+								title="Input / output price per 1M tokens (USD)"
+							>
+								{formatPrice(model)}{#if model.contextLength !== null}
+									· {formatCount(model.contextLength)} context{/if}
+							</span>
+						</div>
+						{#snippet trailing()}
+							<Switch
+								checked={model.enabled}
+								aria-label="Enable {model.displayName}"
+								onCheckedChange={(checked) =>
+									patch(model.id, { enabled: checked }, 'Model updated')}
+							/>
+							<RowMenu
+								label="Actions for {model.displayName}"
+								items={[
+									{ label: 'Capabilities', icon: SparklesIcon, onSelect: () => openCaps(model) },
+									{
+										label: 'Pricing & context',
+										icon: CoinsIcon,
+										onSelect: () => openPricing(model)
+									},
+									'separator',
+									{
+										label: 'Delete',
+										icon: Trash2Icon,
+										destructive: true,
+										onSelect: () => (deleteId = model.id)
+									}
+								]}
+							/>
+						{/snippet}
+					</SettingsListItem>
+				{/each}
+			</ul>
+		{/if}
+	</SettingsSection>
+{:else}
+	<SettingsSection>
+		<div class="flex flex-col items-center gap-3 py-6 text-center">
+			<div
+				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+			>
+				<BoxesIcon class="size-5" />
+			</div>
+			{#if needle}
+				<p class="text-sm text-muted-foreground">No models match “{query.trim()}”.</p>
+			{:else}
+				<div class="flex flex-col gap-1">
+					<p class="text-sm font-medium">No providers yet</p>
+					<p class="text-sm text-muted-foreground">Add a provider first, then fetch its models.</p>
+				</div>
+				<Button size="sm" href={resolve('/settings/providers')}>Go to providers</Button>
+			{/if}
+		</div>
+	</SettingsSection>
+{/each}
 
 <Dialog.Root bind:open={addOpen}>
 	<Dialog.Content>

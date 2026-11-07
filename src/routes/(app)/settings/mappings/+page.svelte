@@ -10,8 +10,13 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import RouteIcon from '@lucide/svelte/icons/route';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
+	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
 	import ModelSelect from '$lib/components/app/ModelSelect.svelte';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
 	import { resolveBrand, resolveModelBrand } from '$lib/provider-brand.js';
@@ -168,83 +173,96 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<div class="flex items-center justify-between">
-		<h2 class="text-xl font-semibold">Model Mappings</h2>
-		<Button onclick={openAdd} disabled={data.models.length === 0}>Add mapping</Button>
-	</div>
-	<p class="text-sm text-muted-foreground">
-		Mappings are named aliases served by the AI proxy: clients pass the mapping name in the
-		<code>model</code> field, and its targets are tried in order until one answers.
-	</p>
+<svelte:head><title>Mappings · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Content>
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Name</Table.Head>
-						<Table.Head>Targets</Table.Head>
-						<Table.Head>Enabled</Table.Head>
-						<Table.Head class="text-right">Actions</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each data.mappings as mapping (mapping.id)}
-						<Table.Row>
-							<Table.Cell class="font-medium">
-								{@const brand = mappingBrand(mapping)}
-								<span class="flex items-center gap-2">
-									{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
-									{mapping.name}
+<SettingsHeader title="Model mappings">
+	{#snippet description()}
+		Named aliases served by the AI proxy. Clients pass the name in the
+		<code class="rounded bg-muted px-1 py-0.5 text-xs">model</code> field and its targets are tried in
+		order until one answers.
+	{/snippet}
+	{#snippet actions()}
+		<Button onclick={openAdd} disabled={data.models.length === 0}>
+			<PlusIcon class="size-4" />Add mapping
+		</Button>
+	{/snippet}
+</SettingsHeader>
+
+<SettingsSection flush>
+	{#if data.mappings.length === 0}
+		<div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
+			<div
+				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+			>
+				<RouteIcon class="size-5" />
+			</div>
+			<div class="flex max-w-sm flex-col gap-1">
+				<p class="text-sm font-medium">No mappings yet</p>
+				<p class="text-sm text-muted-foreground">
+					Add one to expose a stable name like <code class="text-xs">fast</code> with fallback models
+					behind it.
+				</p>
+			</div>
+			<Button size="sm" onclick={openAdd} disabled={data.models.length === 0}>
+				<PlusIcon class="size-4" />Add mapping
+			</Button>
+		</div>
+	{:else}
+		<ul class="divide-y divide-border/60" aria-label="Model mappings">
+			{#each data.mappings as mapping (mapping.id)}
+				{@const brand = mappingBrand(mapping)}
+				<SettingsListItem title={mapping.name} muted={!mapping.enabled}>
+					{#snippet leading()}
+						{#if brand}
+							<ProviderIcon {brand} class="size-4" />
+						{:else}
+							<RouteIcon class="size-4" />
+						{/if}
+					{/snippet}
+					<ol
+						class="mt-1 flex flex-wrap items-center gap-1.5 text-xs"
+						aria-label="Targets in order"
+					>
+						{#each mapping.targets as target, i (i)}
+							{@const t = describeTarget(target)}
+							<li class="flex items-center gap-1.5">
+								{#if i > 0}<span class="text-muted-foreground" aria-hidden="true">→</span>{/if}
+								<span
+									class="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 whitespace-nowrap"
+									title="{t.provider} / {target.modelId}"
+								>
+									{#if t.brand}<ProviderIcon brand={t.brand} class="size-3 shrink-0" />{/if}
+									{t.name}
+									<span class="text-muted-foreground">{t.provider}</span>
 								</span>
-							</Table.Cell>
-							<Table.Cell class="text-muted-foreground">
-								<div class="flex flex-wrap items-center gap-x-1">
-									{#each mapping.targets as target, i (i)}
-										{#if i > 0}<span>→</span>{/if}
-										{@const t = describeTarget(target)}
-										<span
-											class="inline-flex items-center gap-1.5 whitespace-nowrap"
-											title={`${t.provider} / ${target.modelId}`}
-										>
-											{i + 1}.
-											{#if t.brand}<ProviderIcon brand={t.brand} class="size-3.5 shrink-0" />{/if}
-											{t.name}
-											<span class="text-xs opacity-70">({t.provider})</span>
-										</span>
-									{/each}
-								</div>
-							</Table.Cell>
-							<Table.Cell>
-								<Switch
-									checked={mapping.enabled}
-									onCheckedChange={(checked) => toggleEnabled(mapping, checked)}
-								/>
-							</Table.Cell>
-							<Table.Cell class="text-right whitespace-nowrap">
-								<div class="flex justify-end gap-2">
-									<Button variant="outline" size="sm" onclick={() => openEdit(mapping)}>
-										Edit
-									</Button>
-									<Button variant="destructive" size="sm" onclick={() => (deleteId = mapping.id)}>
-										Delete
-									</Button>
-								</div>
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row>
-							<Table.Cell colspan={4} class="text-center text-muted-foreground">
-								No mappings yet. Add one to expose a named alias with fallback targets.
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		</Card.Content>
-	</Card.Root>
-</div>
+							</li>
+						{/each}
+					</ol>
+					{#snippet trailing()}
+						<Switch
+							checked={mapping.enabled}
+							aria-label="Enable {mapping.name}"
+							onCheckedChange={(checked) => toggleEnabled(mapping, checked)}
+						/>
+						<RowMenu
+							label="Actions for {mapping.name}"
+							items={[
+								{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(mapping) },
+								'separator',
+								{
+									label: 'Delete',
+									icon: Trash2Icon,
+									destructive: true,
+									onSelect: () => (deleteId = mapping.id)
+								}
+							]}
+						/>
+					{/snippet}
+				</SettingsListItem>
+			{/each}
+		</ul>
+	{/if}
+</SettingsSection>
 
 <Dialog.Root bind:open={dialogOpen}>
 	<Dialog.Content class="sm:max-w-xl">
