@@ -411,6 +411,15 @@ function syncShellWatchers(db: Db, envs: readonly CodingEnvironmentRow[]): void 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
 
+/**
+ * Re-applies the live thread watch right after an environment was edited or
+ * removed, so no watcher keeps using an old URL or token until the next pass.
+ */
+export function refreshShellWatchers(db: Db = getDb()): void {
+	if (!timer) return; // thread sync isn't running (tests, shutdown)
+	syncShellWatchers(db, listEnabledCodingEnvironments(db));
+}
+
 export function startThreadSync(db: Db = getDb()): void {
 	if (timer) return;
 	const tick = () => {

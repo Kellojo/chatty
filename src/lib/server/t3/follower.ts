@@ -88,6 +88,9 @@ interface LiveTurn {
 	emitted: Map<string, EmittedPart>;
 }
 
+const notFollowedError = () =>
+	new T3ClientError('This coding task is no longer connected', 'protocol');
+
 let shuttingDown = false;
 const followers = new Map<string, CodingFollower>();
 
@@ -147,9 +150,16 @@ export class CodingFollower {
 
 	/** Opens (or reuses) the socket. Commands and the subscription share it. */
 	private connection(): Promise<T3Connection> {
+		// A stopped follower must not reopen a socket with credentials that may
+		// have just been removed or replaced.
+		if (this.stopped) return Promise.reject(notFollowedError());
 		if (this.conn && !this.conn.closed) return Promise.resolve(this.conn);
 		this.connecting ??= connectT3(this.env.base_url, decryptSecret(this.env.token_enc))
 			.then((conn) => {
+				if (this.stopped) {
+					conn.close();
+					throw notFollowedError();
+				}
 				this.conn = conn;
 				conn.onClose(() => {
 					if (this.conn === conn) this.conn = null;
@@ -276,8 +286,16 @@ export class CodingFollower {
 		}
 	}
 
-	stop(): void {
+	/**
+	 * Stops following. A reply still streaming is ended locally (with `reason`
+	 * as its error, if given); the remote run is left alone and keeps going on
+	 * T3, where the next follower for the task picks it up again.
+	 */
+	stop(reason?: string): void {
+		if (this.stopped) return;
 		this.stopped = true;
+		this.pendingInterruptFor = null;
+		this.endLive({ interrupted: true, errorText: reason });
 		this.cancelIdleStop();
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
 		this.clearSnapshotTimer();
@@ -367,7 +385,7 @@ export class CodingFollower {
 	}
 
 	private interruptRun(runId: string): void {
-		if (!this.threadId) return;
+		if (!this.threadId || this.stopped) return;
 		this.rpc('orchestration.dispatchCommand', {
 			type: 'run.interrupt',
 			commandId: randomUUID(),
@@ -953,9 +971,9 @@ export function prepareCodingShutdown(): void {
  * so they don't keep using the old URL and token. Still-relevant ones are
  * re-created on demand (thread sync, next turn) with the current row.
  */
-export function stopFollowersForEnvironment(environmentId: string): void {
+export function stopFollowersForEnvironment(environmentId: string, reason?: string): void {
 	for (const follower of [...followers.values()]) {
-		if (follower.environmentId === environmentId) follower.stop();
+		if (follower.environmentId === environmentId) follower.stop(reason);
 	}
 }
 

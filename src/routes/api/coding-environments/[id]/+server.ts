@@ -1,9 +1,12 @@
 import { json, error } from '@sveltejs/kit';
 import { failCodingAgentRunForTask } from '$lib/server/agents/coding-runs.js';
 import { requireUser } from '$lib/server/auth/guards.js';
-import { abortStream } from '$lib/server/chat/streams.js';
 import { publishServerEvent } from '$lib/server/events/bus.js';
 import { getDb } from '$lib/server/db/index.js';
+import {
+	listLiveCodingConversations,
+	updateCodingConversation
+} from '$lib/server/db/repo/coding-conversations.js';
 import {
 	deleteCodingEnvironment,
 	getCodingEnvironment,
@@ -11,8 +14,8 @@ import {
 	updateCodingEnvironment
 } from '$lib/server/db/repo/coding-environments.js';
 import { T3ClientError } from '$lib/server/t3/client.js';
-import { stopFollowersForEnvironment } from '$lib/server/t3/follower.js';
 import { environmentPatchSchema, resolveEnvironmentConnection } from '$lib/server/t3/input.js';
+import { applyEnvironmentChange, syncCodingEnvironment } from '$lib/server/t3/sync.js';
 import type { RequestHandler } from './$types';
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
@@ -58,27 +61,45 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		token: connection.token
 	});
 	if (!row) error(404, { message: 'Environment not found' });
-	if (
-		row.base_url !== existing.base_url ||
-		row.token_enc !== existing.token_enc ||
-		(existing.enabled === 1 && row.enabled !== 1)
-	) {
-		stopFollowersForEnvironment(row.id);
+	const connectionChanged =
+		row.base_url !== existing.base_url || row.token_enc !== existing.token_enc;
+	const disabled = existing.enabled === 1 && row.enabled !== 1;
+	const enabled = existing.enabled !== 1 && row.enabled === 1;
+	if (disabled) {
+		// The remote agents keep working; their tasks resume when re-enabled.
+		applyEnvironmentChange(db, row.id, DISABLED_ERROR);
+		for (const task of listLiveCodingConversations(db)) {
+			if (task.environment_id !== row.id) continue;
+			updateCodingConversation(db, task.conversation_id, { lastError: DISABLED_ERROR });
+			publishServerEvent(user.id, {
+				type: 'coding.task.updated',
+				conversationId: task.conversation_id
+			});
+		}
+	} else if (connectionChanged || enabled) {
+		applyEnvironmentChange(db, row.id);
 	}
-	return json({ environment: toPublic(row) });
+	// Check the new connection right away, as when adding an environment.
+	const refreshed =
+		row.enabled === 1 && (connectionChanged || enabled)
+			? await syncCodingEnvironment(db, row)
+			: row;
+	return json({ environment: toPublic(refreshed) });
 };
+
+const DISABLED_ERROR = 'The coding environment is disabled. Enable it to continue.';
+
+const REMOVED_ERROR = 'The coding environment was removed';
 
 export const DELETE: RequestHandler = ({ locals, params }) => {
 	const user = requireUser(locals);
 	const db = getDb();
 	const deleted = deleteCodingEnvironment(db, user.id, params.id);
 	if (!deleted) error(404, { message: 'Environment not found' });
-	stopFollowersForEnvironment(params.id);
-	// Its tasks were marked as done; stop anything still streaming from them.
-	for (const id of deleted.endedIds) {
-		abortStream(id);
-		failCodingAgentRunForTask(id, 'The coding environment was removed', db);
-	}
+	// Ends replies still streaming from its tasks (without touching the remote
+	// runs) and closes every connection that used its URL and token.
+	applyEnvironmentChange(db, params.id, REMOVED_ERROR);
+	for (const id of deleted.endedIds) failCodingAgentRunForTask(id, REMOVED_ERROR, db);
 	if (deleted.settledIds.length > 0) {
 		publishServerEvent(user.id, {
 			type: 'conversation.settle_changed',

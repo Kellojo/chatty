@@ -4,6 +4,9 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { MediaQuery } from 'svelte/reactivity';
+	import { flip } from 'svelte/animate';
+	import { cubicOut } from 'svelte/easing';
+	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import ArchiveRestoreIcon from '@lucide/svelte/icons/archive-restore';
@@ -315,6 +318,22 @@
 	}
 
 	const visibleGroups = $derived(groupByDate(searchResults ?? allConversations));
+
+	// Flattened into one keyed list (group headers + rows) so `animate:flip`
+	// can animate rows moving between groups, not just within one.
+	type ListEntry =
+		| { kind: 'header'; key: string; label: string }
+		| { kind: 'row'; key: string; conversation: Conversation };
+	const visibleEntries = $derived(
+		visibleGroups.flatMap((g): ListEntry[] => [
+			{ kind: 'header', key: `group:${g.label}`, label: g.label },
+			...g.items.map((c): ListEntry => ({ kind: 'row', key: c.id, conversation: c }))
+		])
+	);
+
+	const reducedMotion = new MediaQuery('(prefers-reduced-motion: reduce)');
+	const flipDuration = $derived(reducedMotion.current ? 0 : 200);
+	const fadeDuration = $derived(reducedMotion.current ? 0 : 150);
 
 	async function search() {
 		const q = query.trim();
@@ -682,11 +701,17 @@
 	<nav
 		class="flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)] px-2 pb-2"
 	>
-		{#each visibleGroups as group (group.label)}
-			<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{group.label}</p>
-			{#each group.items as c (c.id)}
-				{@render row(c)}
-			{/each}
+		{#each visibleEntries as entry (entry.key)}
+			<div
+				animate:flip={{ duration: flipDuration, easing: cubicOut }}
+				transition:fade={{ duration: fadeDuration }}
+			>
+				{#if entry.kind === 'header'}
+					<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{entry.label}</p>
+				{:else}
+					{@render row(entry.conversation)}
+				{/if}
+			</div>
 		{:else}
 			<p class="px-2 pt-4 text-sm text-muted-foreground">
 				{searchResults
@@ -715,7 +740,12 @@
 			</button>
 			{#if settledOpen}
 				{#each settledItems ?? [] as c (c.id)}
-					{@render row(c)}
+					<div
+						animate:flip={{ duration: flipDuration, easing: cubicOut }}
+						transition:fade={{ duration: fadeDuration }}
+					>
+						{@render row(c)}
+					</div>
 				{:else}
 					{#if settledLoading}
 						<div class="flex justify-center py-2">

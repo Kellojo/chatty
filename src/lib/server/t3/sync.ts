@@ -19,7 +19,9 @@ import {
 	connectT3,
 	fetchEnvironmentDescriptor
 } from './client.js';
-import { startThreadSync, stopThreadSync } from './thread-sync.js';
+import { stopFollowersForEnvironment } from './follower.js';
+import { resumeCodingTasks } from './tasks.js';
+import { refreshShellWatchers, startThreadSync, stopThreadSync } from './thread-sync.js';
 import { dayInZone, parseUsageLimits, parseUsageSummary } from './usage.js';
 
 const log = createLogger('t3-sync');
@@ -107,6 +109,19 @@ export function syncCodingEnvironment(
 	})().finally(() => inFlight.delete(env.id));
 	inFlight.set(env.id, promise);
 	return promise;
+}
+
+/**
+ * Applies an edit (new URL or token, enabled, disabled) or removal of an
+ * environment to everything connected to it: followers and the live thread
+ * watch using the old connection are dropped, and while the environment is
+ * still enabled its live tasks are re-attached with the current row right away.
+ * `reason` is shown on replies whose stream is cut off.
+ */
+export function applyEnvironmentChange(db: Db, environmentId: string, reason?: string): void {
+	stopFollowersForEnvironment(environmentId, reason);
+	refreshShellWatchers(db);
+	resumeCodingTasks(db);
 }
 
 export async function syncAllCodingEnvironments(db: Db = getDb()): Promise<void> {

@@ -157,3 +157,27 @@ describe('CodingFollower reconnects', () => {
 		expect(connectT3.mock.calls.length).toBeGreaterThan(10);
 	});
 });
+
+describe('CodingFollower stop', () => {
+	it('ends a live reply locally and never reconnects or interrupts the remote run', async () => {
+		const { abortStream, getStreamState, hasActiveStream } = await import('../chat/streams.js');
+		failConnect = false;
+		follower.beginTurn('m1');
+		await follower.follow();
+		const conn = lastConnection!;
+		const callSpy = vi.spyOn(conn, 'call');
+		expect(hasActiveStream(conversationId)).toBe(true);
+
+		follower.stop('The coding environment was removed');
+
+		expect(hasActiveStream(conversationId)).toBe(false);
+		expect(getStreamState(conversationId)).toBeNull();
+		expect(conn.closed).toBe(true);
+		// Nothing left to abort, and no interrupt or new socket for the old credentials.
+		expect(abortStream(conversationId)).toBe(false);
+		const connects = connectT3.mock.calls.length;
+		await seconds(600);
+		expect(connectT3.mock.calls.length).toBe(connects);
+		expect(callSpy).not.toHaveBeenCalled();
+	});
+});
