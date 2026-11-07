@@ -1,12 +1,23 @@
 <script lang="ts">
 	import { getToolOrDynamicToolName } from 'ai';
-	import { Badge } from '$lib/components/ui/badge/index.js';
-	import { TOOL_META } from '$lib/tool-meta.js';
-	import WrenchIcon from '@lucide/svelte/icons/wrench';
+	import {
+		describeTool,
+		detailCoversInput,
+		subagentActivity,
+		toolFailed,
+		toolOutcome,
+		type SubagentPhase
+	} from '$lib/tool-meta.js';
+	import { resolveBrand } from '$lib/provider-brand.js';
+	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
+	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import { cn } from '$lib/utils.js';
+	import DiffStat from '$lib/components/app/DiffStat.svelte';
+	import ToolIcon from './ToolIcon.svelte';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
-	import CheckIcon from '@lucide/svelte/icons/check';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
 	type ToolPart = {
 		type: string;
@@ -19,15 +30,50 @@
 
 	// `active`: the response this call belongs to is still being generated. If not,
 	// a call without a result was interrupted and will never finish.
-	let { part, active = true }: { part: ToolPart; active?: boolean } = $props();
+	let {
+		part,
+		active = true,
+		class: className
+	}: { part: ToolPart; active?: boolean; class?: string } = $props();
 
 	let open = $state(false);
 
 	const name = $derived(getToolOrDynamicToolName(part as never));
-	const meta = $derived(TOOL_META[name]);
+	const display = $derived(describeTool(name, part.input));
+	const outcome = $derived(toolOutcome(name, part.output));
 	const incomplete = $derived(part.state === 'input-streaming' || part.state === 'input-available');
 	const running = $derived(incomplete && active);
-	const failed = $derived(part.state === 'output-error');
+	const interrupted = $derived(incomplete && !active);
+	const failed = $derived(toolFailed(part));
+
+	// Subagents get a two-line row: status + task, then what they're doing or found.
+	const subagent = $derived(display.kind === 'subagent');
+	// A subagent can keep working after its parent turn ends; trust its own status then.
+	const subagentRunning = $derived(
+		running || (incomplete && (part.input as { running?: unknown } | undefined)?.running === true)
+	);
+	const phase = $derived<SubagentPhase>(
+		subagentRunning ? 'running' : interrupted ? 'stopped' : failed ? 'failed' : 'done'
+	);
+	const PHASE_LABEL: Record<SubagentPhase, string> = {
+		running: 'Running',
+		done: 'Done',
+		failed: 'Failed',
+		stopped: 'Stopped'
+	};
+	const activity = $derived(
+		subagent
+			? subagentActivity(
+					part.input,
+					part.state === 'output-error' ? part.errorText : part.output,
+					phase
+				)
+			: null
+	);
+	const brand = $derived.by(() => {
+		const args = (part.input ?? {}) as { provider?: unknown };
+		return typeof args.provider === 'string' ? resolveBrand(args.provider) : null;
+	});
 
 	function asPrettyJson(value: unknown): string {
 		try {
@@ -41,73 +87,273 @@
 		return text.length > 4000 ? text.slice(0, 4000) + '\n… truncated' : text;
 	}
 
+	/** Unwraps a JSON string so structured results read as indented JSON. */
+	function prettyText(text: string): string {
+		const trimmed = text.trim();
+		if (!/^[[{]/.test(trimmed)) return text;
+		try {
+			return JSON.stringify(JSON.parse(trimmed), null, 2);
+		} catch {
+			return text;
+		}
+	}
+
+	/**
+	 * Coding-agent items often only carry bookkeeping (`{ kind }`, `{ status: 'completed' }`,
+	 * `{ done: true }`); showing that as a body adds clicks without information.
+	 */
+	function isTrivial(value: unknown): boolean {
+		if (value == null) return true;
+		if (typeof value !== 'object' || Array.isArray(value)) return false;
+		return Object.entries(value).every(
+			([key, v]) =>
+				v == null ||
+				typeof v === 'boolean' ||
+				((key === 'kind' || key === 'status') && typeof v === 'string')
+		);
+	}
+
 	function outputText(output: unknown): string {
-		if (output == null) return '';
+		if (isTrivial(output) || diffStat) return '';
 		if (typeof output === 'string') return output;
-		if (typeof output === 'object' && 'content' in output) {
+		if (typeof output === 'object') {
 			const content = (output as { content?: unknown }).content;
 			if (Array.isArray(content)) {
 				const texts = content.map((c) =>
 					c && typeof c === 'object' && 'text' in c ? String((c as { text: unknown }).text) : null
 				);
-				if (texts.every((t) => t !== null)) return texts.join('\n');
+				if (texts.every((t) => t !== null)) return prettyText(texts.join('\n'));
 			}
+			// Coding-agent command results carry the terminal output as a string,
+			// or only a note when the output was never fetched.
+			const result = output as { output?: unknown; note?: unknown; exitCode?: unknown };
+			if (typeof result.output === 'string') return result.output;
+			if (typeof result.note === 'string' && Object.keys(result).length <= 2) return '';
 		}
 		return asPrettyJson(output);
 	}
 
-	const inputText = $derived(part.input === undefined ? '' : truncate(asPrettyJson(part.input)));
-	const resultText = $derived(truncate(failed ? (part.errorText ?? '') : outputText(part.output)));
+	function inputText(input: unknown): string {
+		if (isTrivial(input)) return '';
+		const args = input as Record<string, unknown> | null;
+		// A subagent's input is its task prompt; the rest is shown in the row itself.
+		if (display.kind === 'subagent' && typeof args?.prompt === 'string') return args.prompt;
+		if (args && Array.isArray(args.files) && Object.keys(args).length === 1) {
+			return args.files.join('\n');
+		}
+		// Show code and commands as written instead of an escaped JSON string.
+		for (const key of ['command', 'code']) {
+			const value = args?.[key];
+			if (typeof value === 'string' && Object.keys(args ?? {}).length === 1) return value;
+		}
+		return asPrettyJson(input);
+	}
+
+	/** Terminal output matters most at the end (summary, error), so start scrolled there. */
+	function scrollToEnd(node: HTMLElement) {
+		if (display.kind === 'command') node.scrollTop = node.scrollHeight;
+	}
+
+	const exitCode = $derived(
+		part.output && typeof part.output === 'object'
+			? (part.output as { exitCode?: unknown }).exitCode
+			: undefined
+	);
+	/** Line counts reported by coding-agent file edits. */
+	const diffStat = $derived.by(() => {
+		const out = part.output as { additions?: unknown; deletions?: unknown } | undefined;
+		if (!out || typeof out !== 'object') return null;
+		const keys = Object.keys(out);
+		if (keys.length !== 2 || !keys.every((k) => k === 'additions' || k === 'deletions'))
+			return null;
+		return {
+			insertions: typeof out.additions === 'number' ? out.additions : 0,
+			deletions: typeof out.deletions === 'number' ? out.deletions : 0
+		};
+	});
+	const inputBody = $derived(truncate(inputText(part.input)));
+	const resultBody = $derived(
+		truncate(part.state === 'output-error' ? (part.errorText ?? '') : outputText(part.output))
+	);
+	// Don't repeat an input the row already shows in full (a short command, a query).
+	const showInput = $derived(
+		inputBody !== '' && inputBody !== '{}' && !detailCoversInput(part.input, display.detail)
+	);
+	/** Failed calls without a detail show the first line of their error instead. */
+	const detail = $derived(display.detail ?? (failed ? errorSummary(resultBody) : null));
+
+	/** First line of an error, without the coding agent's generic lead-in. */
+	function errorSummary(text: string): string | null {
+		const line = text.split('\n').find((l) => l.trim());
+		if (!line) return null;
+		const cause = line.replace(/^The coding agent reported an error:\s*/i, '');
+		return cause ? cause.charAt(0).toUpperCase() + cause.slice(1) : line;
+	}
+	const hasBody = $derived(showInput || resultBody !== '' || running);
+	const labelled = $derived(showInput && resultBody !== '');
 </script>
 
-<div class="w-full max-w-2xl rounded-md border bg-muted/30 text-sm">
-	<button
-		type="button"
-		class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent/50"
-		aria-expanded={open}
-		onclick={() => (open = !open)}
-	>
-		<WrenchIcon class="size-4 shrink-0 text-muted-foreground" />
-		<span class="font-medium">{meta?.label ?? name}</span>
-		{#if meta}
-			<Badge variant="outline" class="text-xs">{meta.server}</Badge>
-		{/if}
-		<span class="ml-auto flex items-center gap-1.5">
-			{#if running}
-				<Loader2Icon class="size-4 animate-spin text-muted-foreground" />
-			{:else if failed}
-				<TriangleAlertIcon class="size-4 text-destructive" />
-			{:else if !incomplete}
-				<CheckIcon class="size-4 text-muted-foreground" />
+<div class={cn('w-full min-w-0 text-sm', className)}>
+	{#if subagent}
+		<button
+			type="button"
+			class={cn(
+				'group/tool flex w-full min-w-0 items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
+				hasBody
+					? 'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
+					: 'cursor-default'
+			)}
+			aria-expanded={hasBody ? open : undefined}
+			disabled={!hasBody}
+			onclick={() => (open = !open)}
+		>
+			<span class="flex h-5 w-5 shrink-0 items-center justify-center">
+				{#if phase === 'running'}
+					<Loader2Icon class="size-4 animate-spin text-info" />
+				{:else if phase === 'done'}
+					<CircleCheckIcon class="size-4 text-success" />
+				{:else if phase === 'failed'}
+					<TriangleAlertIcon class="size-4 text-destructive" />
+				{:else}
+					<CircleSlashIcon class="size-4 text-muted-foreground" />
+				{/if}
+			</span>
+			<span class="flex min-w-0 flex-1 flex-col">
+				<span class="flex min-w-0 items-center gap-1.5">
+					{#if brand}
+						<ProviderIcon {brand} class="size-3.5 shrink-0" />
+					{/if}
+					<span class="truncate font-medium text-foreground/90" title={display.detail ?? undefined}>
+						{display.detail ?? display.label}
+					</span>
+				</span>
+				{#if activity}
+					<span
+						class={cn(
+							'truncate text-xs',
+							phase === 'running' ? 'text-info-foreground' : 'text-muted-foreground',
+							phase === 'failed' && 'text-destructive/80'
+						)}
+						title={activity}>{activity}</span
+					>
+				{/if}
+			</span>
+			<span
+				class={cn(
+					'flex h-5 shrink-0 items-center gap-1.5 pl-2 text-xs',
+					phase === 'running' && 'text-info-foreground',
+					phase === 'done' && 'text-success-foreground',
+					phase === 'failed' && 'text-destructive',
+					phase === 'stopped' && 'text-muted-foreground'
+				)}
+			>
+				{PHASE_LABEL[phase]}
+				<ChevronRightIcon
+					aria-hidden="true"
+					class={cn(
+						'size-3.5 text-muted-foreground transition',
+						hasBody
+							? 'opacity-50 group-hover/tool:opacity-100 group-focus-visible/tool:opacity-100'
+							: 'invisible',
+						open && 'rotate-90 opacity-100'
+					)}
+				/>
+			</span>
+		</button>
+	{:else}
+		<button
+			type="button"
+			class={cn(
+				'group/tool flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-left transition-colors',
+				hasBody
+					? 'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
+					: 'cursor-default'
+			)}
+			aria-expanded={hasBody ? open : undefined}
+			disabled={!hasBody}
+			onclick={() => (open = !open)}
+		>
+			<span
+				class={cn(
+					'flex size-5 shrink-0 items-center justify-center text-muted-foreground',
+					failed && 'text-destructive'
+				)}
+			>
+				{#if running}
+					<Loader2Icon class="size-3.5 animate-spin" />
+				{:else if interrupted}
+					<!-- The message footer explains the stop; the row only marks which call it hit. -->
+					<CircleSlashIcon class="size-3.5" aria-hidden="true" />
+					<span class="sr-only">Stopped</span>
+				{:else if failed}
+					<TriangleAlertIcon class="size-3.5" />
+				{:else}
+					<ToolIcon kind={display.kind} class="size-3.5" />
+				{/if}
+			</span>
+			<span class="shrink-0 font-medium text-foreground/90">{display.label}</span>
+			{#if detail}
+				<span
+					class={cn(
+						'min-w-0 truncate text-xs',
+						failed && !display.detail ? 'text-destructive/80' : 'text-muted-foreground',
+						!display.prose && display.detail && 'font-mono'
+					)}
+					title={detail}>{detail}</span
+				>
 			{/if}
-			<ChevronDownIcon
-				class="size-4 text-muted-foreground transition-transform {open ? 'rotate-180' : ''}"
-			/>
-		</span>
-	</button>
-	{#if open}
-		<div class="flex flex-col gap-2 border-t px-3 py-2">
-			{#if inputText}
+			<span class="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-xs text-muted-foreground">
+				{#if failed && display.kind !== 'error'}
+					<span class="text-destructive">
+						{typeof exitCode === 'number' && exitCode !== 0 ? `Exit ${exitCode}` : 'Failed'}
+					</span>
+				{:else if outcome}
+					<span class={outcome.negative ? 'text-destructive' : undefined}>{outcome.label}</span>
+				{:else if diffStat}
+					<DiffStat diff={diffStat} />
+				{/if}
+				<ChevronRightIcon
+					aria-hidden="true"
+					class={cn(
+						'size-3.5 transition',
+						hasBody
+							? 'opacity-50 group-hover/tool:opacity-100 group-focus-visible/tool:opacity-100'
+							: 'invisible',
+						open && 'rotate-90 opacity-100'
+					)}
+				/>
+			</span>
+		</button>
+	{/if}
+	{#if open && hasBody}
+		<div class="mt-1 mb-2 ml-1 flex flex-col gap-2 sm:ml-9">
+			{#if showInput}
 				<div>
-					<p class="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-						Input
-					</p>
+					{#if labelled}
+						<p class="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+							{subagent ? 'Task' : 'Input'}
+						</p>
+					{/if}
 					<pre
-						class="max-h-64 overflow-auto rounded bg-background p-2 font-mono text-xs break-all whitespace-pre-wrap">{inputText}</pre>
+						class="max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">{inputBody}</pre>
 				</div>
 			{/if}
-			{#if running && !inputText}
+			{#if running && !resultBody}
 				<p class="text-xs text-muted-foreground">Running…</p>
 			{/if}
-			{#if resultText}
+			{#if resultBody}
 				<div>
-					<p class="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-						{failed ? 'Error' : 'Output'}
-					</p>
+					{#if labelled}
+						<p class="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+							{failed ? 'Error' : subagent ? 'Result' : 'Output'}
+						</p>
+					{/if}
 					<pre
-						class="max-h-64 overflow-auto rounded bg-background p-2 font-mono text-xs break-all whitespace-pre-wrap {failed
-							? 'text-destructive'
-							: ''}">{resultText}</pre>
+						{@attach scrollToEnd}
+						class={cn(
+							'max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
+							failed && 'border-destructive/30 text-destructive'
+						)}>{resultBody}</pre>
 				</div>
 			{/if}
 		</div>

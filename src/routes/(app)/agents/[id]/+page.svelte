@@ -35,6 +35,7 @@
 			groups={data.groups}
 			mappings={data.mappings}
 			tools={data.tools}
+			codingEnvironments={data.codingEnvironments}
 			readonly={builtin}
 		/>
 	</div>

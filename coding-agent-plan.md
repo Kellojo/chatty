@@ -34,18 +34,18 @@
 
 ### Comparison with previous plan
 
-| Concern | Previous plan | New plan |
-|---|---|---|
-| Runner | Standalone service, shared storage, same Docker host | chatty-agent daemon, any machine, no shared storage |
-| Runner ↔ Chatty | Chatty pushes via HTTP to known URL | Runner connects via WebSocket, polls for jobs |
-| Agent execution | Chatty's streamText for non-coding, Runner for coding | ALL agents run on chatty-agent runners |
-| Existing agent system | Kept (persona, scheduled, HTTP triggers) | **Removed entirely** — replaced by chatty-agent sessions |
-| Container isolation | Docker on same host as Chatty | Docker on runner's host (any machine) |
-| Multi-harness | OpenCode only | OpenCode (Phase 1), Claude Code (Phase 2), Pi (Phase 3) |
-| Workspaces | Shared NFS volume | Ephemeral per-session dirs on runner |
-| Session resume | Recreate container with same mounts | Re-clone repo, continue OpenCode session |
-| Harness config | Runner generates opencode.json | Runner generates opencode.json with Chatty proxy + MCP gateway |
-| Git | Runner handles git ops | Runner handles git ops, streams diffs to Chatty for display |
+| Concern               | Previous plan                                         | New plan                                                       |
+| --------------------- | ----------------------------------------------------- | -------------------------------------------------------------- |
+| Runner                | Standalone service, shared storage, same Docker host  | chatty-agent daemon, any machine, no shared storage            |
+| Runner ↔ Chatty       | Chatty pushes via HTTP to known URL                   | Runner connects via WebSocket, polls for jobs                  |
+| Agent execution       | Chatty's streamText for non-coding, Runner for coding | ALL agents run on chatty-agent runners                         |
+| Existing agent system | Kept (persona, scheduled, HTTP triggers)              | **Removed entirely** — replaced by chatty-agent sessions       |
+| Container isolation   | Docker on same host as Chatty                         | Docker on runner's host (any machine)                          |
+| Multi-harness         | OpenCode only                                         | OpenCode (Phase 1), Claude Code (Phase 2), Pi (Phase 3)        |
+| Workspaces            | Shared NFS volume                                     | Ephemeral per-session dirs on runner                           |
+| Session resume        | Recreate container with same mounts                   | Re-clone repo, continue OpenCode session                       |
+| Harness config        | Runner generates opencode.json                        | Runner generates opencode.json with Chatty proxy + MCP gateway |
+| Git                   | Runner handles git ops                                | Runner handles git ops, streams diffs to Chatty for display    |
 
 ---
 
@@ -157,18 +157,20 @@ GET /api/runners/connect   → WebSocket upgrade
 ```
 
 **Runner → Chatty (registration):**
+
 ```json
 {
-  "type": "register",
-  "runnerId": "c7a3f8e2-...",
-  "name": "gaming-pc",
-  "labels": ["docker", "linux", "gpu-a6000"],
-  "harnesses": ["opencode@2.1.3"],
-  "version": "0.1.0"
+	"type": "register",
+	"runnerId": "c7a3f8e2-...",
+	"name": "gaming-pc",
+	"labels": ["docker", "linux", "gpu-a6000"],
+	"harnesses": ["opencode@2.1.3"],
+	"version": "0.1.0"
 }
 ```
 
 **Chatty → Runner (ack):**
+
 ```json
 { "type": "registered", "runnerId": "c7a3f8e2-..." }
 ```
@@ -183,6 +185,7 @@ GET /api/runners/sessions/:sessionId/events   → WebSocket upgrade
 ```
 
 **Runner → Chatty (events):**
+
 ```json
 { "type": "status", "status": "cloning" }
 { "type": "status", "status": "container_starting" }
@@ -206,13 +209,13 @@ Creates a long-lived API key with scopes `["runner:connect"]`. The response incl
 
 ```json
 {
-  "key": {
-    "id": "key_abc",
-    "label": "gaming-pc",
-    "token": "cr_...",           // shown once
-    "scopes": ["runner:connect"],
-    "joiningUrl": "http://localhost:3000/api/runners/join?token=cr_..."
-  }
+	"key": {
+		"id": "key_abc",
+		"label": "gaming-pc",
+		"token": "cr_...", // shown once
+		"scopes": ["runner:connect"],
+		"joiningUrl": "http://localhost:3000/api/runners/join?token=cr_..."
+	}
 }
 ```
 
@@ -233,11 +236,11 @@ The user runs `chatty-agent join http://localhost:3000/api/runners/join?token=cr
 
 ### New Routes
 
-| Route | Purpose |
-|---|---|
-| `/dashboard` | Session dashboard — sidebar + chat/git panels |
-| `/dashboard/sessions/[id]` | Single session view |
-| `/dashboard/new` | New session dialog |
+| Route                      | Purpose                                       |
+| -------------------------- | --------------------------------------------- |
+| `/dashboard`               | Session dashboard — sidebar + chat/git panels |
+| `/dashboard/sessions/[id]` | Single session view                           |
+| `/dashboard/new`           | New session dialog                            |
 
 ### Session Dashboard Layout
 
@@ -277,6 +280,7 @@ No changes to the chat rendering stack — the timeline components are already b
 ### Git Panel
 
 Shows diff received from the runner. Features:
+
 - Changed files list with syntax-highlighted diff
 - Stage/unstage checkboxes (if manual review toggled)
 - Commit message input
@@ -293,6 +297,7 @@ Git operations are sent as messages back to the runner on the session event WebS
 ### New Session Dialog
 
 Steps:
+
 1. **Project** — Enter git URL + label, or pick from project registry (future)
 2. **Harness** — Dropdown showing harnesses available on connected runners (OpenCode shown as ✓ or ✗ based on runner capabilities)
 3. **Model** — Text input or dropdown (model IDs supported by Chatty's proxy)
@@ -368,6 +373,7 @@ Every 1 hour:
 ```
 
 Configurable in Settings:
+
 - Stale timeout (days, default 7)
 - Auto-archive stale: yes/no
 - Auto-delete workspaces: yes/no
@@ -379,63 +385,65 @@ Configurable in Settings:
 ### `src/lib/server/runners/dispatch.ts`
 
 ```typescript
-import type { Db } from "$lib/server/db";
-import type { Runner, RunnerSession } from "$lib/types";
-import crypto from "node:crypto";
+import type { Db } from '$lib/server/db';
+import type { Runner, RunnerSession } from '$lib/types';
+import crypto from 'node:crypto';
 
 interface DispatchJobInput {
-  session: RunnerSession;
-  projectUrl: string;
-  harness: string;
-  model: string;
-  branch: string;
-  baseBranch: string;
-  initialPrompt?: string;
-  proxyBaseUrl: string;
-  mcpGatewayUrl: string;
+	session: RunnerSession;
+	projectUrl: string;
+	harness: string;
+	model: string;
+	branch: string;
+	baseBranch: string;
+	initialPrompt?: string;
+	proxyBaseUrl: string;
+	mcpGatewayUrl: string;
 }
 
 export async function dispatchJob(input: DispatchJobInput): Promise<{ jobId: string }> {
-  // 1. Find available runner that supports this harness
-  const runner = findRunner(db, { harness: input.harness, status: "online" });
-  if (!runner) throw new Error("No available runner for this harness");
+	// 1. Find available runner that supports this harness
+	const runner = findRunner(db, { harness: input.harness, status: 'online' });
+	if (!runner) throw new Error('No available runner for this harness');
 
-  // 2. Create temp API key for this session (proxy + MCP access)
-  const { rawKey } = await createApiKey(db, {
-    userId: input.session.user_id,
-    label: `session:${input.session.id}`,
-    scopes: ["proxy:chat", "mcp:read", "mcp:write"],
-    sessionId: input.session.id,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-  });
+	// 2. Create temp API key for this session (proxy + MCP access)
+	const { rawKey } = await createApiKey(db, {
+		userId: input.session.user_id,
+		label: `session:${input.session.id}`,
+		scopes: ['proxy:chat', 'mcp:read', 'mcp:write'],
+		sessionId: input.session.id,
+		expiresAt: Date.now() + 24 * 60 * 60 * 1000
+	});
 
-  // 3. Assign session to runner
-  const jobId = crypto.randomUUID();
-  await db.run(
-    `UPDATE runner_sessions SET runner_id = ?, job_id = ?, status = 'queued' WHERE id = ?`,
-    [runner.id, jobId, input.session.id],
-  );
+	// 3. Assign session to runner
+	const jobId = crypto.randomUUID();
+	await db.run(
+		`UPDATE runner_sessions SET runner_id = ?, job_id = ?, status = 'queued' WHERE id = ?`,
+		[runner.id, jobId, input.session.id]
+	);
 
-  // 4. Dispatch job via runner's control WebSocket
-  const ws = getRunnerConnection(runner.id);
-  ws.send(JSON.stringify({
-    type: "job",
-    jobId,
-    sessionId: input.session.id,
-    harness: input.harness,
-    model: input.model,
-    projectUrl: input.projectUrl,
-    branch: input.branch,
-    baseBranch: input.baseBranch,
-    initialPrompt: input.initialPrompt,
-    proxyConfig: {
-      baseUrl: input.proxyBaseUrl,
-      apiKey: rawKey,
-    },
-    mcpGatewayUrl: input.mcpGatewayUrl,
-  }));
+	// 4. Dispatch job via runner's control WebSocket
+	const ws = getRunnerConnection(runner.id);
+	ws.send(
+		JSON.stringify({
+			type: 'job',
+			jobId,
+			sessionId: input.session.id,
+			harness: input.harness,
+			model: input.model,
+			projectUrl: input.projectUrl,
+			branch: input.branch,
+			baseBranch: input.baseBranch,
+			initialPrompt: input.initialPrompt,
+			proxyConfig: {
+				baseUrl: input.proxyBaseUrl,
+				apiKey: rawKey
+			},
+			mcpGatewayUrl: input.mcpGatewayUrl
+		})
+	);
 
-  return { jobId };
+	return { jobId };
 }
 ```
 
@@ -443,38 +451,38 @@ export async function dispatchJob(input: DispatchJobInput): Promise<{ jobId: str
 
 ```typescript
 // src/lib/server/runners/connections.ts
-import { WebSocketServer } from "ws";
+import { WebSocketServer } from 'ws';
 
-const runnerConnections = new Map<string, WebSocket>();  // runnerId → WS
+const runnerConnections = new Map<string, WebSocket>(); // runnerId → WS
 
 export function getRunnerConnection(runnerId: string): WebSocket | undefined {
-  return runnerConnections.get(runnerId);
+	return runnerConnections.get(runnerId);
 }
 
 export function registerRunnerConnection(runnerId: string, ws: WebSocket): void {
-  runnerConnections.set(runnerId, ws);
+	runnerConnections.set(runnerId, ws);
 
-  ws.on("message", async (data) => {
-    const msg = JSON.parse(data.toString());
-    switch (msg.type) {
-      case "job_accepted":
-        await handleJobAccepted(msg);
-        break;
-      case "job_rejected":
-        await handleJobRejected(msg);
-        break;
-      case "heartbeat":
-        await updateHeartbeat(runnerId);
-        break;
-    }
-  });
+	ws.on('message', async (data) => {
+		const msg = JSON.parse(data.toString());
+		switch (msg.type) {
+			case 'job_accepted':
+				await handleJobAccepted(msg);
+				break;
+			case 'job_rejected':
+				await handleJobRejected(msg);
+				break;
+			case 'heartbeat':
+				await updateHeartbeat(runnerId);
+				break;
+		}
+	});
 
-  ws.on("close", () => {
-    runnerConnections.delete(runnerId);
-    markRunnerOffline(runnerId);
-    // Re-queue any running sessions for this runner
-    requeueRunnerSessions(runnerId);
-  });
+	ws.on('close', () => {
+		runnerConnections.delete(runnerId);
+		markRunnerOffline(runnerId);
+		// Re-queue any running sessions for this runner
+		requeueRunnerSessions(runnerId);
+	});
 }
 ```
 
@@ -482,72 +490,72 @@ export function registerRunnerConnection(runnerId: string, ws: WebSocket): void 
 
 ```typescript
 // src/lib/server/runners/events.ts
-import type { Db } from "$lib/server/db";
-import { publishServerEvent } from "$lib/server/events";
-import { upsertMessage, updateSessionStatus } from "$lib/server/sessions/manager";
+import type { Db } from '$lib/server/db';
+import { publishServerEvent } from '$lib/server/events';
+import { upsertMessage, updateSessionStatus } from '$lib/server/sessions/manager';
 
 export async function handleRunnerEvent(
-  db: Db,
-  sessionId: string,
-  event: RunnerEvent,
+	db: Db,
+	sessionId: string,
+	event: RunnerEvent
 ): Promise<void> {
-  switch (event.type) {
-    case "status":
-      await updateSessionStatus(db, sessionId, event.status);
-      publishServerEvent(session.userId, {
-        type: "session.status",
-        sessionId,
-        status: event.status,
-      });
-      break;
+	switch (event.type) {
+		case 'status':
+			await updateSessionStatus(db, sessionId, event.status);
+			publishServerEvent(session.userId, {
+				type: 'session.status',
+				sessionId,
+				status: event.status
+			});
+			break;
 
-    case "message":
-      await upsertMessage(db, sessionId, event.message);
-      publishServerEvent(session.userId, {
-        type: "session.message",
-        sessionId,
-        message: event.message,
-      });
-      break;
+		case 'message':
+			await upsertMessage(db, sessionId, event.message);
+			publishServerEvent(session.userId, {
+				type: 'session.message',
+				sessionId,
+				message: event.message
+			});
+			break;
 
-    case "tool_call":
-      await upsertToolCall(db, sessionId, event);
-      break;
+		case 'tool_call':
+			await upsertToolCall(db, sessionId, event);
+			break;
 
-    case "tool_result":
-      await upsertToolResult(db, sessionId, event);
-      break;
+		case 'tool_result':
+			await upsertToolResult(db, sessionId, event);
+			break;
 
-    case "git_diff":
-      await updateSessionGitDiff(db, sessionId, event.diff);
-      publishServerEvent(session.userId, {
-        type: "session.git_diff",
-        sessionId,
-        diff: event.diff,
-      });
-      break;
+		case 'git_diff':
+			await updateSessionGitDiff(db, sessionId, event.diff);
+			publishServerEvent(session.userId, {
+				type: 'session.git_diff',
+				sessionId,
+				diff: event.diff
+			});
+			break;
 
-    case "pr_created":
-      await updateSessionPrUrl(db, sessionId, event.url);
-      break;
+		case 'pr_created':
+			await updateSessionPrUrl(db, sessionId, event.url);
+			break;
 
-    case "form_created":
-      await updateSessionStatus(db, sessionId, "awaiting_input");
-      publishServerEvent(session.userId, {
-        type: "session.form_created",
-        sessionId,
-        form: event.form,
-      });
-      break;
+		case 'form_created':
+			await updateSessionStatus(db, sessionId, 'awaiting_input');
+			publishServerEvent(session.userId, {
+				type: 'session.form_created',
+				sessionId,
+				form: event.form
+			});
+			break;
 
-    case "completed":
-      await completeSession(db, sessionId, event.exitCode);
-      break;
+		case 'completed':
+			await completeSession(db, sessionId, event.exitCode);
+			break;
 
-    case "error":
-      await failSession(db, sessionId, event.message);
-      break;
-  }
+		case 'error':
+			await failSession(db, sessionId, event.message);
+			break;
+	}
 }
 ```
 
@@ -611,70 +619,72 @@ chatty-agent config edit           # $EDITOR
 ```yaml
 # ~/.chatty-agent/config.yaml
 chatty:
-  url: "https://chatty.example.com"
-  token: "cr_abc123..."
+  url: 'https://chatty.example.com'
+  token: 'cr_abc123...'
 
 runner:
-  name: "gaming-pc"
-  labels: ["docker", "linux", "gpu-a6000"]
+  name: 'gaming-pc'
+  labels: ['docker', 'linux', 'gpu-a6000']
   maxConcurrentSessions: 4
 
 docker:
-  socketPath: "/var/run/docker.sock"
+  socketPath: '/var/run/docker.sock'
 ```
 
 ### Transport: Connecting to Chatty
 
 ```typescript
 // runner/src/transport/connection.ts
-import WebSocket from "ws";
+import WebSocket from 'ws';
 
 export class ChattyConnection {
-  private ws: WebSocket | null = null;
-  private reconnectDelay = 1000;  // exponential backoff
-  private runnerId: string;
+	private ws: WebSocket | null = null;
+	private reconnectDelay = 1000; // exponential backoff
+	private runnerId: string;
 
-  async connect(url: string, token: string): Promise<void> {
-    this.ws = new WebSocket(`${url}?token=${token}`);
+	async connect(url: string, token: string): Promise<void> {
+		this.ws = new WebSocket(`${url}?token=${token}`);
 
-    this.ws.on("open", () => {
-      this.reconnectDelay = 1000;
-      this.register();
-    });
+		this.ws.on('open', () => {
+			this.reconnectDelay = 1000;
+			this.register();
+		});
 
-    this.ws.on("message", (data) => {
-      const msg = JSON.parse(data.toString());
-      switch (msg.type) {
-        case "registered":
-          this.runnerId = msg.runnerId;
-          console.log(`Registered as ${this.runnerId}`);
-          break;
-        case "job":
-          this.dispatcher.enqueue(msg);
-          break;
-      }
-    });
+		this.ws.on('message', (data) => {
+			const msg = JSON.parse(data.toString());
+			switch (msg.type) {
+				case 'registered':
+					this.runnerId = msg.runnerId;
+					console.log(`Registered as ${this.runnerId}`);
+					break;
+				case 'job':
+					this.dispatcher.enqueue(msg);
+					break;
+			}
+		});
 
-    this.ws.on("close", () => {
-      setTimeout(() => this.connect(url, token), this.reconnectDelay);
-      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
-    });
-  }
+		this.ws.on('close', () => {
+			setTimeout(() => this.connect(url, token), this.reconnectDelay);
+			this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
+		});
+	}
 
-  private register(): void {
-    this.ws!.send(JSON.stringify({
-      type: "register",
-      runnerId: config.runnerId,
-      name: config.runner.name,
-      labels: config.runner.labels,
-      harnesses: this.registry.listInstalled(),
-      version: "0.1.0",
-    }));
-  }
+	private register(): void {
+		this.ws!.send(
+			JSON.stringify({
+				type: 'register',
+				runnerId: config.runnerId,
+				name: config.runner.name,
+				labels: config.runner.labels,
+				harnesses: this.registry.listInstalled(),
+				version: '0.1.0'
+			})
+		);
+	}
 
-  send(msg: object): void {
-    this.ws?.send(JSON.stringify(msg));
-  }
+	send(msg: object): void {
+		this.ws?.send(JSON.stringify(msg));
+	}
 }
 ```
 
@@ -687,33 +697,37 @@ export class ChattyConnection {
 ```typescript
 // runner/src/harness/adapter.ts
 export interface HarnessAdapter {
-  readonly name: string;
-  readonly version: string;
+	readonly name: string;
+	readonly version: string;
 
-  /** Check if harness image is available (docker pull if needed) */
-  ensureImage(): Promise<void>;
+	/** Check if harness image is available (docker pull if needed) */
+	ensureImage(): Promise<void>;
 
-  /** Create and start a container for a session */
-  startSession(opts: StartSessionOpts): Promise<HarnessSession>;
+	/** Create and start a container for a session */
+	startSession(opts: StartSessionOpts): Promise<HarnessSession>;
 
-  /** Send a user message to the running session */
-  sendMessage(session: HarnessSession, message: string): Promise<void>;
+	/** Send a user message to the running session */
+	sendMessage(session: HarnessSession, message: string): Promise<void>;
 
-  /** Get events from the session (SSE stream) */
-  streamEvents(session: HarnessSession): AsyncIterable<HarnessEvent>;
+	/** Get events from the session (SSE stream) */
+	streamEvents(session: HarnessSession): AsyncIterable<HarnessEvent>;
 
-  /** Respond to a form */
-  answerForm(session: HarnessSession, formId: string, answer: Record<string, unknown>): Promise<void>;
+	/** Respond to a form */
+	answerForm(
+		session: HarnessSession,
+		formId: string,
+		answer: Record<string, unknown>
+	): Promise<void>;
 
-  /** Stop the session (stop + remove container) */
-  stopSession(session: HarnessSession): Promise<void>;
+	/** Stop the session (stop + remove container) */
+	stopSession(session: HarnessSession): Promise<void>;
 }
 
 export interface HarnessSession {
-  sessionId: string;
-  containerId: string;
-  port: number;
-  workspacePath: string;
+	sessionId: string;
+	containerId: string;
+	port: number;
+	workspacePath: string;
 }
 ```
 
@@ -721,177 +735,195 @@ export interface HarnessSession {
 
 ```typescript
 // runner/src/harness/opencode.ts
-import Docker from "dockerode";
-import { execSync } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
+import Docker from 'dockerode';
+import { execSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
-const IMAGE = "ghcr.io/anomalyco/opencode:2.0.0";
+const IMAGE = 'ghcr.io/anomalyco/opencode:2.0.0';
 const PORT = 4096;
 
 export class OpenCodeAdapter implements HarnessAdapter {
-  readonly name = "opencode";
-  readonly version = "2.0.0";
+	readonly name = 'opencode';
+	readonly version = '2.0.0';
 
-  constructor(private docker: Docker) {}
+	constructor(private docker: Docker) {}
 
-  async ensureImage(): Promise<void> {
-    const images = await this.docker.listImages();
-    const exists = images.some(img =>
-      img.RepoTags?.includes(IMAGE) || img.RepoTags?.includes(`${IMAGE}-latest`)
-    );
-    if (!exists) {
-      console.log(`Pulling ${IMAGE}...`);
-      await new Promise<void>((resolve, reject) => {
-        this.docker.pull(IMAGE, (err: Error | null, stream: NodeJS.ReadableStream) => {
-          if (err) return reject(err);
-          this.docker.modem.followProgress(stream, (err) => err ? reject(err) : resolve());
-        });
-      });
-    }
-  }
+	async ensureImage(): Promise<void> {
+		const images = await this.docker.listImages();
+		const exists = images.some(
+			(img) => img.RepoTags?.includes(IMAGE) || img.RepoTags?.includes(`${IMAGE}-latest`)
+		);
+		if (!exists) {
+			console.log(`Pulling ${IMAGE}...`);
+			await new Promise<void>((resolve, reject) => {
+				this.docker.pull(IMAGE, (err: Error | null, stream: NodeJS.ReadableStream) => {
+					if (err) return reject(err);
+					this.docker.modem.followProgress(stream, (err) => (err ? reject(err) : resolve()));
+				});
+			});
+		}
+	}
 
-  async startSession(opts: StartSessionOpts): Promise<HarnessSession> {
-    // 1. Write opencode.json into workspace
-    const configPath = path.join(opts.workspacePath, "opencode.json");
-    await fs.writeFile(configPath, JSON.stringify({
-      "$schema": "https://opencode.ai/config.json",
-      "provider": {
-        "chatty": {
-          "npm": "@ai-sdk/openai-compatible",
-          "options": {
-            "baseURL": opts.proxyConfig.baseUrl,
-            "apiKey": opts.proxyConfig.apiKey,
-          },
-          "models": { [opts.model]: {} },
-        },
-      },
-      "mcp": {
-        "chatty-memory": { "url": `${opts.mcpGatewayUrl}/memory` },
-        "chatty-webfetch": { "url": `${opts.mcpGatewayUrl}/webfetch` },
-      },
-      "model": `chatty/${opts.model}`,
-    }, null, 2));
+	async startSession(opts: StartSessionOpts): Promise<HarnessSession> {
+		// 1. Write opencode.json into workspace
+		const configPath = path.join(opts.workspacePath, 'opencode.json');
+		await fs.writeFile(
+			configPath,
+			JSON.stringify(
+				{
+					$schema: 'https://opencode.ai/config.json',
+					provider: {
+						chatty: {
+							npm: '@ai-sdk/openai-compatible',
+							options: {
+								baseURL: opts.proxyConfig.baseUrl,
+								apiKey: opts.proxyConfig.apiKey
+							},
+							models: { [opts.model]: {} }
+						}
+					},
+					mcp: {
+						'chatty-memory': { url: `${opts.mcpGatewayUrl}/memory` },
+						'chatty-webfetch': { url: `${opts.mcpGatewayUrl}/webfetch` }
+					},
+					model: `chatty/${opts.model}`
+				},
+				null,
+				2
+			)
+		);
 
-    // 2. Create container
-    const containerName = `chatty-${opts.sessionId.slice(0, 12)}`;
-    const container = await this.docker.createContainer({
-      Image: IMAGE,
-      name: containerName,
-      Cmd: ["opencode", "serve", "--port", String(PORT), "--hostname", "0.0.0.0"],
-      WorkingDir: "/workspace",
-      HostConfig: {
-        Binds: [`${opts.workspacePath}:/workspace:rw`],
-        PortBindings: { [`${PORT}/tcp`]: [{ HostPort: String(opts.hostPort) }] },
-        Memory: opts.memoryLimit || 4 * 1024 * 1024 * 1024,  // 4GB default
-        NanoCpus: opts.cpuLimit ? opts.cpuLimit * 1e9 : undefined,
-        SecurityOpt: ["no-new-privileges"],
-        CapDrop: ["ALL"],
-      },
-    });
+		// 2. Create container
+		const containerName = `chatty-${opts.sessionId.slice(0, 12)}`;
+		const container = await this.docker.createContainer({
+			Image: IMAGE,
+			name: containerName,
+			Cmd: ['opencode', 'serve', '--port', String(PORT), '--hostname', '0.0.0.0'],
+			WorkingDir: '/workspace',
+			HostConfig: {
+				Binds: [`${opts.workspacePath}:/workspace:rw`],
+				PortBindings: { [`${PORT}/tcp`]: [{ HostPort: String(opts.hostPort) }] },
+				Memory: opts.memoryLimit || 4 * 1024 * 1024 * 1024, // 4GB default
+				NanoCpus: opts.cpuLimit ? opts.cpuLimit * 1e9 : undefined,
+				SecurityOpt: ['no-new-privileges'],
+				CapDrop: ['ALL']
+			}
+		});
 
-    await container.start();
+		await container.start();
 
-    // 3. Wait for OpenCode to be ready
-    const opencodeUrl = `http://localhost:${opts.hostPort}`;
-    await this.waitForReady(opencodeUrl);
+		// 3. Wait for OpenCode to be ready
+		const opencodeUrl = `http://localhost:${opts.hostPort}`;
+		await this.waitForReady(opencodeUrl);
 
-    // 4. Create session
-    const sessionResp = await fetch(`${opencodeUrl}/api/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ location: { directory: "/workspace" } }),
-    });
-    const session = await sessionResp.json();
+		// 4. Create session
+		const sessionResp = await fetch(`${opencodeUrl}/api/session`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ location: { directory: '/workspace' } })
+		});
+		const session = await sessionResp.json();
 
-    // 5. Send initial prompt if provided
-    if (opts.initialPrompt) {
-      await fetch(`${opencodeUrl}/api/session/${session.id}/prompt`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: opts.initialPrompt }),
-      });
-    }
+		// 5. Send initial prompt if provided
+		if (opts.initialPrompt) {
+			await fetch(`${opencodeUrl}/api/session/${session.id}/prompt`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ text: opts.initialPrompt })
+			});
+		}
 
-    return {
-      sessionId: session.id,
-      containerId: container.id,
-      port: opts.hostPort,
-      workspacePath: opts.workspacePath,
-    };
-  }
+		return {
+			sessionId: session.id,
+			containerId: container.id,
+			port: opts.hostPort,
+			workspacePath: opts.workspacePath
+		};
+	}
 
-  async sendMessage(session: HarnessSession, message: string): Promise<void> {
-    await fetch(`http://localhost:${session.port}/api/session/${session.sessionId}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: message }),
-    });
-  }
+	async sendMessage(session: HarnessSession, message: string): Promise<void> {
+		await fetch(`http://localhost:${session.port}/api/session/${session.sessionId}/prompt`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ text: message })
+		});
+	}
 
-  async *streamEvents(session: HarnessSession): AsyncIterable<HarnessEvent> {
-    const response = await fetch(`http://localhost:${session.port}/api/event`, {
-      headers: { Accept: "text/event-stream" },
-    });
+	async *streamEvents(session: HarnessSession): AsyncIterable<HarnessEvent> {
+		const response = await fetch(`http://localhost:${session.port}/api/event`, {
+			headers: { Accept: 'text/event-stream' }
+		});
 
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split('\n');
+			buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
-          if (data === "[DONE]") continue;
-          try {
-            const event = JSON.parse(data);
-            yield this.translateEvent(event);
-          } catch { /* skip unparseable lines */ }
-        }
-      }
-    }
-  }
+			for (const line of lines) {
+				if (line.startsWith('data: ')) {
+					const data = line.slice(6);
+					if (data === '[DONE]') continue;
+					try {
+						const event = JSON.parse(data);
+						yield this.translateEvent(event);
+					} catch {
+						/* skip unparseable lines */
+					}
+				}
+			}
+		}
+	}
 
-  async answerForm(session: HarnessSession, formId: string, answer: Record<string, unknown>): Promise<void> {
-    await fetch(`http://localhost:${session.port}/api/session/${session.sessionId}/form/${formId}/reply`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ answer }),
-    });
-  }
+	async answerForm(
+		session: HarnessSession,
+		formId: string,
+		answer: Record<string, unknown>
+	): Promise<void> {
+		await fetch(
+			`http://localhost:${session.port}/api/session/${session.sessionId}/form/${formId}/reply`,
+			{
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ answer })
+			}
+		);
+	}
 
-  async stopSession(session: HarnessSession): Promise<void> {
-    const container = this.docker.getContainer(session.containerId);
-    try {
-      await container.stop({ t: 10 });  // 10s grace period
-      await container.remove();
-    } catch { /* container already gone */ }
-  }
+	async stopSession(session: HarnessSession): Promise<void> {
+		const container = this.docker.getContainer(session.containerId);
+		try {
+			await container.stop({ t: 10 }); // 10s grace period
+			await container.remove();
+		} catch {
+			/* container already gone */
+		}
+	}
 
-  private async waitForReady(url: string, timeout = 30000): Promise<void> {
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      try {
-        const resp = await fetch(`${url}/api/info`);
-        if (resp.ok) return;
-      } catch {}
-      await new Promise(r => setTimeout(r, 500));
-    }
-    throw new Error("OpenCode did not become ready within timeout");
-  }
+	private async waitForReady(url: string, timeout = 30000): Promise<void> {
+		const start = Date.now();
+		while (Date.now() - start < timeout) {
+			try {
+				const resp = await fetch(`${url}/api/info`);
+				if (resp.ok) return;
+			} catch {}
+			await new Promise((r) => setTimeout(r, 500));
+		}
+		throw new Error('OpenCode did not become ready within timeout');
+	}
 
-  private translateEvent(raw: unknown): HarnessEvent {
-    // Map OpenCode event structure to our HarnessEvent type
-    // ...
-    return raw as HarnessEvent;
-  }
+	private translateEvent(raw: unknown): HarnessEvent {
+		// Map OpenCode event structure to our HarnessEvent type
+		// ...
+		return raw as HarnessEvent;
+	}
 }
 ```
 
@@ -903,12 +935,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
 We target the Docker-compatible HTTP API via `dockerode`. This means:
 
-| Runtime | Socket | Notes |
-|---|---|---|
-| Docker Engine | `/var/run/docker.sock` | Standard, universal |
-| OrbStack (macOS) | Same socket | Free for personal use, faster |
-| Podman | `podman system service unix:///run/podman/podman.sock` | Free, daemonless |
-| colima (macOS) | `~/.colima/default/docker.sock` | Free, Lima VM |
+| Runtime          | Socket                                                 | Notes                         |
+| ---------------- | ------------------------------------------------------ | ----------------------------- |
+| Docker Engine    | `/var/run/docker.sock`                                 | Standard, universal           |
+| OrbStack (macOS) | Same socket                                            | Free for personal use, faster |
+| Podman           | `podman system service unix:///run/podman/podman.sock` | Free, daemonless              |
+| colima (macOS)   | `~/.colima/default/docker.sock`                        | Free, Lima VM                 |
 
 One code path (`dockerode`), all runtimes. No Docker-specific features (no `AutoRemove`, no complex networking).
 
@@ -916,45 +948,45 @@ One code path (`dockerode`), all runtimes. No Docker-specific features (no `Auto
 
 ```typescript
 // runner/src/runtime/docker.ts
-import Docker from "dockerode";
-import { randomBytes } from "node:crypto";
+import Docker from 'dockerode';
+import { randomBytes } from 'node:crypto';
 
 export class DockerRuntime {
-  private docker: Docker;
-  private workspacesDir: string;
+	private docker: Docker;
+	private workspacesDir: string;
 
-  constructor(socketPath: string, workspacesDir: string) {
-    this.docker = new Docker({ socketPath });
-    this.workspacesDir = workspacesDir;
-  }
+	constructor(socketPath: string, workspacesDir: string) {
+		this.docker = new Docker({ socketPath });
+		this.workspacesDir = workspacesDir;
+	}
 
-  async ensureImage(image: string): Promise<void> {
-    // docker pull if not cached
-  }
+	async ensureImage(image: string): Promise<void> {
+		// docker pull if not cached
+	}
 
-  async createContainer(opts: ContainerOpts): Promise<ContainerInfo> {
-    const hostPort = this.findAvailablePort();
-    const container = await this.docker.createContainer({
-      Image: opts.image,
-      name: `chatty-${opts.sessionId.slice(0, 12)}`,
-      Cmd: opts.command,
-      WorkingDir: "/workspace",
-      HostConfig: {
-        Binds: [`${opts.workspacePath}:/workspace:rw`],
-        PortBindings: { [`${opts.internalPort}/tcp`]: [{ HostPort: String(hostPort) }] },
-        Memory: opts.memoryBytes,
-      },
-    });
+	async createContainer(opts: ContainerOpts): Promise<ContainerInfo> {
+		const hostPort = this.findAvailablePort();
+		const container = await this.docker.createContainer({
+			Image: opts.image,
+			name: `chatty-${opts.sessionId.slice(0, 12)}`,
+			Cmd: opts.command,
+			WorkingDir: '/workspace',
+			HostConfig: {
+				Binds: [`${opts.workspacePath}:/workspace:rw`],
+				PortBindings: { [`${opts.internalPort}/tcp`]: [{ HostPort: String(hostPort) }] },
+				Memory: opts.memoryBytes
+			}
+		});
 
-    await container.start();
-    return { containerId: container.id, hostPort };
-  }
+		await container.start();
+		return { containerId: container.id, hostPort };
+	}
 
-  async stopContainer(containerId: string): Promise<void> {
-    const container = this.docker.getContainer(containerId);
-    await container.stop({ t: 10 });
-    await container.remove();
-  }
+	async stopContainer(containerId: string): Promise<void> {
+		const container = this.docker.getContainer(containerId);
+		await container.stop({ t: 10 });
+		await container.remove();
+	}
 }
 ```
 
@@ -964,56 +996,56 @@ export class DockerRuntime {
 
 ```typescript
 // runner/src/git/service.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
 
 export class GitService {
-  constructor(private pat?: string) {}
+	constructor(private pat?: string) {}
 
-  async clone(url: string, path: string, branch: string): Promise<void> {
-    await exec("git", ["clone", "--branch", this.baseBranch(url), "--single-branch", url, path]);
-    await exec("git", ["checkout", "-b", branch], { cwd: path });
-  }
+	async clone(url: string, path: string, branch: string): Promise<void> {
+		await exec('git', ['clone', '--branch', this.baseBranch(url), '--single-branch', url, path]);
+		await exec('git', ['checkout', '-b', branch], { cwd: path });
+	}
 
-  async configureAuth(workspacePath: string): Promise<void> {
-    if (!this.pat) return;
-    // Set git config to use PAT for push
-    // git config --local http.https://github.com/.extraheader "Authorization: Bearer $PAT"
-  }
+	async configureAuth(workspacePath: string): Promise<void> {
+		if (!this.pat) return;
+		// Set git config to use PAT for push
+		// git config --local http.https://github.com/.extraheader "Authorization: Bearer $PAT"
+	}
 
-  async diff(workspacePath: string): Promise<string> {
-    const { stdout } = await exec("git", ["diff", "--stat"], { cwd: workspacePath });
-    return stdout;
-  }
+	async diff(workspacePath: string): Promise<string> {
+		const { stdout } = await exec('git', ['diff', '--stat'], { cwd: workspacePath });
+		return stdout;
+	}
 
-  async diffFull(workspacePath: string): Promise<string> {
-    const { stdout } = await exec("git", ["diff"], { cwd: workspacePath });
-    return stdout;
-  }
+	async diffFull(workspacePath: string): Promise<string> {
+		const { stdout } = await exec('git', ['diff'], { cwd: workspacePath });
+		return stdout;
+	}
 
-  async commit(workspacePath: string, message: string): Promise<void> {
-    await exec("git", ["add", "-A"], { cwd: workspacePath });
-    await exec("git", ["commit", "-m", message], { cwd: workspacePath });
-  }
+	async commit(workspacePath: string, message: string): Promise<void> {
+		await exec('git', ['add', '-A'], { cwd: workspacePath });
+		await exec('git', ['commit', '-m', message], { cwd: workspacePath });
+	}
 
-  async push(workspacePath: string, branch: string): Promise<string | null> {
-    const { stdout } = await exec("git", ["push", "origin", branch], { cwd: workspacePath });
-    // Parse push output for PR URL
-    return this.extractPrUrl(stdout);
-  }
+	async push(workspacePath: string, branch: string): Promise<string | null> {
+		const { stdout } = await exec('git', ['push', 'origin', branch], { cwd: workspacePath });
+		// Parse push output for PR URL
+		return this.extractPrUrl(stdout);
+	}
 
-  private baseBranch(url: string): string {
-    // Detected or configured base branch
-    return "main";
-  }
+	private baseBranch(url: string): string {
+		// Detected or configured base branch
+		return 'main';
+	}
 
-  private extractPrUrl(pushOutput: string): string | null {
-    // Parse git push output for PR creation URL
-    const match = pushOutput.match(/https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/);
-    return match?.[0] ?? null;
-  }
+	private extractPrUrl(pushOutput: string): string | null {
+		// Parse git push output for PR creation URL
+		const match = pushOutput.match(/https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/);
+		return match?.[0] ?? null;
+	}
 }
 ```
 
@@ -1035,17 +1067,17 @@ SvelteKit `+page.svelte`:
 ```svelte
 <!-- Props: sessions (loaded from +page.server.ts) -->
 <div class="flex flex-col gap-1 p-2">
-  <Button onclick={openNewSession}>+ New Session</Button>
-  <Separator />
-  {#each activeSessions as session}
-    <SessionItem {session} />
-  {/each}
-  <Separator />
-  <Collapsible title="Completed">
-    {#each completedSessions as session}
-      <SessionItem {session} />
-    {/each}
-  </Collapsible>
+	<Button onclick={openNewSession}>+ New Session</Button>
+	<Separator />
+	{#each activeSessions as session}
+		<SessionItem {session} />
+	{/each}
+	<Separator />
+	<Collapsible title="Completed">
+		{#each completedSessions as session}
+			<SessionItem {session} />
+		{/each}
+	</Collapsible>
 </div>
 ```
 
@@ -1057,36 +1089,36 @@ Reuses `MessageTimeline` from the existing chat view. Messages come from a Svelt
 
 ```svelte
 <script lang="ts">
-  let { sessionId }: { sessionId: string } = $props();
-  let diff = $state<string | null>(null);
-  let prUrl = $state<string | null>(null);
+	let { sessionId }: { sessionId: string } = $props();
+	let diff = $state<string | null>(null);
+	let prUrl = $state<string | null>(null);
 
-  // Subscribe to git events from the session
-  onMount(() => {
-    const unsub = subscribeToSessionEvents(sessionId, (event) => {
-      if (event.type === "git_diff") diff = event.diff;
-      if (event.type === "pr_created") prUrl = event.url;
-    });
-    return unsub;
-  });
+	// Subscribe to git events from the session
+	onMount(() => {
+		const unsub = subscribeToSessionEvents(sessionId, (event) => {
+			if (event.type === 'git_diff') diff = event.diff;
+			if (event.type === 'pr_created') prUrl = event.url;
+		});
+		return unsub;
+	});
 </script>
 
-<div class="flex flex-col h-full">
-  <h3 class="font-semibold p-2">Changes</h3>
-  {#if prUrl}
-    <a href={prUrl} target="_blank" class="px-2 text-primary hover:underline">
-      View PR #{extractPrNumber(prUrl)}
-    </a>
-  {/if}
-  {#if diff}
-    <ScrollArea class="flex-1">
-      <pre class="text-sm p-2"><code>{diff}</code></pre>
-    </ScrollArea>
-  {/if}
-  <div class="p-2 border-t">
-    <Input placeholder="Commit message" />
-    <Button>Commit & Push</Button>
-  </div>
+<div class="flex h-full flex-col">
+	<h3 class="p-2 font-semibold">Changes</h3>
+	{#if prUrl}
+		<a href={prUrl} target="_blank" class="px-2 text-primary hover:underline">
+			View PR #{extractPrNumber(prUrl)}
+		</a>
+	{/if}
+	{#if diff}
+		<ScrollArea class="flex-1">
+			<pre class="p-2 text-sm"><code>{diff}</code></pre>
+		</ScrollArea>
+	{/if}
+	<div class="border-t p-2">
+		<Input placeholder="Commit message" />
+		<Button>Commit & Push</Button>
+	</div>
 </div>
 ```
 
@@ -1134,30 +1166,40 @@ Uses `Dialog` (shadcn-svelte):
 ```typescript
 // Daily job
 export async function cleanupSessions(db: Db): Promise<void> {
-  const staleTimeout = getSetting(db, "staleTimeoutDays") ?? 7;
-  const cutoff = Date.now() - staleTimeout * 24 * 60 * 60 * 1000;
+	const staleTimeout = getSetting(db, 'staleTimeoutDays') ?? 7;
+	const cutoff = Date.now() - staleTimeout * 24 * 60 * 60 * 1000;
 
-  // 1. Auto-complete stale sessions
-  const stale = db.prepare(`
+	// 1. Auto-complete stale sessions
+	const stale = db
+		.prepare(
+			`
     SELECT id FROM runner_sessions
     WHERE status IN ('active', 'awaiting_input')
       AND last_touched_at < ?
-  `).all(cutoff);
+  `
+		)
+		.all(cutoff);
 
-  for (const { id } of stale) {
-    db.run(`UPDATE runner_sessions SET status = 'completed', completed_at = ? WHERE id = ?`, [Date.now(), id]);
-    // Notify runner to clean up workspace
-    sendRunnerCommand(runnerId, { type: "cleanup", sessionId: id });
-  }
+	for (const { id } of stale) {
+		db.run(`UPDATE runner_sessions SET status = 'completed', completed_at = ? WHERE id = ?`, [
+			Date.now(),
+			id
+		]);
+		// Notify runner to clean up workspace
+		sendRunnerCommand(runnerId, { type: 'cleanup', sessionId: id });
+	}
 
-  // 2. Delete temp API keys for completed/failed sessions
-  db.run(`
+	// 2. Delete temp API keys for completed/failed sessions
+	db.run(
+		`
     DELETE FROM api_keys
     WHERE session_id IN (
       SELECT id FROM runner_sessions WHERE status IN ('completed', 'errored', 'archived')
     )
     AND expires_at IS NOT NULL AND expires_at < ?
-  `, [Date.now()]);
+  `,
+		[Date.now()]
+	);
 }
 ```
 
@@ -1166,15 +1208,15 @@ export async function cleanupSessions(db: Db): Promise<void> {
 ```typescript
 // On Chatty startup
 export async function recoverOnStartup(db: Db): Promise<void> {
-  // 1. Mark running sessions as errored (runner is gone)
-  db.run(`
+	// 1. Mark running sessions as errored (runner is gone)
+	db.run(`
     UPDATE runner_sessions
     SET status = 'errored', error_message = 'Server restarted — session lost'
     WHERE status IN ('queued', 'starting', 'active', 'awaiting_input')
   `);
 
-  // 2. Delete temp API keys for errored sessions
-  db.run(`
+	// 2. Delete temp API keys for errored sessions
+	db.run(`
     DELETE FROM api_keys
     WHERE session_id IN (
       SELECT id FROM runner_sessions WHERE status = 'errored'
@@ -1186,6 +1228,7 @@ export async function recoverOnStartup(db: Db): Promise<void> {
 ### Runner-side recovery
 
 Runner handles its own recovery on startup:
+
 - Checks for orphaned Docker containers → stops + removes them
 - Cleans up workspace directories for sessions that no longer exist
 - Reconnects to Chatty, re-registers
@@ -1194,19 +1237,19 @@ Runner handles its own recovery on startup:
 
 ## Implementation Order
 
-| Phase | Scope | Size | Dependencies |
-|---|---|---|---|
-| 0 | Rip out existing agent system | Small | None |
-| 1 | Chatty: runner registry + WebSocket endpoint | Medium | Phase 0 |
-| 2 | Chatty: session dashboard + git panel | Large | Phase 1 |
-| 3 | Chatty: project registry, notifications, cleanup | Medium | Phase 2 |
-| 4 | Chatty: job dispatch logic | Medium | Phase 1 |
-| 5 | chatty-agent: core daemon (CLI, transport, dispatch) | Large | Phase 1 |
-| 6 | chatty-agent: OpenCode adapter | Large | Phase 5 |
-| 7 | chatty-agent: Docker runtime | Medium | Phase 5 |
-| 8 | chatty-agent: Git service | Small | Phase 5 |
-| 9 | Chatty UI: new session dialog, form rendering | Medium | Phase 2 |
-| 10 | Cleanup & recovery (both sides) | Small | All |
+| Phase | Scope                                                | Size   | Dependencies |
+| ----- | ---------------------------------------------------- | ------ | ------------ |
+| 0     | Rip out existing agent system                        | Small  | None         |
+| 1     | Chatty: runner registry + WebSocket endpoint         | Medium | Phase 0      |
+| 2     | Chatty: session dashboard + git panel                | Large  | Phase 1      |
+| 3     | Chatty: project registry, notifications, cleanup     | Medium | Phase 2      |
+| 4     | Chatty: job dispatch logic                           | Medium | Phase 1      |
+| 5     | chatty-agent: core daemon (CLI, transport, dispatch) | Large  | Phase 1      |
+| 6     | chatty-agent: OpenCode adapter                       | Large  | Phase 5      |
+| 7     | chatty-agent: Docker runtime                         | Medium | Phase 5      |
+| 8     | chatty-agent: Git service                            | Small  | Phase 5      |
+| 9     | Chatty UI: new session dialog, form rendering        | Medium | Phase 2      |
+| 10    | Cleanup & recovery (both sides)                      | Small  | All          |
 
 Phases 1-4 (Chatty) and 5-8 (chatty-agent) can be developed in parallel.
 

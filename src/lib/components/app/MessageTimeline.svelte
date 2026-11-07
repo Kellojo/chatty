@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap } from 'svelte/reactivity';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { formatDateTime, formatMessageTime } from '$lib/datetime.js';
 	import { formatCost, formatLatency, formatToken } from '$lib/formats.js';
@@ -9,7 +9,8 @@
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import { Markdown } from '$lib/components/ai/markdown/index.js';
 	import { Message, MessageActions, MessageContent } from '$lib/components/ai/message/index.js';
-	import { ToolCallCard } from '$lib/components/ai/tool-call-card/index.js';
+	import ActivityGroup from './ActivityGroup.svelte';
+	import { groupParts } from './timeline.js';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
@@ -18,9 +19,14 @@
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
-	import BrainIcon from '@lucide/svelte/icons/brain';
-	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
-	import type { MessageUsage, PromptCharBreakdown, UIMessage } from '$lib/types.js';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
+	import type {
+		MessageUsage,
+		PromptCharBreakdown,
+		UIMessage,
+		UIMessageMetadata
+	} from '$lib/types.js';
 
 	let {
 		messages,
@@ -49,7 +55,6 @@
 
 	type Part = UIMessage['parts'][number];
 
-	const openReasoning = new SvelteSet<string>();
 	let usageMessageId = $state<string | null>(null);
 	const rotations = new SvelteMap<string, number>();
 	const imgSizes = new SvelteMap<string, { w: number; h: number }>();
@@ -124,9 +129,8 @@
 		].filter((s) => s.pct > 0);
 	}
 
-	function toggleReasoning(key: string) {
-		if (openReasoning.has(key)) openReasoning.delete(key);
-		else openReasoning.add(key);
+	function messageStatus(message: UIMessage): UIMessageMetadata {
+		return (message.metadata as UIMessageMetadata | undefined) ?? {};
 	}
 
 	function messageText(message: UIMessage): string {
@@ -156,44 +160,24 @@
 <div class={cn('mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6', className)}>
 	{#each messages as message, index (message.id)}
 		<Message class={message.role === 'user' ? 'flex-col items-end' : 'flex-col items-start'}>
-			{#each message.parts as part, partIndex (partIndex)}
-				{#if part.type === 'text'}
+			{@const blocks = groupParts(message.parts)}
+			{@const messageActive = streaming && isLastAssistant(index)}
+			{#each blocks as block, blockIndex (block.key)}
+				{@const part = block.type === 'content' ? block.item.part : null}
+				{@const partIndex = block.type === 'content' ? block.item.index : -1}
+				{#if block.type === 'activity'}
+					<ActivityGroup
+						items={block.items as never}
+						active={messageActive}
+						live={messageActive && blockIndex === blocks.length - 1}
+					/>
+				{:else if part?.type === 'text'}
 					{#if message.role === 'user'}
-						<MessageContent class="max-w-[85%]">{part.text}</MessageContent>
+						<MessageContent class="max-w-[85%] whitespace-pre-wrap">{part.text}</MessageContent>
 					{:else}
 						<Markdown class="w-full max-w-none" content={part.text} {conversationId} />
 					{/if}
-				{:else if part.type === 'reasoning'}
-					{@const key = `${message.id}:${partIndex}`}
-					{@const reasoningStreaming =
-						streaming && isLastAssistant(index) && partIndex === message.parts.length - 1}
-					{@const open = openReasoning.has(key)}
-					<div class="w-full">
-						<button
-							type="button"
-							class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-							aria-expanded={open}
-							onclick={() => toggleReasoning(key)}
-						>
-							{#if reasoningStreaming}
-								<span class="reasoning-pulse flex"><BrainIcon class="size-4" /></span>
-								<span>Reasoning…</span>
-							{:else}
-								<BrainIcon class="size-4" />
-								<span>Reasoning</span>
-							{/if}
-							<ChevronDownIcon class="size-4 transition-transform {open ? 'rotate-180' : ''}" />
-						</button>
-						{#if open}
-							<div class="reasoning-body mt-2 border-l-2 border-border pl-3">
-								<Markdown
-									class="w-full max-w-none text-sm text-muted-foreground"
-									content={part.text}
-								/>
-							</div>
-						{/if}
-					</div>
-				{:else if part.type === 'file'}
+				{:else if part?.type === 'file'}
 					{@const url = (part as { url?: string }).url ?? ''}
 					{#if part.mediaType?.startsWith('image/')}
 						{@const imgKey = `${message.id}:${partIndex}`}
@@ -257,10 +241,23 @@
 						</a>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					{/if}
-				{:else if part.type.startsWith('tool-') || part.type === 'dynamic-tool'}
-					<ToolCallCard part={part as never} active={streaming && isLastAssistant(index)} />
 				{/if}
 			{/each}
+			{@const status = messageStatus(message)}
+			{#if status.status === 'failed'}
+				<div
+					class="flex w-full items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+					role="alert"
+				>
+					<TriangleAlertIcon class="mt-0.5 size-4 shrink-0" />
+					<span class="min-w-0 break-words">{status.error || 'The response failed.'}</span>
+				</div>
+			{:else if status.status === 'partial' && !messageActive}
+				<p class="flex items-center gap-1.5 text-xs text-muted-foreground">
+					<CircleSlashIcon class="size-3.5" />
+					Response stopped before it finished.
+				</p>
+			{/if}
 
 			<MessageActions class={message.role === 'user' ? 'justify-end' : ''}>
 				{#if mounted}
@@ -336,14 +333,14 @@
 							</div>
 							<div class="flex h-1.5 w-full overflow-hidden rounded-full">
 								{#each shares as s (s.label)}
-									<div class={s.color} style:width="{s.pct}%" />
+									<div class={s.color} style:width="{s.pct}%"></div>
 								{/each}
 							</div>
 							<div class="mt-1.5">
 								{#each shares as s (s.label)}
 									<div class="flex items-center justify-between py-0.5">
 										<span class="flex items-center gap-1.5 text-muted-foreground">
-											<span class="size-2 rounded-[2px] {s.color}" />
+											<span class="size-2 rounded-[2px] {s.color}"></span>
 											{s.label}
 										</span>
 										<span class="text-foreground tabular-nums">{s.pct}%</span>
@@ -389,20 +386,6 @@
 </div>
 
 <style>
-	.reasoning-pulse {
-		animation: reasoning-pulse 1.4s ease-in-out infinite;
-	}
-
-	@keyframes reasoning-pulse {
-		0%,
-		100% {
-			opacity: 1;
-		}
-		50% {
-			opacity: 0.35;
-		}
-	}
-
 	:global(.reasoning-body ul),
 	:global(.reasoning-body ol) {
 		padding-left: 1.25rem;

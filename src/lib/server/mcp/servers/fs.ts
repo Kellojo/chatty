@@ -1,11 +1,15 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { sanitizeFilename } from '../../workspaces.js';
 import type { CallerContext } from '../types.js';
-import { err, looksTextualAsync, resolveInside, text, toPosix, walkAsync } from './shared.js';
+import { readBodyLimited } from '../../net/readBody.js';
+import { safeFetch } from '../../net/safeFetch.js';
+import { resolveInsideReal } from '../../safePath.js';
+import { err, looksTextualAsync, text, toPosix, walkAsync } from './shared.js';
 
 const MAX_OUT = 64 * 1024;
 const MAX_FILE = 1024 * 1024;
@@ -13,6 +17,9 @@ const MAX_SCAN = 5 * 1024 * 1024;
 const MAX_MATCHES = 200;
 const MAX_GLOB = 500;
 const MAX_DOWNLOAD = 100 * 1024 * 1024;
+const MAX_PATTERN = 1000;
+const MAX_GREP_LINE = 10_000;
+const GREP_TIMEOUT_MS = 10_000;
 
 const SCOPE = z.enum(['workspace', 'documents']);
 
@@ -20,35 +27,167 @@ function cap(out: string): string {
 	return out.length > MAX_OUT ? `${out.slice(0, MAX_OUT)}\n… truncated` : out;
 }
 
-function globToRegExp(glob: string): RegExp {
-	// Collapse repeated wildcards: patterns come from the model, and stacked
-	// `.*` groups backtrack badly on long paths.
-	const g = glob
-		.replace(/\\/g, '/')
-		.replace(/(?:\*\*\/)+/g, '**/')
-		.replace(/\*{3,}/g, '**');
-	let out = '';
+type GlobNode =
+	| { t: 'lit'; c: string }
+	| { t: 'one' } // ?   -> [^/]
+	| { t: 'seg' } // *   -> [^/]*
+	| { t: 'any' } // **  -> .*
+	| { t: 'dirsA' } // **/ -> (?:.*/)? — entry: skip the group or start consuming it
+	| { t: 'dirsB' }; //       inside the group's `.*`, left via a '/'
+
+function compileGlob(glob: string): GlobNode[] {
+	const g = glob.replace(/\\/g, '/');
+	const nodes: GlobNode[] = [];
 	for (let i = 0; i < g.length; i++) {
 		const c = g[i];
 		if (c === '*') {
-			if (g[i + 1] === '*') {
+			let n = 1;
+			while (g[i + 1] === '*') {
 				i++;
-				if (g[i + 1] === '/') {
-					i++;
-					out += '(?:.*/)?';
-				} else {
-					out += '.*';
-				}
+				n++;
+			}
+			if (n === 1) {
+				nodes.push({ t: 'seg' });
+			} else if (g[i + 1] === '/') {
+				i++;
+				nodes.push({ t: 'dirsA' }, { t: 'dirsB' });
 			} else {
-				out += '[^/]*';
+				nodes.push({ t: 'any' });
 			}
 		} else if (c === '?') {
-			out += '[^/]';
+			nodes.push({ t: 'one' });
 		} else {
-			out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+			nodes.push({ t: 'lit', c });
 		}
 	}
-	return new RegExp(`^${out}$`);
+	return nodes;
+}
+
+/**
+ * Glob matching by NFA simulation instead of a backtracking RegExp: patterns
+ * come from the model, and e.g. `*a*a*a*a*b` compiled to a regex backtracks
+ * polynomially on long paths. This is O(pattern × path) and keeps the
+ * semantics of the previous regex translation (see GlobNode; everything other
+ * than `*` and `?` is literal).
+ */
+export function globMatcher(glob: string): (p: string) => boolean {
+	const nodes = compileGlob(glob);
+	const accept = nodes.length;
+	const closure = (states: Set<number>): Set<number> => {
+		const stack = [...states];
+		while (stack.length) {
+			const i = stack.pop()!;
+			const n = nodes[i];
+			if (!n) continue;
+			const eps = n.t === 'seg' || n.t === 'any' ? [i + 1] : n.t === 'dirsA' ? [i + 1, i + 2] : [];
+			for (const j of eps) {
+				if (!states.has(j)) {
+					states.add(j);
+					stack.push(j);
+				}
+			}
+		}
+		return states;
+	};
+	return (p) => {
+		let cur = closure(new Set([0]));
+		for (const ch of p) {
+			const next = new Set<number>();
+			for (const i of cur) {
+				const n = nodes[i];
+				if (!n) continue;
+				switch (n.t) {
+					case 'lit':
+						if (ch === n.c) next.add(i + 1);
+						break;
+					case 'one':
+						if (ch !== '/') next.add(i + 1);
+						break;
+					case 'seg':
+						if (ch !== '/') next.add(i);
+						break;
+					case 'any':
+						next.add(i);
+						break;
+					case 'dirsB':
+						next.add(i);
+						if (ch === '/') next.add(i + 1);
+						break;
+				}
+			}
+			if (next.size === 0) return false;
+			cur = closure(next);
+		}
+		return cur.has(accept);
+	};
+}
+
+// Runs as a CommonJS script in a worker (`eval: true`) so it survives any
+// bundling of this module (vite/adapter-node, vitest) without a separate entry.
+const GREP_WORKER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads');
+const fs = require('node:fs');
+const { pattern, flags, files, maxMatches, maxLine } = workerData;
+const re = new RegExp(pattern, flags);
+const out = [];
+for (const f of files) {
+	if (out.length >= maxMatches) break;
+	let content;
+	try {
+		content = fs.readFileSync(f.abs, 'utf-8');
+	} catch {
+		continue;
+	}
+	const lines = content.split(/\\r?\\n/);
+	for (let i = 0; i < lines.length && out.length < maxMatches; i++) {
+		const line = lines[i].length > maxLine ? lines[i].slice(0, maxLine) : lines[i];
+		if (re.test(line)) out.push(f.rel + ':' + (i + 1) + ':' + line);
+	}
+}
+parentPort.postMessage(out);
+`;
+
+export interface GrepJob {
+	pattern: string;
+	flags: string;
+	files: Array<{ abs: string; rel: string }>;
+	maxMatches: number;
+	maxLine: number;
+}
+
+export type GrepResult = { ok: true; lines: string[] } | { ok: false; error: string };
+
+/**
+ * Run the regex search in a worker thread with a hard deadline. A model-supplied
+ * pattern like `(a+)+$` can backtrack for hours on a single line, and nothing on
+ * the main event loop can interrupt one `RegExp#test` call — terminating a
+ * worker can.
+ */
+export function grepInWorker(job: GrepJob, timeoutMs = GREP_TIMEOUT_MS): Promise<GrepResult> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const worker = new Worker(GREP_WORKER_SOURCE, {
+			eval: true,
+			workerData: job,
+			resourceLimits: { maxOldGenerationSizeMb: 256 }
+		});
+		const finish = (r: GrepResult) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			void worker.terminate();
+			resolve(r);
+		};
+		const timer = setTimeout(
+			() => finish({ ok: false, error: `pattern timed out after ${timeoutMs / 1000}s` }),
+			timeoutMs
+		);
+		worker.once('message', (lines: string[]) => finish({ ok: true, lines }));
+		worker.once('error', (e) => finish({ ok: false, error: `grep failed: ${e.message}` }));
+		worker.once('exit', (code) =>
+			finish({ ok: false, error: `grep failed: worker exited with code ${code}` })
+		);
+	});
 }
 
 export function createFsServer(ctx: CallerContext): McpServer {
@@ -60,7 +199,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		const dir = scope === 'workspace' ? ctx.workspaceDir : ctx.documentsDir;
 		if (!dir) return { ok: false, error: err('no workspace available') };
 		await fsp.mkdir(dir, { recursive: true });
-		const abs = resolveInside(dir, rel);
+		const abs = await resolveInsideReal(dir, rel);
 		if (!abs) return { ok: false, error: err(`path escapes ${scope} root`) };
 		return { ok: true, base: dir, abs };
 	}
@@ -193,9 +332,13 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		async ({ scope, pattern, path: rel, ignoreCase }) => {
 			const r = await resolveIn(scope, rel ?? '.');
 			if (!r.ok) return r.error;
-			let re: RegExp;
+			if (pattern.length > MAX_PATTERN) {
+				return err(`pattern too long (max ${MAX_PATTERN} characters)`);
+			}
+			const flags = ignoreCase ? 'i' : '';
 			try {
-				re = new RegExp(pattern, ignoreCase ? 'i' : '');
+				// Validate up front so syntax errors don't cost a worker spin-up.
+				new RegExp(pattern, flags);
 			} catch (e) {
 				return err(`invalid regex: ${e instanceof Error ? e.message : String(e)}`);
 			}
@@ -215,15 +358,15 @@ export function createFsServer(ctx: CallerContext): McpServer {
 					}
 				}
 			}
-			const out: string[] = [];
-			for (const t of targets) {
-				if (out.length >= MAX_MATCHES) break;
-				const lines = (await fsp.readFile(t.abs, 'utf-8')).split(/\r?\n/);
-				for (let i = 0; i < lines.length && out.length < MAX_MATCHES; i++) {
-					if (re.test(lines[i])) out.push(`${t.rel}:${i + 1}:${lines[i]}`);
-				}
-			}
-			return text(cap(out.join('\n')));
+			const result = await grepInWorker({
+				pattern,
+				flags,
+				files: targets,
+				maxMatches: MAX_MATCHES,
+				maxLine: MAX_GREP_LINE
+			});
+			if (!result.ok) return err(result.error);
+			return text(cap(result.lines.join('\n')));
 		}
 	);
 
@@ -242,10 +385,13 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			}
 			// Walk the root and match against it rather than using fs.glob, which
 			// follows `..` and absolute patterns out of its cwd.
-			const re = globToRegExp(normalized);
+			if (normalized.length > MAX_PATTERN) {
+				return err(`pattern too long (max ${MAX_PATTERN} characters)`);
+			}
+			const matchGlob = globMatcher(normalized);
 			const matches: string[] = [];
 			for (const e of await walkAsync(r.base)) {
-				if (re.test(e.rel)) matches.push(e.rel);
+				if (matchGlob(e.rel)) matches.push(e.rel);
 				if (matches.length >= MAX_GLOB) break;
 			}
 			matches.sort();
@@ -369,7 +515,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			if (!r.ok) return r.error;
 			let res: Response;
 			try {
-				res = await fetch(url, {
+				res = await safeFetch(url, {
 					headers: { 'user-agent': 'ai-chat/0.1 (+https://localhost)', ...headers },
 					redirect: 'follow',
 					signal: AbortSignal.timeout(60000)
@@ -382,11 +528,12 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			if (length > MAX_DOWNLOAD) return err(`file too large: ${length} bytes`);
 			let buf: Buffer;
 			try {
-				buf = Buffer.from(await res.arrayBuffer());
+				const limited = await readBodyLimited(res, MAX_DOWNLOAD);
+				if (limited.truncated) return err(`file too large: more than ${MAX_DOWNLOAD} bytes`);
+				buf = limited.body;
 			} catch (e) {
 				return err(`download failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
-			if (buf.length > MAX_DOWNLOAD) return err(`file too large: ${buf.length} bytes`);
 			await fsp.mkdir(path.dirname(r.abs), { recursive: true });
 			await fsp.writeFile(r.abs, buf);
 			return text(`${toPosix(path.relative(r.base, r.abs))} ${buf.length} bytes`);

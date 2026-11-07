@@ -6,6 +6,7 @@ import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { toPublic } from '$lib/server/db/repo/agent-runs.js';
 import { getAgent, type AgentRow } from '$lib/server/db/repo/agents.js';
+import { MAX_LAUNCH_PROMPT } from '$lib/server/t3/tasks.js';
 import type { RequestHandler } from './$types';
 
 const RATE_LIMIT = 20;
@@ -24,7 +25,7 @@ function checkRateLimit(key: string): boolean {
 }
 
 const bodySchema = z.object({
-	instructions: z.string().max(4000).optional()
+	instructions: z.string().max(MAX_LAUNCH_PROMPT).optional()
 });
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
@@ -81,6 +82,12 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
 	const parsed = bodySchema.safeParse(await request.json().catch(() => ({})));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });
+	// An API key may start a coding agent, but only with the task it was saved
+	// with: free-form instructions would let any key holder run arbitrary work
+	// in the user's repositories.
+	if (trigger === 'http' && agent.coding_target && parsed.data.instructions?.trim()) {
+		error(400, { message: 'Coding agents run their saved task; instructions are not accepted' });
+	}
 
 	try {
 		const { run, done } = await startAgentRun({

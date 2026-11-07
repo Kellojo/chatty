@@ -40,8 +40,14 @@ vi.mock('../llm/registry.js', async () => {
 			};
 		}
 	});
+	// Target "bad" always fails before producing output, to exercise fallbacks.
+	const failing = new MockLanguageModelV3({
+		doStream: async () => {
+			throw new Error('bad target exploded');
+		}
+	});
 	return {
-		resolveModel: () => model,
+		resolveModel: (target?: { modelId: string }) => (target?.modelId === 'bad' ? failing : model),
 		roleModel: () => undefined,
 		ModelUnavailableError: class ModelUnavailableError extends Error {},
 		__setChunks: (chunks: unknown[] | null) => {
@@ -54,13 +60,20 @@ vi.mock('../llm/registry.js', async () => {
 	};
 });
 
-vi.mock('../llm/mapped.js', () => ({
-	resolveRefTargets: (ref: { providerId: string; modelId: string }) => ({
-		mappingId: null,
-		targets: [{ providerId: ref.providerId, modelId: ref.modelId }]
-	}),
-	isRetryableModelError: () => false
-}));
+// Tests may set `__chatFallback` to prepend a failing target that is retried.
+vi.mock('../llm/mapped.js', () => {
+	const flags = globalThis as { __chatFallback?: boolean };
+	return {
+		resolveRefTargets: (ref: { providerId: string; modelId: string }) => ({
+			mappingId: null,
+			targets: [
+				...(flags.__chatFallback ? [{ providerId: ref.providerId, modelId: 'bad' }] : []),
+				{ providerId: ref.providerId, modelId: ref.modelId }
+			]
+		}),
+		isRetryableModelError: () => flags.__chatFallback === true
+	};
+});
 
 vi.mock('ai', async () => {
 	const actual = await vi.importActual<typeof import('ai')>('ai');
@@ -677,6 +690,58 @@ describe('handleChatRequest', () => {
 			expect(statuses).not.toContain('partial');
 		} finally {
 			registry.__setChunks(null);
+			closeDb();
+		}
+	});
+
+	it('records a response from a fallback target as complete, not failed', async () => {
+		const flags = globalThis as { __chatFallback?: boolean };
+		flags.__chatFallback = true;
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			createModel(db, { providerId: 'p1', modelId: 'bad' });
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+			});
+			await res.text();
+			await new Promise((r) => setTimeout(r, 50));
+
+			const assistant = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+			expect(assistant.status).toBe('complete');
+			expect(assistant.error).toBeNull();
+			expect(assistant.parts).toContain('Hi there');
+		} finally {
+			flags.__chatFallback = false;
+			consoleError.mockRestore();
+			closeDb();
+		}
+	});
+
+	it('releases the stream and drops the placeholder when setup throws', async () => {
+		const { hasActiveStream } = await import('./streams.js');
+		const { createAgent } = await import('../db/repo/agents.js');
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			const agent = createAgent(db, 'u1', { name: 'a', systemPrompt: 'x', triggerType: 'manual' });
+			db.prepare("UPDATE agents SET skill_names = 'not json' WHERE id = ?").run(agent.id);
+			db.prepare('UPDATE conversations SET agent_id = ? WHERE id = ?').run(
+				agent.id,
+				conversation.id
+			);
+
+			await expect(
+				handleChatRequest('u1', {
+					conversationId: conversation.id,
+					message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+				})
+			).rejects.toThrow();
+			expect(hasActiveStream(conversation.id)).toBe(false);
+			expect(listMessages(db, conversation.id).map((m) => m.role)).toEqual(['user']);
+		} finally {
 			closeDb();
 		}
 	});

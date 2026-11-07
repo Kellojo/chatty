@@ -13,6 +13,8 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import ModelSelect from '$lib/components/app/ModelSelect.svelte';
+	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
+	import { resolveBrand, resolveModelBrand } from '$lib/provider-brand.js';
 	import type { ModelsByProvider } from '$lib/types.js';
 	import type { PageData } from './$types';
 
@@ -31,6 +33,27 @@
 	let deleteBusy = $state(false);
 
 	const providersById = $derived(new Map(data.providers.map((p) => [p.id, p])));
+	const modelsByRef = $derived(
+		new Map(data.models.map((m) => [`${m.providerId}/${m.modelId}`, m]))
+	);
+
+	/** A target as shown in the table: the model's display name and maker, like the pickers. */
+	function describeTarget(target: TargetRow) {
+		const model = modelsByRef.get(`${target.providerId}/${target.modelId}`);
+		const provider = providersById.get(target.providerId);
+		return {
+			name: model?.displayName ?? target.modelId,
+			provider: provider?.name ?? target.providerId,
+			brand: resolveModelBrand(model ?? target, provider)
+		};
+	}
+
+	function mappingBrand(mapping: Mapping) {
+		return (
+			resolveBrand(mapping.name) ??
+			(mapping.targets[0] ? describeTarget(mapping.targets[0]).brand : null)
+		);
+	}
 
 	const modelGroups = $derived.by<ModelsByProvider[]>(() => {
 		const byProvider: Record<string, PageData['models']> = {};
@@ -169,14 +192,26 @@
 				<Table.Body>
 					{#each data.mappings as mapping (mapping.id)}
 						<Table.Row>
-							<Table.Cell class="font-medium">{mapping.name}</Table.Cell>
+							<Table.Cell class="font-medium">
+								{@const brand = mappingBrand(mapping)}
+								<span class="flex items-center gap-2">
+									{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
+									{mapping.name}
+								</span>
+							</Table.Cell>
 							<Table.Cell class="text-muted-foreground">
 								<div class="flex flex-wrap items-center gap-x-1">
 									{#each mapping.targets as target, i (i)}
 										{#if i > 0}<span>→</span>{/if}
-										<span class="whitespace-nowrap">
-											{i + 1}. {providersById.get(target.providerId)?.name ?? target.providerId} /
-											{target.modelId}
+										{@const t = describeTarget(target)}
+										<span
+											class="inline-flex items-center gap-1.5 whitespace-nowrap"
+											title={`${t.provider} / ${target.modelId}`}
+										>
+											{i + 1}.
+											{#if t.brand}<ProviderIcon brand={t.brand} class="size-3.5 shrink-0" />{/if}
+											{t.name}
+											<span class="text-xs opacity-70">({t.provider})</span>
 										</span>
 									{/each}
 								</div>

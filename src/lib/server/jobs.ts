@@ -1,7 +1,14 @@
+import { listActiveStreamIds } from './chat/streams.js';
 import { config } from './config.js';
 import { getDb, type Db } from './db/index.js';
-import { listSoftDeletedBefore, purgeConversation } from './db/repo/conversations.js';
+import {
+	autoSettleConversations,
+	listSoftDeletedBefore,
+	purgeConversation
+} from './db/repo/conversations.js';
+import { publishServerEvent } from './events/bus.js';
 import { createLogger } from './logger.js';
+import { queueThreadStatePush } from './t3/thread-state.js';
 import {
 	gcAgentWorkspaces,
 	gcOrphanConversationWorkspaces,
@@ -76,4 +83,51 @@ export function startDailyJobs(db: Db = getDb()): void {
 		24 * 60 * 60 * 1000
 	);
 	timer.unref?.();
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Settles chats idle for CONVERSATION_AUTO_SETTLE_DAYS, skipping streaming ones. */
+export function runAutoSettle(
+	db: Db = getDb(),
+	days: number = config.CONVERSATION_AUTO_SETTLE_DAYS
+): number {
+	if (days <= 0) return 0;
+	const byUser = autoSettleConversations(db, {
+		cutoffMs: Date.now() - days * DAY_MS,
+		excludeIds: listActiveStreamIds()
+	});
+	let total = 0;
+	for (const [userId, conversationIds] of byUser) {
+		total += conversationIds.length;
+		publishServerEvent(userId, {
+			type: 'conversation.settle_changed',
+			conversationIds,
+			settled: true
+		});
+		queueThreadStatePush(db, userId, conversationIds);
+	}
+	if (total > 0) log.info(`Auto-settled ${total} conversation(s) idle > ${days}d`);
+	return total;
+}
+
+let hourlyTimer: ReturnType<typeof setInterval> | null = null;
+
+export function stopHourlyJobs(): void {
+	if (hourlyTimer) clearInterval(hourlyTimer);
+	hourlyTimer = null;
+}
+
+export function startHourlyJobs(db: Db = getDb()): void {
+	const run = () => {
+		try {
+			runAutoSettle(db);
+		} catch (e) {
+			log.error('Hourly jobs failed', { error: e instanceof Error ? e.message : String(e) });
+		}
+	};
+	run();
+	if (hourlyTimer) return;
+	hourlyTimer = setInterval(run, 60 * 60 * 1000);
+	hourlyTimer.unref?.();
 }

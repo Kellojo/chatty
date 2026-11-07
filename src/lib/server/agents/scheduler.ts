@@ -5,7 +5,8 @@ import {
 	claimAgentRun,
 	listActiveUserIds,
 	listDueScheduleAgents,
-	listOverridesForAgent
+	listOverridesForAgent,
+	type AgentRow
 } from '../db/repo/agents.js';
 import { createLogger } from '../logger.js';
 import { startAgentRun } from './runner.js';
@@ -43,6 +44,11 @@ export async function tickAgents(
 			startAgentRun({ agentId, trigger: 'schedule', userId }).then((s) => s.done));
 	let started = 0;
 	const now = Date.now();
+	// Every due agent starts right away instead of after the previous agent's run
+	// finished, so one long run can't hold up the rest. The tick still resolves
+	// once all are done, but the interval doesn't wait on it, and `inFlight`
+	// keeps an agent from overlapping itself across ticks.
+	const jobs: Promise<void>[] = [];
 	for (const agent of listDueScheduleAgents(db, now)) {
 		let cron: string | undefined;
 		try {
@@ -59,27 +65,36 @@ export async function tickAgents(
 		if (!claimed || inFlight.has(agent.id)) continue;
 		inFlight.add(agent.id);
 		started++;
-		try {
-			if (agent.user_id === null) {
-				const overrides = listOverridesForAgent(db, agent.id);
-				for (const userId of listActiveUserIds(db, agent.last_run_at ?? 0)) {
-					const enabled = overrides.get(userId) ?? agent.enabled === 1;
-					if (!enabled) continue;
-					await run(agent.id, userId);
-				}
-			} else {
-				await run(agent.id, agent.user_id);
-			}
-		} catch (e) {
-			log.error(`Scheduled run of agent ${agent.id} failed`, {
-				agentId: agent.id,
-				error: e instanceof Error ? e.message : String(e)
-			});
-		} finally {
-			inFlight.delete(agent.id);
-		}
+		jobs.push(runScheduledAgent(db, agent, run).finally(() => inFlight.delete(agent.id)));
 	}
+	await Promise.all(jobs);
 	return started;
+}
+
+async function runScheduledAgent(
+	db: Db,
+	agent: AgentRow,
+	run: (agentId: string, userId: string) => Promise<unknown>
+): Promise<void> {
+	try {
+		if (agent.user_id === null) {
+			// One agent's per-user runs stay sequential; different agents don't wait
+			// on each other.
+			const overrides = listOverridesForAgent(db, agent.id);
+			for (const userId of listActiveUserIds(db, agent.last_run_at ?? 0)) {
+				const enabled = overrides.get(userId) ?? agent.enabled === 1;
+				if (!enabled) continue;
+				await run(agent.id, userId);
+			}
+		} else {
+			await run(agent.id, agent.user_id);
+		}
+	} catch (e) {
+		log.error(`Scheduled run of agent ${agent.id} failed`, {
+			agentId: agent.id,
+			error: e instanceof Error ? e.message : String(e)
+		});
+	}
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;

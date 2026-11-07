@@ -304,6 +304,21 @@ describe('PATCH /api/agents/[id]', () => {
 		expect(res.status).toBe(400);
 	});
 
+	it('rejects an unknown model on patch', async () => {
+		const agent = createAgent(getDb(), 'u1', {
+			name: 'a',
+			systemPrompt: 'x',
+			triggerType: 'manual'
+		});
+		const res = await call<{ message: string }>(PATCH, {
+			user: u1,
+			params: { id: agent.id },
+			body: { providerId: 'p1', modelId: 'does-not-exist' }
+		});
+		expect(res.status).toBe(400);
+		expect(res.body.message).toBe('Unknown model');
+	});
+
 	it('patches an agent to an event trigger', async () => {
 		const agent = createAgent(getDb(), 'u1', {
 			name: 'a',

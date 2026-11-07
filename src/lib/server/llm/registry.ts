@@ -233,27 +233,25 @@ async function fetchOpenAICompatibleModels(
 				)
 			: [];
 
-		// Map each modality to a capability tag. Unmapped modalities are kept as-is.
+		// Map each input modality to a capability tag. Unmapped modalities are kept as-is.
+		// An image *input* means the model can see images ('vision'); generating
+		// images is an image *output* ('image', what the image role picker filters on).
 		const modalityToCapability: Record<string, string | undefined> = {
 			audio: 'transcription',
 			speech: 'speech',
 			text: 'chat',
-			image: 'image',
+			image: 'vision',
 			video: 'video',
 			decisions: 'decisions'
 		};
 
-		const capabilities = new Set<string>(['streaming']);
+		// 'chat' is always present (default capability)
+		const capabilities = new Set<string>(['chat', 'streaming']);
 		for (const mod of rawModalities) {
 			const cap = modalityToCapability[mod] ?? mod;
 			capabilities.add(cap);
 		}
-		// Output-image models also get 'vision' for the image model picker filter
-		if (outputs.includes('image')) capabilities.add('vision');
-		// Audio-input models also get 'vision' for the image model picker filter (chat models that see images)
-		if (rawModalities.includes('image')) capabilities.add('vision');
-		// Ensure 'chat' is always present (default capability)
-		capabilities.add('chat');
+		if (outputs.includes('image')) capabilities.add('image');
 
 		return {
 			id: m.id,

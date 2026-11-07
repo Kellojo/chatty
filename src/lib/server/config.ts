@@ -22,12 +22,16 @@ const schema = z.object({
 	OIDC_CLIENT_SECRET: z.string().optional(),
 	OIDC_SCOPES: z.string().default('openid profile email'),
 	AUTO_PROMOTE_FIRST_USER: boolFromString('true'),
-	LM_STUDIO_BASE_URL: z.string().default('http://localhost:1234'),
 	AGENT_MAX_STEPS: z.coerce.number().int().min(1).default(25),
 	CHAT_COMPACT_TOKENS: z.coerce.number().int().min(0).default(60000),
 	CHAT_COMPACT_KEEP_MESSAGES: z.coerce.number().int().min(2).default(10),
 	MAX_ATTACHMENT_SIZE_MB: z.coerce.number().int().min(1).default(50),
 	SETTINGS_MCP_WRITE: boolFromString('false'),
+	// Chats untouched for this many days are settled (hidden from the sidebar). 0 disables.
+	CONVERSATION_AUTO_SETTLE_DAYS: z.coerce.number().int().min(0).default(7),
+	// Lets agent fetch tools (webfetch, fs_curl) reach localhost, private LAN and
+	// link-local/metadata addresses. Off by default to prevent SSRF.
+	ALLOW_PRIVATE_NETWORK_FETCH: boolFromString('false'),
 	PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 	ORIGIN: z.string().url().optional(),
 	APP_SECRET: z.string().min(16).optional()

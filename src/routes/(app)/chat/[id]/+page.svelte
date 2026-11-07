@@ -16,5 +16,8 @@
 		timeFormat={data.timeFormat}
 		personas={data.personas}
 		initiallyGenerating={data.generating}
+		coding={data.coding ?? null}
+		codingEnvironments={data.codingEnvironments}
+		codingAgents={data.codingAgents}
 	/>
 {/key}

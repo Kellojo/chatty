@@ -2,6 +2,8 @@
 	import { tick } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
+	import { mergeTranscript, transcriptCursor } from '$lib/agent-run-transcript.js';
+	import { coalesce } from '$lib/coalesce.js';
 	import MessageTimeline from '$lib/components/app/MessageTimeline.svelte';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
@@ -26,35 +28,27 @@
 		run.endedAt ? `${((run.endedAt - run.startedAt) / 1000).toFixed(1)}s` : '—'
 	);
 
-	let refreshing = false;
-	let queued = false;
-
-	async function refresh() {
-		if (refreshing) {
-			queued = true;
-			return;
-		}
-		refreshing = true;
-		try {
-			const res = await fetch(`/api/agent-runs/${run.id}`);
-			if (!res.ok) return;
-			const body = (await res.json()) as { run: AgentRun; messages: ChatMessage[] };
-			const nearBottom = container
-				? container.scrollHeight - container.scrollTop - container.clientHeight < 120
-				: false;
-			run = body.run;
-			messages = body.messages;
-			tick().then(() => {
-				if (nearBottom && container) container.scrollTop = container.scrollHeight;
-			});
-		} finally {
-			refreshing = false;
-			if (queued) {
-				queued = false;
-				await refresh();
-			}
-		}
-	}
+	// Fetches only the transcript tail that can still change (see
+	// transcriptCursor); events arriving mid-fetch fold into one follow-up fetch.
+	const refresh = coalesce(async () => {
+		const from = transcriptCursor(messages);
+		const query = from ? `?${new URLSearchParams({ from })}` : '';
+		const res = await fetch(`/api/agent-runs/${run.id}${query}`);
+		if (!res.ok) return;
+		const body = (await res.json()) as {
+			run: AgentRun;
+			messages: ChatMessage[];
+			from: string | null;
+		};
+		const nearBottom = container
+			? container.scrollHeight - container.scrollTop - container.clientHeight < 120
+			: false;
+		run = body.run;
+		messages = mergeTranscript(messages, body.from, body.messages);
+		tick().then(() => {
+			if (nearBottom && container) container.scrollTop = container.scrollHeight;
+		});
+	});
 
 	$effect(() => {
 		if (run.status !== 'running') return;
@@ -138,6 +132,17 @@
 			<p class="text-sm text-muted-foreground">
 				Started {formatDateTime(run.startedAt, data.timeFormat)} · Duration {duration}
 			</p>
+			{#if data.isCodingTask && run.conversationId}
+				<div class="flex flex-wrap items-center gap-3 rounded-md border p-3 text-sm">
+					<span class="text-muted-foreground">
+						This run is a coding task. It finishes when the coding agent's turn ends; approvals and
+						follow-ups happen in the task.
+					</span>
+					<Button size="sm" variant="outline" href={resolve(`/chat/${run.conversationId}`)}>
+						Open coding task
+					</Button>
+				</div>
+			{/if}
 			{#if run.error}
 				<div
 					class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"

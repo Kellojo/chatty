@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { applyPatch, parsePatch, reversePatch } from 'diff';
-import matter from 'gray-matter';
 import { error, json } from '@sveltejs/kit';
 import { z } from 'zod';
 import { requireAdmin, requireUser } from '$lib/server/auth/guards.js';
+import { parseFrontmatter } from '$lib/server/frontmatter.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getMemoryWrite } from '$lib/server/db/repo/memory-writes.js';
 import { writeConcept } from '$lib/server/memory/bundle.js';
@@ -51,7 +51,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (restored === false) {
 		error(409, { message: 'Cannot restore: current content conflicts with the recorded diff' });
 	}
-	const { data: fm, content } = matter(restored);
+	const { data: fm, content } = parseFrontmatter(restored);
 	try {
 		const concept = writeConcept(
 			db,

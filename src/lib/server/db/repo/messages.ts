@@ -72,6 +72,27 @@ export function listMessages(db: Db, conversationId: string): MessageRow[] {
 		.all(conversationId) as MessageRow[];
 }
 
+/**
+ * Lists the messages of a conversation from `messageId` (inclusive) onwards,
+ * in the same order as `listMessages`. Returns undefined when the anchor is
+ * not a message of that conversation, so callers can fall back to a full list.
+ */
+export function listMessagesFrom(
+	db: Db,
+	conversationId: string,
+	messageId: string
+): MessageRow[] | undefined {
+	const anchor = getMessage(db, messageId);
+	if (!anchor || anchor.conversation_id !== conversationId) return undefined;
+	return db
+		.prepare(
+			`SELECT rowid, * FROM messages WHERE conversation_id = ?
+			 AND (created_at > ? OR (created_at = ? AND rowid >= ?))
+			 ORDER BY created_at, rowid`
+		)
+		.all(conversationId, anchor.created_at, anchor.created_at, anchor.rowid) as MessageRow[];
+}
+
 export function countMessages(db: Db, conversationId: string): number {
 	const row = db
 		.prepare('SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?')

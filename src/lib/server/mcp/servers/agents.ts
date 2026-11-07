@@ -1,6 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { computeNextRunAt, isValidCron } from '../../agents/scheduler.js';
+import {
+	agentCreateSchema,
+	agentPatchSchema,
+	prepareAgentCreate,
+	prepareAgentUpdate
+} from '../../agentInput.js';
 import { getDb } from '../../db/index.js';
 import {
 	createAgent,
@@ -10,33 +15,16 @@ import {
 	toPublic,
 	updateAgent
 } from '../../db/repo/agents.js';
-import { AGENT_EVENT_NAMES, type AgentTriggerType } from '../../../types.js';
 import { createLogger } from '../../logger.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
 
 const log = createLogger('mcp:agents');
 
-const triggerConfigSchema = z.object({
-	cron: z.string().optional(),
-	instructions: z.string().optional(),
-	event: z.enum(AGENT_EVENT_NAMES).optional(),
-	every: z.number().optional()
-});
-
-function validateTrigger(
-	triggerType: AgentTriggerType,
-	triggerConfig: z.infer<typeof triggerConfigSchema>
-): string | null {
-	if (triggerType === 'schedule') {
-		if (!triggerConfig.cron) return 'Schedule trigger requires a cron expression';
-		if (!isValidCron(triggerConfig.cron)) return 'Invalid cron expression';
-	}
-	if (triggerType === 'event' && !triggerConfig.event) {
-		return 'Event trigger requires an event name';
-	}
-	return null;
-}
+const MODEL_FIELD_DESCRIPTIONS = {
+	providerId: 'Provider id (must be given together with modelId)',
+	modelId: 'Model id (must be given together with providerId)'
+};
 
 export function createAgentsServer(ctx: CallerContext): McpServer {
 	const server = new McpServer({ name: 'ai-chat-agents', version: '0.1.0' });
@@ -63,6 +51,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 							triggerConfig: pub.triggerConfig,
 							enabled: pub.enabled,
 							builtin: r.user_id === null,
+							coding: r.coding_target !== null,
 							lastRunAt: pub.lastRunAt,
 							nextRunAt: pub.nextRunAt
 						};
@@ -96,50 +85,18 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 			description:
 				'Create a new agent for the current user. triggerType persona makes it selectable in chat; schedule requires a cron expression; event requires an event name.',
 			inputSchema: {
-				name: z.string(),
-				description: z.string().optional(),
-				systemPrompt: z.string(),
-				providerId: z
-					.string()
-					.optional()
-					.describe('Provider id (must be given together with modelId)'),
-				modelId: z
-					.string()
-					.optional()
-					.describe('Model id (must be given together with providerId)'),
-				skillNames: z.array(z.string()).optional(),
-				toolAllowlist: z.array(z.string()).optional(),
-				triggerType: z.enum(['persona', 'schedule', 'http', 'manual', 'event']),
-				triggerConfig: triggerConfigSchema.optional(),
-				maxSteps: z.number().optional(),
-				enabled: z.boolean().optional()
+				...agentCreateSchema.shape,
+				providerId: agentCreateSchema.shape.providerId.describe(
+					MODEL_FIELD_DESCRIPTIONS.providerId
+				),
+				modelId: agentCreateSchema.shape.modelId.describe(MODEL_FIELD_DESCRIPTIONS.modelId)
 			}
 		},
 		async (input) => {
-			const triggerConfig = input.triggerConfig ?? {};
-			const triggerError = validateTrigger(input.triggerType, triggerConfig);
-			if (triggerError) return err(triggerError);
-			if ((input.providerId === undefined) !== (input.modelId === undefined)) {
-				return err('providerId and modelId must be provided together');
-			}
-			const enabled = input.enabled !== false;
-			const nextRunAt =
-				input.triggerType === 'schedule' && enabled ? computeNextRunAt(triggerConfig.cron!) : null;
 			const db = getDb();
-			const agent = createAgent(db, ctx.userId, {
-				name: input.name,
-				description: input.description,
-				systemPrompt: input.systemPrompt,
-				providerId: input.providerId,
-				modelId: input.modelId,
-				skillNames: input.skillNames,
-				toolAllowlist: input.toolAllowlist,
-				triggerType: input.triggerType,
-				triggerConfig,
-				maxSteps: input.maxSteps,
-				enabled,
-				nextRunAt
-			});
+			const prepared = prepareAgentCreate(db, input);
+			if (!prepared.ok) return err(prepared.error);
+			const agent = createAgent(db, ctx.userId, prepared.value);
 			log.info('create_agent', {
 				userId: ctx.userId,
 				agentId: agent.id,
@@ -157,17 +114,12 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 				'Update an existing agent owned by the current user. Only provided fields are changed. Built-in agents cannot be modified.',
 			inputSchema: {
 				agentId: z.string(),
-				name: z.string().optional(),
-				description: z.string().optional(),
-				systemPrompt: z.string().optional(),
-				providerId: z.string().optional(),
-				modelId: z.string().optional(),
-				skillNames: z.array(z.string()).optional(),
-				toolAllowlist: z.array(z.string()).optional(),
-				triggerType: z.enum(['persona', 'schedule', 'http', 'manual', 'event']).optional(),
-				triggerConfig: triggerConfigSchema.optional(),
-				maxSteps: z.number().optional(),
-				enabled: z.boolean().optional()
+				...agentPatchSchema.shape,
+				providerId: agentPatchSchema.shape.providerId.describe(MODEL_FIELD_DESCRIPTIONS.providerId),
+				modelId: agentPatchSchema.shape.modelId.describe(MODEL_FIELD_DESCRIPTIONS.modelId),
+				triggerConfig: agentPatchSchema.shape.triggerConfig.describe(
+					'Fields given here are merged into the existing trigger config'
+				)
 			}
 		},
 		async ({ agentId, ...patch }) => {
@@ -181,37 +133,15 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 				log.warn('update_agent builtin attempt', { userId: ctx.userId, agentId });
 				return err('built-in agents cannot be modified');
 			}
-			if ((patch.providerId === undefined) !== (patch.modelId === undefined)) {
-				return err('providerId and modelId must be provided together');
+			// Their prompt becomes work done in the user's repositories, so only
+			// the user changes it (on the Agents page), never a chat model.
+			if (existing.coding_target) {
+				log.warn('update_agent coding agent attempt', { userId: ctx.userId, agentId });
+				return err('coding agents can only be changed by the user on the Agents page');
 			}
-			const triggerType = (patch.triggerType ?? existing.trigger_type) as AgentTriggerType;
-			const existingConfig = JSON.parse(existing.trigger_config) as Record<string, unknown>;
-			const triggerConfig = { ...existingConfig, ...(patch.triggerConfig ?? {}) };
-			if (
-				patch.triggerType !== undefined ||
-				patch.triggerConfig?.cron !== undefined ||
-				patch.triggerConfig?.event !== undefined
-			) {
-				const triggerError = validateTrigger(triggerType, triggerConfig);
-				if (triggerError) return err(triggerError);
-			}
-			let nextRunAt: number | null | undefined;
-			if (
-				patch.triggerType !== undefined ||
-				patch.triggerConfig?.cron !== undefined ||
-				patch.enabled !== undefined
-			) {
-				const enabled = patch.enabled ?? existing.enabled === 1;
-				nextRunAt =
-					triggerType === 'schedule' && enabled
-						? computeNextRunAt(triggerConfig.cron as string)
-						: null;
-			}
-			const updated = updateAgent(db, agentId, {
-				...patch,
-				triggerConfig: patch.triggerConfig !== undefined ? triggerConfig : undefined,
-				...(nextRunAt !== undefined ? { nextRunAt } : {})
-			});
+			const prepared = prepareAgentUpdate(db, existing, patch, { mergeTriggerConfig: true });
+			if (!prepared.ok) return err(prepared.error);
+			const updated = updateAgent(db, agentId, prepared.value);
 			log.info('update_agent', { userId: ctx.userId, agentId, fields: Object.keys(patch) });
 			return text(JSON.stringify(toPublic(updated!)));
 		}

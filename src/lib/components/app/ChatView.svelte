@@ -13,16 +13,23 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import SquareIcon from '@lucide/svelte/icons/square';
+	import ListEndIcon from '@lucide/svelte/icons/list-end';
 	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import XIcon from '@lucide/svelte/icons/x';
 	import ChatTopbar from './ChatTopbar.svelte';
+	import CodingPendingRequest from './CodingPendingRequest.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
+	import LiveElapsed from './LiveElapsed.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
+	import { createPullRequestPrompt } from '$lib/coding-task-details.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
 	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
+	import { messageQueue, type QueuedMessage } from '$lib/state/message-queue.svelte.js';
+	import QueuedMessages from './QueuedMessages.svelte';
+	import { parseSkillCommand, uploadAttachments } from '$lib/chat-send.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
 	import MicButton from '$lib/components/app/MicButton.svelte';
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
@@ -37,6 +44,7 @@
 		type UIMessage
 	} from '$lib/types.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
+	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
 
 	let {
 		conversation: initialConversation,
@@ -47,7 +55,10 @@
 		timeFormat = 'auto',
 		personas,
 		sttModel = null,
-		initiallyGenerating = false
+		initiallyGenerating = false,
+		coding: initialCoding = null,
+		codingEnvironments = [],
+		codingAgents = []
 	}: {
 		conversation: Conversation;
 		initialMessages: ChatMessage[];
@@ -58,10 +69,16 @@
 		timeFormat?: TimeFormat;
 		personas?: Agent[];
 		initiallyGenerating?: boolean;
+		/** Set when this conversation is a coding task run by a remote agent. */
+		coding?: CodingConversation | null;
+		/** Targets for handing this chat off to a coding agent. */
+		codingEnvironments?: CodingEnvironment[];
+		codingAgents?: Agent[];
 	} = $props();
 
-	// svelte-ignore state_referenced_locally
-	let conversation = $state(initialConversation);
+	// Local edits apply immediately; reloaded page data (e.g. a task settled or
+	// renamed on T3) replaces them.
+	let conversation = $derived(initialConversation);
 	let input = $state('');
 	const speech = sttModel ? createServerSpeechRecognition(sttModel) : createSpeechRecognition();
 	let selectedFiles = $state<File[]>([]);
@@ -124,6 +141,62 @@
 		return createChat();
 	}
 
+	// ── coding task ──────────────────────────────────────────────────────────
+	// svelte-ignore state_referenced_locally
+	let coding = $state(initialCoding);
+	let codingEnvironmentName = $state<string | null>(null);
+	// The remote agent can't rewind or read attachments, so hide those affordances.
+	const isCoding = $derived(coding !== null);
+
+	// Page data reloads (invalidate) carry fresh task state too.
+	$effect(() => {
+		if (initialCoding) coding = initialCoding;
+	});
+
+	async function refreshCoding() {
+		const res = await fetch(`/api/coding/tasks/${encodeURIComponent(conversation.id)}`);
+		if (!res.ok) return;
+		const data = (await res.json()) as { coding: CodingConversation };
+		coding = data.coding;
+	}
+
+	$effect(() => {
+		if (!isCoding) return;
+		const id = conversation.id;
+		const refresh = () => void refreshCoding().catch(() => undefined);
+		const offEvent = onServerEvent((event) => {
+			if (
+				(event.type === 'coding.task.updated' || event.type === 'coding.thread.finished') &&
+				event.conversationId === id
+			) {
+				refresh();
+			}
+		});
+		const offResync = onServerEventResync(refresh);
+		return () => {
+			offEvent();
+			offResync();
+		};
+	});
+
+	const codingEnvironmentId = $derived(coding?.environmentId ?? null);
+	$effect(() => {
+		const environmentId = codingEnvironmentId;
+		if (!environmentId) return;
+		let cancelled = false;
+		void fetch('/api/coding/options')
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data: { environments?: CodingEnvironment[] } | null) => {
+				if (cancelled) return;
+				codingEnvironmentName =
+					data?.environments?.find((e) => e.id === environmentId)?.name ?? null;
+			})
+			.catch(() => undefined);
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	let chat = $state(initChat());
 	let pendingTruncateFrom = $state<string | undefined>(undefined);
 
@@ -152,9 +225,17 @@
 						p.type === 'text' || p.type === 'reasoning' ? p.text === '' : false
 					)))
 	);
+
+	// When the current wait began: the coding run's own start if known, else when
+	// this view started waiting.
+	let waitStartedLocally = $state<number | null>(null);
+	$effect(() => {
+		if (!waiting) waitStartedLocally = null;
+		else if (waitStartedLocally === null) waitStartedLocally = Date.now();
+	});
+	const waitingSince = $derived(waiting ? (coding?.runStartedAt ?? waitStartedLocally) : null);
 	const hasContent = $derived(displayInput.trim().length > 0 || selectedFiles.length > 0);
 	let sending = $state(false);
-	const canSend = $derived(hasContent && !sending);
 
 	async function markRead() {
 		await fetch(`/api/conversations/${conversation.id}/read`, { method: 'POST' }).catch(
@@ -206,6 +287,8 @@
 			remoteGenerating = false;
 			await invalidateWhenIdle();
 			await tick();
+			// A queued message may already be on its way; don't wipe it.
+			if (chat.status === 'streaming' || chat.status === 'submitted') return;
 			chat.messages = initialMessages.map(chatMessageToUIMessage);
 			await markRead();
 		};
@@ -228,8 +311,42 @@
 		};
 	});
 
+	/**
+	 * After a failed stream, reload the persisted messages so the failed response
+	 * (with its error) shows inline instead of only in a toast. The server persists
+	 * it just before announcing `chat.stream.finished`, so wait for that first.
+	 */
+	async function reloadAfterError(id: string) {
+		await new Promise<void>((resolve) => {
+			const timer = setTimeout(done, 10_000);
+			const off = onServerEvent((event) => {
+				if (event.type === 'chat.stream.finished' && event.conversationId === id) done();
+			});
+			function done() {
+				clearTimeout(timer);
+				off();
+				resolve();
+			}
+			fetch('/api/chat/active')
+				.then((res) => (res.ok ? res.json() : null))
+				.then((data: { conversationIds: string[] } | null) => {
+					if (data && !data.conversationIds.includes(id)) done();
+				})
+				.catch(() => {});
+		});
+		if (conversation.id !== id || chat.status !== 'error') return;
+		await invalidateWhenIdle();
+		await tick();
+		if (conversation.id !== id || chat.status !== 'error') return;
+		chat.messages = initialMessages.map(chatMessageToUIMessage);
+	}
+
 	$effect(() => {
 		const current = chat.status;
+		if (prevStatus !== 'error' && current === 'error') {
+			messageQueue.pause(conversation.id);
+			void reloadAfterError(conversation.id);
+		}
 		if (prevStatus !== 'ready' && current === 'ready') {
 			markRead();
 			if (activeChats.get(conversation.id) === chat) {
@@ -239,55 +356,45 @@
 		prevStatus = current;
 	});
 
-	async function uploadFiles(): Promise<
-		{ type: 'file'; url: string; mediaType: string; filename: string }[]
-	> {
-		const parts = [];
-		for (const file of selectedFiles) {
-			const form = new FormData();
-			form.append('file', file);
-			const res = await fetch(`/api/conversations/${conversation.id}/attachments`, {
-				method: 'POST',
-				body: form
-			});
-			if (!res.ok) {
-				const data = await res.json().catch(() => null);
-				throw new Error(data?.message ?? `Failed to upload ${file.name}`);
-			}
-			const { attachment } = await res.json();
-			parts.push({
-				type: 'file' as const,
-				url: `/api/conversations/${conversation.id}/attachments/${attachment.id}`,
-				mediaType: attachment.mime,
-				filename: attachment.name
-			});
-		}
-		return parts;
-	}
-
-	const SKILL_CMD = /^\/skill\s+([a-z0-9][a-z0-9-]{0,63})\s*/i;
 	const INTERRUPT_TIMEOUT_MS = 2000;
 
+	// ── queue ────────────────────────────────────────────────────────────────
+	// Messages written while a reply runs wait here and go out one by one once
+	// the chat is idle. "Send now" interrupts the reply instead.
+	const queue = $derived(messageQueue.list(conversation.id));
+	const queuePaused = $derived(messageQueue.isPaused(conversation.id));
+
+	/** Sends the composer's message, or queues it while the chat is busy. */
 	async function send(text: string) {
 		speech.stop();
 		speech.reset();
-		let trimmed = text.trim();
-		if ((!trimmed && selectedFiles.length === 0) || sending) return;
-		sending = true;
-		let skill: string | undefined;
-		const skillMatch = trimmed.match(SKILL_CMD);
-		if (skillMatch) {
-			skill = skillMatch[1];
-			trimmed = trimmed.slice(skillMatch[0].length).trim();
-			if (!trimmed) trimmed = `Use the ${skill} skill.`;
+		const trimmed = text.trim();
+		if (!trimmed && selectedFiles.length === 0) return;
+		// Behind earlier queued messages unless the queue waits for the user.
+		if (streaming || sending || (queue.length > 0 && !queuePaused)) {
+			messageQueue.add(conversation.id, { text: trimmed, files: selectedFiles });
+			input = '';
+			clearFiles();
+			return;
 		}
+		messageQueue.resume(conversation.id);
+		if (await deliver(trimmed, selectedFiles)) {
+			input = '';
+			clearFiles();
+		}
+	}
+
+	/** Interrupts any running reply and sends the message. Returns false on failure. */
+	async function deliver(text: string, files: File[]): Promise<boolean> {
+		if (sending) return false;
+		sending = true;
+		const { text: trimmed, skill } = parseSkillCommand(text);
 		try {
 			const body = skill ? { body: { skill } } : undefined;
-			if (selectedFiles.length > 0) {
+			if (files.length > 0) {
 				// Upload first: if this fails the running response is left untouched.
-				const fileParts = await uploadFiles();
+				const fileParts = await uploadAttachments(conversation.id, files);
 				await interruptResponse();
-				clearFiles();
 				chat.sendMessage(
 					{
 						parts: [...(trimmed ? [{ type: 'text' as const, text: trimmed }] : []), ...fileParts]
@@ -299,13 +406,46 @@
 				chat.sendMessage({ text: trimmed }, body);
 			}
 			activeChats.set(conversation.id, chat);
-			input = '';
+			return true;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to send message');
+			return false;
 		} finally {
 			sending = false;
 		}
 	}
+
+	/** Sends a queued message; on failure it goes back to the front, paused. */
+	async function deliverQueued(item: QueuedMessage) {
+		const id = conversation.id;
+		if (!messageQueue.remove(id, item.id)) return;
+		if (!(await deliver(item.text, item.files))) {
+			messageQueue.prepend(id, item);
+			messageQueue.pause(id);
+		}
+	}
+
+	function sendQueuedNow(item: QueuedMessage) {
+		if (sending) return;
+		messageQueue.resume(conversation.id);
+		void deliverQueued(item);
+	}
+
+	function editQueued(item: QueuedMessage) {
+		if (!messageQueue.remove(conversation.id, item.id)) return;
+		input = input.trim() ? `${input.trimEnd()}\n${item.text}` : item.text;
+		if (item.files.length > 0) addFiles(item.files);
+	}
+
+	// While open, this view sends the queue itself (see message-queue-runner).
+	onMount(() => messageQueue.attach(untrack(() => conversation.id)));
+
+	// Drain: the next queued message goes out as soon as the chat is idle.
+	$effect(() => {
+		const next = queue[0];
+		if (!next || streaming || sending || queuePaused || coding?.pendingRequest) return;
+		untrack(() => void deliverQueued(next));
+	});
 
 	// Stops the response being received so a new message can take over. The Chat
 	// can't start a request until the aborted one has settled. The server aborts
@@ -321,8 +461,25 @@
 	}
 
 	async function stop() {
+		// Stopping means "wait for me": don't fire the next queued message.
+		messageQueue.pause(conversation.id);
 		fetch(`/api/chat/${conversation.id}/abort`, { method: 'POST' }).catch(() => undefined);
 		await chat.stop();
+	}
+
+	/** Sends a predefined instruction to the coding agent without touching the draft. */
+	async function createPullRequest() {
+		if (!coding || sending) return;
+		sending = true;
+		try {
+			await interruptResponse();
+			chat.sendMessage({ text: createPullRequestPrompt(coding) });
+			activeChats.set(conversation.id, chat);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to send message');
+		} finally {
+			sending = false;
+		}
 	}
 
 	function regenerate(messageId: string) {
@@ -445,12 +602,12 @@
 	class="relative flex h-full min-h-0 flex-1 flex-col"
 	role="region"
 	aria-label="Chat"
-	ondragenter={fileDrop.ondragenter}
-	ondragover={fileDrop.ondragover}
-	ondragleave={fileDrop.ondragleave}
-	ondrop={fileDrop.ondrop}
+	ondragenter={isCoding ? undefined : fileDrop.ondragenter}
+	ondragover={isCoding ? undefined : fileDrop.ondragover}
+	ondragleave={isCoding ? undefined : fileDrop.ondragleave}
+	ondrop={isCoding ? undefined : fileDrop.ondrop}
 >
-	{#if fileDrop.dragActive}
+	{#if fileDrop.dragActive && !isCoding}
 		<div
 			class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-info bg-background/70"
 		>
@@ -464,10 +621,17 @@
 		{mappings}
 		{defaultModel}
 		{personas}
+		{coding}
+		{codingEnvironmentName}
+		oncreatepr={isCoding ? createPullRequest : undefined}
+		{codingEnvironments}
+		{codingAgents}
+		handoffDisabled={streaming || chat.messages.length === 0}
 		onupdated={(updated) => (conversation = updated)}
 	/>
 
-	<ChatContainer class="min-h-0 flex-1">
+	<!-- Reserve the scrollbar on both sides so messages stay centred over the composer. -->
+	<ChatContainer class="min-h-0 flex-1 [scrollbar-gutter:stable_both-edges]">
 		<ChatContainerContent>
 			<MessageTimeline
 				messages={chat.messages}
@@ -475,8 +639,8 @@
 				{timeFormat}
 				{messageTimes}
 				conversationId={conversation.id}
-				onregenerate={regenerate}
-				onedit={startEdit}
+				onregenerate={isCoding ? undefined : regenerate}
+				onedit={isCoding ? undefined : startEdit}
 			/>
 			{#if waiting}
 				<div
@@ -487,13 +651,27 @@
 						<span class="thinking-dot"></span>
 						<span class="thinking-dot"></span>
 					</span>
-					<span class="text-sm">Thinking…</span>
+					<span class="text-sm">
+						Thinking…
+						{#if waitingSince !== null}<LiveElapsed since={waitingSince} class="ml-0.5" />{/if}
+					</span>
 				</div>
 			{/if}
 		</ChatContainerContent>
 	</ChatContainer>
 
 	<div class="mx-auto w-full max-w-3xl px-4 pb-4">
+		{#if coding?.pendingRequest}
+			{#key coding.pendingRequest.requestId}
+				<CodingPendingRequest
+					conversationId={conversation.id}
+					request={coding.pendingRequest}
+					onresponded={() => void refreshCoding().catch(() => undefined)}
+				/>
+			{/key}
+		{:else if coding?.status === 'failed' && coding.lastError}
+			<p class="mb-2 px-1 text-sm break-words text-destructive">{coding.lastError}</p>
+		{/if}
 		{#if selectedFiles.length > 0}
 			<div class="mb-2 flex flex-wrap gap-2">
 				{#each selectedFiles as file, i (file.name + i)}
@@ -547,19 +725,33 @@
 				{/each}
 			</div>
 		{/if}
+		{#if queue.length > 0}
+			<QueuedMessages
+				items={queue}
+				paused={queuePaused}
+				busy={streaming}
+				disabled={sending}
+				onsendnow={sendQueuedNow}
+				onedit={editQueued}
+				onremove={(item) => messageQueue.remove(conversation.id, item.id)}
+				onresume={() => messageQueue.resume(conversation.id)}
+			/>
+		{/if}
 		<PromptInput
 			value={displayInput}
 			onValueChange={(v) => (input = v)}
 			onSubmit={() => send(displayInput)}
 		>
 			<PromptInputTextarea
-				placeholder={streaming ? 'Send a message to interrupt and redirect…' : 'Ask anything…'}
+				placeholder={streaming ? 'Queue a follow-up message…' : 'Ask anything…'}
 			/>
 			<PromptInputActions class="justify-between">
 				<div class="flex items-center gap-1">
-					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
-						<PaperclipIcon class="size-4" />
-					</Button>
+					{#if !isCoding}
+						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
+							<PaperclipIcon class="size-4" />
+						</Button>
+					{/if}
 					<MicButton {speech} />
 				</div>
 				{#if streaming && !hasContent}
@@ -569,11 +761,16 @@
 				{:else}
 					<Button
 						size="sm"
-						disabled={!canSend}
-						aria-label="Send"
+						disabled={!hasContent}
+						aria-label={streaming || sending ? 'Queue message' : 'Send'}
+						title={streaming || sending ? 'Queue — sends when the reply finishes' : undefined}
 						onclick={() => send(displayInput)}
 					>
-						<ArrowUpIcon class="size-4" />
+						{#if streaming || sending}
+							<ListEndIcon class="size-4" />
+						{:else}
+							<ArrowUpIcon class="size-4" />
+						{/if}
 					</Button>
 				{/if}
 			</PromptInputActions>

@@ -8,7 +8,7 @@ const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { createConversation, listUnreadChatIds } =
 	await import('$lib/server/db/repo/conversations.js');
 const { createMessage } = await import('$lib/server/db/repo/messages.js');
-const { POST } = await import('./+server.js');
+const { POST, DELETE } = await import('./+server.js');
 
 type Db = ReturnType<typeof getDb>;
 
@@ -95,5 +95,36 @@ describe('POST /api/conversations/[id]/read', () => {
 			parts: [{ type: 'text', text: 'hi' }]
 		});
 		expect(listUnreadChatIds(db, 'u1')).not.toContain(conversation.id);
+	});
+});
+
+describe('DELETE /api/conversations/[id]/read', () => {
+	it("returns 404 for another user's conversation", async () => {
+		const db = getDb();
+		const conversation = createConversation(db, 'u1');
+		const res = await call(DELETE, { user: u2, params: { id: conversation.id } });
+		expect(res.status).toBe(404);
+	});
+
+	it('returns 409 when there is no reply to mark unread', async () => {
+		const db = getDb();
+		const conversation = createConversation(db, 'u1');
+		const res = await call(DELETE, { user: u1, params: { id: conversation.id } });
+		expect(res.status).toBe(409);
+	});
+
+	it('marks a read chat unread again', async () => {
+		const db = getDb();
+		const conversation = createConversation(db, 'u1');
+		createMessage(db, {
+			conversationId: conversation.id,
+			role: 'assistant',
+			parts: [{ type: 'text', text: 'hello' }]
+		});
+		await call(POST, { user: u1, params: { id: conversation.id } });
+		expect(listUnreadChatIds(db, 'u1')).not.toContain(conversation.id);
+		const res = await call(DELETE, { user: u1, params: { id: conversation.id } });
+		expect(res.status).toBe(200);
+		expect(listUnreadChatIds(db, 'u1')).toContain(conversation.id);
 	});
 });

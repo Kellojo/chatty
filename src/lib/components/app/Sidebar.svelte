@@ -4,21 +4,33 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { MediaQuery } from 'svelte/reactivity';
+	import { flip } from 'svelte/animate';
+	import { cubicOut } from 'svelte/easing';
+	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
+	import ArchiveIcon from '@lucide/svelte/icons/archive';
+	import ArchiveRestoreIcon from '@lucide/svelte/icons/archive-restore';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import BrainIcon from '@lucide/svelte/icons/brain';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import CodeIcon from '@lucide/svelte/icons/code';
+	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
+	import MailIcon from '@lucide/svelte/icons/mail';
+	import MailOpenIcon from '@lucide/svelte/icons/mail-open';
+	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { authClient } from '$lib/auth-client.js';
@@ -29,18 +41,24 @@
 	import { formatCount } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
+	import type { CodingTaskStatus } from '$lib/coding-environments.js';
+	import CodingRunTimer from './CodingRunTimer.svelte';
 
 	let {
 		user,
 		conversations,
 		hasMore,
 		unreadIds,
+		settledCount,
+		autoSettleDays,
 		onclose
 	}: {
 		user: { name: string; email: string; image: string | null; role: string };
 		conversations: Conversation[];
 		hasMore: boolean;
 		unreadIds: string[];
+		settledCount: number;
+		autoSettleDays: number;
 		onclose: () => void;
 	} = $props();
 
@@ -87,6 +105,46 @@
 	}
 
 	const allConversations = $derived([...conversations, ...extras]);
+
+	const SETTLED_OPEN_KEY = 'chatty.sidebar.settledOpen';
+	let settledOpen = $state(false);
+	let settledItems = $state<Conversation[] | null>(null);
+	let settledHasMore = $state(false);
+	let settledLoading = $state(false);
+
+	async function loadSettled(reset: boolean) {
+		if (settledLoading && !reset) return;
+		settledLoading = true;
+		try {
+			const offset = reset ? 0 : (settledItems?.length ?? 0);
+			const res = await fetch(`/api/conversations/settled?offset=${offset}`);
+			if (!res.ok) return;
+			const data = (await res.json()) as { conversations: Conversation[]; hasMore: boolean };
+			const previous = reset ? [] : (settledItems ?? []);
+			const known = new Set(previous.map((c) => c.id));
+			settledItems = [...previous, ...data.conversations.filter((c) => !known.has(c.id))];
+			settledHasMore = data.hasMore;
+		} finally {
+			settledLoading = false;
+		}
+	}
+
+	function toggleSettledShelf() {
+		settledOpen = !settledOpen;
+		try {
+			localStorage.setItem(SETTLED_OPEN_KEY, settledOpen ? '1' : '0');
+		} catch {
+			// storage unavailable; the shelf just won't remember its state
+		}
+		if (settledOpen) void loadSettled(true);
+	}
+
+	/** Refreshes everything that depends on settled state after a change. */
+	async function refreshSettled() {
+		if (settledOpen) void loadSettled(true);
+		else settledItems = null;
+		if (searchResults) void search();
+	}
 
 	let query = $state('');
 	let searchInput = $state<HTMLInputElement | null>(null);
@@ -158,6 +216,12 @@
 	}
 
 	onMount(() => {
+		try {
+			settledOpen = localStorage.getItem(SETTLED_OPEN_KEY) === '1';
+		} catch {
+			settledOpen = false;
+		}
+		if (settledOpen) void loadSettled(true);
 		refreshAgentStats();
 		refreshMemoryCount();
 		refreshSkillCount();
@@ -182,7 +246,12 @@
 					break;
 				case 'chat.created':
 				case 'conversation.updated':
+				case 'coding.task.updated':
 					scheduleInvalidate();
+					break;
+				case 'conversation.settle_changed':
+					scheduleInvalidate();
+					void refreshSettled();
 					break;
 				case 'agent.run.started':
 				case 'agent.run.finished':
@@ -250,6 +319,22 @@
 
 	const visibleGroups = $derived(groupByDate(searchResults ?? allConversations));
 
+	// Flattened into one keyed list (group headers + rows) so `animate:flip`
+	// can animate rows moving between groups, not just within one.
+	type ListEntry =
+		| { kind: 'header'; key: string; label: string }
+		| { kind: 'row'; key: string; conversation: Conversation };
+	const visibleEntries = $derived(
+		visibleGroups.flatMap((g): ListEntry[] => [
+			{ kind: 'header', key: `group:${g.label}`, label: g.label },
+			...g.items.map((c): ListEntry => ({ kind: 'row', key: c.id, conversation: c }))
+		])
+	);
+
+	const reducedMotion = new MediaQuery('(prefers-reduced-motion: reduce)');
+	const flipDuration = $derived(reducedMotion.current ? 0 : 200);
+	const fadeDuration = $derived(reducedMotion.current ? 0 : 150);
+
 	async function search() {
 		const q = query.trim();
 		if (!q) {
@@ -268,14 +353,102 @@
 		goto(resolve('/'));
 	}
 
-	async function togglePin(event: MouseEvent, id: string) {
-		event.stopPropagation();
+	async function setSettled(c: Conversation, settled: boolean, undo?: { repin: boolean }) {
+		const res = await fetch(`/api/conversations/${c.id}/settle`, {
+			method: settled ? 'POST' : 'DELETE'
+		});
+		if (!res.ok) {
+			toast.error(settled ? 'Failed to settle conversation' : 'Failed to un-settle conversation');
+			return;
+		}
+		// Settling unpins, so undoing a settle restores the pin.
+		if (undo?.repin) await fetch(`/api/conversations/${c.id}/pin`, { method: 'POST' });
+		await invalidateAll();
+		await refreshSettled();
+		if (undo) return;
+		const repin = settled && c.pinned;
+		toast.success(settled ? 'Conversation settled' : 'Conversation un-settled', {
+			action: { label: 'Undo', onClick: () => void setSettled(c, !settled, { repin }) }
+		});
+	}
+
+	function displayTitle(c: Conversation): string {
+		return c.title || (c.coding ? 'New task' : 'New chat');
+	}
+
+	function settledTitle(c: Conversation): string {
+		const title = displayTitle(c);
+		if (c.settledReason !== 'auto') return title;
+		const after = autoSettleDays > 0 ? ` after ${autoSettleDays} days` : '';
+		return `${title}\nAuto-settled${after} of inactivity`;
+	}
+
+	/** Status words shown under a coding task's title; working/idle stay quiet there. */
+	const CODING_STATUS: Partial<Record<CodingTaskStatus, { label: string; tone: string }>> = {
+		awaiting_input: { label: 'Needs you', tone: 'text-amber-700 dark:text-amber-400' },
+		failed: { label: 'Failed', tone: 'text-destructive' },
+		interrupted: { label: 'Stopped', tone: 'text-muted-foreground' }
+	};
+
+	/**
+	 * One inbox-style state for every row, chat or coding task. Anything but
+	 * `working` and `idle` asks the user to look at the conversation.
+	 */
+	type RowState = 'working' | 'needs-you' | 'failed' | 'unread' | 'idle';
+
+	const ROW_STATE_LABEL: Record<RowState, string | null> = {
+		working: 'Working',
+		'needs-you': 'Needs you',
+		failed: 'Failed',
+		unread: 'New reply',
+		idle: null
+	};
+
+	function rowState(c: Conversation): RowState {
+		const status = c.coding?.status;
+		if (
+			activeChats.has(c.id) ||
+			serverActiveChatIds.has(c.id) ||
+			status === 'running' ||
+			status === 'starting'
+		)
+			return 'working';
+		if (status === 'awaiting_input') return 'needs-you';
+		// Failures, like replies, stop asking for attention once they've been seen.
+		const unread = unreadIds.includes(c.id) && page.url.pathname !== `/chat/${c.id}`;
+		if (!unread) return 'idle';
+		return status === 'failed' ? 'failed' : 'unread';
+	}
+
+	function rowTitle(c: Conversation, state: RowState): string {
+		const title = c.settledAt !== null ? settledTitle(c) : displayTitle(c);
+		const details = [
+			c.coding ? 'Coding task' : null,
+			c.coding?.projectTitle,
+			ROW_STATE_LABEL[state] ?? (c.coding ? CODING_STATUS[c.coding.status]?.label : null)
+		].filter(Boolean);
+		return details.length ? `${title}\n${details.join(' · ')}` : title;
+	}
+
+	let menuOpenId = $state<string | null>(null);
+
+	async function togglePin(id: string) {
 		await fetch(`/api/conversations/${id}/pin`, { method: 'POST' });
 		await invalidateAll();
 	}
 
-	function openRename(event: MouseEvent, c: Conversation) {
-		event.stopPropagation();
+	async function setRead(c: Conversation, read: boolean) {
+		const res = await fetch(`/api/conversations/${c.id}/read`, {
+			method: read ? 'POST' : 'DELETE'
+		}).catch(() => null);
+		if (!res?.ok) {
+			toast.error(read ? 'Failed to mark as read' : 'Failed to mark as unread');
+			return;
+		}
+		await invalidateAll();
+	}
+
+	function openRename(c: Conversation) {
 		renameTarget = c;
 		renameText = c.title;
 	}
@@ -311,6 +484,158 @@
 		goto(resolve('/login'));
 	}
 </script>
+
+{#snippet row(c: Conversation)}
+	{@const settled = c.settledAt !== null}
+	{@const state = rowState(c)}
+	{@const attention =
+		!settled && (state === 'needs-you' || state === 'failed' || state === 'unread')}
+	{@const codingStatus = c.coding ? CODING_STATUS[c.coding.status] : undefined}
+	{@const stateLabel = ROW_STATE_LABEL[state]}
+	<div
+		class="group mb-0.5 flex w-full items-start rounded-md text-sm {c.id === currentId
+			? 'bg-accent text-accent-foreground'
+			: 'hover:bg-accent/50'} {settled && c.id !== currentId ? 'text-muted-foreground' : ''}"
+	>
+		<a
+			href={resolve(`/chat/${c.id}`)}
+			class="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+			title={rowTitle(c, state)}
+			onclick={handleNavigate}
+		>
+			{#if c.coding}
+				<CodeIcon class="mt-[3px] size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+				<span class="sr-only">Coding task:</span>
+			{:else}
+				<MessageCircleIcon
+					class="mt-[3px] size-3.5 shrink-0 text-muted-foreground"
+					aria-hidden="true"
+				/>
+				<span class="sr-only">Chat:</span>
+			{/if}
+			<span class="flex min-w-0 flex-1 flex-col">
+				<span
+					class="truncate {attention
+						? 'font-semibold'
+						: (state === 'idle' || state === 'working') && !settled && c.id !== currentId
+							? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground'
+							: ''}">{displayTitle(c)}</span
+				>
+				{#if c.coding}
+					<span class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+						<span class="sr-only">,</span>
+						<span class="truncate">{c.coding.projectTitle}</span>
+						{#if state === 'working' && c.coding.runStartedAt}
+							<span class="shrink-0" aria-hidden="true">·</span>
+							<span class="shrink-0" aria-hidden="true">
+								<CodingRunTimer startedAt={c.coding.runStartedAt} dot={false} />
+							</span>
+						{/if}
+						{#if codingStatus}
+							<span class="shrink-0" aria-hidden="true">·</span>
+							<span class="shrink-0 {codingStatus.tone}">{codingStatus.label}</span>
+						{/if}
+					</span>
+				{/if}
+			</span>
+			{#if stateLabel && stateLabel !== codingStatus?.label}
+				<span class="sr-only">, {stateLabel}</span>
+			{/if}
+		</a>
+		{#if searchResults && settled}
+			<span
+				class="mt-2.5 mr-1 shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground group-hover:hidden"
+				>Settled</span
+			>
+		{/if}
+		{#if state === 'working' || attention}
+			<span
+				class="mt-2 mr-1.5 h-5 shrink-0 items-center gap-1 text-muted-foreground group-focus-within:hidden group-hover:hidden {menuOpenId ===
+				c.id
+					? 'hidden'
+					: 'flex'}"
+				aria-hidden="true"
+			>
+				{#if state === 'working'}
+					<LoaderCircleIcon class="size-3 animate-spin text-info motion-reduce:animate-none" />
+				{:else}
+					<span
+						class="size-2 rounded-full {state === 'needs-you'
+							? 'bg-amber-700 dark:bg-amber-400'
+							: state === 'failed'
+								? 'bg-destructive'
+								: 'bg-success'}"
+					></span>
+				{/if}
+			</span>
+		{/if}
+		<span
+			class="mt-1.5 shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex {menuOpenId ===
+			c.id
+				? 'flex'
+				: 'hidden'}"
+		>
+			<button
+				class="rounded p-1 text-muted-foreground hover:text-foreground"
+				title={settled ? 'Un-settle' : 'Settle (hide from sidebar)'}
+				aria-label={settled ? 'Un-settle' : 'Settle'}
+				onclick={(e) => {
+					e.stopPropagation();
+					void setSettled(c, !settled);
+				}}
+			>
+				{#if settled}
+					<ArchiveRestoreIcon class="size-4" />
+				{:else}
+					<ArchiveIcon class="size-4" />
+				{/if}
+			</button>
+			<DropdownMenu.Root
+				open={menuOpenId === c.id}
+				onOpenChange={(open) => (menuOpenId = open ? c.id : null)}
+			>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							class="rounded p-1 text-muted-foreground hover:text-foreground"
+							title="More actions"
+							aria-label="More actions"
+						>
+							<EllipsisIcon class="size-4" />
+						</button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="start" class="w-44">
+					{#if !settled}
+						<DropdownMenu.Item onSelect={() => void togglePin(c.id)}>
+							{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
+						</DropdownMenu.Item>
+					{/if}
+					{#if state !== 'working' && state !== 'needs-you' && c.id !== currentId}
+						{@const read = state === 'idle'}
+						<DropdownMenu.Item onSelect={() => void setRead(c, !read)}>
+							{#if read}
+								<MailIcon class="size-4" /> Mark as unread
+							{:else}
+								<MailOpenIcon class="size-4" /> Mark as read
+							{/if}
+						</DropdownMenu.Item>
+					{/if}
+					<DropdownMenu.Item onSelect={() => openRename(c)}>
+						<PencilIcon class="size-4" />
+						Rename
+					</DropdownMenu.Item>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item variant="destructive" onSelect={() => (deleteTarget = c)}>
+						<Trash2Icon class="size-4" />
+						Delete
+					</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
+		</span>
+	</div>
+{/snippet}
 
 <svelte:window onkeydown={onGlobalKeydown} />
 
@@ -376,58 +701,24 @@
 	<nav
 		class="flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)] px-2 pb-2"
 	>
-		{#each visibleGroups as group (group.label)}
-			<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{group.label}</p>
-			{#each group.items as c (c.id)}
-				<div
-					class="group flex w-full items-center rounded-md text-sm {c.id === currentId
-						? 'bg-accent text-accent-foreground'
-						: 'hover:bg-accent/50'}"
-				>
-					<a
-						href={resolve(`/chat/${c.id}`)}
-						class="min-w-0 flex-1 truncate px-2 py-1.5"
-						title={c.title || 'New chat'}
-						onclick={handleNavigate}
-					>
-						{c.title || 'New chat'}
-					</a>
-					{#if activeChats.has(c.id) || serverActiveChatIds.has(c.id)}
-						<LoaderCircleIcon class="mr-1 size-3.5 shrink-0 animate-spin text-info-foreground" />
-					{:else if unreadIds.includes(c.id) && page.url.pathname !== '/chat/' + c.id}
-						<span class="size-2 shrink-0 rounded-full bg-info" title="New messages"></span>
-					{/if}
-					<span class="hidden shrink-0 gap-0.5 pr-1 group-hover:flex">
-						<button
-							class="rounded p-1 text-muted-foreground hover:text-foreground"
-							title={c.pinned ? 'Unpin' : 'Pin'}
-							onclick={(e) => togglePin(e, c.id)}
-						>
-							{#if c.pinned}<PinOffIcon class="size-4" />{:else}<PinIcon class="size-4" />{/if}
-						</button>
-						<button
-							class="rounded p-1 text-muted-foreground hover:text-foreground"
-							title="Rename"
-							onclick={(e) => openRename(e, c)}
-						>
-							<PencilIcon class="size-4" />
-						</button>
-						<button
-							class="rounded p-1 text-muted-foreground hover:text-destructive"
-							title="Delete"
-							onclick={(e) => {
-								e.stopPropagation();
-								deleteTarget = c;
-							}}
-						>
-							<Trash2Icon class="size-4" />
-						</button>
-					</span>
-				</div>
-			{/each}
+		{#each visibleEntries as entry (entry.key)}
+			<div
+				animate:flip={{ duration: flipDuration, easing: cubicOut }}
+				transition:fade={{ duration: fadeDuration }}
+			>
+				{#if entry.kind === 'header'}
+					<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{entry.label}</p>
+				{:else}
+					{@render row(entry.conversation)}
+				{/if}
+			</div>
 		{:else}
 			<p class="px-2 pt-4 text-sm text-muted-foreground">
-				{searchResults ? 'No matches.' : 'No conversations yet.'}
+				{searchResults
+					? 'No matches.'
+					: settledCount > 0
+						? 'No active conversations.'
+						: 'No conversations yet.'}
 			</p>
 		{/each}
 		{#if !searchResults && hasMorePages}
@@ -437,13 +728,53 @@
 				{/if}
 			</div>
 		{/if}
+		{#if !searchResults && (settledCount > 0 || (settledItems?.length ?? 0) > 0)}
+			<button
+				type="button"
+				class="mt-3 flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+				aria-expanded={settledOpen}
+				onclick={toggleSettledShelf}
+			>
+				<ChevronRightIcon class="size-3.5 transition-transform {settledOpen ? 'rotate-90' : ''}" />
+				Settled ({settledCount})
+			</button>
+			{#if settledOpen}
+				{#each settledItems ?? [] as c (c.id)}
+					<div
+						animate:flip={{ duration: flipDuration, easing: cubicOut }}
+						transition:fade={{ duration: fadeDuration }}
+					>
+						{@render row(c)}
+					</div>
+				{:else}
+					{#if settledLoading}
+						<div class="flex justify-center py-2">
+							<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
+						</div>
+					{/if}
+				{/each}
+				{#if settledHasMore}
+					<button
+						type="button"
+						class="flex w-full items-center justify-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground disabled:opacity-50"
+						disabled={settledLoading}
+						onclick={() => loadSettled(false)}
+					>
+						{#if settledLoading}
+							<LoaderCircleIcon class="size-3.5 animate-spin" />
+						{/if}
+						Show more
+					</button>
+				{/if}
+			{/if}
+		{/if}
 	</nav>
 
 	<div class="px-2 pt-2 pb-2">
 		<p class="px-2 pt-1 pb-1 text-xs font-medium text-muted-foreground">Workspace</p>
 		<a
 			href={resolve('/agents')}
-			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
 				'/agents'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -466,7 +797,7 @@
 		</a>
 		<a
 			href={resolve('/memory')}
-			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
 				'/memory'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -484,7 +815,7 @@
 		</a>
 		<a
 			href={resolve('/skills')}
-			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
 				'/skills'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -500,31 +831,29 @@
 				>
 			{/if}
 		</a>
-		{#if user.role === 'admin'}
-			<a
-				href={resolve('/requests')}
-				class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
-					'/requests'
-				)
-					? 'bg-accent text-accent-foreground'
-					: 'text-muted-foreground hover:bg-accent/50'}"
-				onclick={handleNavigate}
-			>
-				<ScrollTextIcon class="size-4" />
-				Requests
-				{#if requestStats}
-					<span
-						class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
-						title="{requestStats.running} running of {requestStats.total} requests"
-					>
-						{#if requestStats.running > 0}
-							<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
-						{/if}
-						{formatCount(requestStats.total)}
-					</span>
-				{/if}
-			</a>
-		{/if}
+		<a
+			href={resolve('/usage')}
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
+				'/usage'
+			)
+				? 'bg-accent text-accent-foreground'
+				: 'text-muted-foreground hover:bg-accent/50'}"
+			onclick={handleNavigate}
+		>
+			<GaugeIcon class="size-4" />
+			Usage
+			{#if user.role === 'admin' && requestStats}
+				<span
+					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
+					title="{requestStats.total} requests all time · {requestStats.running} running"
+				>
+					{#if requestStats.running > 0}
+						<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
+					{/if}
+					{formatCount(requestStats.total)}
+				</span>
+			{/if}
+		</a>
 	</div>
 
 	<div class="flex items-center justify-between gap-2 border-t p-3">
@@ -577,7 +906,8 @@
 		<Dialog.Header>
 			<Dialog.Title>Delete conversation?</Dialog.Title>
 			<Dialog.Description>
-				"{deleteTarget?.title || 'New chat'}" will be moved to trash and purged after 30 days.
+				"{deleteTarget ? displayTitle(deleteTarget) : ''}" will be moved to trash and purged after
+				30 days.
 			</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>

@@ -32,7 +32,7 @@
 	async function signInWithOidc() {
 		try {
 			oidcLoading = true;
-			await authClient.signIn.oauth2({ providerId: 'oidc', callbackURL: '/' });
+			await authClient.signIn.social({ provider: 'oidc', callbackURL: '/' });
 		} catch (e) {
 			errorMessage = e instanceof Error ? e.message : 'SSO sign in failed';
 		} finally {

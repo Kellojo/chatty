@@ -17,13 +17,17 @@ afterAll(async () => {
 	await fsp.rm(tmpDir, { recursive: true, force: true });
 });
 
-async function callCodeExec(args: Record<string, unknown>) {
+async function callCodeExec(
+	args: Record<string, unknown>,
+	ctxOverrides: { workspaceDir?: string | null } = {}
+) {
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	const ctx = {
 		userId: 'test-user',
 		role: 'user',
 		workspaceDir: tmpDir,
-		documentsDir: path.join(tmpDir, 'documents')
+		documentsDir: path.join(tmpDir, 'documents'),
+		...ctxOverrides
 	};
 	const server = createCodeExecServer(ctx);
 	await server.connect(serverTransport);
@@ -96,6 +100,20 @@ describe('code-exec server', () => {
 	it('prevents path traversal outside workspace', async () => {
 		const res = await callCodeExec({ code: "readFile('../etc/passwd')" });
 		expect((res as { isError?: boolean }).isError).toBe(true);
+	});
+
+	it('keeps the concurrency cap working after early-returning calls', async () => {
+		// These fail before taking a slot; they used to give one back anyway.
+		for (let i = 0; i < 5; i++) {
+			const res = await callCodeExec({ code: '1' }, { workspaceDir: null });
+			expect((res as { isError?: boolean }).isError).toBe(true);
+		}
+		const busy = 'const end = Date.now() + 400; while (Date.now() < end) {} 1';
+		const results = await Promise.all(
+			Array.from({ length: 5 }, () => callCodeExec({ code: busy, timeoutMs: 5000 }))
+		);
+		const rejected = results.filter((r) => resultText(r).includes('Too many concurrent'));
+		expect(rejected).toHaveLength(1);
 	});
 
 	it('handles undefined return value gracefully', async () => {

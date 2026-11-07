@@ -1,6 +1,10 @@
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import {
+	listCodingEnvironments,
+	toPublic as environmentToPublic
+} from '$lib/server/db/repo/coding-environments.js';
+import {
 	listEnabledModelMappings,
 	toPublic as mappingToPublic
 } from '$lib/server/db/repo/model-mappings.js';
@@ -14,6 +18,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		groups: listModelsGrouped(),
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
-		tools: await listToolInfo(user.id)
+		tools: await listToolInfo(user.id),
+		codingEnvironments: listCodingEnvironments(db, user.id)
+			.filter((row) => row.enabled === 1)
+			.map(environmentToPublic)
 	};
 };

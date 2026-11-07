@@ -161,6 +161,8 @@ export interface ProxyRequestFilters {
 	userId?: string;
 	apiKeyId?: string;
 	model?: string;
+	/** Configured provider the request was served by. */
+	providerId?: string;
 	status?: string;
 	endpoint?: string;
 	source?: string;
@@ -183,6 +185,10 @@ function buildWhere(filters: ProxyRequestFilters): { where: string; args: unknow
 	if (filters.model) {
 		clauses.push('requested_model = ?');
 		args.push(filters.model);
+	}
+	if (filters.providerId) {
+		clauses.push('provider_id = ?');
+		args.push(filters.providerId);
 	}
 	if (filters.status) {
 		clauses.push('status = ?');
@@ -238,6 +244,8 @@ export interface ProxyRequestStats {
 	inputTokens: number;
 	outputTokens: number;
 	costUsd: number;
+	/** Requests that reported a cost (possibly 0). */
+	pricedRequests: number;
 	distinctModels: number;
 	cavemanSaved: number;
 }
@@ -253,6 +261,7 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 				COALESCE(SUM(input_tokens), 0) AS input_tokens,
 				COALESCE(SUM(output_tokens), 0) AS output_tokens,
 				COALESCE(SUM(cost_usd), 0) AS cost_usd,
+				COUNT(cost_usd) AS priced_requests,
 				COUNT(DISTINCT requested_model) AS distinct_models,
 			COALESCE(SUM(CAST(json_extract(compression, '$.caveman.estSaved') AS INTEGER)), 0) AS caveman_saved
 		 FROM proxy_requests ${where}`
@@ -265,6 +274,7 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 		input_tokens: number;
 		output_tokens: number;
 		cost_usd: number;
+		priced_requests: number;
 		distinct_models: number;
 		caveman_saved: number;
 	};
@@ -276,6 +286,7 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 		inputTokens: row.input_tokens,
 		outputTokens: row.output_tokens,
 		costUsd: row.cost_usd,
+		pricedRequests: row.priced_requests,
 		distinctModels: row.distinct_models,
 		cavemanSaved: row.caveman_saved
 	};
@@ -291,21 +302,22 @@ export interface DailyCount {
 export function proxyRequestDailyCounts(
 	db: Db,
 	days: number,
-	filters: ProxyRequestFilters = {}
+	filters: ProxyRequestFilters = {},
+	utcOffsetMinutes = 0
 ): DailyCount[] {
 	const { where, args } = buildWhere(filters);
 	const from = Date.now() - days * 86400000;
 	const extra = where ? ` AND started_at >= ?` : 'WHERE started_at >= ?';
 	return db
 		.prepare(
-			`SELECT date(started_at / 1000, 'unixepoch') AS day,
+			`SELECT date(started_at / 1000 + ?, 'unixepoch') AS day,
 				COUNT(*) AS count,
 				SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS completed,
 				SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
 			 FROM proxy_requests ${where}${extra}
 			 GROUP BY day ORDER BY day`
 		)
-		.all(...args, from) as DailyCount[];
+		.all(utcOffsetMinutes * 60, ...args, from) as DailyCount[];
 }
 
 export interface ModelUsage {
@@ -313,6 +325,8 @@ export interface ModelUsage {
 	count: number;
 	totalTokens: number;
 	costUsd: number;
+	/** Requests that reported a cost (possibly 0). */
+	pricedRequests: number;
 	avgLatencyMs: number | null;
 }
 
@@ -328,6 +342,7 @@ export function proxyRequestTopModels(
 				COUNT(*) AS count,
 				COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS total_tokens,
 				COALESCE(SUM(cost_usd), 0) AS cost_usd,
+				COUNT(cost_usd) AS priced_requests,
 				AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms END) AS avg_latency
 			 FROM proxy_requests ${where}
 			 GROUP BY requested_model
@@ -339,6 +354,7 @@ export function proxyRequestTopModels(
 		count: number;
 		total_tokens: number;
 		cost_usd: number;
+		priced_requests: number;
 		avg_latency: number | null;
 	}[];
 	return rows.map((r) => ({
@@ -346,6 +362,7 @@ export function proxyRequestTopModels(
 		count: r.count,
 		totalTokens: r.total_tokens,
 		costUsd: r.cost_usd,
+		pricedRequests: r.priced_requests,
 		avgLatencyMs: r.avg_latency
 	}));
 }
@@ -359,21 +376,99 @@ export interface DailyModelCount {
 export function proxyRequestDailyModelCounts(
 	db: Db,
 	days: number,
-	filters: ProxyRequestFilters = {}
+	filters: ProxyRequestFilters = {},
+	utcOffsetMinutes = 0
 ): DailyModelCount[] {
 	const { where, args } = buildWhere(filters);
 	const from = Date.now() - days * 86400000;
 	const extra = where ? ' AND started_at >= ?' : 'WHERE started_at >= ?';
 	return db
 		.prepare(
-			`SELECT date(started_at / 1000, 'unixepoch') AS day,
+			`SELECT date(started_at / 1000 + ?, 'unixepoch') AS day,
 			        requested_model AS model,
 			        COUNT(*) AS count
 			 FROM proxy_requests ${where}${extra}
 			 GROUP BY day, requested_model
 			 ORDER BY day, count DESC`
 		)
-		.all(...args, from) as DailyModelCount[];
+		.all(utcOffsetMinutes * 60, ...args, from) as DailyModelCount[];
+}
+
+export interface ProviderModelDailyUsage {
+	day: string;
+	providerId: string | null;
+	/** Display name of the configured provider; null when unset or since deleted. */
+	providerName: string | null;
+	model: string;
+	requests: number;
+	/** Requests that reported a cost (possibly 0); the rest had no known price. */
+	pricedRequests: number;
+	inputTokens: number;
+	outputTokens: number;
+	costUsd: number;
+}
+
+/**
+ * Actual spend through Chatty's configured providers, bucketed per day, provider and
+ * served model. `utcOffsetMinutes` shifts the day boundary into the caller's time zone.
+ */
+export function proxyRequestProviderUsage(
+	db: Db,
+	filters: ProxyRequestFilters = {},
+	utcOffsetMinutes = 0
+): ProviderModelDailyUsage[] {
+	const { where, args } = buildWhere(filters);
+	const rows = db
+		.prepare(
+			`SELECT date(pr.started_at / 1000 + ?, 'unixepoch') AS day,
+				pr.provider_id AS provider_id,
+				p.name AS provider_name,
+				COALESCE(pr.model_id, pr.requested_model) AS model,
+				COUNT(*) AS requests,
+				COUNT(pr.cost_usd) AS priced_requests,
+				COALESCE(SUM(pr.input_tokens), 0) AS input_tokens,
+				COALESCE(SUM(pr.output_tokens), 0) AS output_tokens,
+				COALESCE(SUM(pr.cost_usd), 0) AS cost_usd
+			 FROM proxy_requests pr
+			 LEFT JOIN providers p ON p.id = pr.provider_id
+			 ${where}
+			 GROUP BY day, pr.provider_id, model
+			 ORDER BY day, cost_usd DESC`
+		)
+		.all(utcOffsetMinutes * 60, ...args) as {
+		day: string;
+		provider_id: string | null;
+		provider_name: string | null;
+		model: string;
+		requests: number;
+		priced_requests: number;
+		input_tokens: number;
+		output_tokens: number;
+		cost_usd: number;
+	}[];
+	return rows.map((r) => ({
+		day: r.day,
+		providerId: r.provider_id,
+		providerName: r.provider_name,
+		model: r.model,
+		requests: r.requests,
+		pricedRequests: r.priced_requests,
+		inputTokens: r.input_tokens,
+		outputTokens: r.output_tokens,
+		costUsd: r.cost_usd
+	}));
+}
+
+/** When the earliest matching request started, or null when there is none. */
+export function proxyRequestFirstStartedAt(
+	db: Db,
+	filters: ProxyRequestFilters = {}
+): number | null {
+	const { where, args } = buildWhere(filters);
+	const row = db
+		.prepare(`SELECT MIN(started_at) AS first FROM proxy_requests ${where}`)
+		.get(...args) as { first: number | null };
+	return row.first;
 }
 
 export function failRunningProxyRequests(db: Db): number {

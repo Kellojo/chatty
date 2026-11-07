@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const SRC = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-repo-'));
+let lastCloneArgs: Record<string, unknown> | null = null;
 
 // isomorphic-git's node http client cannot clone file:// URLs; mock clone to
 // copy the local source repo into the destination instead.
@@ -13,7 +14,9 @@ vi.mock('isomorphic-git', async (importOriginal) => {
 		...original,
 		default: {
 			...original,
-			clone: async ({ dir }: { dir: string }) => {
+			clone: async (args: { dir: string }) => {
+				lastCloneArgs = args;
+				const { dir } = args;
 				fs.cpSync(SRC, dir, { recursive: true });
 			}
 		}
@@ -237,5 +240,29 @@ describe('importSkillsFromGit', () => {
 		expect(result.imported).toEqual([{ name: 'single', action: 'created' }]);
 		scanner.invalidateSkillCache();
 		expect(scanner.readSkill('shared', 'u1', 'single')).not.toBeNull();
+	});
+
+	it('rejects clone URLs with a query, fragment or non-http scheme', async () => {
+		for (const gitUrl of [
+			'http://169.254.169.254/latest/meta-data/#',
+			'https://example.com/repo.git?x=1',
+			'file:///etc',
+			'ext::sh -c id'
+		]) {
+			await expect(importSkillsFromGit({ gitUrl, userId: 'u1' })).rejects.toThrow();
+		}
+	});
+
+	it('clones with a guarded http client and an fs that never creates symlinks', async () => {
+		await importSkillsFromGit({ gitUrl: REPO_URL, path: 'single', userId: 'u1' });
+		const args = lastCloneArgs as {
+			fs: { promises: { symlink: (t: string, p: string) => Promise<void> } };
+			http: { request: unknown };
+		};
+		expect(typeof args.http.request).toBe('function');
+		const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-symlink-')), 'link');
+		await args.fs.promises.symlink('/etc/passwd', file);
+		expect(fs.lstatSync(file).isSymbolicLink()).toBe(false);
+		expect(fs.readFileSync(file, 'utf8')).toBe('/etc/passwd');
 	});
 });

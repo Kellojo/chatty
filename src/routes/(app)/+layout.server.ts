@@ -1,7 +1,9 @@
 import { redirect } from '@sveltejs/kit';
+import { config } from '$lib/server/config.js';
 import { getDb } from '$lib/server/db/index.js';
 import {
 	CONVERSATIONS_PAGE_SIZE,
+	countSettledConversations,
 	listConversations,
 	listUnreadChatIds,
 	toPublic
@@ -22,6 +24,8 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		},
 		conversations: rows.slice(0, CONVERSATIONS_PAGE_SIZE).map(toPublic),
 		hasMoreConversations: rows.length > CONVERSATIONS_PAGE_SIZE,
+		settledCount: countSettledConversations(db, locals.user.id),
+		autoSettleDays: config.CONVERSATION_AUTO_SETTLE_DAYS,
 		unreadIds: listUnreadChatIds(db, locals.user.id),
 		sidebarOpen: getSidebarOpen(db, locals.user.id),
 		settings: getUserSettings(db, locals.user.id)

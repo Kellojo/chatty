@@ -1,8 +1,9 @@
 import { createMCPClient, type MCPClient, type MCPTransport } from '@ai-sdk/mcp';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { decryptSecret } from '../crypto.js';
 import type { Db } from '../db/index.js';
-import { getMcpServer, type McpServerRow } from '../db/repo/mcp-servers.js';
+import { getMcpServer, parseMcpArgs, type McpServerRow } from '../db/repo/mcp-servers.js';
 import { BUILTIN_SERVERS } from './servers/index.js';
 import type { CallerContext } from './types.js';
 
@@ -33,6 +34,7 @@ export async function connectServer(
 			}
 		};
 	}
+	if (row.transport === 'stdio') return connectStdio(row);
 	if (!row.url) throw new Error(`MCP server ${row.name} has no url configured`);
 	const headers: Record<string, string> = {};
 	if (row.token_enc) headers.authorization = `Bearer ${decryptSecret(row.token_enc)}`;
@@ -41,6 +43,40 @@ export async function connectServer(
 		maxRetries: 2
 	});
 	return { client, close: () => client.close() };
+}
+
+/**
+ * Spawns the configured command (no shell) and talks MCP over its stdio. The
+ * child only inherits the SDK's minimal default environment (PATH, HOME, ...),
+ * not Chatty's own secrets. `close()` always terminates the process, and a
+ * failed handshake does too, so no child outlives its connection.
+ */
+async function connectStdio(row: McpServerRow): Promise<ServerConnection> {
+	if (!row.command) throw new Error(`MCP server ${row.name} has no command configured`);
+	const transport = new StdioClientTransport({
+		command: row.command,
+		args: parseMcpArgs(row.args)
+	});
+	let client: MCPClient;
+	try {
+		client = await createMCPClient({
+			transport: transport as unknown as MCPTransport,
+			maxRetries: 2
+		});
+	} catch (e) {
+		await transport.close().catch(() => undefined);
+		throw e;
+	}
+	return {
+		client,
+		close: async () => {
+			try {
+				await client.close();
+			} finally {
+				await transport.close();
+			}
+		}
+	};
 }
 
 export interface TestConnectionTool {

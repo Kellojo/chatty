@@ -3,6 +3,7 @@ import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getAgent, toPublic as agentToPublic } from '$lib/server/db/repo/agents.js';
 import { getAgentRun, toPublic as runToPublic } from '$lib/server/db/repo/agent-runs.js';
+import { getCodingConversation } from '$lib/server/db/repo/coding-conversations.js';
 import { listMessages, toPublic as messageToPublic } from '$lib/server/db/repo/messages.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import type { PageServerLoad } from './$types';
@@ -20,6 +21,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		agent: agentToPublic(agent),
 		run: runToPublic(run),
 		messages: run.conversation_id ? listMessages(db, run.conversation_id).map(messageToPublic) : [],
-		timeFormat: getTimeFormat(db, user.id)
+		timeFormat: getTimeFormat(db, user.id),
+		/** Coding agent runs live in a coding task conversation of their own. */
+		isCodingTask: run.conversation_id ? !!getCodingConversation(db, run.conversation_id) : false
 	};
 };

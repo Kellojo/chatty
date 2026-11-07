@@ -18,6 +18,7 @@ import {
 	getConversation,
 	setConversationTitle,
 	touchConversation,
+	unsettleConversation,
 	updateConversation,
 	type ConversationRow
 } from '../db/repo/conversations.js';
@@ -38,6 +39,9 @@ import {
 	linkAttachmentsToMessage
 } from '../db/repo/attachments.js';
 import { getAgent } from '../db/repo/agents.js';
+import { getCodingConversation } from '../db/repo/coding-conversations.js';
+import { queueThreadStatePush } from '../t3/thread-state.js';
+import { CodingTaskError, startCodingTurn } from '../t3/tasks.js';
 import { latestSummary } from '../db/repo/conversation-summaries.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
@@ -113,7 +117,7 @@ async function inlineAttachmentParts(
 						try {
 							let dataUri = attachmentCache.get(attachmentId);
 							if (dataUri === undefined) {
-								const bytes = await fs.readFile(resolveAttachment(row.path));
+								const bytes = await fs.readFile(await resolveAttachment(row.path));
 								dataUri = `data:${row.mime};base64,${bytes.toString('base64')}`;
 								attachmentCache.set(attachmentId, dataUri);
 							}
@@ -148,8 +152,10 @@ function historyFromDb(db: Db, conversationId: string): UIMessage[] {
 	const rows = listMessages(db, conversationId);
 	const summary = latestSummary(db, conversationId);
 	const visible = summary ? rows.filter((r) => r.rowid > summary.through_rowid) : rows;
-	const messages = visible.map((row) => {
-		const message = toPublic(row);
+	// A failed response with no output only carries an error for the UI; an empty
+	// assistant turn is not valid model input.
+	const messages = visible.map(toPublic).flatMap((message) => {
+		if (message.role === 'assistant' && message.parts.length === 0) return [];
 		return {
 			id: message.id,
 			role: message.role,
@@ -280,6 +286,36 @@ async function consumeStreamCopy(
 	}
 }
 
+/** Bookkeeping after a user message is stored: un-settle, provisional title, bump. */
+function afterUserMessage(
+	db: Db,
+	userId: string,
+	conversation: ConversationRow,
+	message: UIMessage
+): void {
+	if (conversation.settled_at !== null) {
+		unsettleConversation(db, userId, conversation.id);
+		publishServerEvent(userId, {
+			type: 'conversation.settle_changed',
+			conversationIds: [conversation.id],
+			settled: false
+		});
+		queueThreadStatePush(db, userId, [conversation.id]);
+	}
+	if (conversation.title === '') {
+		const raw = extractText(message.parts).trim().replace(/\s+/g, ' ');
+		let provisional: string;
+		if (raw.length <= 50) {
+			provisional = raw;
+		} else {
+			const cut = raw.lastIndexOf(' ', 50);
+			provisional = (cut > 10 ? raw.slice(0, cut) : raw.slice(0, 50)) + '…';
+		}
+		setConversationTitle(db, conversation.id, provisional);
+	}
+	touchConversation(db, conversation.id);
+}
+
 export async function handleChatRequest(
 	userId: string,
 	body: { conversationId: string; message: UIMessage; truncateFrom?: string; skill?: string }
@@ -288,6 +324,22 @@ export async function handleChatRequest(
 	let conversation = getConversation(db, userId, body.conversationId);
 	if (!conversation) throw new ChatRequestError(404, 'Conversation not found');
 	if (conversation.kind !== 'chat') throw new ChatRequestError(400, 'Not a chat conversation');
+
+	// Coding tasks: the reply comes from a remote T3 Code thread, not our model loop.
+	const coding = getCodingConversation(db, conversation.id);
+	if (coding) {
+		if (body.truncateFrom !== undefined) {
+			throw new ChatRequestError(400, 'Coding tasks cannot rewind their history');
+		}
+		const userMessage = upsertUserMessage(db, conversation.id, body.message);
+		afterUserMessage(db, userId, conversation, userMessage);
+		try {
+			return await startCodingTurn(userId, coding, userMessage);
+		} catch (e) {
+			if (e instanceof CodingTaskError) throw new ChatRequestError(e.status, e.message);
+			throw e;
+		}
+	}
 
 	// A new message takes over from a response that is still running. Its partial
 	// output has to be persisted first so that it is part of the history below.
@@ -303,18 +355,7 @@ export async function handleChatRequest(
 		deleteMessagesFrom(db, conversation.id, body.truncateFrom);
 	}
 	const lastUserMessage = upsertUserMessage(db, conversation.id, body.message);
-	if (conversation.title === '') {
-		const raw = extractText(lastUserMessage.parts).trim().replace(/\s+/g, ' ');
-		let provisional: string;
-		if (raw.length <= 50) {
-			provisional = raw;
-		} else {
-			const cut = raw.lastIndexOf(' ', 50);
-			provisional = (cut > 10 ? raw.slice(0, cut) : raw.slice(0, 50)) + '\u2026';
-		}
-		setConversationTitle(db, conversation.id, provisional);
-	}
-	touchConversation(db, conversation.id);
+	afterUserMessage(db, userId, conversation, lastUserMessage);
 
 	const ref = { providerId: conversation.provider_id!, modelId: conversation.model_id! };
 	let targets;
@@ -360,53 +401,72 @@ export async function handleChatRequest(
 	// The assistant message exists from the start and is filled incrementally by
 	// consumeStreamCopy, so a reload mid-stream never sees a gap.
 	const assistantMessageId = randomUUID();
-	createMessage(db, {
-		id: assistantMessageId,
-		conversationId: conversation.id,
-		role: 'assistant',
-		parts: [],
-		status: 'partial'
-	});
-
 	let errorText: string | null = null;
-	const agentSkillNames = agent ? (JSON.parse(agent.skill_names) as string[]) : [];
-	const boundSkillNames = [...agentSkillNames];
-	let manualSkillWarning: string | null = null;
-	if (body.skill) {
-		const skill = resolveSkill(userId, body.skill);
-		if (!skill) {
-			manualSkillWarning = `The requested skill "${body.skill}" was not found.`;
-		} else if (!skill.enabled) {
-			manualSkillWarning = `The requested skill "${body.skill}" is disabled.`;
-		} else {
-			boundSkillNames.push(skill.name);
-			recordSkillInvocation(db, {
-				skillName: skill.name,
-				scope: skill.scope,
-				userId,
-				conversationId: conversation.id,
-				messageId: lastUserMessage.id,
-				triggeredBy: 'manual'
-			});
+	let promptParts: ReturnType<typeof buildSystemPromptParts>;
+	let system: string;
+	let history: UIMessage[];
+	let modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
+	// Until createUIMessageStream takes over (its onEnd releases everything), a
+	// throw here would leave the stream registered as active forever and the MCP
+	// connections open, so undo the setup by hand.
+	try {
+		createMessage(db, {
+			id: assistantMessageId,
+			conversationId: conversation.id,
+			role: 'assistant',
+			parts: [],
+			status: 'partial'
+		});
+
+		const agentSkillNames = agent ? (JSON.parse(agent.skill_names) as string[]) : [];
+		const boundSkillNames = [...agentSkillNames];
+		let manualSkillWarning: string | null = null;
+		if (body.skill) {
+			const skill = resolveSkill(userId, body.skill);
+			if (!skill) {
+				manualSkillWarning = `The requested skill "${body.skill}" was not found.`;
+			} else if (!skill.enabled) {
+				manualSkillWarning = `The requested skill "${body.skill}" is disabled.`;
+			} else {
+				boundSkillNames.push(skill.name);
+				recordSkillInvocation(db, {
+					skillName: skill.name,
+					scope: skill.scope,
+					userId,
+					conversationId: conversation.id,
+					messageId: lastUserMessage.id,
+					triggeredBy: 'manual'
+				});
+			}
 		}
+		promptParts = buildSystemPromptParts(conversation, {
+			globalInstructions: getGlobalInstructions(db, userId),
+			userId,
+			boundSkillNames,
+			includeSkillsIndex: 'load_skill' in tools,
+			extraWarning: manualSkillWarning
+		});
+		system = [promptParts.base, promptParts.skills, promptParts.system]
+			.filter(Boolean)
+			.join('\n\n');
+		history = historyFromDb(db, conversation.id);
+		// An interrupted response can leave tool calls without results, which providers
+		// reject, so they are left out of the prompt.
+		modelMessages = await convertToModelMessages(
+			await inlineAttachmentParts(db, conversation.id, history),
+			{ ignoreIncompleteToolCalls: true }
+		);
+	} catch (e) {
+		try {
+			deleteMessage(db, assistantMessageId);
+		} catch {
+			// nothing to clean up if the message was never created
+		}
+		releaseStream(conversation.id, controller);
+		publishServerEvent(userId, { type: 'chat.stream.finished', conversationId: conversation.id });
+		await close().catch(() => undefined);
+		throw e;
 	}
-	const promptParts = buildSystemPromptParts(conversation, {
-		globalInstructions: getGlobalInstructions(db, userId),
-		userId,
-		boundSkillNames,
-		includeSkillsIndex: 'load_skill' in tools,
-		extraWarning: manualSkillWarning
-	});
-	const system = [promptParts.base, promptParts.skills, promptParts.system]
-		.filter(Boolean)
-		.join('\n\n');
-	const history = historyFromDb(db, conversation.id);
-	// An interrupted response can leave tool calls without results, which providers
-	// reject, so they are left out of the prompt.
-	const modelMessages = await convertToModelMessages(
-		await inlineAttachmentParts(db, conversation.id, history),
-		{ ignoreIncompleteToolCalls: true }
-	);
 	const stopWhen = stepCountIs(
 		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5
 	);
@@ -430,6 +490,8 @@ export async function handleChatRequest(
 				const target = targets[i];
 				let contentful = false;
 				const buffer: UIMessageChunk[] = [];
+				// A failed earlier target must not mark a successful fallback as failed.
+				errorText = null;
 				try {
 					const model = resolveModel(target);
 					const startedAt = Date.now();
@@ -491,7 +553,10 @@ export async function handleChatRequest(
 							recordStep({ status: 'complete', usage: step.usage });
 							for (const tr of step.toolResults) {
 								if (tr.toolName === 'generate_image' || tr.toolName === 'edit_image') {
-									const ids = attachmentIdsFromOutput(tr.output);
+									// Only ids belonging to this conversation: tool output is untrusted.
+									const ids = attachmentIdsFromOutput(tr.output).filter(
+										(id) => getConversationAttachment(db, conversation.id, id) !== undefined
+									);
 									if (ids.length === 0) continue;
 									linkAttachmentsToMessage(db, assistantMessageId, ids);
 									for (const id of ids) {
@@ -575,6 +640,9 @@ export async function handleChatRequest(
 				} catch (e) {
 					lastError = e;
 					if (!contentful && i < targets.length - 1 && isRetryableModelError(e)) continue;
+					// Errors thrown outside streamText (e.g. resolving the model) never reach
+					// its onError, so record them here for onEnd's status.
+					errorText ??= e instanceof Error ? e.message : String(e);
 					throw e;
 				}
 			}
@@ -585,7 +653,9 @@ export async function handleChatRequest(
 				// 'partial' only ever means "still being generated", so that anything
 				// left in that state after a restart is known to be a dead response.
 				const status = isAborted || errorText ? 'failed' : 'complete';
-				if (responseMessage.parts.length > 0 || status === 'complete') {
+				// A failure is kept even without output so the error stays visible in the
+				// conversation; only an empty interrupted response is dropped.
+				if (responseMessage.parts.length > 0 || status === 'complete' || errorText) {
 					updateMessage(db, assistantMessageId, {
 						parts: responseMessage.parts,
 						status,

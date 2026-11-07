@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import git from 'isomorphic-git';
-import http from 'isomorphic-git/http/node';
+import git, { type HttpClient } from 'isomorphic-git';
 import matter from 'gray-matter';
+import { parseFrontmatter } from '../frontmatter.js';
+import { safeFetch } from '../net/safeFetch.js';
 import { walk } from '../mcp/servers/shared.js';
 import { isValidSkillName, skillsRoot, findSkillFile, type SkillScope } from './paths.js';
 import { parseSkillFrontmatter } from './scanner.js';
@@ -78,6 +79,60 @@ export function parseGitUrl(input: string): ParsedGitUrl {
 	};
 }
 
+// The clone URL is user-supplied, so every request (and redirect hop) goes
+// through safeFetch's private-address guard instead of isomorphic-git's
+// unguarded node client.
+const guardedHttp: HttpClient = {
+	async request({ url, method = 'GET', headers = {}, body, signal }) {
+		let payload: Uint8Array<ArrayBuffer> | undefined;
+		if (body) {
+			const chunks: Uint8Array[] = [];
+			for await (const chunk of body) chunks.push(chunk);
+			payload = new Uint8Array(Buffer.concat(chunks));
+		}
+		const res = await safeFetch(url, { method, headers, body: payload, signal });
+		async function* iterate(): AsyncGenerator<Uint8Array> {
+			if (!res.body) return;
+			for await (const chunk of res.body) yield chunk;
+		}
+		return {
+			url: res.url || url,
+			method,
+			statusCode: res.status,
+			statusMessage: res.statusText,
+			headers: Object.fromEntries(res.headers.entries()),
+			body: iterate()
+		};
+	}
+};
+
+// A repo can contain symlinks (mode 120000) pointing anywhere on the host;
+// materialize them as plain files holding the link target so nothing we later
+// read, rewrite or copy can escape the temp checkout.
+const noSymlinkFs = {
+	promises: {
+		...fs.promises,
+		symlink: (target: string, file: string) => fs.promises.writeFile(file, target)
+	}
+};
+
+function assertCloneUrl(gitUrl: string): void {
+	let url: URL;
+	try {
+		url = new URL(gitUrl);
+	} catch {
+		throw new Error('Invalid git URL');
+	}
+	if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+		throw new Error('Only http(s) git URLs are supported');
+	}
+	// isomorphic-git appends "/info/refs?..." — a hash or query would let the
+	// caller pick the exact path requested.
+	if (url.hash || url.search || gitUrl.includes('#') || gitUrl.includes('?')) {
+		throw new Error('Git URL must not contain a query or fragment');
+	}
+}
+
 // Re-import preserves locally-added files carrying the `.local` suffix
 // (e.g. `notes.md.local`) by leaving them untouched — we only overwrite
 // files that come from the repo.
@@ -101,11 +156,12 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 	const gitUrl = urlParts.gitUrl;
 	const branch = input.branch ?? urlParts.branch;
 	const repoPath = input.path ?? urlParts.path;
-	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-import-'));
+	assertCloneUrl(gitUrl);
+	const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-import-')));
 	try {
 		await git.clone({
-			fs,
-			http,
+			fs: noSymlinkFs,
+			http: guardedHttp,
 			dir: tmp,
 			url: gitUrl,
 			ref: branch,
@@ -122,6 +178,10 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 			throw new Error('Invalid path inside repo');
 		}
 		if (!fs.existsSync(srcRoot)) throw new Error(`Path not found in repo: ${subdir || '/'}`);
+		const realRoot = fs.realpathSync(srcRoot);
+		if (realRoot !== tmp && !realRoot.startsWith(tmp + path.sep)) {
+			throw new Error('Invalid path inside repo');
+		}
 
 		// Discover skill directories: any dir containing a skill.md/SKILL.md.
 		const skillDirs: string[] = [];
@@ -146,7 +206,7 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 			let name = dirName;
 			let invalid: string | null = null;
 			try {
-				const parsed = matter(fs.readFileSync(srcSkillFile, 'utf8'));
+				const parsed = parseFrontmatter(fs.readFileSync(srcSkillFile, 'utf8'));
 				const fm = parseSkillFrontmatter(parsed.data);
 				name = fm.name;
 				if (fm.name !== dirName)
@@ -165,7 +225,7 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 			const existed = fs.existsSync(dest);
 			// Stamp the source so re-imports from the same repo are recognizable,
 			// and normalize the file to lowercase skill.md.
-			const parsed = matter(fs.readFileSync(srcSkillFile, 'utf8'));
+			const parsed = parseFrontmatter(fs.readFileSync(srcSkillFile, 'utf8'));
 			parsed.data.source = `git:${gitUrl}`;
 			parsed.data.title ??= name
 				.split('-')

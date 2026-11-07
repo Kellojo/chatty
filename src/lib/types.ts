@@ -1,4 +1,5 @@
 import type { UIMessage } from 'ai';
+import type { AgentCodingTarget, CodingConversationSummary } from './coding-environments.js';
 
 export type { UIMessage };
 
@@ -44,6 +45,9 @@ export interface McpServerInfo {
 	name: string;
 	transport: 'builtin' | 'stdio' | 'http' | 'sse';
 	url: string | null;
+	/** stdio only: executable and arguments spawned on the host. */
+	command: string | null;
+	args: string[];
 	hasToken: boolean;
 	enabled: boolean;
 	builtin: boolean;
@@ -63,6 +67,10 @@ export interface Conversation {
 	maxTokens: number | null;
 	pinned: boolean;
 	agentId: string | null;
+	settledAt: number | null;
+	settledReason: 'manual' | 'auto' | null;
+	/** Set when the conversation is a coding task run on a T3 Code server. */
+	coding: CodingConversationSummary | null;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -73,7 +81,8 @@ export const AGENT_EVENT_NAMES = [
 	'chat.message_completed',
 	'skill.created',
 	'skill.updated',
-	'skill.deleted'
+	'skill.deleted',
+	'coding.thread.finished'
 ] as const;
 
 export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
@@ -85,6 +94,17 @@ export type ServerEvent =
 	| { type: 'chat.stream.finished'; conversationId: string }
 	| { type: 'conversation.updated'; conversationId: string }
 	| { type: 'conversation.compacted'; conversationId: string }
+	| { type: 'conversation.settle_changed'; conversationIds: string[]; settled: boolean }
+	/** A coding task's status, pending approval, branch or PR changed. */
+	| { type: 'coding.task.updated'; conversationId: string }
+	/** A coding task's agent run ended (completed, failed or interrupted). */
+	| {
+			type: 'coding.thread.finished';
+			conversationId: string;
+			status: 'completed' | 'failed' | 'interrupted';
+			branch: string | null;
+			prUrl: string | null;
+	  }
 	| {
 			type: 'memory.changed';
 			scope: 'user' | 'shared';
@@ -124,6 +144,8 @@ export interface Agent {
 	triggerType: AgentTriggerType;
 	triggerConfig: AgentTriggerConfig;
 	maxSteps: number | null;
+	/** Set for coding agents: each run is a T3 coding task with this target. */
+	codingTarget: AgentCodingTarget | null;
 	enabled: boolean;
 	lastRunAt: number | null;
 	nextRunAt: number | null;
@@ -251,11 +273,24 @@ export interface ChatMessage {
 	createdAt: number;
 }
 
+/** Client-side message metadata: usage for the info dialog, status for failed or stopped replies. */
+export interface UIMessageMetadata {
+	usage?: MessageUsage;
+	status?: 'partial' | 'failed';
+	error?: string | null;
+}
+
 export function chatMessageToUIMessage(message: ChatMessage): UIMessage {
+	const metadata: UIMessageMetadata = {};
+	if (message.usage) metadata.usage = message.usage;
+	if (message.status !== 'complete') {
+		metadata.status = message.status;
+		metadata.error = message.error;
+	}
 	return {
 		id: message.id,
 		role: message.role,
 		parts: message.parts as UIMessage['parts'],
-		metadata: message.usage ? { usage: message.usage } : undefined
+		metadata: Object.keys(metadata).length > 0 ? metadata : undefined
 	};
 }

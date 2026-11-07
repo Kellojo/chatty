@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { z } from 'zod';
+import { parseFrontmatter } from '../frontmatter.js';
 import { walk } from '../mcp/servers/shared.js';
 import {
 	findSkillFile,
@@ -167,7 +168,7 @@ export function readSkill(scope: SkillScope, userId: string, name: string): Skil
 
 	let skill: Skill;
 	try {
-		const parsed = matter(fs.readFileSync(skillFile, 'utf8'));
+		const parsed = parseFrontmatter(fs.readFileSync(skillFile, 'utf8'));
 		const frontmatter = parseSkillFrontmatter(parsed.data);
 		if (frontmatter.name !== name) return null;
 		skill = {

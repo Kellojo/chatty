@@ -177,3 +177,18 @@ describe('tickAgents', () => {
 		expect(runAgentFn).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe('tickAgents concurrency', () => {
+	it('starts every due agent without waiting for earlier runs to finish', async () => {
+		const a = seedScheduleAgent();
+		const b = seedScheduleAgent();
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const runAgentFn = vi.fn().mockReturnValue(gate);
+		const tick = tickAgents(db, runAgentFn);
+		await vi.waitFor(() => expect(runAgentFn).toHaveBeenCalledTimes(2));
+		expect(runAgentFn.mock.calls.map((c) => c[0]).sort()).toEqual([a.id, b.id].sort());
+		release();
+		expect(await tick).toBe(2);
+	});
+});

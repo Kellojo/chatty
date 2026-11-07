@@ -143,6 +143,27 @@ describe('startAgentRun', () => {
 		closeDb();
 	});
 
+	it('fails the run instead of leaving it running when setup throws', async () => {
+		const db = getDb();
+		const agent = seed(db);
+		db.prepare("UPDATE agents SET skill_names = 'not json' WHERE id = ?").run(agent.id);
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		try {
+			await expect(
+				startAgentRun({ agentId: agent.id, trigger: 'manual', userId: 'u1' })
+			).rejects.toThrow();
+			const runs = db
+				.prepare('SELECT status, error FROM agent_runs WHERE agent_id = ?')
+				.all(agent.id) as { status: string; error: string | null }[];
+			expect(runs).toHaveLength(1);
+			expect(runs[0].status).toBe('failed');
+			expect(runs[0].error).toBeTruthy();
+		} finally {
+			consoleError.mockRestore();
+			closeDb();
+		}
+	});
+
 	it('throws when the agent does not exist', async () => {
 		getDb();
 		await expect(

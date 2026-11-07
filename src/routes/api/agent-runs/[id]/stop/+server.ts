@@ -1,4 +1,5 @@
 import { json, error } from '@sveltejs/kit';
+import { stopCodingAgentRun } from '$lib/server/agents/coding-runs.js';
 import { stopAgentRun } from '$lib/server/agents/runner.js';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
@@ -15,7 +16,7 @@ export const POST: RequestHandler = ({ locals, params }) => {
 	if (run.status !== 'running') {
 		error(409, { message: 'Run is not running' });
 	}
-	if (!stopAgentRun(run.id)) {
+	if (!stopAgentRun(run.id) && !stopCodingAgentRun(run.id, db)) {
 		error(409, { message: 'Run is not active on this server' });
 	}
 	return json({ ok: true });

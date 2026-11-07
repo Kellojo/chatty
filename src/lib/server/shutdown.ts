@@ -2,8 +2,10 @@ import { stopAllAgentRuns } from './agents/runner.js';
 import { stopAgentScheduler } from './agents/scheduler.js';
 import { abortStreamAndWait, listActiveStreamIds } from './chat/streams.js';
 import { closeDb } from './db/index.js';
-import { stopDailyJobs } from './jobs.js';
+import { stopDailyJobs, stopHourlyJobs } from './jobs.js';
 import { createLogger } from './logger.js';
+import { prepareCodingShutdown, stopAllCodingFollowers } from './t3/follower.js';
+import { stopCodingEnvironmentSync } from './t3/sync.js';
 
 const log = createLogger('server');
 
@@ -17,10 +19,15 @@ export function drainForShutdown(): Promise<void> {
 	draining ??= (async () => {
 		stopAgentScheduler();
 		stopDailyJobs();
+		stopHourlyJobs();
+		stopCodingEnvironmentSync();
+		// Coding agents run remotely and must keep going; only detach from them.
+		prepareCodingShutdown();
 		await Promise.all([
 			...listActiveStreamIds().map((id) => abortStreamAndWait(id, DRAIN_TIMEOUT_MS)),
 			stopAllAgentRuns(DRAIN_TIMEOUT_MS)
 		]);
+		stopAllCodingFollowers();
 	})().catch((e) => {
 		log.error('Failed to drain running work on shutdown', {
 			error: e instanceof Error ? e.message : String(e)

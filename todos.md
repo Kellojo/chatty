@@ -49,6 +49,7 @@ Next Steps:
 - For LM Studio providers, support pulling in the configured context length
 
 ## Coding Agents
+
 - Workspaces with one isolated environment per agent or task
 - Repository integration with GitHub, Gitea, GitLab, or Bitbucket (using url of the service + PAT)
 - Should leverage opencode as a harness and be auto configured to run against the proxy that is part of the app
@@ -58,6 +59,5 @@ Next Steps:
 - Ideally the coding agent does it's thing, tests, validates and once complete creates a pr for the functionality. When it needs my input it should say sow and the chat should indicate this.
 - It should create a pr on a dedicated branch, which I can then review.
 - What would be super usefrul for web based apps, is the option to open the current environment as a preview, so I can test features directly in the browser, without having to run things locally
-
 
 On the pr creation, i am not fully behind the create pr thingy, is it just the rest api creating the pr for the already pushed branch? Also we probably do need an api to get the current status of a pr, check if it exists, read any comments, ... How do we do that?

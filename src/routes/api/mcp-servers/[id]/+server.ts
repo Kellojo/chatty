@@ -1,44 +1,26 @@
 import { json, error } from '@sveltejs/kit';
-import { z } from 'zod';
 import { requireAdmin } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
-import { deleteMcpServer, toPublic, updateMcpServer } from '$lib/server/db/repo/mcp-servers.js';
+import {
+	deleteMcpServer,
+	getMcpServer,
+	toPublic,
+	updateMcpServer
+} from '$lib/server/db/repo/mcp-servers.js';
+import { mcpServerPatchSchema, resolveMcpServerPatch } from '$lib/server/mcp/serverInput.js';
 import type { RequestHandler } from './$types';
 
-const nameSchema = z
-	.string()
-	.min(1)
-	.max(64)
-	.transform((name) =>
-		name
-			.trim()
-			.toLowerCase()
-			.replace(/[\s_]+/g, '-')
-			.replace(/[^a-z0-9-]/g, '')
-			.replace(/^-+|-+$/g, '')
-			.replace(/-{2,}/g, '-')
-	)
-	.pipe(
-		z
-			.string()
-			.min(1)
-			.max(64)
-			.regex(/^[a-z0-9][a-z0-9-]*$/)
-	);
-
-const patchSchema = z.object({
-	name: nameSchema.optional(),
-	transport: z.enum(['http', 'sse']).optional(),
-	url: z.url().nullish(),
-	token: z.string().min(1).nullable().optional(),
-	enabled: z.boolean().optional()
-});
-
+// Admin-only: stdio servers run an arbitrary command on the host.
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	requireAdmin(locals);
-	const parsed = patchSchema.safeParse(await request.json().catch(() => null));
+	const parsed = mcpServerPatchSchema.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });
-	const server = updateMcpServer(getDb(), params.id, parsed.data);
+	const db = getDb();
+	const existing = getMcpServer(db, params.id);
+	if (!existing) error(404, { message: 'Server not found' });
+	const resolved = resolveMcpServerPatch(existing, parsed.data);
+	if (!resolved.ok) error(400, { message: resolved.error });
+	const server = updateMcpServer(db, params.id, resolved.value);
 	if (!server) error(404, { message: 'Server not found' });
 	return json({ server: toPublic(server) });
 };

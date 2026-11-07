@@ -1,6 +1,5 @@
 import { createAuthClient } from 'better-auth/svelte';
-import { genericOAuthClient } from 'better-auth/client/plugins';
 
-export const authClient = createAuthClient({
-	plugins: [genericOAuthClient()]
-});
+// better-auth >=1.7 routes generic OAuth providers through the core
+// `signIn.social` endpoint, so no client plugin is needed.
+export const authClient = createAuthClient();

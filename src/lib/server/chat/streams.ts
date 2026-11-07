@@ -1,10 +1,16 @@
 import type { UIMessageChunk } from 'ai';
 
-const MAX_CHUNKS = 2000;
+// Consecutive deltas are merged (see `pushChunk`), so this bounds structural
+// chunks (part starts/ends, tool calls/results), not tokens.
+const MAX_CHUNKS = 20_000;
 
 interface ActiveStream {
 	controller: AbortController;
 	chunks: UIMessageChunk[];
+	// Set once the replay buffer outgrew MAX_CHUNKS. An incomplete replay would
+	// hand reconnecting clients a message with a hole in it, so replay is then
+	// refused and they fall back to the periodically persisted copy.
+	overflowed: boolean;
 	listeners: Set<(chunk: UIMessageChunk) => void>;
 	done: boolean;
 	released: Promise<void>;
@@ -25,6 +31,7 @@ export function registerStream(conversationId: string, controller: AbortControll
 	const stream: ActiveStream = {
 		controller,
 		chunks: [],
+		overflowed: false,
 		listeners: new Set(),
 		done: false,
 		released,
@@ -43,8 +50,12 @@ export function appendChunk(
 ): void {
 	const stream = streams.get(conversationId);
 	if (!stream || (owner && stream.controller !== owner)) return;
-	if (stream.chunks.length < MAX_CHUNKS) {
-		stream.chunks.push(chunk);
+	if (!stream.overflowed) {
+		pushChunk(stream.chunks, chunk);
+		if (stream.chunks.length > MAX_CHUNKS) {
+			stream.overflowed = true;
+			stream.chunks = [];
+		}
 	}
 	for (const listener of stream.listeners) {
 		listener(chunk);
@@ -69,8 +80,43 @@ export function getStreamState(
 	conversationId: string
 ): { chunks: UIMessageChunk[]; done: boolean } | null {
 	const stream = streams.get(conversationId);
-	if (!stream) return null;
+	if (!stream || stream.overflowed) return null;
 	return { chunks: [...stream.chunks], done: stream.done };
+}
+
+/**
+ * Appends to a replay buffer, folding a delta into the previous chunk when it
+ * continues the same text/reasoning part or tool input. Replaying the merged
+ * chunk reconstructs the identical message, and a long transcript then costs
+ * roughly its own size instead of one chunk per token. Chunks are copied, never
+ * mutated, since listeners received the originals.
+ */
+export function pushChunk(chunks: UIMessageChunk[], chunk: UIMessageChunk): void {
+	const last = chunks.at(-1);
+	if (last) {
+		if (
+			(chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') &&
+			last.type === chunk.type &&
+			last.id === chunk.id &&
+			!last.providerMetadata &&
+			!chunk.providerMetadata
+		) {
+			chunks[chunks.length - 1] = { ...last, delta: last.delta + chunk.delta };
+			return;
+		}
+		if (
+			chunk.type === 'tool-input-delta' &&
+			last.type === 'tool-input-delta' &&
+			last.toolCallId === chunk.toolCallId
+		) {
+			chunks[chunks.length - 1] = {
+				...last,
+				inputTextDelta: last.inputTextDelta + chunk.inputTextDelta
+			};
+			return;
+		}
+	}
+	chunks.push(chunk);
 }
 
 export function markDone(conversationId: string, owner?: AbortController): void {

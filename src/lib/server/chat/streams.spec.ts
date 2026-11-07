@@ -1,9 +1,11 @@
+import type { UIMessageChunk } from 'ai';
 import { describe, expect, it } from 'vitest';
 import {
 	abortStreamAndWait,
 	appendChunk,
 	getStreamState,
 	markDone,
+	pushChunk,
 	registerStream,
 	releaseStream
 } from './streams.js';
@@ -60,5 +62,41 @@ describe('stream ownership', () => {
 		await expect(wait).resolves.toBeUndefined();
 		expect(getStreamState('c4')).not.toBeNull();
 		releaseStream('c4', newController);
+	});
+});
+
+describe('replay buffer', () => {
+	it('merges consecutive deltas of the same part without mutating chunks', () => {
+		const chunks: UIMessageChunk[] = [];
+		const first = { type: 'text-delta', id: 't1', delta: 'Hel' } as const;
+		pushChunk(chunks, { type: 'text-start', id: 't1' });
+		pushChunk(chunks, first);
+		pushChunk(chunks, { type: 'text-delta', id: 't1', delta: 'lo' });
+		pushChunk(chunks, { type: 'text-delta', id: 't2', delta: '!' });
+		pushChunk(chunks, { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"a"' });
+		pushChunk(chunks, { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: ':1}' });
+		expect(chunks).toEqual([
+			{ type: 'text-start', id: 't1' },
+			{ type: 'text-delta', id: 't1', delta: 'Hello' },
+			{ type: 'text-delta', id: 't2', delta: '!' },
+			{ type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"a":1}' }
+		]);
+		expect(first.delta).toBe('Hel');
+	});
+
+	it('keeps long token streams small and refuses replay once it overflows', () => {
+		const controller = new AbortController();
+		registerStream('c5', controller);
+		appendChunk('c5', { type: 'text-start', id: 't1' }, controller);
+		for (let i = 0; i < 50_000; i++) {
+			appendChunk('c5', { type: 'text-delta', id: 't1', delta: 'x' }, controller);
+		}
+		expect(getStreamState('c5')!.chunks).toHaveLength(2);
+		for (let i = 0; i < 20_001; i++) {
+			appendChunk('c5', { type: 'start-step' }, controller);
+		}
+		// A partial replay would leave a hole in the message, so none is offered.
+		expect(getStreamState('c5')).toBeNull();
+		releaseStream('c5', controller);
 	});
 });

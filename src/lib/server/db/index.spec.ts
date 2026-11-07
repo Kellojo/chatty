@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from './index.js';
 
@@ -34,17 +36,22 @@ describe('db migrations', () => {
 			'agent_event_counters',
 			'model_mappings',
 			'proxy_requests',
-			'conversation_summaries'
+			'conversation_summaries',
+			'coding_environments',
+			'coding_usage_limits',
+			'coding_usage_daily'
 		]) {
 			expect(tables).toContain(expected);
 		}
 		const versions = db.prepare('SELECT version FROM _migrations ORDER BY version').all() as {
 			version: number;
 		}[];
-		expect(versions.map((v) => v.version)).toEqual([
-			1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-			27, 28
-		]);
+		// Numbers can have gaps (e.g. one reserved by unmerged work), so derive them.
+		const expectedVersions = readdirSync(join(process.cwd(), 'migrations'))
+			.filter((f) => /^\d{4}_.*\.sql$/.test(f))
+			.map((f) => Number(f.slice(0, 4)))
+			.sort((a, b) => a - b);
+		expect(versions.map((v) => v.version)).toEqual(expectedVersions);
 		db.close();
 	});
 

@@ -7,6 +7,7 @@ import {
 	extractText,
 	finalizeInterruptedMessages,
 	listMessages,
+	listMessagesFrom,
 	toPublic,
 	updateMessage
 } from './messages.js';
@@ -105,5 +106,26 @@ describe('messages repo', () => {
 				{ type: 'text', text: 'b' }
 			])
 		).toBe('a\nb');
+	});
+});
+
+describe('listMessagesFrom', () => {
+	it('returns the anchor and every later message in order', () => {
+		const a = createMessage(db, { conversationId, role: 'user', parts: [], createdAt: 1 });
+		const b = createMessage(db, { conversationId, role: 'assistant', parts: [], createdAt: 2 });
+		const c = createMessage(db, { conversationId, role: 'assistant', parts: [], createdAt: 2 });
+		expect(listMessagesFrom(db, conversationId, b.id)!.map((r) => r.id)).toEqual([b.id, c.id]);
+		expect(listMessagesFrom(db, conversationId, a.id)!.map((r) => r.id)).toEqual([
+			a.id,
+			b.id,
+			c.id
+		]);
+	});
+
+	it('returns undefined for an unknown or foreign anchor', () => {
+		const other = createConversation(db, 'u1').id;
+		const foreign = createMessage(db, { conversationId: other, role: 'user', parts: [] });
+		expect(listMessagesFrom(db, conversationId, 'missing')).toBeUndefined();
+		expect(listMessagesFrom(db, conversationId, foreign.id)).toBeUndefined();
 	});
 });

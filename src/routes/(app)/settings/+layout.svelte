@@ -12,14 +12,25 @@
 	const sections = [
 		{ href: '/settings/account', label: 'Account', adminOnly: false, group: 'General' },
 		{ href: '/settings/conversation', label: 'Conversation', adminOnly: false, group: 'General' },
+		{
+			href: '/settings/notifications',
+			label: 'Notifications',
+			adminOnly: false,
+			group: 'General'
+		},
 		{ href: '/settings/providers', label: 'Providers', adminOnly: true, group: 'Models' },
 		{ href: '/settings/models', label: 'Models', adminOnly: true, group: 'Models' },
 		{ href: '/settings/mappings', label: 'Mappings', adminOnly: true, group: 'Models' },
 		{ href: '/settings/defaults', label: 'Model Defaults', adminOnly: true, group: 'Models' },
 		{ href: '/settings/api', label: 'API', adminOnly: false, group: 'Other' },
 		{ href: '/settings/memory', label: 'Memory', adminOnly: false, group: 'Other' },
-		{ href: '/settings/mcp', label: 'MCP', adminOnly: true, group: 'Other' },
-		{ href: '/settings/search', label: 'Search', adminOnly: true, group: 'Other' }
+		{
+			href: '/settings/environments',
+			label: 'Coding environments',
+			adminOnly: false,
+			group: 'Other'
+		},
+		{ href: '/settings/mcp', label: 'MCP', adminOnly: true, group: 'Other' }
 	] as const;
 
 	const isAdmin = $derived(data.user.role === 'admin');

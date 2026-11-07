@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
+// The fixture server listens on 127.0.0.1, which the SSRF guard blocks by default.
+process.env.ALLOW_PRIVATE_NETWORK_FETCH = 'true';
 
 const { createWebfetchServer } = await import('./webfetch.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
@@ -20,6 +22,21 @@ beforeAll(async () => {
 	httpServer = http.createServer((req, res) => {
 		if (req.url?.startsWith('/status/500')) {
 			res.writeHead(500).end('oops');
+			return;
+		}
+		if (req.url === '/huge') {
+			// Streams well past the 1 MiB cap; the tool must stop reading.
+			res.writeHead(200, { 'content-type': 'text/plain' });
+			const chunk = 'a'.repeat(64 * 1024);
+			let sent = 0;
+			const pump = () => {
+				while (sent < 64 && !res.destroyed) {
+					sent++;
+					if (!res.write(chunk)) return void res.once('drain', pump);
+				}
+				res.end();
+			};
+			pump();
 			return;
 		}
 		if (req.url === '/plain') {
@@ -78,6 +95,17 @@ describe('webfetch server', () => {
 	it('returns non-HTML content as-is', async () => {
 		const res = await callFetch({ url: `${base}/plain`, format: 'text' });
 		expect(resultText(res)).toContain('plain <b>text</b>');
+	});
+
+	it('truncates bodies past the size limit and marks them truncated', async () => {
+		const out = resultText(await callFetch({ url: `${base}/huge`, format: 'text' }));
+		expect(out.endsWith('\n… truncated')).toBe(true);
+		expect(out.length).toBe(1024 * 1024 + '\n… truncated'.length);
+	});
+
+	it('does not mark small bodies as truncated', async () => {
+		const out = resultText(await callFetch({ url: `${base}/plain`, format: 'text' }));
+		expect(out).not.toContain('truncated');
 	});
 
 	it('reports non-2xx status as error', async () => {

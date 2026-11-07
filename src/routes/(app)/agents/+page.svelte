@@ -157,6 +157,14 @@
 										{#if agent.userId === null}
 											<Badge variant="outline">Built-in</Badge>
 										{/if}
+										{#if agent.codingTarget}
+											<Badge
+												variant="outline"
+												title="Runs as a coding task in {agent.codingTarget.projectTitle}"
+											>
+												Coding · {agent.codingTarget.projectTitle}
+											</Badge>
+										{/if}
 									</div>
 									{#if agent.description}
 										<p class="line-clamp-2 text-sm text-muted-foreground" title={agent.description}>
