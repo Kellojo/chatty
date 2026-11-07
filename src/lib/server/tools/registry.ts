@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { Tool } from 'ai';
+import type { ToolInfo } from '$lib/types.js';
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
 import { listEnabledMcpServers } from '../db/repo/mcp-servers.js';
@@ -91,4 +92,20 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 			}
 		}
 	};
+}
+
+/** Lists every tool currently available to the user (for pickers in the UI), sorted by server then name. */
+export async function listToolInfo(userId: string): Promise<ToolInfo[]> {
+	const built = await buildTools({ userId, memoryEnabled: true });
+	try {
+		return Object.entries(built.tools)
+			.map(([name, t]) => ({
+				name,
+				description: typeof t.description === 'string' ? t.description : '',
+				server: built.toolToServer[name] ?? ''
+			}))
+			.sort((a, b) => a.server.localeCompare(b.server) || a.name.localeCompare(b.name));
+	} finally {
+		await built.close();
+	}
 }

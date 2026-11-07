@@ -15,15 +15,10 @@
 		AgentEventName,
 		AgentTriggerType,
 		ModelMapping,
-		ModelsByProvider
+		ModelsByProvider,
+		ToolInfo
 	} from '$lib/types.js';
 	import { AGENT_EVENT_NAMES } from '$lib/types.js';
-
-	interface ToolInfo {
-		name: string;
-		description: string;
-		server: string;
-	}
 
 	let {
 		agent,

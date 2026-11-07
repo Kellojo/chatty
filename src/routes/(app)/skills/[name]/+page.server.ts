@@ -4,9 +4,10 @@ import { getDb } from '$lib/server/db/index.js';
 import { listSkillInvocations } from '$lib/server/db/repo/skill-invocations.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import { readSkill } from '$lib/server/skills/scanner.js';
+import { listToolInfo } from '$lib/server/tools/registry.js';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals, params, url }) => {
+export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const user = requireUser(locals);
 	const isAdmin = (user as { role?: string }).role === 'admin';
 	const scope = url.searchParams.get('scope') === 'shared' ? 'shared' : 'user';
@@ -23,6 +24,7 @@ export const load: PageServerLoad = ({ locals, params, url }) => {
 			limit: 50
 		}),
 		timeFormat: getTimeFormat(getDb(), user.id),
+		tools: canEdit ? await listToolInfo(user.id) : [],
 		isAdmin
 	};
 };
