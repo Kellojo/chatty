@@ -5,13 +5,14 @@ import {
 	listCodingEnvironments,
 	toPublic as environmentToPublic
 } from '$lib/server/db/repo/coding-environments.js';
-import { getAgent, toPublic } from '$lib/server/db/repo/agents.js';
+import { getAgent, listAgentOverrides, toPublicWithOverrides } from '$lib/server/db/repo/agents.js';
 import {
 	listEnabledModelMappings,
 	toPublic as mappingToPublic
 } from '$lib/server/db/repo/model-mappings.js';
 import { listModelsGrouped } from '$lib/server/llm/registry.js';
 import { listToolInfo } from '$lib/server/tools/registry.js';
+import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -22,12 +23,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		error(404, { message: 'Agent not found' });
 	}
 	return {
-		agent: toPublic(agent),
+		agent: toPublicWithOverrides(agent, listAgentOverrides(db, user.id)),
 		groups: listModelsGrouped(),
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		tools: await listToolInfo(user.id),
 		codingEnvironments: listCodingEnvironments(db, user.id)
 			.filter((row) => row.enabled === 1)
-			.map(environmentToPublic)
+			.map(environmentToPublic),
+		timeFormat: getTimeFormat(db, user.id)
 	};
 };

@@ -5,6 +5,7 @@
 	let {
 		title,
 		titleAttr,
+		href,
 		leading,
 		badges,
 		meta,
@@ -15,6 +16,8 @@
 		title: string;
 		/** Hover text for the title, e.g. the full value when it truncates. */
 		titleAttr?: string;
+		/** Makes the title a link to the entry's own page (an already resolved path). */
+		href?: string;
 		leading?: Snippet;
 		/** Inline chips after the title. */
 		badges?: Snippet;
@@ -22,7 +25,7 @@
 		meta?: Snippet;
 		/** Switch and actions menu on the right. */
 		trailing?: Snippet;
-		/** Dim the row's text, e.g. for a disabled entry. */
+		/** Dim the row's icon, e.g. for a disabled entry (its switch shows the state). */
 		muted?: boolean;
 		/** Extra content under the meta line. */
 		children?: Snippet;
@@ -40,12 +43,22 @@
 			{@render leading()}
 		</div>
 	{/if}
-	<div class={cn('flex min-w-0 flex-1 flex-col gap-0.5', muted && 'opacity-60')}>
+	<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 		<div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-			<span
-				class="line-clamp-2 min-w-0 text-sm font-medium wrap-break-word"
-				title={titleAttr ?? title}>{title}</span
-			>
+			{#if href}
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- callers pass resolve()d hrefs -->
+				<a
+					{href}
+					class="line-clamp-2 min-w-0 rounded-sm text-sm font-medium wrap-break-word underline-offset-4 hover:underline"
+					title={titleAttr ?? title}>{title}</a
+				>
+				<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			{:else}
+				<span
+					class="line-clamp-2 min-w-0 text-sm font-medium wrap-break-word"
+					title={titleAttr ?? title}>{title}</span
+				>
+			{/if}
 			{@render badges?.()}
 		</div>
 		{#if meta}
