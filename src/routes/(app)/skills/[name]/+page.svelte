@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { toast } from 'svelte-sonner';
@@ -12,6 +13,7 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import ToolMultiSelect from '$lib/components/app/ToolMultiSelect.svelte';
 	import { formatDateTime } from '$lib/datetime.js';
 	import type { PageData } from './$types';
 
@@ -20,9 +22,8 @@
 	let title = $state(data.skill.title);
 	let description = $state(data.skill.description);
 	let when = $state(data.skill.frontmatter.when ?? '');
-	let tools = $state(data.skill.frontmatter.tools.join(', '));
+	let tools = $state([...data.skill.frontmatter.tools]);
 	let version = $state(data.skill.version ?? '');
-	let author = $state(data.skill.author ?? '');
 	let enabled = $state(data.skill.enabled);
 	let body = $state(data.skill.body);
 	let busy = $state(false);
@@ -44,12 +45,8 @@
 					title: title.trim(),
 					description: description.trim(),
 					when: when.trim() || null,
-					tools: tools
-						.split(',')
-						.map((t) => t.trim())
-						.filter(Boolean),
+					tools,
 					version: version.trim() || null,
-					author: author.trim() || null,
 					enabled,
 					body
 				})
@@ -111,6 +108,15 @@
 	<div class="mx-auto flex w-full max-w-7xl flex-col gap-4 p-6">
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					href={resolve('/skills')}
+					aria-label="Back to skills"
+					title="Back to skills"
+				>
+					<ArrowLeftIcon class="size-4" />
+				</Button>
 				<h1 class="text-xl font-semibold">{data.skill.name}</h1>
 				<Badge variant="outline">{data.scope}</Badge>
 				<Badge variant="secondary">{data.skill.source}</Badge>
@@ -169,19 +175,14 @@
 						/>
 					</div>
 					<div class="flex flex-col gap-1.5">
-						<Label for="tools">Expected tools (comma-separated)</Label>
-						<Input
+						<Label for="tools">Expected tools</Label>
+						<ToolMultiSelect
 							id="tools"
-							placeholder="webfetch, search_memory"
+							tools={data.tools}
 							bind:value={tools}
 							disabled={!data.canEdit}
 						/>
 					</div>
-				</div>
-
-				<div class="flex flex-col gap-1.5">
-					<Label for="author">Author</Label>
-					<Input id="author" bind:value={author} disabled={!data.canEdit} />
 				</div>
 
 				<div class="flex min-h-72 flex-col gap-1.5">
