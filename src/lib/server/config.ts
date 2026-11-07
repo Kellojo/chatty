@@ -6,6 +6,15 @@ const boolFromString = (fallback: 'true' | 'false') =>
 		.default(fallback)
 		.transform((v) => v === 'true');
 
+function isValidTimeZone(timeZone: string): boolean {
+	try {
+		new Intl.DateTimeFormat('en-US', { timeZone });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 const schema = z.object({
 	DATABASE_PATH: z.string().default('./data/ai-chat.db'),
 	MEMORY_VOLUME: z.string().default('./memory'),
@@ -13,7 +22,10 @@ const schema = z.object({
 	DOCUMENTS_VOLUME: z.string().default('./documents'),
 	WORKSPACES_VOLUME: z.string().default('./workspaces'),
 	WORKSPACE_GC_DAYS: z.coerce.number().int().min(1).default(30),
-	TZ: z.string().default('UTC'),
+	TZ: z
+		.string()
+		.default('UTC')
+		.refine(isValidTimeZone, { message: 'must be a valid IANA time zone (e.g. Europe/Berlin)' }),
 	ENABLE_SIGNUP: boolFromString('true'),
 	ENABLE_PASSWORD_LOGIN: boolFromString('true'),
 	OIDC_ONLY: boolFromString('false'),

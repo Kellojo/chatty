@@ -135,15 +135,27 @@ describe('chat-search server', () => {
 		const codingId = createConversation(db, 'u1', { title: 'fix the flaky test' }).id;
 		db.prepare(
 			`INSERT INTO coding_conversations (conversation_id, project_id, project_title,
-			   provider_instance_id, model, runtime_mode, created_at, updated_at)
-			 VALUES (?, 'p1', 'kellojo-website', 'codex', 'gpt', 'full-access', 0, 0)`
+			   provider_instance_id, model, runtime_mode, branch, status, diff_insertions,
+			   diff_deletions, created_at, updated_at)
+			 VALUES (?, 'p1', 'kellojo-website', 'codex', 'gpt', 'full-access', 'fix/flaky',
+			   'idle', 12, 3, 0, 0)`
 		).run(codingId);
 		db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(5000, codingId);
-		type Hit = { id: string; coding?: { project: string; status: string } };
+		type Hit = { id: string; coding?: Record<string, unknown> };
 
 		const byQuery = JSON.parse(resultText(await callSearch({ query: 'flaky' }))) as Hit[];
 		expect(byQuery.map((h) => h.id)).toEqual([codingId]);
-		expect(byQuery[0].coding).toEqual({ project: 'kellojo-website', status: expect.any(String) });
+		expect(byQuery[0].coding).toEqual({
+			project: 'kellojo-website',
+			status: 'idle',
+			provider: 'codex',
+			model: 'gpt',
+			autonomy: 'full-access',
+			workspace: expect.any(String),
+			branch: 'fix/flaky',
+			linesAdded: 12,
+			linesRemoved: 3
+		});
 
 		const bySince = JSON.parse(resultText(await callSearch({ since: '2500' }))) as Hit[];
 		expect(bySince.find((h) => h.id === codingId)?.coding?.project).toBe('kellojo-website');

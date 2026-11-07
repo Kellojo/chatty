@@ -311,6 +311,30 @@
 		};
 	});
 
+	// Replies can change with no stream attached (a coding task's background
+	// subagent reporting progress after its turn ended); reload them while idle.
+	$effect(() => {
+		if (!isCoding) return;
+		const id = conversation.id;
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const reload = async () => {
+			timer = null;
+			if (streaming || conversation.id !== id) return;
+			await invalidateWhenIdle();
+			await tick();
+			if (streaming || conversation.id !== id) return;
+			chat.messages = initialMessages.map(chatMessageToUIMessage);
+		};
+		const off = onServerEvent((event) => {
+			if (event.type !== 'chat.messages.updated' || event.conversationId !== id) return;
+			timer ??= setTimeout(() => void reload(), 300);
+		});
+		return () => {
+			off();
+			if (timer) clearTimeout(timer);
+		};
+	});
+
 	/**
 	 * After a failed stream, reload the persisted messages so the failed response
 	 * (with its error) shows inline instead of only in a toast. The server persists

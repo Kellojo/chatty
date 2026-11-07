@@ -4,7 +4,8 @@
 	import GitPullRequestIcon from '@lucide/svelte/icons/git-pull-request';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
 	import { agentIsFree, hasPullRequestWork, pullRequestNumber } from '$lib/coding-task-details.js';
-	import type { CodingConversation, CodingTaskStatus } from '$lib/coding-environments.js';
+	import type { CodingConversation } from '$lib/coding-environments.js';
+	import { CODING_STATUS_STYLE } from '$lib/coding-status.js';
 	import CodingRunTimer from './CodingRunTimer.svelte';
 	import DiffStat from './DiffStat.svelte';
 
@@ -23,21 +24,7 @@
 	const canCreatePr = $derived(!!oncreatepr && hasPullRequestWork(coding));
 	const agentFree = $derived(agentIsFree(coding));
 
-	/** One quiet style for every state: a dot plus muted text, tinted only when it needs you. */
-	const STATUS: Record<CodingTaskStatus, { label: string; dot: string; tone: string }> = {
-		starting: { label: 'Starting', dot: 'bg-info animate-pulse', tone: 'text-muted-foreground' },
-		running: { label: 'Working', dot: 'bg-info animate-pulse', tone: 'text-muted-foreground' },
-		awaiting_input: {
-			label: 'Waiting for you',
-			dot: 'bg-amber-500',
-			tone: 'text-amber-700 dark:text-amber-400'
-		},
-		idle: { label: 'Idle', dot: 'bg-muted-foreground', tone: 'text-muted-foreground' },
-		failed: { label: 'Failed', dot: 'bg-destructive', tone: 'text-destructive' },
-		interrupted: { label: 'Interrupted', dot: 'bg-muted-foreground', tone: 'text-muted-foreground' }
-	};
-
-	const status = $derived(STATUS[coding.status] ?? STATUS.idle);
+	const status = $derived(CODING_STATUS_STYLE[coding.status] ?? CODING_STATUS_STYLE.idle);
 	/** A working task shows how long its run has been going instead of a status badge. */
 	const runStartedAt = $derived(
 		coding.status === 'running' || coding.status === 'starting' ? coding.runStartedAt : null

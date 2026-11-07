@@ -260,6 +260,47 @@ function widgets(): PlaygroundMessage[] {
 				),
 				text(
 					'The report is ready:\n\n' + fence('file', { name: 'report.html', path: 'report.html' })
+				),
+				text(
+					'Your recent chats:\n\n' +
+						fence('chats', {
+							title: 'Updated this week',
+							chats: [
+								{
+									id: 'c-1',
+									title: 'Side Panel: Coding Tasks vs Chat',
+									updatedAt: Date.now() - 2 * 3600_000,
+									summary: 'Decided to group coding tasks above chats in the sidebar.'
+								},
+								{
+									id: 'c-2',
+									title: 'Fix the flaky upload test',
+									updatedAt: Date.now() - 5 * 60_000,
+									coding: {
+										project: 'ai-chat',
+										status: 'running',
+										model: 'gpt-5.5',
+										branch: 'fix/flaky-upload',
+										linesAdded: 48,
+										linesRemoved: 12
+									}
+								},
+								{
+									id: 'c-3',
+									title: 'Migrate settings pages',
+									updatedAt: Date.now() - 26 * 3600_000,
+									coding: {
+										project: 'ai-chat',
+										status: 'awaiting_input',
+										branch: 'feat/settings-redesign',
+										pullRequest: 'https://github.com/Kellojo/ai-chat/pull/6',
+										linesAdded: 310,
+										linesRemoved: 95,
+										waitingFor: { kind: 'approval', title: 'Run pnpm install?' }
+									}
+								}
+							]
+						})
 				)
 			]
 		}
@@ -682,7 +723,8 @@ function codingSession(): PlaygroundMessage[] {
 				prompt: 'Bump the dependencies, prioritising what pnpm audit flags.',
 				progress: 'Running pnpm install after the SvelteKit bump',
 				provider: 'claudeAgent',
-				running: true
+				running: true,
+				startedAt: Date.now() - 95_000
 			}
 		},
 		t3(
@@ -690,7 +732,9 @@ function codingSession(): PlaygroundMessage[] {
 			{
 				description: 'Security audit of the T3 routes',
 				prompt: 'Review the T3 routes for auth gaps.',
-				provider: 'claudeAgent'
+				provider: 'claudeAgent',
+				startedAt: Date.now() - 400_000,
+				completedAt: Date.now() - 262_000
 			},
 			'## Findings\n- **High**: settle endpoint lacks an ownership check'
 		),

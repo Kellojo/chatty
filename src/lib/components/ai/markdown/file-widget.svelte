@@ -1,8 +1,15 @@
 <script lang="ts">
-	import { getContext } from 'svelte';
+	import { getContext, type Component } from 'svelte';
 	import FileIcon from '@lucide/svelte/icons/file';
+	import FileTextIcon from '@lucide/svelte/icons/file-text';
+	import FileCodeIcon from '@lucide/svelte/icons/file-code';
+	import FileImageIcon from '@lucide/svelte/icons/file-image';
+	import FileSpreadsheetIcon from '@lucide/svelte/icons/file-spreadsheet';
+	import FileArchiveIcon from '@lucide/svelte/icons/file-archive';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
+	import { buttonVariants } from '$lib/components/ui/button/index.js';
+	import WidgetCard from './widget-card.svelte';
 
 	type Payload = {
 		name: string;
@@ -35,32 +42,58 @@
 		const encodedPath = data.path.split('/').map(encodeURIComponent).join('/');
 		return `/api/chat/${conversationId}/workspace-files/${encodedPath}`;
 	});
+
+	const KINDS: [RegExp, Component<{ class?: string }>][] = [
+		[/^(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/, FileImageIcon],
+		[/^(csv|tsv|xlsx?|ods)$/, FileSpreadsheetIcon],
+		[/^(zip|tar|gz|tgz|7z|rar)$/, FileArchiveIcon],
+		[
+			/^(html?|css|js|ts|jsx|tsx|json|py|sh|svelte|xml|ya?ml|sql|go|rs|java|c|cpp|rb)$/,
+			FileCodeIcon
+		],
+		[/^(md|txt|pdf|docx?|rtf|log)$/, FileTextIcon]
+	];
+
+	const ext = $derived(data?.name.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? '');
+	const icon = $derived(KINDS.find(([re]) => re.test(ext))?.[1] ?? FileIcon);
+	// Show where the file lives when that adds something beyond its name.
+	const subtitle = $derived.by(() => {
+		if (!data) return null;
+		const kind = ext ? `${ext.toUpperCase()} file` : 'File';
+		return data.path !== data.name ? `${kind} · ${data.path}` : kind;
+	});
+
+	const action = buttonVariants({ variant: 'ghost', size: 'icon-sm' });
 </script>
 
-{#if data && url}
-	<div class="my-2 flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
-		<FileIcon class="size-4 shrink-0 text-muted-foreground" />
-		<span class="min-w-0 flex-1 truncate font-medium">{data.name}</span>
-		<!-- eslint-disable svelte/no-navigation-without-resolve -->
-		<a
-			href={url}
-			download
-			class="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-			title="Download"
-			aria-label="Download file"
-		>
-			<DownloadIcon class="size-3.5" />
-		</a>
-		<a
-			href={url}
-			target="_blank"
-			rel="noopener noreferrer"
-			class="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-			title="Open in new tab"
-			aria-label="Open file in new tab"
-		>
-			<ExternalLinkIcon class="size-3.5" />
-		</a>
-		<!-- eslint-enable svelte/no-navigation-without-resolve -->
-	</div>
-{/if}
+<WidgetCard
+	{icon}
+	status={data && url ? 'ready' : isIncomplete ? 'loading' : 'error'}
+	loadingLabel="Preparing file…"
+	errorLabel="Could not show file"
+	raw={code}
+	title={data?.name}
+	{subtitle}
+	divided={false}
+>
+	{#snippet meta()}
+		{#if url}
+			<!-- eslint-disable svelte/no-navigation-without-resolve -->
+			<a
+				href={url}
+				target="_blank"
+				rel="noopener noreferrer"
+				class={action}
+				title="Open in new tab"
+			>
+				<ExternalLinkIcon class="size-4" />
+				<span class="sr-only">Open {data?.name} in new tab</span>
+			</a>
+			<a href={url} download class={action} title="Download">
+				<DownloadIcon class="size-4" />
+				<span class="sr-only">Download {data?.name}</span>
+			</a>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
+		{/if}
+	{/snippet}
+</WidgetCard>

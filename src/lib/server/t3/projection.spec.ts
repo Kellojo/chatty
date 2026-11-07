@@ -3,12 +3,14 @@ import {
 	activeRun,
 	applyStreamItem,
 	emptyThreadState,
+	hasRunningSubagent,
 	MAX_PART_CHARS,
 	MAX_RUN_PARTS,
 	MAX_THREAD_RECORDS,
 	OMITTED_PARTS_NOTICE,
 	renderRun,
 	replyMessageId,
+	runItemsEvicted,
 	streamItemRun,
 	summarizeTask,
 	TRUNCATED_MARKER
@@ -84,6 +86,25 @@ describe('applyStreamItem', () => {
 		expect(applyStreamItem(state, event(5, 'something.new', {}))).toBe(false);
 		expect(state.lastSequence).toBe(5);
 		expect(applyStreamItem(state, 'garbage')).toBe(false);
+	});
+
+	it('ignores events it has already applied', () => {
+		const state = emptyThreadState();
+		applyStreamItem(state, snapshot({ runs: [run({ status: 'completed' })] }));
+		expect(applyStreamItem(state, event(10, 'run.updated', run()))).toBe(false);
+		expect(applyStreamItem(state, event(9, 'run.updated', run()))).toBe(false);
+		expect(activeRun(state)).toBeNull();
+		expect(state.lastSequence).toBe(10);
+		expect(applyStreamItem(state, event(11, 'run.updated', run()))).toBe(true);
+		expect(activeRun(state)?.id).toBe('run-1');
+	});
+
+	it('keeps its state when a snapshot has no projection', () => {
+		const state = emptyThreadState();
+		applyStreamItem(state, snapshot({ runs: [run()] }));
+		expect(applyStreamItem(state, { kind: 'snapshot', snapshotSequence: 12 })).toBe(false);
+		expect(state.runs.size).toBe(1);
+		expect(state.lastSequence).toBe(10);
 	});
 });
 
@@ -204,6 +225,8 @@ describe('renderRun', () => {
 						status: 'completed',
 						title: 'Review',
 						prompt: 'Review the diff',
+						startedAt: '2026-11-07T10:00:00.000Z',
+						completedAt: '2026-11-07T10:01:30.000Z',
 						result: 'Looks good'
 					},
 					{
@@ -229,7 +252,12 @@ describe('renderRun', () => {
 		expect(parts[1]).toMatchObject({ toolName: 'Grep', output: 'a.ts:1: todo' });
 		expect(parts[2]).toMatchObject({
 			toolName: 'subagent',
-			input: { description: 'Review', prompt: 'Review the diff' },
+			input: {
+				description: 'Review',
+				prompt: 'Review the diff',
+				startedAt: Date.parse('2026-11-07T10:00:00.000Z'),
+				completedAt: Date.parse('2026-11-07T10:01:30.000Z')
+			},
 			output: 'Looks good'
 		});
 		expect(parts[3]).toMatchObject({
@@ -261,9 +289,57 @@ describe('renderRun', () => {
 		);
 		expect(renderRun(state, run())[0].part).toMatchObject({ state: 'output-error' });
 	});
+
+	it('does not show cancelled or interrupted tools as successful', () => {
+		const state = emptyThreadState();
+		const tool = (id: string, ordinal: number, status: string) => ({
+			id,
+			runId: 'run-1',
+			ordinal,
+			type: 'dynamic_tool',
+			status,
+			toolName: 'Read'
+		});
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run({ status: 'interrupted' })],
+				turnItems: [tool('a', 1, 'cancelled'), tool('b', 2, 'interrupted')]
+			})
+		);
+		expect(renderRun(state, run()).map((e) => e.part)).toMatchObject([
+			{ state: 'output-error', errorText: 'Cancelled' },
+			{ state: 'output-error', errorText: 'Interrupted' }
+		]);
+	});
 });
 
 describe('summarizeTask', () => {
+	it('stays running while a background subagent works after its run completed', () => {
+		const state = emptyThreadState();
+		const subagent = (status: string) => ({
+			id: 's1',
+			runId: 'run-1',
+			ordinal: 1,
+			type: 'subagent',
+			status,
+			startedAt: '2026-11-07T10:05:00.000Z'
+		});
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'completed' })], turnItems: [subagent('running')] })
+		);
+		expect(summarizeTask(state)).toMatchObject({
+			status: 'running',
+			runStartedAt: Date.parse('2026-11-07T10:05:00.000Z')
+		});
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'completed' })], turnItems: [subagent('completed')] }, 11)
+		);
+		expect(summarizeTask(state)).toMatchObject({ status: 'idle', runStartedAt: null });
+	});
+
 	it('surfaces a pending approval with its offered decisions', () => {
 		const state = emptyThreadState();
 		applyStreamItem(
@@ -341,6 +417,50 @@ describe('summarizeTask', () => {
 				{ id: 'Postgres', label: 'Postgres', description: 'Managed, scales out' },
 				{ id: 'sqlite', label: 'SQLite' }
 			]
+		});
+	});
+
+	it('ignores requests left pending by a run that has ended', () => {
+		const state = emptyThreadState();
+		const approval = (id: string, runId: string) => ({
+			id: `item-${id}`,
+			runId,
+			ordinal: 1,
+			type: 'approval_request',
+			status: 'waiting',
+			requestId: id,
+			prompt: `Approve ${id}?`
+		});
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run({ status: 'interrupted' })],
+				runtimeRequests: [{ id: 'stale', kind: 'command', status: 'pending' }],
+				turnItems: [approval('stale', 'run-1')]
+			})
+		);
+		expect(summarizeTask(state)).toMatchObject({ status: 'interrupted', pendingRequest: null });
+
+		applyStreamItem(
+			state,
+			snapshot(
+				{
+					runs: [
+						run({ status: 'interrupted' }),
+						run({ id: 'run-2', ordinal: 2, status: 'waiting' })
+					],
+					runtimeRequests: [
+						{ id: 'stale', kind: 'command', status: 'pending' },
+						{ id: 'live', kind: 'command', status: 'pending', runId: 'run-2' }
+					],
+					turnItems: [approval('stale', 'run-1'), approval('live', 'run-2')]
+				},
+				11
+			)
+		);
+		expect(summarizeTask(state)).toMatchObject({
+			status: 'awaiting_input',
+			pendingRequest: { requestId: 'live', title: 'Approve live?' }
 		});
 	});
 
@@ -457,5 +577,47 @@ describe('size limits', () => {
 		expect(state.turnItems.size).toBe(MAX_THREAD_RECORDS);
 		expect(state.turnItems.has('i0')).toBe(false);
 		expect(state.turnItems.has(`i${MAX_THREAD_RECORDS + 9}`)).toBe(true);
+	});
+
+	it('remembers which runs lost turn items to the cap', () => {
+		const state = emptyThreadState();
+		const items = [
+			item(0, { runId: 'old' }),
+			...Array.from({ length: MAX_THREAD_RECORDS }, (_, i) => item(i + 1))
+		];
+		applyStreamItem(state, snapshot({ runs: [run(), run({ id: 'old' })], turnItems: items }));
+		expect(runItemsEvicted(state, 'old')).toBe(true);
+		expect(runItemsEvicted(state, 'run-1')).toBe(false);
+
+		applyStreamItem(state, event(11, 'turn-item.updated', item(MAX_THREAD_RECORDS + 1)));
+		expect(runItemsEvicted(state, 'run-1')).toBe(true);
+
+		// A later snapshot that fits starts over.
+		applyStreamItem(state, snapshot({ runs: [run()], turnItems: [item(1)] }, 20));
+		expect(runItemsEvicted(state, 'old')).toBe(false);
+		expect(runItemsEvicted(state, 'run-1')).toBe(false);
+	});
+});
+
+describe('hasRunningSubagent', () => {
+	it('is true only while a subagent item is unfinished, even after its run ended', () => {
+		const state = emptyThreadState();
+		const item = (status: string) => ({
+			id: 's1',
+			runId: 'run-1',
+			ordinal: 1,
+			type: 'subagent',
+			status
+		});
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'completed' })], turnItems: [item('running')] })
+		);
+		expect(hasRunningSubagent(state)).toBe(true);
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'completed' })], turnItems: [item('completed')] }, 11)
+		);
+		expect(hasRunningSubagent(state)).toBe(false);
 	});
 });

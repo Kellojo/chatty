@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { getDb } from '../db/index.js';
 import { listEnabledMcpServers } from '../db/repo/mcp-servers.js';
 import { createLogger } from '../logger.js';
-import { connectServer } from '../mcp/clientManager.js';
+import { connectServer, withTimeout } from '../mcp/clientManager.js';
 import type { CallerContext } from '../mcp/types.js';
 import { wrapMcpTools } from './wrap.js';
 
@@ -53,10 +53,11 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		if (result.status === 'fulfilled') {
 			try {
 				closers.push(result.value.close);
-				const set = wrapMcpTools(
-					(await result.value.client.tools()) as unknown as Record<string, Tool>,
-					row.name
+				const listed = await withTimeout(
+					result.value.client.tools(),
+					`Listing tools of MCP server ${row.name}`
 				);
+				const set = wrapMcpTools(listed as unknown as Record<string, Tool>, row.name);
 				for (const [name, tool] of Object.entries(set)) {
 					if (tools[name]) {
 						log.warn(`MCP tool name collision: "${name}" from ${row.name} skipped`);

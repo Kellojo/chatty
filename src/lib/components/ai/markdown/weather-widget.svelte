@@ -14,7 +14,10 @@
 	import NavigationIcon from '@lucide/svelte/icons/navigation';
 	import UmbrellaIcon from '@lucide/svelte/icons/umbrella';
 	import ThermometerIcon from '@lucide/svelte/icons/thermometer';
-	import type { Component } from 'svelte';
+	import MapPinIcon from '@lucide/svelte/icons/map-pin';
+	import type { Component, Snippet } from 'svelte';
+	import WidgetCard from './widget-card.svelte';
+	import { mode } from 'mode-watcher';
 
 	type Daily = {
 		date: string;
@@ -138,6 +141,9 @@
 		return (((h0 + d * f) % 360) + 360) % 360;
 	}
 
+	// The ramp is tuned for dark surfaces; deepen it on light ones so values keep contrast.
+	const lightness = $derived(mode.current === 'dark' ? 0 : -0.1);
+
 	function tempColor(v: number | null | undefined): string {
 		if (v === null || v === undefined || Number.isNaN(v)) return 'var(--foreground)';
 		const t = Math.max(TEMP_STOPS[0].t, Math.min(TEMP_STOPS[TEMP_STOPS.length - 1].t, v));
@@ -146,14 +152,14 @@
 			const b = TEMP_STOPS[i + 1];
 			if (t >= a.t && t <= b.t) {
 				const f = (t - a.t) / (b.t - a.t);
-				const l = a.l + (b.l - a.l) * f;
+				const l = a.l + (b.l - a.l) * f + lightness;
 				const c = a.c + (b.c - a.c) * f;
 				const h = lerpHue(a.h, b.h, f);
 				return `oklch(${l.toFixed(3)} ${c.toFixed(3)} ${h.toFixed(1)})`;
 			}
 		}
 		const last = TEMP_STOPS[TEMP_STOPS.length - 1];
-		return `oklch(${last.l} ${last.c} ${last.h})`;
+		return `oklch(${last.l + lightness} ${last.c} ${last.h})`;
 	}
 
 	const tempUnit = $derived(data?.units?.temp ?? '°C');
@@ -162,89 +168,85 @@
 	const loc = $derived(data?.location);
 	const cur = $derived(data?.current);
 	const daily = $derived(data?.daily ?? []);
+	const today = $derived(daily[0]);
+	const place = $derived(loc?.name ?? null);
+	const region = $derived(
+		[loc?.admin1, loc?.country].filter((v) => v && v !== loc?.name).join(', ') || null
+	);
 </script>
 
-{#snippet stat(icon: Component, label: string, value: string)}
+{#snippet stat(icon: Component, label: string, value: string, extra?: Snippet)}
 	{@const Icon = icon}
-	<span
-		class="inline-flex items-center gap-1.5 rounded-full bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground"
-	>
-		<Icon class="size-3.5 text-muted-foreground" />
-		<span class="text-muted-foreground">{label}</span>
-		{value}
-	</span>
+	<div class="flex min-w-0 flex-col gap-0.5 rounded-xl bg-muted/50 px-3 py-2">
+		<span class="flex items-center gap-1.5 text-xs text-muted-foreground">
+			<Icon class="size-3.5 shrink-0" aria-hidden="true" />
+			{label}
+		</span>
+		<span class="flex items-center gap-1 text-sm font-medium tabular-nums">
+			{value}
+			{@render extra?.()}
+		</span>
+	</div>
 {/snippet}
 
-<div class="my-4 w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-	{#if !data}
-		<div class="flex items-center gap-3 p-4">
-			<CloudyIcon class="size-5 animate-pulse text-muted-foreground" />
-			<span class="text-sm text-muted-foreground">Loading weather…</span>
-		</div>
-	{:else}
+<WidgetCard
+	icon={MapPinIcon}
+	status={data ? 'ready' : isIncomplete ? 'loading' : 'error'}
+	loadingLabel="Loading weather…"
+	errorLabel="Could not render weather"
+	skeletonClass="h-56"
+	raw={code}
+	title={place}
+	subtitle={region}
+	divided={false}
+>
+	{#if data}
 		{@const cond = condition(cur?.code)}
 		{@const CondIcon = cond.icon}
-		<!-- Hero -->
-		<div class="flex items-start justify-between gap-3 p-4 pb-3">
-			<div class="flex items-center gap-3">
-				<CondIcon
-					class="size-12 shrink-0"
-					stroke-width={1.5}
-					style="color: {tempColor(cur?.temp)}"
-				/>
-				<div class="flex flex-col">
-					<div class="flex items-start gap-1">
-						<span
-							class="text-5xl leading-none font-semibold tracking-tight"
-							style="color: {tempColor(cur?.temp)}">{round(cur?.temp)}</span
-						>
-						<span class="mt-0.5 text-xl leading-none text-muted-foreground">{tempUnit}</span>
-					</div>
-					<span class="mt-1 text-sm text-muted-foreground">{cond.label}</span>
+		<!-- Now -->
+		<div class="flex items-center gap-4 px-4 {place ? 'pt-1' : 'pt-4'} pb-4">
+			<CondIcon
+				class="size-14 shrink-0"
+				stroke-width={1.25}
+				style="color: {tempColor(cur?.temp)}"
+				aria-hidden="true"
+			/>
+			<div class="flex min-w-0 flex-col">
+				<div class="flex items-start">
+					<span
+						class="text-5xl leading-none font-semibold tracking-tight tabular-nums"
+						style="color: {tempColor(cur?.temp)}">{round(cur?.temp)}</span
+					>
+					<span class="mt-1 ml-0.5 text-lg leading-none text-muted-foreground">{tempUnit}</span>
 				</div>
+				<span class="mt-1.5 text-sm text-muted-foreground">
+					{cond.label}{#if today}<span class="tabular-nums">
+							&nbsp;· H {round(today.tmax)}° L {round(today.tmin)}°</span
+						>{/if}
+				</span>
 			</div>
-			{#if loc?.name}
-				<div class="flex flex-col items-end text-right">
-					<span class="text-sm font-medium text-foreground">{loc.name}</span>
-					{#if loc.country}
-						<span class="text-xs text-muted-foreground"
-							>{[loc.admin1, loc.country].filter(Boolean).join(', ')}</span
-						>
-					{/if}
-				</div>
-			{/if}
 		</div>
 
-		<!-- Stat chips -->
-		<div class="flex flex-wrap gap-1.5 px-4 pb-3">
-			{@render stat(ThermometerIcon, 'Feels', `${round(cur?.feels)}${tempUnit}`)}
+		<!-- Current details -->
+		<div class="grid grid-cols-2 gap-2 px-4 pb-4 sm:grid-cols-4">
+			{@render stat(ThermometerIcon, 'Feels like', `${round(cur?.feels)}${tempUnit}`)}
 			{@render stat(DropletsIcon, 'Humidity', `${round(cur?.humidity)}%`)}
-			<span
-				class="inline-flex items-center gap-1.5 rounded-full bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground"
-			>
-				<WindIcon class="size-3.5 text-muted-foreground" />
-				{round(cur?.wind)}{windUnit}
-				{#if cur?.windDir !== null && cur?.windDir !== undefined}
-					<NavigationIcon
-						class="size-3 text-muted-foreground"
-						style="transform: rotate({(cur.windDir + 180) % 360}deg)"
-					/>
-				{/if}
-			</span>
-			{@render stat(UmbrellaIcon, 'Precip', `${round1(cur?.precip)}${precipUnit}`)}
+			{@render stat(WindIcon, 'Wind', `${round(cur?.wind)} ${windUnit}`, windArrow)}
+			{@render stat(UmbrellaIcon, 'Precipitation', `${round1(cur?.precip)} ${precipUnit}`)}
 		</div>
 
-		<!-- 7-day strip -->
+		<!-- Daily forecast -->
 		{#if daily.length > 0}
-			<div class="overflow-x-auto border-t border-border/60">
-				<div class="flex w-full px-2 py-2">
+			<div class="[scrollbar-width:none] overflow-x-auto border-t border-border/60">
+				<ul class="flex w-full gap-0.5 p-2" aria-label="Daily forecast">
 					{#each daily as day, i (day.date)}
 						{@const dc = condition(day.code)}
 						{@const DayIcon = dc.icon}
 						{@const isToday = i === 0}
-						<div
-							class="flex min-w-22 flex-1 flex-col items-center gap-1 rounded-lg px-1 py-2 text-center {isToday
-								? 'bg-primary/5 ring-1 ring-primary/15 dark:bg-primary/10'
+						{@const rain = (day.precipProb ?? 0) > 0}
+						<li
+							class="flex min-w-11 flex-1 flex-col items-center gap-1.5 rounded-xl px-1 py-2 text-center {isToday
+								? 'bg-muted/60'
 								: ''}"
 						>
 							<span
@@ -252,31 +254,35 @@
 									? 'font-semibold text-foreground'
 									: 'font-medium text-muted-foreground'}">{dayLabel(day.date, i)}</span
 							>
-							<DayIcon class="size-5 {isToday ? 'text-foreground' : 'text-muted-foreground'}" />
-							<span class="text-sm font-semibold tabular-nums" style="color: {tempColor(day.tmax)}"
-								>{round(day.tmax)}°</span
-							>
-							<span class="text-xs tabular-nums" style="color: {tempColor(day.tmin)}"
-								>{round(day.tmin)}°</span
-							>
-							<span
-								class="flex items-center gap-0.5 text-[10px] leading-none {day.precipProb !==
-									null &&
-								day.precipProb !== undefined &&
-								day.precipProb > 0
-									? 'text-sky-600 dark:text-sky-400'
-									: 'text-transparent'}"
-							>
-								<DropletsIcon class="size-2.5" />{day.precipProb !== null &&
-								day.precipProb !== undefined &&
-								day.precipProb > 0
-									? `${round(day.precipProb)}%`
-									: '0%'}
+							<DayIcon class="size-5 text-muted-foreground" aria-label={dc.label} />
+							<span class="flex flex-col items-center leading-tight tabular-nums">
+								<span class="text-sm font-semibold" style="color: {tempColor(day.tmax)}"
+									>{round(day.tmax)}°</span
+								>
+								<span class="text-xs text-muted-foreground">{round(day.tmin)}°</span>
 							</span>
-						</div>
+							<span
+								class="flex h-3 items-center gap-0.5 text-[11px] leading-none text-sky-600 tabular-nums dark:text-sky-400 {rain
+									? ''
+									: 'invisible'}"
+								aria-hidden={!rain}
+							>
+								<DropletsIcon class="size-2.5" aria-hidden="true" />{round(day.precipProb)}%
+							</span>
+						</li>
 					{/each}
-				</div>
+				</ul>
 			</div>
 		{/if}
 	{/if}
-</div>
+</WidgetCard>
+
+{#snippet windArrow()}
+	{#if cur?.windDir !== null && cur?.windDir !== undefined}
+		<NavigationIcon
+			class="size-3 text-muted-foreground"
+			style="transform: rotate({(cur.windDir + 180) % 360}deg)"
+			aria-label="Wind from {Math.round(cur.windDir)}°"
+		/>
+	{/if}
+{/snippet}

@@ -35,7 +35,7 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { authClient } from '$lib/auth-client.js';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
-	import { serverActiveChatIds } from '$lib/state/chat-status.svelte.js';
+	import { serverActiveChats } from '$lib/state/chat-status.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
 	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
 	import { formatCount } from '$lib/formats.js';
@@ -196,14 +196,16 @@
 	async function refreshActiveChats() {
 		const res = await fetch('/api/chat/active');
 		if (!res.ok) return;
-		const { conversationIds } = (await res.json()) as { conversationIds: string[] };
-		const next = new Set(conversationIds);
+		const { streams } = (await res.json()) as {
+			streams: Array<{ conversationId: string; startedAt: number }>;
+		};
+		const next = new Map(streams.map((s) => [s.conversationId, s.startedAt]));
 		let completed = false;
-		for (const id of serverActiveChatIds) {
+		for (const id of serverActiveChats.keys()) {
 			if (!next.has(id)) completed = true;
 		}
-		serverActiveChatIds.clear();
-		for (const id of next) serverActiveChatIds.add(id);
+		serverActiveChats.clear();
+		for (const [id, startedAt] of next) serverActiveChats.set(id, startedAt);
 		if (completed) await invalidateWhenIdle();
 	}
 
@@ -238,10 +240,10 @@
 		const offEvents = onServerEvent((event) => {
 			switch (event.type) {
 				case 'chat.stream.started':
-					serverActiveChatIds.add(event.conversationId);
+					serverActiveChats.set(event.conversationId, event.startedAt ?? Date.now());
 					break;
 				case 'chat.stream.finished':
-					serverActiveChatIds.delete(event.conversationId);
+					serverActiveChats.delete(event.conversationId);
 					scheduleInvalidate();
 					break;
 				case 'chat.created':
@@ -408,7 +410,7 @@
 		const status = c.coding?.status;
 		if (
 			activeChats.has(c.id) ||
-			serverActiveChatIds.has(c.id) ||
+			serverActiveChats.has(c.id) ||
 			status === 'running' ||
 			status === 'starting'
 		)
@@ -492,6 +494,7 @@
 		!settled && (state === 'needs-you' || state === 'failed' || state === 'unread')}
 	{@const codingStatus = c.coding ? CODING_STATUS[c.coding.status] : undefined}
 	{@const stateLabel = ROW_STATE_LABEL[state]}
+	{@const chatStartedAt = serverActiveChats.get(c.id)}
 	<div
 		class="group mb-0.5 flex w-full items-start rounded-md text-sm {c.id === currentId
 			? 'bg-accent text-accent-foreground'
@@ -535,6 +538,14 @@
 							<span class="shrink-0" aria-hidden="true">·</span>
 							<span class="shrink-0 {codingStatus.tone}">{codingStatus.label}</span>
 						{/if}
+					</span>
+				{:else if state === 'working' && chatStartedAt}
+					<span class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+						<span class="truncate" aria-hidden="true">Working</span>
+						<span class="shrink-0" aria-hidden="true">·</span>
+						<span class="shrink-0" aria-hidden="true">
+							<CodingRunTimer startedAt={chatStartedAt} dot={false} />
+						</span>
 					</span>
 				{/if}
 			</span>

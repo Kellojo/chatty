@@ -75,9 +75,15 @@ describe('GET /api/chat/active', () => {
 	it('returns the id of an active stream on an owned conversation', async () => {
 		const conversation = createConversation(getDb(), 'u1', {});
 		register(conversation.id);
-		const res = await call<{ conversationIds: string[] }>(GET, { user: u1 });
+		const res = await call<{
+			conversationIds: string[];
+			streams: Array<{ conversationId: string; startedAt: number }>;
+		}>(GET, { user: u1 });
 		expect(res.status).toBe(200);
 		expect(res.body.conversationIds).toEqual([conversation.id]);
+		expect(res.body.streams).toEqual([
+			{ conversationId: conversation.id, startedAt: expect.any(Number) }
+		]);
 	});
 
 	it("omits streams on another user's conversation", async () => {

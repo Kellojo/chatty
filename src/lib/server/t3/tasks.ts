@@ -427,8 +427,50 @@ export async function startCodingTurn(
 	return createStreamReplayResponse(coding.conversation_id) ?? new Response(null, { status: 204 });
 }
 
+/** Tail of each conversation's chain of turns being sent (see `sendCodingTurn`). */
+const turnChains = new Map<string, Promise<void>>();
+
+/**
+ * Runs `fn` after every earlier call for the same conversation has settled, so
+ * two messages sent at once can't both launch a thread.
+ */
+async function serializedByConversation<T>(
+	conversationId: string,
+	fn: () => Promise<T>
+): Promise<T> {
+	const previous = turnChains.get(conversationId) ?? Promise.resolve();
+	const result = previous.then(fn);
+	const tail = result.then(
+		() => undefined,
+		() => undefined
+	);
+	turnChains.set(conversationId, tail);
+	try {
+		return await result;
+	} finally {
+		if (turnChains.get(conversationId) === tail) turnChains.delete(conversationId);
+	}
+}
+
 /** Launches the thread on the first message, otherwise sends a follow-up. */
-async function sendCodingTurn(
+function sendCodingTurn(
+	userId: string,
+	coding: CodingConversationRow,
+	message: { id: string; text: string },
+	db: Db
+): Promise<void> {
+	return serializedByConversation(coding.conversation_id, () =>
+		// Re-read: a turn sent just before may have launched the thread.
+		sendCodingTurnNow(
+			userId,
+			getCodingConversation(db, coding.conversation_id) ?? coding,
+			message,
+			db
+		)
+	);
+}
+
+async function sendCodingTurnNow(
 	userId: string,
 	coding: CodingConversationRow,
 	message: { id: string; text: string },
@@ -487,6 +529,12 @@ async function sendCodingTurn(
 	void follower.follow();
 }
 
+/**
+ * Last request answered (or being answered) per conversation. One entry per
+ * conversation; a new pending request has a new id, so it never blocks one.
+ */
+const respondedRequests = new Map<string, string>();
+
 export async function respondToCodingRequest(
 	userId: string,
 	conversationId: string,
@@ -508,6 +556,12 @@ export async function respondToCodingRequest(
 		throw new CodingTaskError(409, 'The coding environment for this task was removed');
 	}
 	const env = requireEnvironment(db, userId, coding.environment_id);
+	// A double click must not answer the same request twice: the stored
+	// request only clears once T3 reports it resolved.
+	if (respondedRequests.get(conversationId) === pending.requestId) {
+		throw new CodingTaskError(409, 'This request was already answered or has expired');
+	}
+	respondedRequests.set(conversationId, pending.requestId);
 	const follower = ensureFollower({
 		conversationId,
 		userId,
@@ -535,9 +589,57 @@ export async function respondToCodingRequest(
 			});
 		}
 	} catch (e) {
+		// Not sent: let the user try again.
+		if (respondedRequests.get(conversationId) === pending.requestId) {
+			respondedRequests.delete(conversationId);
+		}
 		throw asTaskError(e, 'Could not send the answer to the coding agent');
 	}
 	void follower.follow();
+}
+
+/**
+ * Interrupts the run active on a task's thread straight on T3, for when no
+ * follower here streams it (e.g. it gave up, or the server restarted).
+ * Best-effort: failures are logged, never thrown.
+ */
+export async function interruptCodingTaskRemotely(
+	userId: string,
+	conversationId: string,
+	db: Db = getDb()
+): Promise<void> {
+	try {
+		const coding = getCodingConversation(db, conversationId);
+		if (!coding?.thread_id || !coding.environment_id) return;
+		const env = getCodingEnvironment(db, userId, coding.environment_id);
+		if (!env || env.enabled !== 1) return;
+		const shell = rec(
+			await t3HttpGet(
+				env.base_url,
+				decryptSecret(env.token_enc),
+				'/api/orchestration/shell?omitIdleSubagents=1'
+			)
+		);
+		const thread = (Array.isArray(shell?.threads) ? shell.threads : [])
+			.map(rec)
+			.find((t) => t?.id === coding.thread_id);
+		const runId = thread?.activeRunId;
+		if (typeof runId !== 'string' || !runId) return;
+		await withConnection(env, (conn) =>
+			conn.call('orchestration.dispatchCommand', {
+				type: 'run.interrupt',
+				commandId: randomUUID(),
+				threadId: coding.thread_id,
+				runId,
+				holdQueue: true
+			})
+		);
+	} catch (e) {
+		log.warn('Could not interrupt the coding agent', {
+			conversationId,
+			error: e instanceof Error ? e.message : String(e)
+		});
+	}
 }
 
 /** Re-attaches to tasks that were still working when the server stopped. */

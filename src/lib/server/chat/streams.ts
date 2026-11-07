@@ -6,6 +6,8 @@ const MAX_CHUNKS = 20_000;
 
 interface ActiveStream {
 	controller: AbortController;
+	/** When the turn started (ms), for the sidebar's "running for" timer. */
+	startedAt: number;
 	chunks: UIMessageChunk[];
 	// Set once the replay buffer outgrew MAX_CHUNKS. An incomplete replay would
 	// hand reconnecting clients a message with a hole in it, so replay is then
@@ -30,6 +32,7 @@ export function registerStream(conversationId: string, controller: AbortControll
 	const released = new Promise<void>((resolve) => (release = resolve));
 	const stream: ActiveStream = {
 		controller,
+		startedAt: Date.now(),
 		chunks: [],
 		overflowed: false,
 		listeners: new Set(),
@@ -115,6 +118,15 @@ export function pushChunk(chunks: UIMessageChunk[], chunk: UIMessageChunk): void
 			};
 			return;
 		}
+		// A running tool's input re-sent (e.g. subagent progress): only the latest counts.
+		if (
+			chunk.type === 'tool-input-available' &&
+			last.type === 'tool-input-available' &&
+			last.toolCallId === chunk.toolCallId
+		) {
+			chunks[chunks.length - 1] = { ...chunk };
+			return;
+		}
 	}
 	chunks.push(chunk);
 }
@@ -160,6 +172,15 @@ export function releaseStream(conversationId: string, controller: AbortControlle
 
 export function listActiveStreamIds(): string[] {
 	return [...streams.keys()];
+}
+
+/** Active streams with their start times (ms). */
+export function listActiveStreams(): Array<{ conversationId: string; startedAt: number }> {
+	return [...streams].map(([conversationId, s]) => ({ conversationId, startedAt: s.startedAt }));
+}
+
+export function getStreamStartedAt(conversationId: string): number | null {
+	return streams.get(conversationId)?.startedAt ?? null;
 }
 
 export function hasActiveStream(conversationId: string): boolean {

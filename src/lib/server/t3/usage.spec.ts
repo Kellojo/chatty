@@ -128,6 +128,11 @@ describe('dayInZone', () => {
 		expect(dayInZone(ms, 'UTC')).toBe('2026-11-07');
 		expect(dayInZone(ms, 'Europe/Berlin')).toBe('2026-11-08');
 	});
+
+	it('falls back to UTC for an unknown time zone', () => {
+		const ms = Date.parse('2026-11-07T23:30:00.000Z');
+		expect(dayInZone(ms, 'Not/AZone')).toBe('2026-11-07');
+	});
 });
 
 describe('describeFailureCause', () => {

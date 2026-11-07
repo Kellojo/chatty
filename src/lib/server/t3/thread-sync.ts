@@ -17,9 +17,11 @@ import {
 	importCodingConversation,
 	listKnownThreadIds,
 	listThreadCodingConversations,
-	relinkOrphanedThreads
+	relinkOrphanedThreads,
+	updateCodingConversation
 } from '../db/repo/coding-conversations.js';
 import {
+	getCodingEnvironment,
 	listEnabledCodingEnvironments,
 	type CodingEnvironmentRow
 } from '../db/repo/coding-environments.js';
@@ -201,20 +203,55 @@ function importThreads(db: Db, env: CodingEnvironmentRow, shell: unknown): void 
 /** Tasks whose change size was already requested by this process (one try each). */
 const diffBackfilled = new Set<string>();
 
-function followActiveThreads(db: Db, env: CodingEnvironmentRow, shell: Rec | null): void {
+/** Statuses only a follower moves on from; without one, the stored value may be stale. */
+const ACTIVE_STATUSES: ReadonlySet<CodingTaskStatus> = new Set([
+	'starting',
+	'running',
+	'awaiting_input'
+]);
+
+const MISSING_THREAD_ERROR = 'The coding thread no longer exists on the coding machine';
+
+/**
+ * Follows tasks among `threads` (T3 thread shells) that need it: their thread
+ * is running or waiting on T3, their stored status still says active although
+ * nothing follows them (e.g. a follower gave up, or the server restarted
+ * mid-run), or their change size is missing. With `onlyListed`, tasks whose
+ * thread isn't among `threads` are left alone (live updates carry one thread).
+ *
+ * `knownThreadIds` (every thread T3 has, archived ones included) lets the full
+ * pass end tasks still marked active whose thread is gone on T3: no follower
+ * could ever move them on, so following them would only retry forever.
+ */
+function followThreads(
+	db: Db,
+	env: CodingEnvironmentRow,
+	threads: unknown[],
+	{
+		onlyListed = false,
+		knownThreadIds
+	}: { onlyListed?: boolean; knownThreadIds?: Set<string> } = {}
+): void {
+	const listed = new Set<string>();
 	const active = new Set<string>();
-	for (const entry of Array.isArray(shell?.threads) ? shell.threads : []) {
+	for (const entry of threads) {
 		const t = rec(entry);
-		if (t && typeof t.id === 'string' && (str(t.activeRunId) || rec(t.pendingRuntimeRequest))) {
-			active.add(t.id);
-		}
+		if (!t || typeof t.id !== 'string') continue;
+		listed.add(t.id);
+		if (str(t.activeRunId) || rec(t.pendingRuntimeRequest)) active.add(t.id);
 	}
 	let started = 0;
 	for (const row of listThreadCodingConversations(db, env.id)) {
 		if (started >= MAX_IMPORTS_PER_PASS) break;
 		if (getFollower(row.conversation_id)) continue;
+		if (onlyListed && !listed.has(row.thread_id!)) continue;
 		const needsDiff = row.diff_insertions === null && !diffBackfilled.has(row.conversation_id);
-		if (!active.has(row.thread_id!) && !needsDiff) continue;
+		const staleStatus = ACTIVE_STATUSES.has(row.status);
+		if (staleStatus && knownThreadIds && !knownThreadIds.has(row.thread_id!)) {
+			endMissingThreadTask(db, row);
+			continue;
+		}
+		if (!active.has(row.thread_id!) && !staleStatus && !needsDiff) continue;
 		diffBackfilled.add(row.conversation_id);
 		started++;
 		void ensureFollower({
@@ -251,12 +288,74 @@ async function reconcileThreadStates(db: Db, env: CodingEnvironmentRow, threads:
 	for (const [userId, ids] of toPush) await pushThreadState(db, userId, ids);
 }
 
+/** Ends a task still marked active whose thread no longer exists on T3. */
+function endMissingThreadTask(
+	db: Db,
+	row: { conversation_id: string; user_id: string; thread_id: string | null }
+): void {
+	log.warn('Ending a coding task whose thread is gone on T3', {
+		conversationId: row.conversation_id,
+		threadId: row.thread_id
+	});
+	updateCodingConversation(db, row.conversation_id, {
+		status: 'failed',
+		pendingRequest: null,
+		runStartedAt: null,
+		lastError: MISSING_THREAD_ERROR
+	});
+	publishServerEvent(row.user_id, {
+		type: 'coding.task.updated',
+		conversationId: row.conversation_id
+	});
+	// Settles a coding agent run waiting on this task.
+	publishServerEvent(row.user_id, {
+		type: 'coding.thread.finished',
+		conversationId: row.conversation_id,
+		status: 'failed',
+		branch: null,
+		prUrl: null
+	});
+}
+
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
-export async function syncAllThreads(db: Db = getDb()): Promise<void> {
+/** Ids of every thread in a T3 shell, or null when the shell has no thread lists. */
+function shellThreadIds(shell: Rec | null): Set<string> | null {
+	if (!Array.isArray(shell?.threads) || !Array.isArray(shell?.archivedThreads)) return null;
+	const ids = new Set<string>();
+	for (const entry of [...shell.threads, ...shell.archivedThreads]) {
+		const t = rec(entry);
+		if (t && typeof t.id === 'string') ids.add(t.id);
+	}
+	return ids;
+}
+
+/**
+ * Whether `env` (read before an await) is still enabled with the same URL and
+ * token, so work done with it doesn't revive followers on old credentials.
+ */
+function isCurrentEnvironment(db: Db, env: CodingEnvironmentRow): boolean {
+	const current = getCodingEnvironment(db, env.user_id, env.id);
+	return (
+		current?.enabled === 1 &&
+		current.base_url === env.base_url &&
+		current.token_enc === env.token_enc
+	);
+}
+
+/** Lets `stopThreadSync` cut short a pass that is still running (shutdown). */
+export interface ThreadSyncPass {
+	cancelled: boolean;
+}
+
+export async function syncAllThreads(
+	db: Db = getDb(),
+	pass: ThreadSyncPass = { cancelled: false }
+): Promise<void> {
 	const envs = listEnabledCodingEnvironments(db);
 	syncShellWatchers(db, envs);
 	for (const env of envs) {
+		if (pass.cancelled) return;
 		let shell: Rec | null;
 		try {
 			shell = rec(
@@ -273,9 +372,14 @@ export async function syncAllThreads(db: Db = getDb()): Promise<void> {
 			});
 			continue;
 		}
+		if (pass.cancelled) return;
+		// The environment may have been disabled, edited or removed meanwhile.
+		if (!isCurrentEnvironment(db, env)) continue;
 		try {
 			importThreads(db, env, shell);
-			followActiveThreads(db, env, shell);
+			followThreads(db, env, list(shell?.threads), {
+				knownThreadIds: shellThreadIds(shell) ?? undefined
+			});
 			await reconcileThreadStates(db, env, [
 				...list(shell?.threads),
 				...list(shell?.archivedThreads)
@@ -367,7 +471,14 @@ class ShellWatcher {
 		const item = rec(value);
 		// Snapshots (on connect) are left to the periodic pass.
 		if (item?.kind !== 'thread.updated' || !rec(item.thread)) return;
-		reconcileThreadStates(this.db, this.env, [item.thread]).catch((e) =>
+		// A run started on T3 (or finished there) shows up right away rather
+		// than on the next periodic pass; the follower keeps the status current.
+		const sync = async () => {
+			if (this.stopped || !isCurrentEnvironment(this.db, this.env)) return;
+			followThreads(this.db, this.env, [item.thread], { onlyListed: true });
+			await reconcileThreadStates(this.db, this.env, [item.thread]);
+		};
+		sync().catch((e) =>
 			log.error('Live thread sync failed', {
 				environmentId: this.env.id,
 				error: e instanceof Error ? e.message : String(e)
@@ -419,6 +530,7 @@ function syncShellWatchers(db: Db, envs: readonly CodingEnvironmentRow[]): void 
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
+let currentPass: ThreadSyncPass | null = null;
 
 /**
  * Re-applies the live thread watch right after an environment was edited or
@@ -434,9 +546,18 @@ export function startThreadSync(db: Db = getDb()): void {
 	const tick = () => {
 		if (running) return;
 		running = true;
-		syncAllThreads(db).finally(() => {
-			running = false;
-		});
+		const pass: ThreadSyncPass = { cancelled: false };
+		currentPass = pass;
+		syncAllThreads(db, pass)
+			.catch((e) =>
+				log.error('Thread sync failed', {
+					error: e instanceof Error ? e.message : String(e)
+				})
+			)
+			.finally(() => {
+				running = false;
+				if (currentPass === pass) currentPass = null;
+			});
 	};
 	tick();
 	timer = setInterval(tick, THREAD_SYNC_INTERVAL_MS);
@@ -446,6 +567,8 @@ export function startThreadSync(db: Db = getDb()): void {
 export function stopThreadSync(): void {
 	if (timer) clearInterval(timer);
 	timer = null;
+	if (currentPass) currentPass.cancelled = true;
+	currentPass = null;
 	for (const watcher of watchers.values()) watcher.stop();
 	watchers.clear();
 }

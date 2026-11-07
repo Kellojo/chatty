@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentCodingTarget } from '$lib/coding-environments.js';
 
 const launchCodingTask = vi.fn();
+const interruptCodingTaskRemotely = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 vi.mock('../t3/tasks.js', () => ({
 	MAX_LAUNCH_PROMPT: 20_000,
 	launchCodingTask: (...args: unknown[]) => launchCodingTask(...args),
+	interruptCodingTaskRemotely: (...args: unknown[]) => interruptCodingTaskRemotely(...args),
 	resolveCodingTarget: vi.fn()
 }));
 const abortStream = vi.fn();
@@ -45,6 +47,7 @@ beforeEach(() => {
 	).run();
 	launchCodingTask.mockReset();
 	abortStream.mockReset();
+	interruptCodingTaskRemotely.mockClear();
 	published.length = 0;
 });
 
@@ -228,8 +231,25 @@ describe('stopCodingAgentRun', () => {
 			trigger: 'manual',
 			conversationId
 		});
+		abortStream.mockReturnValue(true);
 		expect(stopCodingAgentRun(run.id, db)).toBe(true);
 		expect(abortStream).toHaveBeenCalledWith(conversationId);
+		expect(interruptCodingTaskRemotely).not.toHaveBeenCalled();
+		expect(getAgentRun(db, run.id)).toMatchObject({ status: 'failed', error: 'Stopped by user' });
+	});
+
+	it('interrupts the remote run directly when nothing streams it here', () => {
+		const agent = seedCodingAgent();
+		const conversationId = seedCodingConversation();
+		const run = createAgentRun(db, {
+			agentId: agent.id,
+			userId: 'u1',
+			trigger: 'manual',
+			conversationId
+		});
+		abortStream.mockReturnValue(false);
+		expect(stopCodingAgentRun(run.id, db)).toBe(true);
+		expect(interruptCodingTaskRemotely).toHaveBeenCalledWith('u1', conversationId, db);
 		expect(getAgentRun(db, run.id)).toMatchObject({ status: 'failed', error: 'Stopped by user' });
 	});
 

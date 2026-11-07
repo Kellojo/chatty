@@ -63,6 +63,7 @@ import { maybeCompactConversation } from './compact.js';
 import {
 	abortStreamAndWait,
 	appendChunk,
+	getStreamStartedAt,
 	markDone,
 	registerStream,
 	releaseStream
@@ -396,7 +397,11 @@ export async function handleChatRequest(
 
 	const controller = new AbortController();
 	registerStream(conversation.id, controller);
-	publishServerEvent(userId, { type: 'chat.stream.started', conversationId: conversation.id });
+	publishServerEvent(userId, {
+		type: 'chat.stream.started',
+		conversationId: conversation.id,
+		startedAt: getStreamStartedAt(conversation.id) ?? Date.now()
+	});
 
 	// The assistant message exists from the start and is filled incrementally by
 	// consumeStreamCopy, so a reload mid-stream never sees a gap.

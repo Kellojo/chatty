@@ -2,7 +2,7 @@
 	import { formatElapsed } from '$lib/formats.js';
 	import { now } from '$lib/state/now.svelte.js';
 
-	/** Live "running for" timer for a coding task's agent run. */
+	/** Live "running for" timer for an agent run (coding task or chat reply). */
 	let {
 		startedAt,
 		dot = true,
@@ -14,7 +14,7 @@
 
 <span
 	class="inline-flex shrink-0 items-center gap-1.5 text-xs tabular-nums {className}"
-	title="Agent running for {elapsed}"
+	title="Running for {elapsed}"
 >
 	{#if dot}
 		<span

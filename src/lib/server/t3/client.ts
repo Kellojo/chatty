@@ -16,6 +16,8 @@ import { isLinkLocalOrReserved, linkLocalGuardedAgent } from '../net/safeFetch.j
 export const ORCHESTRATION_PROTOCOL_VERSION = 2;
 
 const HTTP_TIMEOUT_MS = 10_000;
+/** Binary downloads (images up to tens of MB) get longer than JSON calls. */
+const BINARY_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 const CALL_TIMEOUT_MS = 60_000;
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
@@ -46,7 +48,11 @@ function str(value: unknown): string | null {
 	return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+async function fetchWithTimeout(
+	url: string,
+	init: RequestInit = {},
+	timeoutMs = HTTP_TIMEOUT_MS
+): Promise<Response> {
 	const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
 	// The URL is user-configured. T3 servers legitimately live on loopback/LAN/
 	// tailnet addresses, but never on link-local (cloud metadata) ranges.
@@ -57,7 +63,7 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Re
 		return await fetch(url, {
 			...init,
 			redirect: 'error',
-			signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+			signal: AbortSignal.timeout(timeoutMs),
 			// undici-specific option honoured by Node's built-in fetch.
 			dispatcher: linkLocalGuardedAgent
 		} as RequestInit);
@@ -67,25 +73,48 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Re
 	}
 }
 
-/** Parses a JSON body, refusing (and cancelling) bodies over `MAX_BODY_BYTES`. */
-async function readJson(res: Response): Promise<unknown> {
+/**
+ * Reads a whole body, refusing (and cancelling) bodies over `maxBytes`. A
+ * timeout or reset mid-body surfaces as an `unreachable` {@link T3ClientError}.
+ */
+async function readBody(res: Response, maxBytes: number, tooLarge: string): Promise<Buffer> {
 	const declared = Number(res.headers.get('content-length'));
-	if (declared > MAX_BODY_BYTES) {
-		await res.body?.cancel();
-		throw new T3ClientError('Response too large', 'remote');
+	if (declared > maxBytes) {
+		await res.body?.cancel().catch(() => {});
+		throw new T3ClientError(tooLarge, 'remote');
 	}
-	if (!res.body) return null;
+	if (!res.body) return Buffer.alloc(0);
 	const chunks: Uint8Array[] = [];
 	let size = 0;
-	for await (const chunk of res.body) {
-		size += chunk.byteLength;
-		if (size > MAX_BODY_BYTES) {
-			await res.body.cancel().catch(() => {});
-			throw new T3ClientError('Response too large', 'remote');
+	try {
+		for await (const chunk of res.body) {
+			size += chunk.byteLength;
+			if (size > maxBytes) {
+				await res.body.cancel().catch(() => {});
+				throw new T3ClientError(tooLarge, 'remote');
+			}
+			chunks.push(chunk);
 		}
-		chunks.push(chunk);
+	} catch (e) {
+		if (e instanceof T3ClientError) throw e;
+		const reason = e instanceof Error && e.name === 'TimeoutError' ? 'timed out' : 'failed';
+		throw new T3ClientError(`Reading the response ${reason}`, 'unreachable');
 	}
-	return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+	return Buffer.concat(chunks);
+}
+
+/** Parses a JSON body; anything else (e.g. a proxy's HTML page) is `incompatible`. */
+async function readJson(res: Response): Promise<unknown> {
+	if (!res.body) return null;
+	const text = (await readBody(res, MAX_BODY_BYTES, 'Response too large')).toString('utf8');
+	try {
+		return JSON.parse(text);
+	} catch {
+		throw new T3ClientError(
+			'Unexpected response (not JSON) — is this URL a T3 Code server?',
+			'incompatible'
+		);
+	}
 }
 
 export async function fetchEnvironmentDescriptor(baseUrl: string): Promise<EnvironmentDescriptor> {
@@ -221,6 +250,11 @@ export interface T3Stream {
 }
 
 const PING_INTERVAL_MS = 15_000;
+/**
+ * T3 answers every Ping with a Pong, so a socket silent for this long is dead
+ * (laptop asleep, NAT or tailnet dropped it) even though no close event came.
+ */
+export const SILENCE_TIMEOUT_MS = 3 * PING_INTERVAL_MS;
 
 /** A single authenticated RPC socket. Create with {@link connectT3}, always `close()`. */
 export class T3Connection {
@@ -230,9 +264,13 @@ export class T3Connection {
 	private readonly closeListeners = new Set<(error: Error) => void>();
 	private closedError: Error | null = null;
 	private readonly pingTimer: ReturnType<typeof setInterval>;
+	private lastReceivedAt = Date.now();
 
 	constructor(private readonly ws: WebSocket) {
-		ws.addEventListener('message', (event) => this.onMessage(event.data));
+		ws.addEventListener('message', (event) => {
+			this.lastReceivedAt = Date.now();
+			this.onMessage(event.data);
+		});
 		ws.addEventListener('close', () =>
 			this.failAll(new T3ClientError('Connection closed', 'remote'))
 		);
@@ -240,7 +278,13 @@ export class T3Connection {
 			this.failAll(new T3ClientError('Connection error', 'remote'))
 		);
 		// Keeps idle sockets (and proxies in between) from timing out.
-		this.pingTimer = setInterval(() => this.send({ _tag: 'Ping' }), PING_INTERVAL_MS);
+		this.pingTimer = setInterval(() => {
+			if (Date.now() - this.lastReceivedAt >= SILENCE_TIMEOUT_MS) {
+				this.failAll(new T3ClientError('The coding machine stopped responding', 'unreachable'));
+				return;
+			}
+			this.send({ _tag: 'Ping' });
+		}, PING_INTERVAL_MS);
 		this.pingTimer.unref?.();
 	}
 
@@ -302,12 +346,6 @@ export class T3Connection {
 
 	close(): void {
 		this.failAll(new T3ClientError('Connection closed', 'remote'));
-		clearInterval(this.pingTimer);
-		try {
-			this.ws.close(1000);
-		} catch {
-			// already closed
-		}
 	}
 
 	private send(message: unknown): void {
@@ -399,10 +437,27 @@ export class T3Connection {
 		}
 		for (const [key, stream] of this.streams) {
 			this.streams.delete(key);
-			stream.onEnd(error);
+			try {
+				stream.onEnd(error);
+			} catch {
+				// A consumer bug must not keep other streams from ending.
+			}
 		}
 		if (first) {
-			for (const listener of this.closeListeners) listener(error);
+			// Failures reported in-band (Defect, protocol error) leave the socket
+			// open; nothing uses it after this, so don't leak it.
+			try {
+				this.ws.close(1000);
+			} catch {
+				// already closed
+			}
+			for (const listener of this.closeListeners) {
+				try {
+					listener(error);
+				} catch {
+					// Same as above: every listener must hear about the close.
+				}
+			}
 			this.closeListeners.clear();
 		}
 	}
@@ -422,27 +477,22 @@ export async function t3FetchBinary(
 	path: string,
 	maxBytes: number
 ): Promise<{ contentType: string; bytes: Uint8Array } | null> {
-	const res = await fetchWithTimeout(joinUrl(baseUrl, path), {
-		headers: { authorization: `Bearer ${token}` }
-	});
+	const res = await fetchWithTimeout(
+		joinUrl(baseUrl, path),
+		{ headers: { authorization: `Bearer ${token}` } },
+		BINARY_TIMEOUT_MS
+	);
 	if (res.status === 404) return null;
 	if (res.status === 401 || res.status === 403) {
 		throw new T3ClientError('Access token was rejected or lacks permission', 'unauthorized');
 	}
-	if (!res.ok || !res.body) throw new T3ClientError(`Request failed (${res.status})`, 'remote');
-	const chunks: Uint8Array[] = [];
-	let size = 0;
-	for await (const chunk of res.body) {
-		size += chunk.byteLength;
-		if (size > maxBytes) {
-			await res.body.cancel().catch(() => {});
-			throw new T3ClientError('File too large', 'remote');
-		}
-		chunks.push(chunk);
+	if (!res.ok || !res.body) {
+		await res.body?.cancel().catch(() => {});
+		throw new T3ClientError(`Request failed (${res.status})`, 'remote');
 	}
 	return {
 		contentType: res.headers.get('content-type') ?? 'application/octet-stream',
-		bytes: Buffer.concat(chunks)
+		bytes: await readBody(res, maxBytes, 'File too large')
 	};
 }
 
@@ -472,7 +522,11 @@ export async function connectT3(baseUrl: string, token: string): Promise<T3Conne
 	url.searchParams.set('orchestrationProtocol', String(ORCHESTRATION_PROTOCOL_VERSION));
 	url.searchParams.set('wsTicket', ticket);
 
-	const ws = new WebSocket(url);
+	// Same DNS guard as the HTTP calls (undici's WebSocket honours `dispatcher`);
+	// IP-literal hosts were already refused by the ticket request above. The DOM
+	// typings only know the `protocols` form of the second argument.
+	const init = { dispatcher: linkLocalGuardedAgent } as unknown as string[];
+	const ws = new WebSocket(url, init);
 	await new Promise<void>((resolve, reject) => {
 		const timer = setTimeout(() => {
 			ws.close();

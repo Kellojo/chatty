@@ -1,3 +1,4 @@
+import { describeError } from './errors.js';
 import { randomUUID } from 'node:crypto';
 import {
 	convertToModelMessages,
@@ -53,6 +54,8 @@ export function stopAgentRun(runId: string): boolean {
 }
 
 const SHUTDOWN_MESSAGE = 'Interrupted by server shutdown';
+/** Minimum gap between DB writes of a streaming assistant message. */
+const PERSIST_INTERVAL_MS = 500;
 const activeRuns = new Set<Promise<unknown>>();
 let shuttingDown = false;
 
@@ -206,38 +209,58 @@ export async function startAgentRun(
 					recordStep({ status: 'complete', usage: step.usage });
 				},
 				onError: ({ error }) => {
-					errorText = error instanceof Error ? error.message : String(error);
+					errorText = describeError(error);
 					recordStep({ status: 'failed', error: errorText });
 				}
 			});
-			for await (const message of readUIMessageStream({
-				stream: result.toUIMessageStream({
-					originalMessages: [uiUserMessage],
-					generateMessageId: () => randomUUID()
-				})
-			})) {
-				if (message.parts.length > 0) contentful = true;
-				if (!assistantMessageIds.includes(message.id)) {
-					assistantMessageIds.push(message.id);
-					createMessage(db, {
-						id: message.id,
-						conversationId: conversation.id,
-						role: 'assistant',
-						parts: message.parts,
-						status: 'partial'
-					});
-				} else {
-					updateMessage(db, message.id, { parts: message.parts });
+			// Each write re-serialises every part and blocks the event loop, so
+			// persist at most every PERSIST_INTERVAL_MS and flush the latest parts
+			// when a message ends.
+			let unsaved: { id: string; parts: unknown[] } | null = null;
+			let lastPersistAt = 0;
+			const flushParts = () => {
+				if (!unsaved) return;
+				updateMessage(db, unsaved.id, { parts: unsaved.parts });
+				unsaved = null;
+			};
+			try {
+				for await (const message of readUIMessageStream({
+					stream: result.toUIMessageStream({
+						originalMessages: [uiUserMessage],
+						generateMessageId: () => randomUUID()
+					})
+				})) {
+					if (message.parts.length > 0) contentful = true;
+					const now = Date.now();
+					if (!assistantMessageIds.includes(message.id)) {
+						flushParts();
+						assistantMessageIds.push(message.id);
+						createMessage(db, {
+							id: message.id,
+							conversationId: conversation.id,
+							role: 'assistant',
+							parts: message.parts,
+							status: 'partial'
+						});
+						lastPersistAt = now;
+					} else {
+						unsaved = { id: message.id, parts: message.parts };
+						if (now - lastPersistAt >= PERSIST_INTERVAL_MS) {
+							lastPersistAt = now;
+							flushParts();
+						}
+					}
+					if (now - lastProgressAt >= 500) {
+						lastProgressAt = now;
+						publishServerEvent(input.userId, {
+							type: 'agent.run.progress',
+							agentId: agent.id,
+							runId: run.id
+						});
+					}
 				}
-				const now = Date.now();
-				if (now - lastProgressAt >= 500) {
-					lastProgressAt = now;
-					publishServerEvent(input.userId, {
-						type: 'agent.run.progress',
-						agentId: agent.id,
-						runId: run.id
-					});
-				}
+			} finally {
+				flushParts();
 			}
 			const totalUsage = await result.usage;
 			log.info('LLM inference finished', {
@@ -274,7 +297,7 @@ export async function startAgentRun(
 			}
 			if (lastError) throw lastError;
 		} catch (e) {
-			if (!errorText) errorText = e instanceof Error ? e.message : String(e);
+			if (!errorText) errorText = describeError(e);
 		} finally {
 			if (controller.signal.aborted) {
 				const reason: unknown = controller.signal.reason;
@@ -305,7 +328,7 @@ export async function startAgentRun(
 			error: e instanceof Error ? e.message : String(e)
 		});
 		try {
-			finishAgentRun(db, run.id, 'failed', e instanceof Error ? e.message : String(e));
+			finishAgentRun(db, run.id, 'failed', describeError(e));
 		} catch {
 			// run row may already be finalized
 		}

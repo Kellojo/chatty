@@ -187,6 +187,19 @@ describe('title', () => {
 		expect(reconcile({ title: 'Fix the build' })).toBe(true);
 		expect(local().title).toBe('Renamed');
 	});
+
+	it('keeps a long local title when T3 holds its capped form', () => {
+		const long = 'y'.repeat(MAX_THREAD_TITLE_CHARS + 50);
+		const capped = long.slice(0, MAX_THREAD_TITLE_CHARS);
+		reconcile({ title: 'Fix the build' });
+		conversations.updateConversation(db, 'u1', conversationId, { title: long });
+		expect(reconcile({ title: 'Fix the build' })).toBe(true);
+		// What a successful push records (it sends the capped title).
+		coding.updateCodingConversation(db, conversationId, { remoteTitle: capped });
+		expect(reconcile({ title: capped })).toBe(false);
+		expect(local().title).toBe(long);
+		expect(agreed().remote_title).toBe(capped);
+	});
 });
 
 describe('pinned', () => {

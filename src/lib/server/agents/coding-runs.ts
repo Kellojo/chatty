@@ -20,7 +20,12 @@ import { getCodingConversation } from '../db/repo/coding-conversations.js';
 import { abortStream } from '../chat/streams.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
-import { launchCodingTask, MAX_LAUNCH_PROMPT, resolveCodingTarget } from '../t3/tasks.js';
+import {
+	interruptCodingTaskRemotely,
+	launchCodingTask,
+	MAX_LAUNCH_PROMPT,
+	resolveCodingTarget
+} from '../t3/tasks.js';
 import type { StartAgentRunInput, StartedAgentRun } from './runner.js';
 
 const log = createLogger('agents');
@@ -179,7 +184,11 @@ export function stopCodingAgentRun(runId: string, db: Db = getDb()): boolean {
 	const run = getAgentRun(db, runId);
 	if (!run || run.status !== 'running' || !run.conversation_id) return false;
 	if (!getCodingConversation(db, run.conversation_id)) return false;
-	abortStream(run.conversation_id);
+	// Without a live stream here (follower gave up, server restarted), nothing
+	// else would stop the remote agent.
+	if (!abortStream(run.conversation_id)) {
+		void interruptCodingTaskRemotely(run.user_id, run.conversation_id, db);
+	}
 	finish(db, { id: run.agent_id }, run, 'failed', 'Stopped by user');
 	return true;
 }

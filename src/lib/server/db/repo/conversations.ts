@@ -241,12 +241,9 @@ export function touchConversation(db: Db, id: string): void {
 	db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(Date.now(), id);
 }
 
+/** Sets the title without counting as activity, so a generated title doesn't reorder the sidebar. */
 export function setConversationTitle(db: Db, id: string, title: string): void {
-	db.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?').run(
-		title,
-		Date.now(),
-		id
-	);
+	db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, id);
 }
 
 export function softDeleteConversation(db: Db, userId: string, id: string): boolean {

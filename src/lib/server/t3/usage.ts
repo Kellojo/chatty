@@ -124,14 +124,20 @@ export function parseUsageSummary(summary: unknown): ParsedUsageSummary {
 	};
 }
 
-/** `YYYY-MM-DD` for `ms` in `timeZone`. */
+/** `YYYY-MM-DD` for `ms` in `timeZone` (UTC when the zone is unknown). */
 export function dayInZone(ms: number, timeZone: string): string {
-	const parts = new Intl.DateTimeFormat('en-CA', {
-		timeZone,
+	const options: Intl.DateTimeFormatOptions = {
 		year: 'numeric',
 		month: '2-digit',
 		day: '2-digit'
-	}).formatToParts(new Date(ms));
+	};
+	let format: Intl.DateTimeFormat;
+	try {
+		format = new Intl.DateTimeFormat('en-CA', { ...options, timeZone });
+	} catch {
+		format = new Intl.DateTimeFormat('en-CA', { ...options, timeZone: 'UTC' });
+	}
+	const parts = format.formatToParts(new Date(ms));
 	const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
 	return `${get('year')}-${get('month')}-${get('day')}`;
 }
