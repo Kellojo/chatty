@@ -60,8 +60,14 @@ const { getDb, closeDb } = await import('../db/index.js');
 const { createConversation } = await import('../db/repo/conversations.js');
 const coding = await import('../db/repo/coding-conversations.js');
 const { createCodingEnvironment } = await import('../db/repo/coding-environments.js');
-const { ensureFollower, getFollower, stopAllCodingFollowers, GAVE_UP_ERROR } =
-	await import('./follower.js');
+const {
+	ensureFollower,
+	getFollower,
+	stopAllCodingFollowers,
+	GAVE_UP_ERROR,
+	RUN_GONE_ERROR,
+	UNBOUND_TURN_ERROR
+} = await import('./follower.js');
 
 let conversationId: string;
 let follower: ReturnType<typeof ensureFollower>;
@@ -149,12 +155,106 @@ describe('CodingFollower reconnects', () => {
 		expect(getFollower(conversationId)).toBeUndefined();
 	});
 
-	it('keeps reconnecting while a Chatty turn is live', async () => {
+	it('keeps reconnecting while a Chatty turn is live, but not forever', async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		const { hasActiveStream } = await import('../chat/streams.js');
 		follower.beginTurn('m1');
 		void follower.follow();
-		await seconds(900);
+		await seconds(500);
 		expect(getFollower(conversationId)).toBe(follower);
 		expect(connectT3.mock.calls.length).toBeGreaterThan(10);
+		// The turn never got a run: it ends with an error, then the follower gives up.
+		await seconds(300);
+		expect(hasActiveStream(conversationId)).toBe(false);
+		expect(getFollower(conversationId)).toBeUndefined();
+		expect(getMessage(getDb(), 'm1:reply')).toMatchObject({
+			status: 'failed',
+			error: UNBOUND_TURN_ERROR
+		});
+	});
+
+	it('gives up eventually on a live turn whose run is bound', async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		failConnect = false;
+		follower.beginTurn('m1');
+		await follower.follow();
+		lastConnection!.streams[0].onValue(runSnapshot('running'));
+		await seconds(1);
+		failConnect = true;
+		lastConnection!.close();
+		await seconds(600);
+		expect(getFollower(conversationId)).toBe(follower);
+		await seconds(900);
+		expect(getFollower(conversationId)).toBeUndefined();
+		expect(getMessage(getDb(), 'm1:reply')).toMatchObject({
+			status: 'failed',
+			error: GAVE_UP_ERROR
+		});
+	});
+
+	it('does not record an error when stopped while connecting', async () => {
+		let resolve!: (conn: FakeConnection) => void;
+		connectT3.mockImplementationOnce(() => new Promise((r) => (resolve = r)));
+		const following = follower.follow();
+		follower.stop();
+		resolve(new FakeConnection());
+		await following;
+		expect(lastError()).toBeNull();
+	});
+});
+
+const runSnapshot = (status: string, sequence = 1, runs = true) => ({
+	kind: 'snapshot',
+	snapshotSequence: sequence,
+	projection: {
+		thread: { id: 't1' },
+		runs: runs
+			? [
+					{
+						id: 'run-1',
+						ordinal: 1,
+						status,
+						userMessageId: 'm1',
+						requestedAt: '2026-11-07T10:00:00.000Z'
+					}
+				]
+			: [],
+		turnItems: []
+	}
+});
+
+describe('CodingFollower live turn bounds', () => {
+	it('ends a live turn whose run disappears from the thread', async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		const { hasActiveStream } = await import('../chat/streams.js');
+		failConnect = false;
+		follower.beginTurn('m1');
+		await follower.follow();
+		const stream = lastConnection!.streams[0];
+		stream.onValue(runSnapshot('running'));
+		await seconds(1);
+		expect(hasActiveStream(conversationId)).toBe(true);
+
+		stream.onValue(runSnapshot('running', 2, false));
+		await seconds(1);
+
+		expect(hasActiveStream(conversationId)).toBe(false);
+		expect(getMessage(getDb(), 'm1:reply')).toMatchObject({
+			status: 'failed',
+			error: RUN_GONE_ERROR
+		});
+	});
+
+	it('does not let a pending idle stop end a new turn', async () => {
+		const { hasActiveStream } = await import('../chat/streams.js');
+		failConnect = false;
+		await follower.follow();
+		lastConnection!.streams[0].onValue(runSnapshot('completed'));
+		await seconds(290); // idle stop armed at the first render, due at ~300 s
+		follower.beginTurn('m2');
+		await seconds(60);
+		expect(getFollower(conversationId)).toBe(follower);
+		expect(hasActiveStream(conversationId)).toBe(true);
 	});
 });
 
@@ -179,5 +279,286 @@ describe('CodingFollower stop', () => {
 		await seconds(600);
 		expect(connectT3.mock.calls.length).toBe(connects);
 		expect(callSpy).not.toHaveBeenCalled();
+		const { getMessage } = await import('../db/repo/messages.js');
+		expect(getMessage(getDb(), 'm1:reply')).toMatchObject({
+			status: 'failed',
+			error: 'The coding environment was removed'
+		});
+	});
+});
+
+describe('CodingFollower omitted output', () => {
+	const outputSnapshot = (sequence: number) => ({
+		...runSnapshot('completed', sequence),
+		projection: {
+			...runSnapshot('completed', sequence).projection,
+			turnItems: [
+				{
+					id: 'c1',
+					runId: 'run-1',
+					ordinal: 1,
+					type: 'command_execution',
+					status: 'completed',
+					command: 'ls',
+					outputOmitted: true
+				}
+			]
+		}
+	});
+
+	it('retries a failed fetch later instead of caching an empty output', async () => {
+		failConnect = false;
+		await follower.follow();
+		const conn = lastConnection!;
+		const call = vi
+			.spyOn(conn, 'call')
+			.mockRejectedValueOnce(new Error('timeout'))
+			.mockResolvedValue({ item: { output: 'file.txt' } });
+		const fetches = () =>
+			call.mock.calls.filter((c) => (c as unknown[])[0] === 'orchestration.getTurnItem');
+		const stream = conn.streams[0];
+
+		stream.onValue(outputSnapshot(1));
+		await seconds(1);
+		expect(fetches()).toHaveLength(1);
+		stream.onValue(outputSnapshot(2));
+		await seconds(1);
+		expect(fetches()).toHaveLength(1); // not right away
+
+		await seconds(30);
+		stream.onValue(outputSnapshot(3));
+		await seconds(1);
+		expect(fetches()).toHaveLength(2);
+		stream.onValue(outputSnapshot(4));
+		await seconds(40);
+		expect(fetches()).toHaveLength(2); // loaded now
+	});
+});
+
+describe('CodingFollower message ids', () => {
+	it('scopes a reply id that another conversation following the thread already holds', async () => {
+		const { createMessage, getMessage } = await import('../db/repo/messages.js');
+		const db = getDb();
+		db.prepare(
+			`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u2', 'u2', 'u2@example.com', 0, 0, 0, 'user')`
+		).run();
+		const other = createConversation(db, 'u2', { kind: 'chat', mode: 'agent', title: 'Task' }).id;
+		createMessage(db, {
+			id: 'm1:reply',
+			conversationId: other,
+			role: 'assistant',
+			parts: [{ type: 'text', text: 'theirs' }],
+			status: 'complete'
+		});
+
+		follower.beginTurn('m1');
+
+		expect(getMessage(db, 'm1:reply')).toMatchObject({
+			conversation_id: other,
+			status: 'complete'
+		});
+		expect(getMessage(db, `${conversationId}:m1:reply`)).toMatchObject({
+			conversation_id: conversationId,
+			status: 'partial'
+		});
+		// Stays on the scoped id once it has it, even when the plain id frees up.
+		db.prepare('DELETE FROM messages WHERE id = ?').run('m1:reply');
+		follower.beginTurn('m1');
+		expect(getMessage(db, 'm1:reply')).toBeUndefined();
+	});
+
+	it('keeps the plain id when no other conversation holds it', async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		follower.beginTurn('m1');
+		expect(getMessage(getDb(), 'm1:reply')).toMatchObject({ conversation_id: conversationId });
+	});
+});
+
+describe('CodingFollower subagent status', () => {
+	const subagentSnapshot = (runStatus: string, progress: string, status = 'running') => ({
+		kind: 'snapshot',
+		snapshotSequence: 1,
+		projection: {
+			thread: { id: 't1' },
+			runs: [
+				{
+					id: 'run-1',
+					ordinal: 1,
+					status: runStatus,
+					userMessageId: 'm1',
+					requestedAt: '2026-11-07T10:00:00.000Z'
+				}
+			],
+			turnItems: [
+				{
+					id: 's1',
+					runId: 'run-1',
+					ordinal: 1,
+					type: 'subagent',
+					status,
+					title: 'Review',
+					prompt: 'Review the diff',
+					progress
+				}
+			]
+		}
+	});
+
+	it('streams a running subagent’s progress as it changes', async () => {
+		const { getStreamState } = await import('../chat/streams.js');
+		failConnect = false;
+		follower.beginTurn('m1');
+		await follower.follow();
+		const stream = lastConnection!.streams[0];
+
+		stream.onValue(subagentSnapshot('running', 'Reading routes'));
+		await seconds(1);
+		stream.onValue(subagentSnapshot('running', 'Writing the report'));
+		await seconds(1);
+
+		const inputs = getStreamState(conversationId)!.chunks.filter(
+			(c) => c.type === 'tool-input-available' && c.toolCallId === 's1'
+		);
+		expect(inputs).toHaveLength(1);
+		expect(inputs[0]).toMatchObject({ input: { progress: 'Writing the report', running: true } });
+	});
+
+	it('tells an open chat to reload when a background subagent reports after its turn', async () => {
+		const { publishServerEvent } = await import('../events/bus.js');
+		failConnect = false;
+		await follower.follow();
+		const stream = lastConnection!.streams[0];
+
+		stream.onValue(subagentSnapshot('completed', 'Reading routes'));
+		await seconds(2);
+		vi.mocked(publishServerEvent).mockClear();
+		stream.onValue(subagentSnapshot('completed', 'Writing the report'));
+		await seconds(2);
+
+		expect(publishServerEvent).toHaveBeenCalledWith('u1', {
+			type: 'chat.messages.updated',
+			conversationId
+		});
+	});
+});
+
+describe('CodingFollower user stop', () => {
+	const runningSnapshot = (sequence: number) => ({
+		kind: 'snapshot',
+		snapshotSequence: sequence,
+		projection: {
+			thread: { id: 't1' },
+			runs: [
+				{
+					id: 'run-1',
+					ordinal: 1,
+					status: 'running',
+					userMessageId: null,
+					requestedAt: '2026-11-07T10:00:00.000Z'
+				}
+			],
+			turnItems: [
+				{
+					id: 'a1',
+					runId: 'run-1',
+					ordinal: 1,
+					type: 'assistant_message',
+					status: 'running',
+					streaming: true,
+					text: 'Working'
+				}
+			]
+		}
+	});
+
+	it('interrupts the run and does not reopen its stream while it is still running', async () => {
+		const { abortStream, hasActiveStream } = await import('../chat/streams.js');
+		failConnect = false;
+		await follower.follow();
+		const conn = lastConnection!;
+		const callSpy = vi.spyOn(conn, 'call');
+		conn.streams[0].onValue(runningSnapshot(1));
+		await seconds(1);
+		expect(hasActiveStream(conversationId)).toBe(true);
+
+		expect(abortStream(conversationId)).toBe(true);
+		// T3 hasn't processed the interrupt yet: the run still shows as running.
+		conn.streams[0].onValue(runningSnapshot(2));
+		await seconds(1);
+
+		expect(hasActiveStream(conversationId)).toBe(false);
+		expect(callSpy).toHaveBeenCalledWith(
+			'orchestration.dispatchCommand',
+			expect.objectContaining({ type: 'run.interrupt', runId: 'run-1' })
+		);
+	});
+});
+
+describe('CodingFollower agent notices', () => {
+	it('does not mirror the agent runtime’s own notices as user messages', async () => {
+		const { createMessage, getMessage } = await import('../db/repo/messages.js');
+		const db = getDb();
+		// Mirrored by an older version; cleaned up on the next render.
+		createMessage(db, {
+			id: 'n1',
+			conversationId,
+			role: 'user',
+			parts: [{ type: 'text', text: 'Background task completed.' }],
+			status: 'complete'
+		});
+		failConnect = false;
+		await follower.follow();
+		lastConnection!.streams[0].onValue({
+			kind: 'snapshot',
+			snapshotSequence: 1,
+			projection: {
+				thread: { id: 't1' },
+				runs: [
+					{
+						id: 'r1',
+						ordinal: 1,
+						status: 'completed',
+						userMessageId: 'u1m',
+						requestedAt: '2026-11-07T10:00:00.000Z'
+					},
+					{
+						id: 'r2',
+						ordinal: 2,
+						status: 'completed',
+						userMessageId: 'n1',
+						requestedAt: '2026-11-07T10:01:00.000Z'
+					},
+					{
+						id: 'r3',
+						ordinal: 3,
+						status: 'completed',
+						userMessageId: 'n2',
+						requestedAt: '2026-11-07T10:02:00.000Z'
+					}
+				],
+				messages: [
+					{ id: 'u1m', role: 'user', createdBy: 'user', text: 'Fix the bug' },
+					{
+						id: 'n1',
+						role: 'user',
+						createdBy: 'agent',
+						notification: { source: { kind: 'background_task' }, outcome: 'updated' },
+						text: 'Background task completed.'
+					},
+					{
+						id: 'n2',
+						role: 'user',
+						createdBy: 'agent',
+						notification: { source: { kind: 'background_task', work: 'subagent' } },
+						text: 'This agent’s report was delivered to you as a message from "a1".'
+					}
+				]
+			}
+		});
+		await seconds(1);
+
+		expect(getMessage(db, 'u1m')).toMatchObject({ role: 'user' });
+		expect(getMessage(db, 'n1')).toBeUndefined();
+		expect(getMessage(db, 'n2')).toBeUndefined();
 	});
 });

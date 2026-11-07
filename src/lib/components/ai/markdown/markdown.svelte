@@ -10,6 +10,7 @@
 	import ChartWidget from './chart-widget.svelte';
 	import MapWidget from './map-widget.svelte';
 	import FileWidget from './file-widget.svelte';
+	import ChatsWidget from './chats-widget.svelte';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -64,7 +65,8 @@
 				{ language: 'weather', component: WeatherWidget },
 				{ language: 'chart', component: ChartWidget },
 				{ language: 'map', component: MapWidget },
-				{ language: 'file', component: FileWidget }
+				{ language: 'file', component: FileWidget },
+				{ language: 'chats', component: ChatsWidget }
 			]
 		}}
 		components={{ img: MarkdownImage }}

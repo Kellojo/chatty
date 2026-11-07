@@ -1,20 +1,30 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import CopyIcon from '@lucide/svelte/icons/copy';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import SearchIcon from '@lucide/svelte/icons/search';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import UsersIcon from '@lucide/svelte/icons/users';
+	import EyeIcon from '@lucide/svelte/icons/eye';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import EmptyState from '$lib/components/app/EmptyState.svelte';
+	import PageHeader from '$lib/components/app/PageHeader.svelte';
+	import RowMenu, { type RowMenuItem } from '$lib/components/app/settings/RowMenu.svelte';
+	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import { skillPath, skillSourceLabel } from '$lib/skill-labels.js';
 	import type { SkillSummary } from '$lib/skill-types.js';
 	import type { PageData } from './$types';
 
@@ -34,13 +44,57 @@
 	let duplicateName = $state('');
 	let duplicateBusy = $state(false);
 
-	function sourceLabel(skill: SkillSummary): string {
-		if (skill.scope === 'shared' && skill.source === 'user') return 'shared';
-		return skill.source;
-	}
-
 	function shadowedVersion(skillName: string): SkillSummary | undefined {
 		return data.shadowedSkills.find((s) => s.name === skillName);
+	}
+
+	let query = $state('');
+	const totalSkills = $derived(data.userSkills.length + data.sharedSkills.length);
+
+	function matches(skill: SkillSummary, q: string): boolean {
+		return [skill.title, skill.name, skill.description].some((text) =>
+			text.toLowerCase().includes(q)
+		);
+	}
+
+	const userSkills = $derived.by(() => {
+		const q = query.trim().toLowerCase();
+		return q ? data.userSkills.filter((skill) => matches(skill, q)) : data.userSkills;
+	});
+	const sharedSkills = $derived.by(() => {
+		const q = query.trim().toLowerCase();
+		return q ? data.sharedSkills.filter((skill) => matches(skill, q)) : data.sharedSkills;
+	});
+
+	function menuItems(skill: SkillSummary): RowMenuItem[] {
+		const editable = skill.scope === 'user' || data.isAdmin;
+		const items: RowMenuItem[] = [
+			{
+				label: editable ? 'Edit' : 'View',
+				icon: editable ? PencilIcon : EyeIcon,
+				onSelect: () => goto(resolve(skillPath(skill)))
+			},
+			{
+				label: skill.scope === 'shared' ? 'Duplicate to yours' : 'Duplicate',
+				icon: CopyIcon,
+				onSelect: () => {
+					duplicateTarget = skill;
+					duplicateName = `${skill.name}-copy`;
+				}
+			}
+		];
+		if (data.isAdmin && skill.scope === 'user') {
+			items.push({ label: 'Share with everyone', icon: UsersIcon, onSelect: () => promote(skill) });
+		}
+		if (editable) {
+			items.push('separator', {
+				label: 'Delete',
+				icon: Trash2Icon,
+				destructive: true,
+				onSelect: () => (deleteTarget = skill)
+			});
+		}
+		return items;
 	}
 
 	async function toggleSkill(skill: SkillSummary, enabled: boolean) {
@@ -152,7 +206,7 @@
 			const res = await fetch(`/api/skills/${skill.name}/promote`, { method: 'POST' });
 			const body = (await res.json().catch(() => null)) as { message?: string } | null;
 			if (!res.ok) throw new Error(body?.message ?? `Request failed (${res.status})`);
-			toast.success(`Promoted ${skill.name} to shared`);
+			toast.success(`${skill.title} is now shared with everyone`);
 			await invalidateAll();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to promote skill');
@@ -160,286 +214,161 @@
 	}
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-7xl flex-col gap-4 p-6">
-		<div class="flex items-center justify-between">
-			<h1 class="flex items-center gap-2 text-xl font-semibold">
-				<SparklesIcon class="size-5" />
-				Skills
-			</h1>
-			<div class="flex gap-2">
-				<Button variant="outline" onclick={() => (importOpen = true)}>
-					<GitBranchIcon class="size-4" />
-					Import from git
-				</Button>
-				<Button href={resolve('/skills/new')}>New skill</Button>
+<svelte:head><title>Skills · Chatty</title></svelte:head>
+
+{#snippet skillRow(skill: SkillSummary, canToggle: boolean)}
+	{@const shadowed = skill.scope === 'user' ? shadowedVersion(skill.name) : undefined}
+	<SettingsListItem
+		title={skill.title}
+		titleAttr={skill.name}
+		href={resolve(skillPath(skill))}
+		muted={!skill.enabled}
+	>
+		{#snippet leading()}
+			{#if skill.source.startsWith('git:')}
+				<GitBranchIcon class="size-4" />
+			{:else}
+				<SparklesIcon class="size-4" />
+			{/if}
+		{/snippet}
+		{#snippet badges()}
+			{#if skill.version}
+				<span class="text-xs text-muted-foreground tabular-nums">v{skill.version}</span>
+			{/if}
+			{#if shadowed}
+				<Badge variant="outline" title="Used instead of the shared skill “{shadowed.title}”">
+					Overrides shared
+				</Badge>
+			{/if}
+		{/snippet}
+		{#snippet meta()}
+			<span class="font-mono">{skill.name}</span> ·
+			<span title={skill.source}>{skillSourceLabel(skill)}</span>
+		{/snippet}
+		{#if skill.description}
+			<p class="line-clamp-2 text-xs text-pretty text-muted-foreground" title={skill.description}>
+				{skill.description}
+			</p>
+		{/if}
+		{#snippet trailing()}
+			<Switch
+				checked={skill.enabled}
+				aria-label="Enable {skill.title}"
+				disabled={toggleBusy !== null || !canToggle}
+				onCheckedChange={(checked) => toggleSkill(skill, checked)}
+			/>
+			<RowMenu label="Actions for {skill.title}" items={menuItems(skill)} />
+		{/snippet}
+	</SettingsListItem>
+{/snippet}
+
+<div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
+	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
+		<PageHeader
+			title="Skills"
+			icon={SparklesIcon}
+			description="Instructions the AI loads when a request matches a skill's description."
+		>
+			{#snippet actions()}
+				<!-- The empty state carries these actions until there is something listed. -->
+				{#if data.userSkills.length > 0}
+					<Button variant="outline" onclick={() => (importOpen = true)}>
+						<GitBranchIcon class="size-4" />
+						Import from git
+					</Button>
+					<Button href={resolve('/skills/new')}><PlusIcon class="size-4" />New skill</Button>
+				{/if}
+			{/snippet}
+		</PageHeader>
+
+		{#if totalSkills > 5}
+			<div class="relative sm:max-w-xs">
+				<SearchIcon
+					class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+				/>
+				<Input
+					type="search"
+					placeholder="Search skills"
+					aria-label="Search skills"
+					class="pl-9"
+					bind:value={query}
+				/>
 			</div>
-		</div>
+		{/if}
 
-		<!-- Your Skills -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Your Skills</Card.Title>
-			</Card.Header>
-			<Card.Content>
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head>Skill</Table.Head>
-							<Table.Head>Source</Table.Head>
-							<Table.Head>Enabled</Table.Head>
-							<Table.Head class="text-right">Actions</Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#each data.userSkills as skill (skill.name)}
-							{@const shadowed = shadowedVersion(skill.name)}
-							<Table.Row>
-								<Table.Cell class="max-w-96">
-									<div class="flex items-center gap-2">
-										<a
-											class="truncate font-medium hover:underline"
-											title={skill.name}
-											href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)}
-										>
-											{skill.title}
-										</a>
-										{#if skill.version}
-											<span class="text-xs text-muted-foreground">v{skill.version}</span>
-										{/if}
-										{#if shadowed}
-											<Badge
-												variant="outline"
-												class="text-xs"
-												title={`Overrides shared skill: ${shadowed.title}`}
-											>
-												shadows shared
-											</Badge>
-										{/if}
-									</div>
-									<p class="line-clamp-2 text-sm text-muted-foreground" title={skill.description}>
-										{skill.description}
-									</p>
-								</Table.Cell>
-								<Table.Cell>
-									<Badge variant="secondary" title={skill.source}>{sourceLabel(skill)}</Badge>
-								</Table.Cell>
-								<Table.Cell>
-									<Switch
-										checked={skill.enabled}
-										disabled={toggleBusy !== null}
-										onCheckedChange={(checked) => toggleSkill(skill, checked)}
-									/>
-								</Table.Cell>
-								<Table.Cell class="text-right whitespace-nowrap">
-									<DropdownMenu.Root>
-										<DropdownMenu.Trigger>
-											{#snippet child({ props })}
-												<Button
-													{...props}
-													variant="ghost"
-													size="icon"
-													title="Actions"
-													aria-label="Actions"
-												>
-													<EllipsisIcon class="size-4" />
-												</Button>
-											{/snippet}
-										</DropdownMenu.Trigger>
-										<DropdownMenu.Content align="end">
-											<DropdownMenu.Item>
-												{#snippet child({ props })}
-													<a
-														href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)}
-														{...props}
-													>
-														Edit
-													</a>
-												{/snippet}
-											</DropdownMenu.Item>
-											<DropdownMenu.Item
-												onclick={() => {
-													duplicateTarget = skill;
-													duplicateName = `${skill.name}-copy`;
-												}}
-											>
-												Duplicate
-											</DropdownMenu.Item>
-											{#if data.isAdmin && skill.scope === 'user'}
-												<DropdownMenu.Item onclick={() => promote(skill)}>
-													Promote to shared
-												</DropdownMenu.Item>
-											{/if}
-											<DropdownMenu.Separator />
-											<DropdownMenu.Item
-												variant="destructive"
-												onclick={() => (deleteTarget = skill)}
-											>
-												Delete
-											</DropdownMenu.Item>
-										</DropdownMenu.Content>
-									</DropdownMenu.Root>
-								</Table.Cell>
-							</Table.Row>
-						{:else}
-							<Table.Row>
-								<Table.Cell colspan={4} class="text-center text-muted-foreground">
-									No personal skills yet. Create one or import from git.
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
-			</Card.Content>
-		</Card.Root>
-
-		<!-- Shared Skills -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Shared Skills</Card.Title>
-				<Card.Description>
-					Skills available to all users. Your personal skills with the same name take precedence.
-				</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head>Skill</Table.Head>
-							<Table.Head>Source</Table.Head>
-							<Table.Head>Enabled</Table.Head>
-							<Table.Head class="text-right">Actions</Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#each data.sharedSkills as skill (skill.name)}
-							<Table.Row>
-								<Table.Cell class="max-w-96">
-									<div class="flex items-center gap-2">
-										<a
-											class="truncate font-medium hover:underline"
-											title={skill.name}
-											href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)}
-										>
-											{skill.title}
-										</a>
-										{#if skill.version}
-											<span class="text-xs text-muted-foreground">v{skill.version}</span>
-										{/if}
-									</div>
-									<p class="line-clamp-2 text-sm text-muted-foreground" title={skill.description}>
-										{skill.description}
-									</p>
-								</Table.Cell>
-								<Table.Cell>
-									<Badge variant="secondary" title={skill.source}>{sourceLabel(skill)}</Badge>
-								</Table.Cell>
-								<Table.Cell>
-									<Switch
-										checked={skill.enabled}
-										disabled={toggleBusy !== null || !data.isAdmin}
-										onCheckedChange={(checked) => toggleSkill(skill, checked)}
-									/>
-								</Table.Cell>
-								<Table.Cell class="text-right whitespace-nowrap">
-									<DropdownMenu.Root>
-										<DropdownMenu.Trigger>
-											{#snippet child({ props })}
-												<Button
-													{...props}
-													variant="ghost"
-													size="icon"
-													title="Actions"
-													aria-label="Actions"
-												>
-													<EllipsisIcon class="size-4" />
-												</Button>
-											{/snippet}
-										</DropdownMenu.Trigger>
-										<DropdownMenu.Content align="end">
-											<DropdownMenu.Item>
-												{#snippet child({ props })}
-													<a
-														href={resolve(`/skills/${skill.name}?scope=${skill.scope}`)}
-														{...props}
-													>
-														{data.isAdmin ? 'Edit' : 'View'}
-													</a>
-												{/snippet}
-											</DropdownMenu.Item>
-											<DropdownMenu.Item
-												onclick={() => {
-													duplicateTarget = skill;
-													duplicateName = `${skill.name}-copy`;
-												}}
-											>
-												Duplicate to personal
-											</DropdownMenu.Item>
-											{#if data.isAdmin}
-												<DropdownMenu.Separator />
-												<DropdownMenu.Item
-													variant="destructive"
-													onclick={() => (deleteTarget = skill)}
-												>
-													Delete
-												</DropdownMenu.Item>
-											{/if}
-										</DropdownMenu.Content>
-									</DropdownMenu.Root>
-								</Table.Cell>
-							</Table.Row>
-						{:else}
-							<Table.Row>
-								<Table.Cell colspan={4} class="text-center text-muted-foreground">
-									No shared skills available.
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
-			</Card.Content>
-		</Card.Root>
-
-		<!-- Shadowed Shared Skills (info only) -->
-		{#if data.shadowedSkills.length > 0}
-			<details class="rounded-lg border">
-				<summary
-					class="cursor-pointer px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/50"
+		<SettingsSection title="Your skills" flush>
+			{#if data.userSkills.length === 0}
+				<EmptyState
+					icon={SparklesIcon}
+					title="No skills of your own yet"
+					description="Write one, import a repository of skills, or duplicate a shared skill to adapt it."
 				>
-					{data.shadowedSkills.length} shared skill{data.shadowedSkills.length !== 1 ? 's' : ''} overridden
-					by your personal versions
+					<Button size="sm" href={resolve('/skills/new')}
+						><PlusIcon class="size-4" />New skill</Button
+					>
+					<Button size="sm" variant="outline" onclick={() => (importOpen = true)}>
+						<GitBranchIcon class="size-4" />Import from git
+					</Button>
+				</EmptyState>
+			{:else if userSkills.length === 0}
+				<p class="px-6 py-6 text-center text-sm text-muted-foreground">
+					No skills of yours match “{query.trim()}”.
+				</p>
+			{:else}
+				<ul class="divide-y divide-border/60" aria-label="Your skills">
+					{#each userSkills as skill (skill.name)}
+						{@render skillRow(skill, true)}
+					{/each}
+				</ul>
+			{/if}
+		</SettingsSection>
+
+		<SettingsSection
+			title="Shared skills"
+			description={data.isAdmin
+				? 'Available to everyone. A skill of yours with the same name replaces it for you.'
+				: 'Available to everyone and managed by admins. A skill of yours with the same name replaces it for you.'}
+			flush
+		>
+			{#if data.sharedSkills.length === 0}
+				<p class="px-6 py-6 text-center text-sm text-muted-foreground">No shared skills.</p>
+			{:else if sharedSkills.length === 0}
+				<p class="px-6 py-6 text-center text-sm text-muted-foreground">
+					No shared skills match “{query.trim()}”.
+				</p>
+			{:else}
+				<ul class="divide-y divide-border/60" aria-label="Shared skills">
+					{#each sharedSkills as skill (skill.name)}
+						{@render skillRow(skill, data.isAdmin)}
+					{/each}
+				</ul>
+			{/if}
+		</SettingsSection>
+
+		{#if data.shadowedSkills.length > 0}
+			<details class="group rounded-2xl border">
+				<summary
+					class="flex cursor-pointer list-none items-center gap-2 rounded-2xl px-6 py-3 text-sm text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+				>
+					<ChevronRightIcon class="size-4 transition-transform group-open:rotate-90" />
+					{data.shadowedSkills.length} shared skill{data.shadowedSkills.length === 1 ? '' : 's'}
+					replaced by yours
 				</summary>
-				<div class="border-t px-4 py-2">
-					<Table.Root>
-						<Table.Body>
-							{#each data.shadowedSkills as skill (skill.name)}
-								<Table.Row class="text-muted-foreground">
-									<Table.Cell class="max-w-96">
-										<div class="flex items-center gap-2">
-											<span class="truncate font-medium" title={skill.name}>{skill.title}</span>
-											<Badge variant="outline" class="text-xs">shadowed</Badge>
-										</div>
-										<p class="line-clamp-1 text-sm" title={skill.description}>
-											{skill.description}
-										</p>
-									</Table.Cell>
-									<Table.Cell>
-										<Badge variant="secondary">{sourceLabel(skill)}</Badge>
-									</Table.Cell>
-									<Table.Cell class="text-right">
-										<Button
-											variant="ghost"
-											size="sm"
-											href={resolve(`/skills/${skill.name}?scope=shared`)}
-										>
-											View shared
-										</Button>
-									</Table.Cell>
-								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
-				</div>
+				<ul class="divide-y divide-border/60 border-t" aria-label="Replaced shared skills">
+					{#each data.shadowedSkills as skill (skill.name)}
+						<SettingsListItem
+							title={skill.title}
+							titleAttr={skill.name}
+							href={resolve(skillPath(skill))}
+							muted
+						>
+							{#snippet leading()}<SparklesIcon class="size-4" />{/snippet}
+							{#snippet meta()}
+								<span class="font-mono">{skill.name}</span> · {skillSourceLabel(skill)}
+							{/snippet}
+						</SettingsListItem>
+					{/each}
+				</ul>
 			</details>
 		{/if}
 	</div>
@@ -450,7 +379,9 @@
 		<Dialog.Header>
 			<Dialog.Title>Delete skill?</Dialog.Title>
 			<Dialog.Description>
-				"{deleteTarget?.name}" will be permanently deleted from the {deleteTarget?.scope} bundle.
+				“{deleteTarget?.title}” will be permanently deleted{deleteTarget?.scope === 'shared'
+					? ' for everyone'
+					: ''}.
 			</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>
@@ -465,41 +396,54 @@
 
 <Dialog.Root open={importOpen} onOpenChange={(open) => !open && (importOpen = false)}>
 	<Dialog.Content>
-		<Dialog.Header>
-			<Dialog.Title>Import skills from git</Dialog.Title>
-			<Dialog.Description>
-				Paste a repository URL — including links to a subdirectory like
-				github.com/user/repo/tree/main/skills — and every skill (directory containing a skill.md)
-				will be copied into your personal skills.
-			</Dialog.Description>
-		</Dialog.Header>
-		<div class="flex flex-col gap-3">
-			<div class="flex flex-col gap-1.5">
-				<Label for="git-url">Repository URL</Label>
-				<Input
-					id="git-url"
-					placeholder="https://github.com/user/repo/tree/main/skills"
-					bind:value={importUrl}
-				/>
-			</div>
-			<div class="flex gap-3">
-				<div class="flex flex-1 flex-col gap-1.5">
-					<Label for="git-branch">Branch (auto-detected from URL)</Label>
-					<Input id="git-branch" placeholder="main" bind:value={importBranch} />
+		<form
+			class="contents"
+			onsubmit={(e) => {
+				e.preventDefault();
+				void confirmImport();
+			}}
+		>
+			<Dialog.Header>
+				<Dialog.Title>Import skills from git</Dialog.Title>
+				<Dialog.Description>
+					Every folder with a skill.md in the repository is copied into your skills. Links to a
+					subfolder, like github.com/user/repo/tree/main/skills, work too.
+				</Dialog.Description>
+			</Dialog.Header>
+			<div class="flex flex-col gap-4">
+				<div class="flex flex-col gap-2">
+					<Label for="git-url">Repository URL</Label>
+					<Input
+						id="git-url"
+						type="url"
+						required
+						placeholder="https://github.com/user/repo"
+						bind:value={importUrl}
+					/>
 				</div>
-				<div class="flex flex-1 flex-col gap-1.5">
-					<Label for="git-path">Path in repo (auto-detected from URL)</Label>
-					<Input id="git-path" placeholder="skills/" bind:value={importPath} />
+				<div class="grid gap-4 sm:grid-cols-2">
+					<div class="flex flex-col gap-2">
+						<Label for="git-branch">Branch</Label>
+						<Input
+							id="git-branch"
+							placeholder="From the URL, or default"
+							bind:value={importBranch}
+						/>
+					</div>
+					<div class="flex flex-col gap-2">
+						<Label for="git-path">Folder</Label>
+						<Input id="git-path" placeholder="From the URL, or root" bind:value={importPath} />
+					</div>
 				</div>
 			</div>
-		</div>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={() => (importOpen = false)}>Cancel</Button>
-			<Button disabled={importBusy || !importUrl.trim()} onclick={confirmImport}>
-				{#if importBusy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-				Import
-			</Button>
-		</Dialog.Footer>
+			<Dialog.Footer>
+				<Button type="button" variant="outline" onclick={() => (importOpen = false)}>Cancel</Button>
+				<Button type="submit" disabled={importBusy || !importUrl.trim()}>
+					{#if importBusy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
+					Import
+				</Button>
+			</Dialog.Footer>
+		</form>
 	</Dialog.Content>
 </Dialog.Root>
 
@@ -508,22 +452,32 @@
 	onOpenChange={(open) => !open && (duplicateTarget = null)}
 >
 	<Dialog.Content>
-		<Dialog.Header>
-			<Dialog.Title>Duplicate skill</Dialog.Title>
-			<Dialog.Description>
-				Copy "{duplicateTarget?.name}" into your personal skills under a new name.
-			</Dialog.Description>
-		</Dialog.Header>
-		<div class="flex flex-col gap-1.5">
-			<Label for="dup-name">New name</Label>
-			<Input id="dup-name" bind:value={duplicateName} />
-		</div>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={() => (duplicateTarget = null)}>Cancel</Button>
-			<Button disabled={duplicateBusy || !duplicateName.trim()} onclick={confirmDuplicate}>
-				{#if duplicateBusy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-				Duplicate
-			</Button>
-		</Dialog.Footer>
+		<form
+			class="contents"
+			onsubmit={(e) => {
+				e.preventDefault();
+				void confirmDuplicate();
+			}}
+		>
+			<Dialog.Header>
+				<Dialog.Title>Duplicate skill</Dialog.Title>
+				<Dialog.Description>
+					Copy “{duplicateTarget?.title}” into your skills under a new name.
+				</Dialog.Description>
+			</Dialog.Header>
+			<div class="flex flex-col gap-2">
+				<Label for="dup-name">New name</Label>
+				<Input id="dup-name" class="font-mono" required bind:value={duplicateName} />
+			</div>
+			<Dialog.Footer>
+				<Button type="button" variant="outline" onclick={() => (duplicateTarget = null)}
+					>Cancel</Button
+				>
+				<Button type="submit" disabled={duplicateBusy || !duplicateName.trim()}>
+					{#if duplicateBusy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
+					Duplicate
+				</Button>
+			</Dialog.Footer>
+		</form>
 	</Dialog.Content>
 </Dialog.Root>

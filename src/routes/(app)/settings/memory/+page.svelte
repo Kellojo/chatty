@@ -3,7 +3,10 @@
 	import { toast } from 'svelte-sonner';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -47,54 +50,54 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<div class="flex flex-col gap-1">
-		<h2 class="text-xl font-semibold">Memory</h2>
-		<p class="text-sm text-muted-foreground">
-			Long-term memory the assistant builds from your conversations.
-		</p>
-	</div>
+<svelte:head><title>Memory · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Memory extraction</Card.Title>
-			<Card.Description>
-				The built-in memory-extraction agent runs automatically on every 5th new chat and distills
-				recent conversations into long-term memory concepts. You can also trigger it manually.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-wrap items-center gap-2">
-			<Button disabled={extractBusy} onclick={extractNow}>
-				{#if extractBusy}
+<SettingsHeader
+	title="Memory"
+	description="Long-term memory the assistant builds from your conversations."
+>
+	{#snippet actions()}
+		<Button variant="outline" href={resolve('/memory')}>
+			Browse memory <ArrowRightIcon class="size-4" />
+		</Button>
+	{/snippet}
+</SettingsHeader>
+
+<SettingsSection title="Extraction" description="Turns past chats into memory concepts.">
+	<SettingsRow
+		label="Extract memory"
+		description="Runs automatically after every 5th new chat and distills recent conversations into memory concepts. Run it now to catch up right away."
+		stack
+	>
+		<Button variant="outline" class="w-full sm:w-auto" disabled={extractBusy} onclick={extractNow}>
+			{#if extractBusy}
+				<LoaderCircleIcon class="size-4 animate-spin" />
+				Starting…
+			{:else}
+				Extract now
+			{/if}
+		</Button>
+	</SettingsRow>
+</SettingsSection>
+
+{#if isAdmin}
+	<SettingsSection
+		title="Search index"
+		description="Full-text search over memory. Only admins can rebuild it."
+	>
+		<SettingsRow
+			label="Full-text index"
+			description="Covers all memory bundles. Rebuild it after changing memory files outside the app."
+			stack
+		>
+			<Button variant="outline" class="w-full sm:w-auto" disabled={reindexBusy} onclick={reindex}>
+				{#if reindexBusy}
 					<LoaderCircleIcon class="size-4 animate-spin" />
-					Starting…
+					Rebuilding…
 				{:else}
-					Extract memory now
+					Rebuild index
 				{/if}
 			</Button>
-			<Button variant="outline" href={resolve('/memory')}>Open memory browser</Button>
-		</Card.Content>
-	</Card.Root>
-
-	{#if isAdmin}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Search index</Card.Title>
-				<Card.Description>
-					Rebuild the full-text search index over all memory bundles. Use this after changing memory
-					files outside the app.
-				</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<Button variant="outline" disabled={reindexBusy} onclick={reindex}>
-					{#if reindexBusy}
-						<LoaderCircleIcon class="size-4 animate-spin" />
-						Rebuilding…
-					{:else}
-						Rebuild index
-					{/if}
-				</Button>
-			</Card.Content>
-		</Card.Root>
-	{/if}
-</div>
+		</SettingsRow>
+	</SettingsSection>
+{/if}

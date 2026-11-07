@@ -1,3 +1,4 @@
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap } from 'svelte/reactivity';
 
-export const serverActiveChatIds = new SvelteSet<string>();
+/** Conversations with a reply streaming on the server, mapped to when it started (ms). */
+export const serverActiveChats = new SvelteMap<string, number>();

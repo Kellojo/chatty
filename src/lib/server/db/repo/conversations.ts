@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { CodingConversationSummary, CodingTaskStatus } from '$lib/coding-environments.js';
+import {
+	isCodingPullRequestState,
+	type CodingConversationSummary,
+	type CodingTaskStatus
+} from '$lib/coding-environments.js';
 import type { Db } from '../index.js';
 
 export interface ConversationRow {
@@ -29,6 +33,8 @@ export interface ConversationRow {
 	coding_run_started_at?: number | null;
 	coding_diff_insertions?: number | null;
 	coding_diff_deletions?: number | null;
+	coding_pr_url?: string | null;
+	coding_pr_state?: string | null;
 }
 
 export interface Conversation {
@@ -82,7 +88,12 @@ export function toPublic(row: ConversationRow): Conversation {
 					diff:
 						row.coding_diff_insertions == null || row.coding_diff_deletions == null
 							? null
-							: { insertions: row.coding_diff_insertions, deletions: row.coding_diff_deletions }
+							: { insertions: row.coding_diff_insertions, deletions: row.coding_diff_deletions },
+					pullRequest: row.coding_pr_url
+						? {
+								state: isCodingPullRequestState(row.coding_pr_state) ? row.coding_pr_state : null
+							}
+						: null
 				}
 			: null,
 		createdAt: row.created_at,
@@ -95,7 +106,7 @@ export const CONVERSATIONS_PAGE_SIZE = 50;
 /** Conversation columns plus the coding-task summary the sidebar shows. */
 const CODING_SUMMARY_COLUMNS = `cc.project_title AS coding_project_title, cc.status AS coding_status,
 	cc.run_started_at AS coding_run_started_at, cc.diff_insertions AS coding_diff_insertions,
-	cc.diff_deletions AS coding_diff_deletions`;
+	cc.diff_deletions AS coding_diff_deletions, cc.pr_url AS coding_pr_url, cc.pr_state AS coding_pr_state`;
 
 const SIDEBAR_SELECT = `SELECT c.*, ${CODING_SUMMARY_COLUMNS}
 	FROM conversations c
@@ -149,9 +160,9 @@ export function countSettledConversations(db: Db, userId: string): number {
 export function listConversationsSince(db: Db, userId: string, since: number): ConversationRow[] {
 	return db
 		.prepare(
-			`SELECT * FROM conversations
-			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND updated_at >= ?
-			 ORDER BY updated_at DESC`
+			`${SIDEBAR_SELECT}
+			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.updated_at >= ?
+			 ORDER BY c.updated_at DESC`
 		)
 		.all(userId, since) as ConversationRow[];
 }
@@ -241,12 +252,9 @@ export function touchConversation(db: Db, id: string): void {
 	db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(Date.now(), id);
 }
 
+/** Sets the title without counting as activity, so a generated title doesn't reorder the sidebar. */
 export function setConversationTitle(db: Db, id: string, title: string): void {
-	db.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?').run(
-		title,
-		Date.now(),
-		id
-	);
+	db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, id);
 }
 
 export function softDeleteConversation(db: Db, userId: string, id: string): boolean {

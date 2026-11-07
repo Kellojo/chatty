@@ -3,6 +3,8 @@
 	import Undo2Icon from '@lucide/svelte/icons/undo-2';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { resolve } from '$app/paths';
+	import { formatTimeAgo } from '$lib/datetime.js';
 	import type { MemoryWriteEntry } from '$lib/memory-types.js';
 
 	let {
@@ -24,16 +26,6 @@
 				? ''
 				: 'border-border bg-secondary text-secondary-foreground'
 	);
-
-	function formatTimestamp(timestamp: number): string {
-		const diff = Date.now() - timestamp;
-		const minute = 60_000;
-		const hour = 60 * minute;
-		if (diff < minute) return 'just now';
-		if (diff < hour) return `${Math.floor(diff / minute)}m ago`;
-		if (diff < 24 * hour) return `${Math.floor(diff / hour)}h ago`;
-		return new Date(timestamp).toLocaleString();
-	}
 </script>
 
 <div class="rounded-md border bg-muted/30 text-sm">
@@ -49,22 +41,20 @@
 				class="shrink-0 text-xs text-muted-foreground"
 				title={new Date(entry.created_at).toLocaleString()}
 			>
-				{formatTimestamp(entry.created_at)}
+				{formatTimeAgo(entry.created_at)}
 			</span>
 		</div>
 		{#if entry.conversation_id || entry.agent_run_id}
-			<div class="flex flex-col gap-0.5 text-xs text-muted-foreground">
+			<p class="text-xs text-muted-foreground">
 				{#if entry.conversation_id}
-					<span class="truncate" title={entry.conversation_id}>
-						chat: {entry.conversation_id}
-					</span>
+					From <a
+						class="underline underline-offset-4 hover:text-foreground"
+						href={resolve(`/chat/${entry.conversation_id}`)}>a chat</a
+					>
+				{:else}
+					From an agent run
 				{/if}
-				{#if entry.agent_run_id}
-					<span class="truncate" title={entry.agent_run_id}>
-						agent run: {entry.agent_run_id}
-					</span>
-				{/if}
-			</div>
+			</p>
 		{/if}
 		{#if entry.diff}
 			<div class="flex items-center justify-between gap-2">

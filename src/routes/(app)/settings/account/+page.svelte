@@ -5,7 +5,9 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { THEMES, TIME_FORMATS, type Theme, type TimeFormat } from '$lib/user-settings.js';
 	import type { PageData } from './$types';
@@ -95,11 +97,15 @@
 		}
 		passwordBusy = true;
 		try {
-			await fetch('/api/user/password', {
+			const res = await fetch('/api/user/password', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ currentPassword, newPassword })
 			});
+			if (!res.ok) {
+				const payload = (await res.json().catch(() => null)) as { message?: string } | null;
+				throw new Error(payload?.message ?? `Request failed (${res.status})`);
+			}
 			toast.success('Password updated');
 			passwordDialogOpen = false;
 			currentPassword = '';
@@ -113,71 +119,58 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<h2 class="text-xl font-semibold">Account</h2>
-	<p class="text-sm text-muted-foreground">Personal preferences for your account.</p>
+<svelte:head><title>Account · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Appearance</Card.Title>
-			<Card.Description>Choose how the app looks.</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-4">
-			<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-				<div class="flex min-w-0 flex-col gap-1">
-					<Label>Theme</Label>
-					<p class="text-sm text-muted-foreground">Light, dark, or follow your system setting.</p>
-				</div>
-				<Select.Root
-					type="single"
-					value={theme}
-					onValueChange={(value) => changeTheme(value as Theme)}
-				>
-					<Select.Trigger class="w-full shrink-0 sm:w-48" disabled={themeBusy}>
-						{themeLabels[theme]}
-					</Select.Trigger>
-					<Select.Content>
-						{#each THEMES as option (option)}
-							<Select.Item value={option}>{themeLabels[option]}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-				<div class="flex min-w-0 flex-col gap-1">
-					<Label>Time format</Label>
-					<p class="text-sm text-muted-foreground">
-						How times are shown. Automatic follows your browser locale.
-					</p>
-				</div>
-				<Select.Root
-					type="single"
-					value={timeFormat}
-					onValueChange={(value) => changeTimeFormat(value as TimeFormat)}
-				>
-					<Select.Trigger class="w-full shrink-0 sm:w-48" disabled={timeFormatBusy}>
-						{timeFormatLabels[timeFormat]}
-					</Select.Trigger>
-					<Select.Content>
-						{#each TIME_FORMATS as option (option)}
-							<Select.Item value={option}>{timeFormatLabels[option]}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-		</Card.Content>
-	</Card.Root>
+<SettingsHeader title="Account" description="Personal preferences for your account." />
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Change password</Card.Title>
-			<Card.Description>Update your account password.</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex justify-end">
-			<Button onclick={openPasswordDialog}>Update password</Button>
-		</Card.Content>
-	</Card.Root>
-</div>
+<SettingsSection title="Appearance" description="Choose how the app looks.">
+	<SettingsRow
+		label="Theme"
+		for="pref-theme"
+		description="Light, dark, or follow your system setting."
+		stack
+	>
+		<Select.Root type="single" value={theme} onValueChange={(value) => changeTheme(value as Theme)}>
+			<Select.Trigger id="pref-theme" class="w-full sm:w-48" disabled={themeBusy}>
+				{themeLabels[theme]}
+			</Select.Trigger>
+			<Select.Content>
+				{#each THEMES as option (option)}
+					<Select.Item value={option}>{themeLabels[option]}</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
+	</SettingsRow>
+	<SettingsRow
+		label="Time format"
+		for="pref-time-format"
+		description="How times are shown. Automatic follows your browser locale."
+		stack
+	>
+		<Select.Root
+			type="single"
+			value={timeFormat}
+			onValueChange={(value) => changeTimeFormat(value as TimeFormat)}
+		>
+			<Select.Trigger id="pref-time-format" class="w-full sm:w-48" disabled={timeFormatBusy}>
+				{timeFormatLabels[timeFormat]}
+			</Select.Trigger>
+			<Select.Content>
+				{#each TIME_FORMATS as option (option)}
+					<Select.Item value={option}>{timeFormatLabels[option]}</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
+	</SettingsRow>
+</SettingsSection>
+
+<SettingsSection title="Security" description="How you sign in to Chatty.">
+	<SettingsRow label="Password" description="Change the password you sign in with." stack>
+		<Button variant="outline" class="w-full sm:w-auto" onclick={openPasswordDialog}>
+			Change password
+		</Button>
+	</SettingsRow>
+</SettingsSection>
 
 <Dialog.Root
 	open={passwordDialogOpen}
@@ -192,10 +185,11 @@
 >
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Update password</Dialog.Title>
+			<Dialog.Title>Change password</Dialog.Title>
+			<Dialog.Description>Use at least 8 characters.</Dialog.Description>
 		</Dialog.Header>
 		<form onsubmit={submitPassword} class="flex flex-col gap-4">
-			<div class="flex flex-col gap-1">
+			<div class="flex flex-col gap-2">
 				<Label for="dialog-current-password">Current password</Label>
 				<Input
 					id="dialog-current-password"
@@ -206,7 +200,7 @@
 					autocomplete="current-password"
 				/>
 			</div>
-			<div class="flex flex-col gap-1">
+			<div class="flex flex-col gap-2">
 				<Label for="dialog-new-password">New password</Label>
 				<Input
 					id="dialog-new-password"
@@ -218,7 +212,7 @@
 					autocomplete="new-password"
 				/>
 			</div>
-			<div class="flex flex-col gap-1">
+			<div class="flex flex-col gap-2">
 				<Label for="dialog-confirm-new-password">Confirm new password</Label>
 				<Input
 					id="dialog-confirm-new-password"
@@ -232,7 +226,7 @@
 			</div>
 			<Dialog.Footer>
 				<Button type="submit" disabled={passwordBusy}>
-					{passwordBusy ? 'Updating…' : 'Update password'}
+					{passwordBusy ? 'Saving…' : 'Change password'}
 				</Button>
 			</Dialog.Footer>
 		</form>

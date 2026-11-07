@@ -8,8 +8,16 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import ServerIcon from '@lucide/svelte/icons/server';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
+	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
 	import EnvironmentStatusBadge from '$lib/components/app/EnvironmentStatusBadge.svelte';
 	import { formatTimeAgo } from '$lib/datetime.js';
 	import LinkIcon from '@lucide/svelte/icons/link';
@@ -164,100 +172,114 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<div class="flex items-center justify-between gap-4">
-		<div class="flex flex-col gap-1">
-			<h2 class="text-xl font-semibold">Coding environments</h2>
-			<p class="text-sm text-muted-foreground">
-				Remote T3 Code servers connected to your account. Chatty reads their status and provider
-				usage — see <a class="underline" href={resolve('/usage')}>Usage</a>.
-			</p>
-		</div>
-		<Button onclick={() => openForm(null)}>Connect environment</Button>
-	</div>
+<svelte:head><title>Coding environments · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Content>
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Name</Table.Head>
-						<Table.Head>URL</Table.Head>
-						<Table.Head>Status</Table.Head>
-						<Table.Head>Last synced</Table.Head>
-						<Table.Head>Enabled</Table.Head>
-						<Table.Head class="text-right">Actions</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each data.environments as env (env.id)}
-						<Table.Row>
-							<Table.Cell class="max-w-40 font-medium" title={env.name}>
-								<div class="flex flex-col">
-									<span class="truncate">{env.name}</span>
-									{#if env.serverVersion}
-										<span class="text-xs font-normal text-muted-foreground">
-											T3 Code {env.serverVersion}
-										</span>
-									{/if}
-								</div>
-							</Table.Cell>
-							<Table.Cell class="max-w-56 truncate text-muted-foreground" title={env.baseUrl}>
-								{env.baseUrl}
-							</Table.Cell>
-							<Table.Cell>
-								<EnvironmentStatusBadge environment={env} />
-							</Table.Cell>
-							<Table.Cell class="text-muted-foreground">
-								{env.lastSyncedAt ? formatTimeAgo(env.lastSyncedAt) : 'Never'}
-							</Table.Cell>
-							<Table.Cell>
-								<Switch
-									checked={enabledOverride[env.id] ?? env.enabled}
-									onCheckedChange={(checked) => toggleEnabled(env, checked)}
-								/>
-							</Table.Cell>
-							<Table.Cell class="text-right whitespace-nowrap">
-								<div class="flex justify-end gap-2">
-									<Button
-										variant="outline"
-										size="sm"
-										disabled={syncBusyId === env.id || !env.enabled}
-										onclick={() => sync(env)}
-									>
-										{#if syncBusyId === env.id}
-											<Loader2Icon class="size-4 animate-spin" />
-											Syncing…
-										{:else}
-											Sync now
-										{/if}
-									</Button>
-									<Button variant="outline" size="sm" onclick={() => openForm(env)}>Edit</Button>
-									<Button
-										variant="destructive"
-										size="sm"
-										onclick={() => {
-											deleteTarget = env;
-											deleteOpen = true;
-										}}
-									>
-										Remove
-									</Button>
-								</div>
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row>
-							<Table.Cell colspan={6} class="text-center text-muted-foreground">
-								No coding environments connected yet.
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		</Card.Content>
-	</Card.Root>
-</div>
+<SettingsHeader title="Coding environments">
+	{#snippet description()}
+		Remote T3 Code servers connected to your account. Chatty runs coding tasks on them and reads
+		their provider usage for
+		<a class="underline underline-offset-4 hover:text-foreground" href={resolve('/usage')}>Usage</a
+		>.
+	{/snippet}
+	{#snippet actions()}
+		<Button onclick={() => openForm(null)}><PlusIcon class="size-4" />Connect environment</Button>
+	{/snippet}
+</SettingsHeader>
+
+<SettingsSection flush>
+	{#if data.environments.length === 0}
+		<div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
+			<div
+				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+			>
+				<ServerIcon class="size-5" />
+			</div>
+			<div class="flex max-w-sm flex-col gap-1">
+				<p class="text-sm font-medium">No environments connected</p>
+				<p class="text-sm text-muted-foreground">
+					Run <code class="rounded bg-muted px-1 py-0.5 text-xs">t3 serve</code> on a machine and paste
+					its pairing link to run coding tasks there.
+				</p>
+			</div>
+			<Button size="sm" onclick={() => openForm(null)}>
+				<PlusIcon class="size-4" />Connect environment
+			</Button>
+		</div>
+	{:else}
+		<ul class="divide-y divide-border/60" aria-label="Coding environments">
+			{#each data.environments as env (env.id)}
+				{@const enabled = enabledOverride[env.id] ?? env.enabled}
+				<SettingsListItem title={env.name} muted={!enabled}>
+					{#snippet leading()}<ServerIcon class="size-4" />{/snippet}
+					{#snippet badges()}<EnvironmentStatusBadge environment={env} />{/snippet}
+					{#snippet meta()}
+						<!-- External T3 Code server, not an app route. -->
+						<!-- eslint-disable svelte/no-navigation-without-resolve -->
+						<a
+							href={env.baseUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="rounded-sm hover:text-foreground hover:underline hover:underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+							title="Open {env.name} in T3 Code">{env.baseUrl}</a
+						>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
+					{/snippet}
+					<p class="text-xs text-muted-foreground">
+						{#if env.serverVersion}T3 Code {env.serverVersion} ·{/if}
+						{syncBusyId === env.id
+							? 'Syncing…'
+							: env.lastSyncedAt
+								? `Synced ${formatTimeAgo(env.lastSyncedAt)}`
+								: 'Never synced'}
+					</p>
+					{#if env.status === 'error' && env.lastError && enabled}
+						<p class="line-clamp-2 text-xs text-destructive" title={env.lastError}>
+							{env.lastError}
+						</p>
+					{/if}
+					{#snippet trailing()}
+						{#if syncBusyId === env.id}
+							<Loader2Icon class="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+						{/if}
+						<Switch
+							checked={enabled}
+							aria-label="Enable {env.name}"
+							onCheckedChange={(checked) => toggleEnabled(env, checked)}
+						/>
+						<RowMenu
+							label="Actions for {env.name}"
+							items={[
+								{
+									label: 'Open in T3 Code',
+									icon: ExternalLinkIcon,
+									onSelect: () => window.open(env.baseUrl, '_blank', 'noopener,noreferrer')
+								},
+								'separator',
+								{
+									label: 'Sync now',
+									icon: RefreshCwIcon,
+									disabled: syncBusyId === env.id || !env.enabled,
+									onSelect: () => sync(env)
+								},
+								{ label: 'Edit', icon: PencilIcon, onSelect: () => openForm(env) },
+								'separator',
+								{
+									label: 'Remove',
+									icon: Trash2Icon,
+									destructive: true,
+									onSelect: () => {
+										deleteTarget = env;
+										deleteOpen = true;
+									}
+								}
+							]}
+						/>
+					{/snippet}
+				</SettingsListItem>
+			{/each}
+		</ul>
+	{/if}
+</SettingsSection>
 
 <Dialog.Root bind:open={formOpen}>
 	<Dialog.Content>

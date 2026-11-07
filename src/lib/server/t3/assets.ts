@@ -8,7 +8,7 @@ import { decryptSecret } from '../crypto.js';
 import type { Db } from '../db/index.js';
 import { getCodingConversationForUser } from '../db/repo/coding-conversations.js';
 import { getCodingEnvironment } from '../db/repo/coding-environments.js';
-import { connectT3, t3FetchBinary, T3ClientError } from './client.js';
+import { connectT3, t3FetchBinary, T3ClientError, type T3Connection } from './client.js';
 import { CodingTaskError } from './tasks.js';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -18,17 +18,57 @@ export interface CodingAsset {
 	bytes: Uint8Array;
 }
 
+/** Characters that would make a match part of a longer path. */
+const PATH_CHAR_BEFORE = /[\p{L}\p{N}_.~\-/\\:]/u;
+const PATH_CHAR_AFTER = /[\p{L}\p{N}_\-/\\]/u;
+
+/** Whether `path` occurs in `text` as a whole path, not inside a longer one. */
+export function containsPath(text: string, path: string): boolean {
+	for (let i = text.indexOf(path); i !== -1; i = text.indexOf(path, i + 1)) {
+		const before = text[i - 1];
+		const after = text[i + path.length];
+		if (before !== undefined && PATH_CHAR_BEFORE.test(before)) continue;
+		if (after !== undefined && PATH_CHAR_AFTER.test(after)) continue;
+		// A trailing "." ends a sentence, but ".png" etc. would extend the path.
+		const next = text[i + path.length + 1];
+		if (after === '.' && next !== undefined && /[\p{L}\p{N}]/u.test(next)) continue;
+		return true;
+	}
+	return false;
+}
+
+function someString(value: unknown, test: (s: string) => boolean): boolean {
+	if (typeof value === 'string') return test(value);
+	if (Array.isArray(value)) return value.some((v) => someString(v, test));
+	if (value && typeof value === 'object') {
+		return Object.values(value).some((v) => someString(v, test));
+	}
+	return false;
+}
+
 /**
- * Only paths that already appear in the conversation are served, so a chat
- * can't be used to read arbitrary files off the coding machine.
+ * Only paths the coding agent itself put in the conversation are served, so a
+ * chat can't be used to read arbitrary files off the coding machine.
  */
 function isReferenced(db: Db, conversationId: string, path: string): boolean {
-	// Message parts are stored as JSON, where backslashes are escaped.
+	// Message parts are stored as JSON, where backslashes are escaped; the SQL
+	// substring match only prefilters, the exact check runs on decoded strings.
 	const needle = JSON.stringify(path).slice(1, -1);
-	const row = db
-		.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND instr(parts, ?) > 0 LIMIT 1')
-		.get(conversationId, needle);
-	return row !== undefined;
+	const rows = db
+		.prepare(
+			`SELECT parts FROM messages
+			 WHERE conversation_id = ? AND role = 'assistant' AND instr(parts, ?) > 0`
+		)
+		.all(conversationId, needle) as { parts: string }[];
+	return rows.some(({ parts }) => {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(parts);
+		} catch {
+			return false;
+		}
+		return someString(parsed, (s) => containsPath(s, path));
+	});
 }
 
 export async function fetchCodingImage(
@@ -48,19 +88,19 @@ export async function fetchCodingImage(
 
 	const token = decryptSecret(env.token_enc);
 	let relativeUrl: string | null;
-	const conn = await connectT3(env.base_url, token);
+	let conn: T3Connection;
+	try {
+		conn = await connectT3(env.base_url, token);
+	} catch (e) {
+		throw toAssetError(e);
+	}
 	try {
 		const result = await conn.call<{ relativeUrl?: unknown }>('assets.createUrl', {
 			resource: { _tag: 'media-file', threadId: coding.thread_id, path }
 		});
 		relativeUrl = typeof result?.relativeUrl === 'string' ? result.relativeUrl : null;
 	} catch (e) {
-		if (e instanceof T3ClientError && e.kind === 'unauthorized') {
-			throw new CodingTaskError(
-				403,
-				'Re-pair this coding environment to show images from it (it needs workspace access)'
-			);
-		}
+		if (e instanceof T3ClientError && e.kind === 'unauthorized') throw toAssetError(e);
 		throw new CodingTaskError(404, 'Image not available on the coding machine');
 	} finally {
 		conn.close();
@@ -70,10 +110,30 @@ export async function fetchCodingImage(
 		throw new CodingTaskError(404, 'Image not available on the coding machine');
 	}
 
-	const file = await t3FetchBinary(env.base_url, token, relativeUrl, MAX_IMAGE_BYTES);
+	let file: Awaited<ReturnType<typeof t3FetchBinary>>;
+	try {
+		file = await t3FetchBinary(env.base_url, token, relativeUrl, MAX_IMAGE_BYTES);
+	} catch (e) {
+		throw toAssetError(e);
+	}
 	if (!file) throw new CodingTaskError(404, 'Image not available on the coding machine');
 	if (!file.contentType.startsWith('image/') || file.contentType.includes('svg')) {
 		throw new CodingTaskError(415, 'Not an image');
 	}
 	return file;
+}
+
+/** Maps a failure talking to T3 to the response the image route sends. */
+function toAssetError(e: unknown): CodingTaskError {
+	if (e instanceof T3ClientError && e.kind === 'unauthorized') {
+		return new CodingTaskError(
+			403,
+			'Re-pair this coding environment to show images from it (it needs workspace access)'
+		);
+	}
+	// T3 answered but refused (too large, server error): treat as unavailable.
+	if (e instanceof T3ClientError && e.kind === 'remote') {
+		return new CodingTaskError(404, 'Image not available on the coding machine');
+	}
+	return new CodingTaskError(502, 'Could not reach the coding machine');
 }

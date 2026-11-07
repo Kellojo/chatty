@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import CheckIcon from '@lucide/svelte/icons/check';
@@ -13,11 +14,17 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
+	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
+	import CodeBlock from '$lib/components/app/settings/CodeBlock.svelte';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
 	import type { ApiKey } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -224,315 +231,203 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<h2 class="text-xl font-semibold">API</h2>
-	<p class="text-sm text-muted-foreground">
-		Programmatic access: run agents over HTTP or call LLMs through the OpenAI-compatible proxy. API
-		keys authenticate as you — treat them like passwords.
-	</p>
+<svelte:head><title>API · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>API keys</Card.Title>
-			<Card.Description>
-				Used to trigger agents over HTTP and call the AI proxy. Treat keys like passwords.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-3">
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Label</Table.Head>
-						<Table.Head>Scopes</Table.Head>
-						<Table.Head>Created</Table.Head>
-						<Table.Head>Last used</Table.Head>
-						<Table.Head class="text-right">Actions</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each data.apiKeys as key (key.id)}
-						<Table.Row>
-							<Table.Cell class="max-w-48 truncate font-medium" title={key.label}>
-								{key.label}
-							</Table.Cell>
-							<Table.Cell>
-								<div class="flex flex-wrap gap-1">
-									{#each key.scopes as scope (scope)}
-										<Badge variant="secondary">{scope}</Badge>
-									{/each}
-								</div>
-							</Table.Cell>
-							<Table.Cell class="whitespace-nowrap text-muted-foreground">
-								{formatDateTime(key.createdAt, data.timeFormat)}
-							</Table.Cell>
-							<Table.Cell class="whitespace-nowrap text-muted-foreground">
-								{key.lastUsedAt ? formatDateTime(key.lastUsedAt, data.timeFormat) : 'never'}
-							</Table.Cell>
-							<Table.Cell class="text-right">
-								<Button
-									variant="destructive"
-									size="sm"
-									disabled={deleteKeyBusy !== null}
-									onclick={() => deleteKey(key.id)}
-								>
-									{deleteKeyBusy === key.id ? 'Deleting…' : 'Delete'}
-								</Button>
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row>
-							<Table.Cell colspan={5} class="text-center text-muted-foreground">
-								No API keys yet.
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-			<div>
-				<Button onclick={openKeyDialog}>Create API key</Button>
+<SettingsHeader
+	title="API"
+	description="Run agents over HTTP or call models through the OpenAI-compatible proxy. API keys act as you, so treat them like passwords."
+>
+	{#snippet actions()}
+		<Button onclick={openKeyDialog}><PlusIcon class="size-4" />Create key</Button>
+	{/snippet}
+</SettingsHeader>
+
+<SettingsSection title="API keys" flush>
+	{#snippet description()}
+		Scope a key to <code class="rounded bg-muted px-1 py-0.5 text-xs">agents:run</code>,
+		<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> or both.
+	{/snippet}
+	{#if data.apiKeys.length === 0}
+		<div
+			class="flex flex-col items-center gap-3 border-t border-border/60 px-6 pt-6 pb-4 text-center"
+		>
+			<div
+				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+			>
+				<KeyRoundIcon class="size-5" />
 			</div>
-		</Card.Content>
-	</Card.Root>
-
-	<h3 class="text-lg font-semibold">Agent API</h3>
-	<p class="text-sm text-muted-foreground">
-		Trigger agents over HTTP. Requires an API key with the
-		<code class="rounded bg-muted px-1 py-0.5 text-xs">agents:run</code> scope.
-	</p>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>curl</Card.Title>
-			<Card.Description>
-				Start an agent run. The request returns <code class="rounded bg-muted px-1 py-0.5 text-xs"
-					>202 Accepted</code
-				> with the created run.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-3">
-			<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{agentRunSnippet}</pre>
-			<div>
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={() => copyText('agent-run', agentRunSnippet)}
-					aria-label="Copy agent run snippet"
-				>
-					{#if copiedId === 'agent-run'}
-						<CheckIcon class="size-4" />
-					{:else}
-						<CopyIcon class="size-4" />
-					{/if}
-					Copy
-				</Button>
+			<div class="flex flex-col gap-1">
+				<p class="text-sm font-medium">No API keys yet</p>
+				<p class="text-sm text-muted-foreground">
+					Create one to start agent runs or call models from scripts and other tools.
+				</p>
 			</div>
-		</Card.Content>
-	</Card.Root>
-
-	<h3 class="text-lg font-semibold">Model inference</h3>
-	<p class="text-sm text-muted-foreground">
-		<code class="rounded bg-muted px-1 py-0.5 text-xs">GET {origin}/api/v1/models</code> lists
-		available model ids (no auth). Inference calls require an API key with the
-		<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> scope.
-	</p>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Provider setups</Card.Title>
-			<Card.Description>
-				Point your tools at the OpenAI-compatible proxy. Each call needs an API key with the
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> scope.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-3">
-			<Tabs.Root value="curl">
-				<Tabs.List class="flex-wrap">
-					<Tabs.Trigger value="curl">
-						<SquareTerminalIcon class="size-4" aria-hidden="true" />Curl
-					</Tabs.Trigger>
-					<Tabs.Trigger value="opencode">
-						<CodeIcon class="size-4" aria-hidden="true" />OpenCode
-					</Tabs.Trigger>
-					<Tabs.Trigger value="claude-code">
-						<BotIcon class="size-4" aria-hidden="true" />Claude Code
-					</Tabs.Trigger>
-					<Tabs.Trigger value="pi">
-						<SquarePiIcon class="size-4" aria-hidden="true" />pi
-					</Tabs.Trigger>
-				</Tabs.List>
-
-				<Tabs.Content value="curl" class="flex flex-col gap-3">
-					<p class="text-sm text-muted-foreground">
-						Call the chat completions endpoint with an API key that has the
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> scope.
-					</p>
-					<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{curlSnippet}</pre>
-					<div>
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={() => copyText('curl', curlSnippet)}
-							aria-label="Copy curl snippet"
-						>
-							{#if copiedId === 'curl'}
-								<CheckIcon class="size-4" />
-							{:else}
-								<CopyIcon class="size-4" />
-							{/if}
-							Copy
-						</Button>
-					</div>
-				</Tabs.Content>
-
-				<Tabs.Content value="opencode" class="flex flex-col gap-3">
-					<p class="text-sm text-muted-foreground">
-						Add this provider entry to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
-							>opencode.json</code
-						>.
-					</p>
-					<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{opencodeSnippet}</pre>
-					<div>
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={() => copyText('opencode', opencodeSnippet)}
-							aria-label="Copy opencode config"
-						>
-							{#if copiedId === 'opencode'}
-								<CheckIcon class="size-4" />
-							{:else}
-								<CopyIcon class="size-4" />
-							{/if}
-							Copy
-						</Button>
-					</div>
-				</Tabs.Content>
-
-				<Tabs.Content value="claude-code" class="flex flex-col gap-3">
-					<p class="text-sm text-muted-foreground">
-						Claude Code speaks the Anthropic Messages API. Point an OpenAI-compatible shim such as
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">claude-code-router</code> at
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">{origin}/api/v1</code> with an
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key. Native
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">/v1/messages</code> support is planned.
-					</p>
-				</Tabs.Content>
-
-				<Tabs.Content value="pi" class="flex flex-col gap-3">
-					<p class="text-sm text-muted-foreground">
-						Add this provider to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
-							>models.json</code
-						>
-						in pi's agent directory. Replace
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">&lt;model&gt;</code>
-						with any model id from
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">GET {origin}/api/v1/models</code>.
-					</p>
-					<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{piSnippet}</pre>
-					<div>
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={() => copyText('pi', piSnippet)}
-							aria-label="Copy pi config"
-						>
-							{#if copiedId === 'pi'}
-								<CheckIcon class="size-4" />
-							{:else}
-								<CopyIcon class="size-4" />
-							{/if}
-							Copy
-						</Button>
-					</div>
-				</Tabs.Content>
-			</Tabs.Root>
-		</Card.Content>
-	</Card.Root>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Decisions</Card.Title>
-			<Card.Description>
-				Classify content, route requests, and score inputs with the Decisions API. Supports
-				predicate, choice, and score question types. Assign a model with the
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">decisions</code> capability on the
-				Defaults page — by default no model is assigned and the endpoint returns an error. Requires
-				an API key with the
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> scope.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-3">
-			<pre class="overflow-x-auto rounded-md bg-muted p-3 text-xs">{decisionsCurlSnippet}</pre>
-			<div>
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={() => copyText('decisions', decisionsCurlSnippet)}
-					aria-label="Copy decisions snippet"
-				>
-					{#if copiedId === 'decisions'}
-						<CheckIcon class="size-4" />
-					{:else}
-						<CopyIcon class="size-4" />
-					{/if}
-					Copy
-				</Button>
-			</div>
-		</Card.Content>
-	</Card.Root>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Compression</Card.Title>
-			<Card.Description>
-				Reduce token usage for requests made through the AI proxy with your API keys.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-4">
-			<div class="flex items-center justify-between gap-6">
-				<div class="flex min-w-0 flex-col gap-1">
-					<Label>Caveman</Label>
-					<p class="text-sm text-muted-foreground">
-						{cavemanDescriptions[caveman]}
-					</p>
-					<p class="text-xs text-muted-foreground">
-						Savings are estimates; the prompt adds ~1–1.5k input tokens overhead per request.
-					</p>
-				</div>
-				<Select.Root
-					type="single"
-					value={caveman}
-					onValueChange={(value) => changeCaveman(value as CavemanLevel)}
-				>
-					<Select.Trigger class="w-48 shrink-0" disabled={cavemanBusy}>
-						{cavemanLabels[caveman]}
-					</Select.Trigger>
-					<Select.Content>
-						{#each cavemanLevels as option (option)}
-							<Select.Item value={option}>
-								<span class="flex flex-col">
-									<span>{cavemanLabels[option]}</span>
-									<span class="text-xs whitespace-normal text-muted-foreground">
-										{cavemanDescriptions[option]}
-									</span>
-								</span>
-							</Select.Item>
+		</div>
+	{:else}
+		<ul class="divide-y divide-border/60 border-t border-border/60" aria-label="API keys">
+			{#each data.apiKeys as key (key.id)}
+				<SettingsListItem title={key.label}>
+					{#snippet leading()}<KeyRoundIcon class="size-4" />{/snippet}
+					{#snippet badges()}
+						{#each key.scopes as scope (scope)}
+							<Badge variant="secondary" class="font-mono font-normal">{scope}</Badge>
 						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<div class="flex flex-col gap-2 border-t pt-4">
-				<Label>Your savings</Label>
-				<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-					<dt class="text-muted-foreground">Proxy requests</dt>
-					<dd>{data.savings.total.toLocaleString()}</dd>
-					<dt class="text-muted-foreground">Caveman saved (est.)</dt>
-					<dd>{data.savings.cavemanSaved.toLocaleString()} tokens</dd>
-				</dl>
-			</div>
-		</Card.Content>
-	</Card.Root>
-</div>
+					{/snippet}
+					{#snippet meta()}
+						Created {formatDateTime(key.createdAt, data.timeFormat)} · {key.lastUsedAt
+							? `Last used ${formatDateTime(key.lastUsedAt, data.timeFormat)}`
+							: 'Never used'}
+					{/snippet}
+					{#snippet trailing()}
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							class="text-muted-foreground hover:text-destructive"
+							title="Delete key"
+							aria-label="Delete key {key.label}"
+							disabled={deleteKeyBusy !== null}
+							onclick={() => deleteKey(key.id)}
+						>
+							<Trash2Icon class="size-4" />
+						</Button>
+					{/snippet}
+				</SettingsListItem>
+			{/each}
+		</ul>
+	{/if}
+</SettingsSection>
+
+<SettingsSection title="Agent API">
+	{#snippet description()}
+		Start an agent run. Needs a key with the <code class="rounded bg-muted px-1 py-0.5 text-xs"
+			>agents:run</code
+		>
+		scope and returns
+		<code class="rounded bg-muted px-1 py-0.5 text-xs">202 Accepted</code> with the created run.
+	{/snippet}
+	<CodeBlock code={agentRunSnippet} label="curl" />
+</SettingsSection>
+
+<SettingsSection title="Model inference">
+	{#snippet description()}
+		Point your tools at the OpenAI-compatible proxy with an <code
+			class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code
+		>
+		key. Listing model ids needs no key:
+		<code
+			class="inline-block max-w-full overflow-x-auto rounded bg-muted px-1 py-0.5 align-bottom text-xs whitespace-nowrap"
+			>GET {origin}/api/v1/models</code
+		>
+	{/snippet}
+	<Tabs.Root value="curl" class="gap-3">
+		<Tabs.List class="flex-wrap">
+			<Tabs.Trigger value="curl">
+				<SquareTerminalIcon class="size-4" aria-hidden="true" />curl
+			</Tabs.Trigger>
+			<Tabs.Trigger value="opencode">
+				<CodeIcon class="size-4" aria-hidden="true" />OpenCode
+			</Tabs.Trigger>
+			<Tabs.Trigger value="claude-code">
+				<BotIcon class="size-4" aria-hidden="true" />Claude Code
+			</Tabs.Trigger>
+			<Tabs.Trigger value="pi">
+				<SquarePiIcon class="size-4" aria-hidden="true" />pi
+			</Tabs.Trigger>
+		</Tabs.List>
+		<Tabs.Content value="curl" class="flex flex-col gap-3">
+			<p class="text-sm text-muted-foreground">Stream a chat completion.</p>
+			<CodeBlock code={curlSnippet} label="curl" />
+		</Tabs.Content>
+		<Tabs.Content value="opencode" class="flex flex-col gap-3">
+			<p class="text-sm text-muted-foreground">
+				Add this provider entry to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
+					>opencode.json</code
+				>.
+			</p>
+			<CodeBlock code={opencodeSnippet} label="OpenCode config" />
+		</Tabs.Content>
+		<Tabs.Content value="claude-code" class="flex flex-col gap-3">
+			<p class="text-sm text-muted-foreground">
+				Claude Code speaks the Anthropic Messages API. Point an OpenAI-compatible shim such as
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">claude-code-router</code> at
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">{origin}/api/v1</code>
+				with an
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key. Native
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">/v1/messages</code> support is planned.
+			</p>
+		</Tabs.Content>
+		<Tabs.Content value="pi" class="flex flex-col gap-3">
+			<p class="text-sm text-muted-foreground">
+				Add this provider to <code class="rounded bg-muted px-1 py-0.5 text-xs">models.json</code>
+				in pi's agent directory and replace
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">&lt;model&gt;</code> with a model id from the
+				models endpoint.
+			</p>
+			<CodeBlock code={piSnippet} label="pi config" />
+		</Tabs.Content>
+	</Tabs.Root>
+</SettingsSection>
+
+<SettingsSection title="Decisions">
+	{#snippet description()}
+		Classify content, route requests and score inputs with predicate, choice and score questions.
+		Needs an <code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key and a model
+		with the
+		<code class="rounded bg-muted px-1 py-0.5 text-xs">decisions</code> capability set in
+		<a
+			class="underline underline-offset-4 hover:text-foreground"
+			href={resolve('/settings/defaults')}>Defaults</a
+		>; until then the endpoint returns an error.
+	{/snippet}
+	<CodeBlock code={decisionsCurlSnippet} label="curl" />
+</SettingsSection>
+
+<SettingsSection
+	title="Compression"
+	description="Reduce token usage for proxy requests made with your API keys."
+>
+	<SettingsRow label="Caveman" for="caveman-level" stack>
+		{#snippet description()}
+			<p>{cavemanDescriptions[caveman]}</p>
+			<p class="mt-1 text-xs">
+				Savings are estimates; the prompt adds about 1–1.5k input tokens per request.
+			</p>
+		{/snippet}
+		<Select.Root
+			type="single"
+			value={caveman}
+			onValueChange={(value) => changeCaveman(value as CavemanLevel)}
+		>
+			<Select.Trigger id="caveman-level" class="w-full sm:w-48" disabled={cavemanBusy}>
+				{cavemanLabels[caveman]}
+			</Select.Trigger>
+			<Select.Content>
+				{#each cavemanLevels as option (option)}
+					<Select.Item value={option}>
+						<span class="flex flex-col">
+							<span>{cavemanLabels[option]}</span>
+							<span class="text-xs whitespace-normal text-muted-foreground">
+								{cavemanDescriptions[option]}
+							</span>
+						</span>
+					</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
+	</SettingsRow>
+	<dl class="grid grid-cols-2 gap-3 border-t pt-4">
+		<div class="flex flex-col gap-0.5 rounded-xl bg-muted/50 px-4 py-3">
+			<dt class="text-xs text-muted-foreground">Proxy requests</dt>
+			<dd class="text-xl font-semibold tabular-nums">{data.savings.total.toLocaleString()}</dd>
+		</div>
+		<div class="flex flex-col gap-0.5 rounded-xl bg-muted/50 px-4 py-3">
+			<dt class="text-xs text-muted-foreground">Tokens saved (est.)</dt>
+			<dd class="text-xl font-semibold tabular-nums">
+				{data.savings.cavemanSaved.toLocaleString()}
+			</dd>
+		</div>
+	</dl>
+</SettingsSection>
 
 <Dialog.Root open={keyDialogOpen} onOpenChange={closeKeyDialog}>
 	<Dialog.Content>

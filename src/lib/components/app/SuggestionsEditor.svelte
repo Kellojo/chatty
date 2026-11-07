@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
+	import PlusIcon from '@lucide/svelte/icons/plus';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import { MAX_SUGGESTIONS } from '$lib/user-settings.js';
 
 	let {
@@ -28,6 +29,14 @@
 	// The editor owns its rows after the first render.
 	let rows = $state(untrack(() => toRows(initial)));
 	let busy = $state(false);
+	let saved = $state(untrack(() => [...initial]));
+
+	const cleanedRows = $derived(
+		rows.map((row) => row.text.trim()).filter((text) => text.length > 0)
+	);
+	const dirty = $derived(
+		cleanedRows.length !== saved.length || cleanedRows.some((text, i) => text !== saved[i])
+	);
 
 	function addRow() {
 		if (rows.length >= MAX_SUGGESTIONS) return;
@@ -40,11 +49,12 @@
 
 	async function onSave() {
 		if (busy) return;
-		const cleaned = rows.map((row) => row.text.trim()).filter((text) => text.length > 0);
+		const cleaned = cleanedRows;
 		busy = true;
 		try {
 			await save(cleaned);
 			rows = toRows(cleaned);
+			saved = [...cleaned];
 			toast.success(`${title} saved`);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : `Failed to save ${title.toLowerCase()}`);
@@ -54,41 +64,50 @@
 	}
 </script>
 
-<Card.Root>
-	<Card.Header>
-		<Card.Title>{title}</Card.Title>
-		<Card.Description>{description} Up to {MAX_SUGGESTIONS} suggestions.</Card.Description>
-	</Card.Header>
-	<Card.Content class="flex flex-col gap-3">
-		{#each rows as row (row.id)}
-			<div class="flex items-center gap-2">
-				<Input bind:value={row.text} maxlength={200} placeholder="Suggestion text" />
-				<Button
-					variant="ghost"
-					size="sm"
-					onclick={() => removeRow(row.id)}
-					aria-label="Remove suggestion"
-				>
-					<XIcon class="size-4" />
-				</Button>
-			</div>
-		{:else}
-			<p class="text-sm text-muted-foreground">
-				No suggestions, so the defaults are shown: {defaults.join(' · ')}
-			</p>
-		{/each}
-		<div class="flex items-center gap-2">
-			<Button
-				variant="outline"
-				size="sm"
-				onclick={addRow}
-				disabled={rows.length >= MAX_SUGGESTIONS}
+<SettingsSection {title} {description}>
+	{#if rows.length > 0}
+		<ul class="flex flex-col gap-2">
+			{#each rows as row, i (row.id)}
+				<li class="flex items-center gap-2">
+					<Input
+						bind:value={row.text}
+						maxlength={200}
+						placeholder="Suggestion text"
+						aria-label="{title} {i + 1}"
+					/>
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						class="shrink-0"
+						onclick={() => removeRow(row.id)}
+						aria-label="Remove suggestion {i + 1}"
+						title="Remove"
+					>
+						<XIcon class="size-4" />
+					</Button>
+				</li>
+			{/each}
+		</ul>
+	{:else}
+		<div
+			class="rounded-xl border border-dashed border-border/80 px-4 py-3 text-sm text-muted-foreground"
+		>
+			<p>No custom suggestions, so the home page shows the defaults:</p>
+			<p class="mt-1 text-foreground/80">{defaults.join(' · ')}</p>
+		</div>
+	{/if}
+	<div class="flex flex-wrap items-center justify-between gap-2">
+		<Button variant="ghost" size="sm" onclick={addRow} disabled={rows.length >= MAX_SUGGESTIONS}>
+			<PlusIcon class="size-4" />
+			Add suggestion
+		</Button>
+		<div class="flex items-center gap-3">
+			<span class="text-xs text-muted-foreground tabular-nums"
+				>{rows.length} of {MAX_SUGGESTIONS}</span
 			>
-				Add suggestion
-			</Button>
-			<Button size="sm" onclick={onSave} disabled={busy}>
-				{busy ? 'Saving…' : 'Save suggestions'}
+			<Button size="sm" onclick={onSave} disabled={busy || !dirty}>
+				{busy ? 'Saving…' : 'Save'}
 			</Button>
 		</div>
-	</Card.Content>
-</Card.Root>
+	</div>
+</SettingsSection>

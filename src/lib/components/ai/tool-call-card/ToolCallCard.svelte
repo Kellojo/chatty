@@ -12,6 +12,8 @@
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import { cn } from '$lib/utils.js';
+	import { formatElapsed } from '$lib/formats.js';
+	import { now } from '$lib/state/now.svelte.js';
 	import DiffStat from '$lib/components/app/DiffStat.svelte';
 	import ToolIcon from './ToolIcon.svelte';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
@@ -70,6 +72,16 @@
 				)
 			: null
 	);
+	/** How long the subagent has been at work (live) or took, when T3 says. */
+	const subagentDuration = $derived.by(() => {
+		if (!subagent) return null;
+		const args = (part.input ?? {}) as { startedAt?: unknown; completedAt?: unknown };
+		if (typeof args.startedAt !== 'number') return null;
+		if (phase === 'running') return formatElapsed(now() - args.startedAt);
+		return typeof args.completedAt === 'number'
+			? formatElapsed(args.completedAt - args.startedAt)
+			: null;
+	});
 	const brand = $derived.by(() => {
 		const args = (part.input ?? {}) as { provider?: unknown };
 		return typeof args.provider === 'string' ? resolveBrand(args.provider) : null;
@@ -171,13 +183,41 @@
 			deletions: typeof out.deletions === 'number' ? out.deletions : 0
 		};
 	});
-	const inputBody = $derived(truncate(inputText(part.input)));
+	/** Whether outputText() would be non-empty, without serialising the output. */
+	function hasOutputText(output: unknown): boolean {
+		if (isTrivial(output) || diffStat) return false;
+		if (typeof output === 'string') return output !== '';
+		if (typeof output === 'object') {
+			const content = (output as { content?: unknown }).content;
+			if (Array.isArray(content)) {
+				const texts = content.map((c) =>
+					c && typeof c === 'object' && 'text' in c ? String((c as { text: unknown }).text) : null
+				);
+				if (texts.every((t) => t !== null)) return texts.some((t) => t !== '');
+			}
+			const result = output as { output?: unknown; note?: unknown };
+			if (typeof result.output === 'string') return result.output !== '';
+			if (typeof result.note === 'string' && Object.keys(result).length <= 2) return false;
+		}
+		return true;
+	}
+
+	// The message being streamed is replaced on every chunk, so anything derived
+	// from it re-runs per token. Serialising large tool inputs/outputs is the
+	// expensive part: only do it once the body is actually shown (or, for a
+	// failed call, to summarise its error).
+	const hasResult = $derived(
+		part.state === 'output-error' ? !!part.errorText : hasOutputText(part.output)
+	);
+	const inputBody = $derived(open ? truncate(inputText(part.input)) : '');
 	const resultBody = $derived(
-		truncate(part.state === 'output-error' ? (part.errorText ?? '') : outputText(part.output))
+		open || failed
+			? truncate(part.state === 'output-error' ? (part.errorText ?? '') : outputText(part.output))
+			: ''
 	);
 	// Don't repeat an input the row already shows in full (a short command, a query).
 	const showInput = $derived(
-		inputBody !== '' && inputBody !== '{}' && !detailCoversInput(part.input, display.detail)
+		!isTrivial(part.input) && !detailCoversInput(part.input, display.detail)
 	);
 	/** Failed calls without a detail show the first line of their error instead. */
 	const detail = $derived(display.detail ?? (failed ? errorSummary(resultBody) : null));
@@ -189,8 +229,8 @@
 		const cause = line.replace(/^The coding agent reported an error:\s*/i, '');
 		return cause ? cause.charAt(0).toUpperCase() + cause.slice(1) : line;
 	}
-	const hasBody = $derived(showInput || resultBody !== '' || running);
-	const labelled = $derived(showInput && resultBody !== '');
+	const hasBody = $derived(showInput || hasResult || running);
+	const labelled = $derived(showInput && hasResult);
 </script>
 
 <div class={cn('w-full min-w-0 text-sm', className)}>
@@ -248,6 +288,14 @@
 				)}
 			>
 				{PHASE_LABEL[phase]}
+				{#if subagentDuration}
+					<span
+						class="text-muted-foreground tabular-nums"
+						title={phase === 'running'
+							? `Running for ${subagentDuration}`
+							: `Took ${subagentDuration}`}>· {subagentDuration}</span
+					>
+				{/if}
 				<ChevronRightIcon
 					aria-hidden="true"
 					class={cn(

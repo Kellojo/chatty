@@ -1,10 +1,28 @@
 <script lang="ts">
-	import BarChartIcon from '@lucide/svelte/icons/bar-chart-3';
+	import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
+	import ChartLineIcon from '@lucide/svelte/icons/chart-line';
+	import ChartAreaIcon from '@lucide/svelte/icons/chart-area';
+	import ChartPieIcon from '@lucide/svelte/icons/chart-pie';
 	import { BarChart, LineChart, AreaChart, PieChart } from 'layerchart';
 	import * as Chart from '$lib/components/ui/chart/index.js';
 	import type { ChartConfig } from '$lib/components/ui/chart/index.js';
+	import WidgetCard from './widget-card.svelte';
 
 	type ChartType = 'bar' | 'line' | 'area' | 'pie';
+
+	const TYPE_LABEL: Record<ChartType, string> = {
+		bar: 'Bar chart',
+		line: 'Line chart',
+		area: 'Area chart',
+		pie: 'Pie chart'
+	};
+
+	const TYPE_ICON: Record<ChartType, typeof ChartColumnIcon> = {
+		bar: ChartColumnIcon,
+		line: ChartLineIcon,
+		area: ChartAreaIcon,
+		pie: ChartPieIcon
+	};
 
 	type Dataset = {
 		label?: string;
@@ -100,60 +118,97 @@
 		return cfg;
 	});
 
+	const pieTotal = $derived(pieRows.reduce((sum, r) => sum + r.value, 0));
+	const fmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+	const pct = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 });
+
 	const showLegend = $derived(
 		data !== null && (data.type === 'pie' ? pieRows.length > 1 : data.datasets.length > 1)
 	);
 </script>
 
-<div class="my-4 w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-	{#if !data}
-		<div class="flex items-center gap-3 p-4">
-			<BarChartIcon class="size-5 animate-pulse text-muted-foreground" />
-			<span class="text-sm text-muted-foreground">
-				{isIncomplete ? 'Loading chart…' : 'Could not render chart'}
-			</span>
-		</div>
-	{:else}
-		{#if data.title}
-			<div class="border-b border-border/60 px-4 py-2.5">
-				<span class="text-sm font-medium text-foreground">{data.title}</span>
-			</div>
-		{/if}
-		<div class="p-4">
+<WidgetCard
+	icon={data ? TYPE_ICON[data.type] : ChartColumnIcon}
+	status={data ? 'ready' : isIncomplete ? 'loading' : 'error'}
+	loadingLabel="Loading chart…"
+	errorLabel="Could not render chart"
+	skeletonClass="h-64"
+	raw={code}
+	title={data?.title ?? (data ? TYPE_LABEL[data.type] : null)}
+>
+	{#if data}
+		<div class="px-4 pt-4 pb-3">
 			{#if data.type === 'pie'}
-				<Chart.Container config={pieConfig} class="min-h-[200px] w-full">
+				<Chart.Container config={pieConfig} class="aspect-auto h-64 w-full">
 					<PieChart
 						data={pieRows}
 						key="key"
 						label="label"
 						value="value"
 						c="color"
-						legend={showLegend}
+						innerRadius={-28}
+						cornerRadius={4}
+						padAngle={0.01}
 					>
 						{#snippet tooltip()}
 							<Chart.Tooltip />
 						{/snippet}
 					</PieChart>
 				</Chart.Container>
+				<!-- Values stay readable without hovering (touch), unlike the tooltip. -->
+				<ul class="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-xs">
+					{#each pieRows as r (r.key)}
+						<li class="flex items-center gap-1.5">
+							<span class="size-2.5 shrink-0 rounded-[3px]" style="background: {r.color}"></span>
+							<span class="text-muted-foreground">{r.label}</span>
+							<span class="font-medium tabular-nums">{fmt.format(r.value)}</span>
+							{#if pieTotal > 0}
+								<span class="text-muted-foreground tabular-nums"
+									>{pct.format(r.value / pieTotal)}</span
+								>
+							{/if}
+						</li>
+					{/each}
+				</ul>
 			{:else if data.type === 'bar'}
-				<Chart.Container config={chartConfig} class="min-h-[200px] w-full">
-					<BarChart data={rows} x="label" {series} seriesLayout="group" legend={showLegend}>
+				<Chart.Container config={chartConfig} class="aspect-auto h-64 w-full">
+					<BarChart
+						data={rows}
+						x="label"
+						{series}
+						seriesLayout="group"
+						legend={showLegend}
+						props={{ bars: { radius: 4, strokeWidth: 0 } }}
+					>
 						{#snippet tooltip()}
 							<Chart.Tooltip />
 						{/snippet}
 					</BarChart>
 				</Chart.Container>
 			{:else if data.type === 'line'}
-				<Chart.Container config={chartConfig} class="min-h-[200px] w-full">
-					<LineChart data={rows} x="label" {series} legend={showLegend}>
+				<Chart.Container config={chartConfig} class="aspect-auto h-64 w-full">
+					<LineChart
+						data={rows}
+						x="label"
+						{series}
+						legend={showLegend}
+						points={rows.length <= 12}
+						props={{ spline: { strokeWidth: 2 } }}
+					>
 						{#snippet tooltip()}
 							<Chart.Tooltip />
 						{/snippet}
 					</LineChart>
 				</Chart.Container>
 			{:else}
-				<Chart.Container config={chartConfig} class="min-h-[200px] w-full">
-					<AreaChart data={rows} x="label" {series} legend={showLegend}>
+				<Chart.Container config={chartConfig} class="aspect-auto h-64 w-full">
+					<AreaChart
+						data={rows}
+						x="label"
+						{series}
+						legend={showLegend}
+						props={{ area: { fillOpacity: 0.25, line: { strokeWidth: 2 } } }}
+					>
 						{#snippet tooltip()}
 							<Chart.Tooltip />
 						{/snippet}
@@ -162,4 +217,4 @@
 			{/if}
 		</div>
 	{/if}
-</div>
+</WidgetCard>

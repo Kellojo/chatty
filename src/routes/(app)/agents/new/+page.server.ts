@@ -10,6 +10,7 @@ import {
 } from '$lib/server/db/repo/model-mappings.js';
 import { listModelsGrouped } from '$lib/server/llm/registry.js';
 import { listToolInfo } from '$lib/server/tools/registry.js';
+import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -21,6 +22,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		tools: await listToolInfo(user.id),
 		codingEnvironments: listCodingEnvironments(db, user.id)
 			.filter((row) => row.enabled === 1)
-			.map(environmentToPublic)
+			.map(environmentToPublic),
+		timeFormat: getTimeFormat(db, user.id)
 	};
 };

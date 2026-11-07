@@ -30,7 +30,10 @@ export const SYNC_INTERVAL_MS = 15 * 60 * 1000;
 /** Days of token/cost history requested on each sync (today included). */
 export const USAGE_HISTORY_DAYS = 90;
 
-const inFlight = new Map<string, Promise<CodingEnvironmentRow>>();
+const inFlight = new Map<
+	string,
+	{ connectionKey: string; promise: Promise<CodingEnvironmentRow> }
+>();
 
 function errorMessage(e: unknown): string {
 	if (e instanceof T3ClientError) return e.message;
@@ -93,9 +96,14 @@ export function syncCodingEnvironment(
 	db: Db,
 	env: CodingEnvironmentRow
 ): Promise<CodingEnvironmentRow> {
+	const connectionKey = `${env.base_url}
+${env.token_enc}`;
 	const existing = inFlight.get(env.id);
-	if (existing) return existing;
+	if (existing?.connectionKey === connectionKey) return existing.promise;
 	const promise = (async () => {
+		// A sync still running with the old URL or token would report (and
+		// record) the old connection's status; let it finish, then check anew.
+		if (existing) await existing.promise;
 		try {
 			await runSync(db, env);
 		} catch (e) {
@@ -106,8 +114,10 @@ export function syncCodingEnvironment(
 			recordEnvironmentCheck(db, env.id, { status: 'error', error: errorMessage(e) });
 		}
 		return getCodingEnvironment(db, env.user_id, env.id) ?? env;
-	})().finally(() => inFlight.delete(env.id));
-	inFlight.set(env.id, promise);
+	})().finally(() => {
+		if (inFlight.get(env.id)?.promise === promise) inFlight.delete(env.id);
+	});
+	inFlight.set(env.id, { connectionKey, promise });
 	return promise;
 }
 

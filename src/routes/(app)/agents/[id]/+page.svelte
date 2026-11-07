@@ -1,42 +1,44 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
+	import InfoIcon from '@lucide/svelte/icons/info';
 	import AgentEditor from '$lib/components/app/AgentEditor.svelte';
-	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
+	import AgentHeader from '$lib/components/app/AgentHeader.svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
 
 	const builtin = $derived(data.agent.userId === null);
+	// Bumped to discard edits: remounts the editor from the saved agent.
+	let resets = $state(0);
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-7xl flex-col gap-4 p-6">
-		<div class="flex flex-col gap-1">
-			<Breadcrumb.Root>
-				<Breadcrumb.List>
-					<Breadcrumb.Item>
-						<Breadcrumb.Link href={resolve('/agents')}>Agents</Breadcrumb.Link>
-					</Breadcrumb.Item>
-					<Breadcrumb.Separator />
-					<Breadcrumb.Item>
-						<Breadcrumb.Page>{data.agent.name}</Breadcrumb.Page>
-					</Breadcrumb.Item>
-				</Breadcrumb.List>
-			</Breadcrumb.Root>
-			<h1 class="text-xl font-semibold">
-				{data.agent.name}
-				{#if builtin}
-					<span class="ml-1 align-middle text-sm font-normal text-muted-foreground">Built-in</span>
-				{/if}
-			</h1>
+<svelte:head><title>{data.agent.name} · Agents · Chatty</title></svelte:head>
+
+<div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
+	<div class="mx-auto w-full max-w-6xl p-4 md:p-6">
+		<div class="flex w-full max-w-4xl flex-col gap-6">
+			<AgentHeader agent={data.agent} active="setup" />
+			{#if builtin}
+				<p
+					class="flex items-start gap-2 rounded-xl border bg-muted/50 px-4 py-3 text-sm text-muted-foreground"
+				>
+					<InfoIcon class="mt-0.5 size-4 shrink-0" />
+					Built-in agents ship with Chatty, so their setup can't be changed. You can still turn them on
+					or off and run them.
+				</p>
+			{/if}
+			<!-- Keyed so switching between agents starts the form over. -->
+			{#key `${data.agent.id}:${resets}`}
+				<AgentEditor
+					agent={data.agent}
+					groups={data.groups}
+					mappings={data.mappings}
+					tools={data.tools}
+					codingEnvironments={data.codingEnvironments}
+					timeFormat={data.timeFormat}
+					readonly={builtin}
+					onreset={() => resets++}
+				/>
+			{/key}
 		</div>
-		<AgentEditor
-			agent={data.agent}
-			groups={data.groups}
-			mappings={data.mappings}
-			tools={data.tools}
-			codingEnvironments={data.codingEnvironments}
-			readonly={builtin}
-		/>
 	</div>
 </div>

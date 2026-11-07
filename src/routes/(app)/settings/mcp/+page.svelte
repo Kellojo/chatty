@@ -9,13 +9,50 @@
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import BlocksIcon from '@lucide/svelte/icons/blocks';
+	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import ClockIcon from '@lucide/svelte/icons/clock';
+	import MessageSquareTextIcon from '@lucide/svelte/icons/message-square-text';
+	import FolderIcon from '@lucide/svelte/icons/folder';
+	import SettingsIcon from '@lucide/svelte/icons/settings';
+	import BrainIcon from '@lucide/svelte/icons/brain';
+	import BotIcon from '@lucide/svelte/icons/bot';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
+	import TerminalIcon from '@lucide/svelte/icons/terminal';
+	import ImageIcon from '@lucide/svelte/icons/image';
+	import HourglassIcon from '@lucide/svelte/icons/hourglass';
+	import CalculatorIcon from '@lucide/svelte/icons/calculator';
+	import CloudSunIcon from '@lucide/svelte/icons/cloud-sun';
+	import type { Component } from 'svelte';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import PlugZapIcon from '@lucide/svelte/icons/plug-zap';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
+	import RowMenu, { type RowMenuItem } from '$lib/components/app/settings/RowMenu.svelte';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import type { McpServerInfo } from '$lib/types.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	function menuItems(server: McpServerInfo): RowMenuItem[] {
+		const test: RowMenuItem = {
+			label: 'Test connection',
+			icon: PlugZapIcon,
+			disabled: testBusyId === server.id,
+			onSelect: () => runTest(server)
+		};
+		if (server.builtin) return [test];
+		return [
+			test,
+			{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(server) },
+			'separator',
+			{ label: 'Delete', icon: Trash2Icon, destructive: true, onSelect: () => openDelete(server) }
+		];
+	}
 
 	type ConfigurableTransport = 'http' | 'sse' | 'stdio';
 	type TestResult = {
@@ -75,10 +112,46 @@
 
 	function connectionLabel(server: McpServerInfo): string {
 		if (server.transport === 'stdio') {
-			return [server.command ?? '', ...server.args].join(' ').trim() || '—';
+			return [server.command ?? '', ...server.args].join(' ').trim();
 		}
-		return server.url ?? '—';
+		return server.url ?? '';
 	}
+
+	/** One-line purpose for each bundled server, shown under its name. */
+	const BUILTIN_PURPOSE: Record<string, string> = {
+		webfetch: 'Fetch and read web pages',
+		datetime: 'Current date, time and time zones',
+		'chat-search': 'Search your past conversations',
+		fs: 'Read and write files in the agent workspace',
+		settings: "Read and change Chatty's settings",
+		memory: 'Read and save long-term memory',
+		agents: 'Create, run and manage agents',
+		skills: 'Load skills and their reference files',
+		'code-exec': 'Run code in a sandbox',
+		image: 'Generate and edit images',
+		wait: 'Pause, then check back on long tasks',
+		math: 'Evaluate math expressions',
+		weather: 'Current weather and forecasts'
+	};
+
+	const BUILTIN_ICON: Record<string, Component<{ class?: string }>> = {
+		webfetch: GlobeIcon,
+		datetime: ClockIcon,
+		'chat-search': MessageSquareTextIcon,
+		fs: FolderIcon,
+		settings: SettingsIcon,
+		memory: BrainIcon,
+		agents: BotIcon,
+		skills: SparklesIcon,
+		'code-exec': TerminalIcon,
+		image: ImageIcon,
+		wait: HourglassIcon,
+		math: CalculatorIcon,
+		weather: CloudSunIcon
+	};
+
+	const builtinServers = $derived(data.servers.filter((s) => s.builtin));
+	const customServers = $derived(data.servers.filter((s) => !s.builtin));
 
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<McpServerInfo | null>(null);
@@ -215,91 +288,97 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<div class="flex items-center justify-between">
-		<div class="flex flex-col gap-1">
-			<h2 class="text-xl font-semibold">MCP servers</h2>
-			<p class="text-sm text-muted-foreground">
-				Model Context Protocol servers available to chat and agent modes.
-			</p>
-		</div>
-		<Button onclick={openAdd}>Add server</Button>
-	</div>
+<svelte:head><title>MCP servers · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Content>
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Name</Table.Head>
-						<Table.Head>Transport</Table.Head>
-						<Table.Head>URL / command</Table.Head>
-						<Table.Head>Enabled</Table.Head>
-						<Table.Head class="text-right">Actions</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each data.servers as server (server.id)}
-						<Table.Row>
-							<Table.Cell class="max-w-40 font-medium" title={server.name}>
-								<div class="flex items-center gap-2">
-									<span class="truncate">{server.name}</span>
-									{#if server.builtin}
-										<Badge variant="secondary" class="shrink-0">bundled</Badge>
-									{/if}
-								</div>
-							</Table.Cell>
-							<Table.Cell><Badge variant="outline">{server.transport}</Badge></Table.Cell>
-							<Table.Cell
-								class="max-w-48 truncate text-muted-foreground"
-								title={connectionLabel(server)}
-							>
-								{connectionLabel(server)}
-							</Table.Cell>
-							<Table.Cell>
-								<Switch
-									checked={enabledOverride[server.id] ?? server.enabled}
-									onCheckedChange={(checked) => toggleEnabled(server, checked)}
-								/>
-							</Table.Cell>
-							<Table.Cell class="text-right whitespace-nowrap">
-								<div class="flex justify-end gap-2">
-									<Button
-										variant="outline"
-										size="sm"
-										disabled={testBusyId === server.id}
-										onclick={() => runTest(server)}
-									>
-										{#if testBusyId === server.id}
-											<Loader2Icon class="size-4 animate-spin" />
-											Testing…
-										{:else}
-											Test
-										{/if}
-									</Button>
-									{#if !server.builtin}
-										<Button variant="outline" size="sm" onclick={() => openEdit(server)}
-											>Edit</Button
-										>
-										<Button variant="destructive" size="sm" onclick={() => openDelete(server)}>
-											Delete
-										</Button>
-									{/if}
-								</div>
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row>
-							<Table.Cell colspan={5} class="text-center text-muted-foreground">
-								No MCP servers configured.
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		</Card.Content>
-	</Card.Root>
-</div>
+<SettingsHeader
+	title="MCP servers"
+	description="Model Context Protocol servers whose tools are available in chats and agent runs."
+>
+	{#snippet actions()}
+		<Button onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
+	{/snippet}
+</SettingsHeader>
+
+{#snippet serverRow(server: McpServerInfo)}
+	{@const enabled = enabledOverride[server.id] ?? server.enabled}
+	{@const connection = connectionLabel(server)}
+	<SettingsListItem title={server.name} muted={!enabled}>
+		{#snippet leading()}
+			{@const Icon = (server.builtin && BUILTIN_ICON[server.name]) || BlocksIcon}
+			<Icon class="size-4" />
+		{/snippet}
+		{#snippet badges()}
+			{#if !server.builtin && server.transport !== 'builtin'}
+				<Badge variant="outline">{transportLabels[server.transport]}</Badge>
+			{/if}
+		{/snippet}
+		{#snippet meta()}
+			{#if connection}
+				<span class="font-mono" title={connection}>{connection}</span>
+			{:else if BUILTIN_PURPOSE[server.name]}
+				{BUILTIN_PURPOSE[server.name]}
+			{/if}
+		{/snippet}
+		{#snippet trailing()}
+			{#if testBusyId === server.id}
+				<span class="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
+					<Loader2Icon class="size-4 animate-spin" />Testing…
+				</span>
+			{/if}
+			<Switch
+				checked={enabled}
+				aria-label="Enable {server.name}"
+				onCheckedChange={(checked) => toggleEnabled(server, checked)}
+			/>
+			<RowMenu label="Actions for {server.name}" items={menuItems(server)} />
+		{/snippet}
+	</SettingsListItem>
+{/snippet}
+
+<SettingsSection
+	title="Your servers"
+	description="Servers you've connected over HTTP, SSE or stdio."
+	flush
+>
+	{#if customServers.length === 0}
+		<div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
+			<div
+				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+			>
+				<BlocksIcon class="size-5" />
+			</div>
+			<div class="flex flex-col gap-1">
+				<p class="text-sm font-medium">No servers added yet</p>
+				<p class="text-sm text-muted-foreground">
+					Add a remote server over HTTP or run a local one over stdio.
+				</p>
+			</div>
+			<Button size="sm" variant="outline" onclick={openAdd}
+				><PlusIcon class="size-4" />Add server</Button
+			>
+		</div>
+	{:else}
+		<ul class="divide-y divide-border/60" aria-label="Your MCP servers">
+			{#each customServers as server (server.id)}
+				{@render serverRow(server)}
+			{/each}
+		</ul>
+	{/if}
+</SettingsSection>
+
+{#if builtinServers.length > 0}
+	<SettingsSection
+		title="Built-in"
+		description="Tools that ship with Chatty. Turn off any you don't want models to use."
+		flush
+	>
+		<ul class="divide-y divide-border/60" aria-label="Built-in MCP servers">
+			{#each builtinServers as server (server.id)}
+				{@render serverRow(server)}
+			{/each}
+		</ul>
+	</SettingsSection>
+{/if}
 
 <Dialog.Root bind:open={addOpen}>
 	<Dialog.Content>

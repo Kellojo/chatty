@@ -63,6 +63,14 @@ export type CodingTaskStatus =
 
 export type CodingWorkspaceMode = 'worktree' | 'local';
 
+/** Last known state of a task's pull request, as T3 reports it. */
+export const CODING_PR_STATES = ['open', 'draft', 'merged', 'closed'] as const;
+export type CodingPullRequestState = (typeof CODING_PR_STATES)[number];
+
+export function isCodingPullRequestState(value: unknown): value is CodingPullRequestState {
+	return (CODING_PR_STATES as readonly unknown[]).includes(value);
+}
+
 /** How much the coding agent may do without asking (maps to T3 runtime modes). */
 export const CODING_AUTONOMY_VALUES = ['supervised', 'auto-edits', 'auto', 'full-access'] as const;
 export type CodingAutonomy = (typeof CODING_AUTONOMY_VALUES)[number];
@@ -115,6 +123,8 @@ export interface CodingConversation {
 	baseBranch: string | null;
 	branch: string | null;
 	prUrl: string | null;
+	/** Null when there is no PR or T3 hasn't observed its state yet. */
+	prState: CodingPullRequestState | null;
 	status: CodingTaskStatus;
 	pendingRequest: CodingPendingRequest | null;
 	lastError: string | null;
@@ -136,6 +146,8 @@ export interface CodingConversationSummary {
 	/** Start of the agent run in progress (ms), null when nothing runs. */
 	runStartedAt: number | null;
 	diff: CodingDiffStat | null;
+	/** Set when the task has a pull request; null state means not yet observed. */
+	pullRequest: { state: CodingPullRequestState | null } | null;
 }
 
 /** A provider instance + model slug on a T3 server. */

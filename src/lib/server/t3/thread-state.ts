@@ -171,13 +171,16 @@ export function reconcileThreadState(
 	}
 
 	if (remote.title !== null) {
-		const merge = mergeValue(conversation.title.trim(), row.remote_title, remote.title);
+		// Compared capped like T3's value, so a long local title isn't "changed" by
+		// T3 holding its first MAX_THREAD_TITLE_CHARS.
+		const localTitle = threadTitle(conversation.title) ?? '';
+		const merge = mergeValue(localTitle, row.remote_title, remote.title);
 		if (merge === 'adopt') {
 			updateConversation(db, userId, conversationId, { title: remote.title });
 			updated = true;
 		}
 		if (merge === 'adopt' || merge === 'agree') patch.remoteTitle = remote.title;
-		if (merge === 'push' && conversation.title.trim()) push = true;
+		if (merge === 'push' && localTitle) push = true;
 	}
 
 	if (remote.read) {
@@ -234,7 +237,8 @@ function pendingCommands(
 	}
 
 	// A title nobody compared yet is left to the first reconcile (T3's wins).
-	const title = conversation.title.trim();
+	// Sent and recorded capped, the same way T3's title is read back.
+	const title = threadTitle(conversation.title);
 	if (title && row.remote_title !== null && row.remote_title !== title) {
 		commands.push({
 			command: { type: 'thread.metadata.update', ...base(), title },

@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
-import { getAgent, toPublic as agentToPublic } from '$lib/server/db/repo/agents.js';
+import { getAgent, listAgentOverrides, toPublicWithOverrides } from '$lib/server/db/repo/agents.js';
 import { listAgentRuns, toPublic as runToPublic } from '$lib/server/db/repo/agent-runs.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import type { PageServerLoad } from './$types';
@@ -28,7 +28,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		}
 	}
 	return {
-		agent: agentToPublic(agent),
+		agent: toPublicWithOverrides(agent, listAgentOverrides(db, user.id)),
 		runs,
 		users,
 		showUser,

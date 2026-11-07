@@ -90,8 +90,10 @@ export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
 export type ServerEvent =
 	| { type: 'chat.created'; conversationId: string }
 	| { type: 'chat.message_completed'; conversationId: string }
-	| { type: 'chat.stream.started'; conversationId: string }
+	| { type: 'chat.stream.started'; conversationId: string; startedAt?: number }
 	| { type: 'chat.stream.finished'; conversationId: string }
+	/** Persisted messages changed outside a live stream; an open chat should reload them. */
+	| { type: 'chat.messages.updated'; conversationId: string }
 	| { type: 'conversation.updated'; conversationId: string }
 	| { type: 'conversation.compacted'; conversationId: string }
 	| { type: 'conversation.settle_changed'; conversationIds: string[]; settled: boolean }

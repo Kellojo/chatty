@@ -8,13 +8,14 @@
 // One follower per conversation, kept alive while the task is active and for a
 // grace period after it goes idle. It reconnects with backoff if the socket drops,
 // and gives up after MAX_FAILED_ATTEMPTS attempts in a row that never got the
-// thread (unreachable server, or one that never sends a snapshot) unless a
-// Chatty turn is live; thread sync and the next turn re-create it on demand.
+// thread (unreachable server, or one that never sends a snapshot) — more while
+// a Chatty turn is live; thread sync and the next turn re-create it on demand.
 
 import { randomUUID } from 'node:crypto';
 import type { UIMessageChunk } from 'ai';
 import {
 	appendChunk,
+	getStreamStartedAt,
 	hasActiveStream,
 	markDone,
 	registerStream,
@@ -37,8 +38,11 @@ import {
 	activeRun,
 	applyStreamItem,
 	emptyThreadState,
+	hasRunningSubagent,
+	isAgentNotification,
 	isRunActive,
 	isRunFinished,
+	runItemsEvicted,
 	MAX_THREAD_RECORDS,
 	messageText,
 	renderRun,
@@ -61,6 +65,15 @@ const MIN_RECONNECT_MS = 2000;
 const MAX_RECONNECT_MS = 60_000;
 /** Consecutive attempts without a snapshot before the follower gives up (~4 min of backoff). */
 export const MAX_FAILED_ATTEMPTS = 8;
+/** The same, while a Chatty turn is live (~15 min): a reply can't spin forever. */
+export const MAX_FAILED_ATTEMPTS_LIVE = 20;
+/** How long a turn may wait for its remote run to show up before it ends with an error. */
+export const UNBOUND_TURN_TIMEOUT_MS = 10 * 60 * 1000;
+export const UNBOUND_TURN_ERROR = 'The coding agent did not start working on this message.';
+export const RUN_GONE_ERROR = 'The coding task’s run is no longer available.';
+/** Spacing and number of retries for omitted command output that failed to load. */
+const OUTPUT_RETRY_MS = 30_000;
+const MAX_OUTPUT_ATTEMPTS = 3;
 /** How long a subscription may stay silent before the attempt counts as failed. */
 export const SNAPSHOT_TIMEOUT_MS = 30_000;
 export const GAVE_UP_ERROR =
@@ -86,6 +99,8 @@ interface LiveTurn {
 	runId: string | null;
 	interruptWhenBound: boolean;
 	emitted: Map<string, EmittedPart>;
+	/** Ends the turn if it never binds to a run; see {@link UNBOUND_TURN_TIMEOUT_MS}. */
+	bindTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const notFollowedError = () =>
@@ -113,6 +128,8 @@ export class CodingFollower {
 	private readonly persisted = new Map<string, { json: string; at: number; status: string }>();
 	private readonly commandOutputs = new Map<string, string>();
 	private readonly fetchingOutputs = new Set<string>();
+	/** Omitted outputs whose fetch failed: when last tried, and how often. */
+	private readonly failedOutputs = new Map<string, { at: number; attempts: number }>();
 	/**
 	 * Runs whose parts may have changed since they were last rendered. Rendering
 	 * is synchronous and grows with the run's size, so re-rendering a long
@@ -176,8 +193,13 @@ export class CodingFollower {
 
 	/** Starts following the thread (idempotent). */
 	async follow(): Promise<void> {
-		if (this.stopped || !this.threadId || this.stream) return;
+		if (this.stopped || !this.threadId) return;
 		this.cancelIdleStop();
+		if (this.stream) {
+			// Already following: a render re-arms the idle stop from now, if due.
+			if (this.hasSnapshot) this.scheduleRender();
+			return;
+		}
 		await this.subscribe();
 	}
 
@@ -233,6 +255,8 @@ export class CodingFollower {
 			}, SNAPSHOT_TIMEOUT_MS);
 			this.snapshotTimer.unref?.();
 		} catch (e) {
+			// Stopped while connecting: deliberate, not a connection problem.
+			if (this.stopped) return;
 			this.recordError(e);
 			this.scheduleReconnect();
 		}
@@ -246,7 +270,8 @@ export class CodingFollower {
 	private scheduleReconnect(): void {
 		if (this.stopped || this.reconnectTimer || !this.threadId) return;
 		if (!this.attemptGotSnapshot) this.failedAttempts++;
-		if (this.failedAttempts >= MAX_FAILED_ATTEMPTS && !this.live) {
+		const limit = this.live ? MAX_FAILED_ATTEMPTS_LIVE : MAX_FAILED_ATTEMPTS;
+		if (this.failedAttempts >= limit) {
 			this.giveUp();
 			return;
 		}
@@ -266,7 +291,7 @@ export class CodingFollower {
 			attempts: this.failedAttempts
 		});
 		this.recordError(new T3ClientError(GAVE_UP_ERROR, 'unreachable'));
-		this.stop();
+		this.stop(GAVE_UP_ERROR);
 	}
 
 	private recordError(e: unknown): void {
@@ -295,7 +320,11 @@ export class CodingFollower {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.pendingInterruptFor = null;
-		this.endLive({ interrupted: true, errorText: reason });
+		this.endLive({
+			interrupted: true,
+			errorText: reason,
+			settleError: reason ?? 'Response interrupted'
+		});
 		this.cancelIdleStop();
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
 		this.clearSnapshotTimer();
@@ -384,15 +413,26 @@ export class CodingFollower {
 		});
 	}
 
+	/**
+	 * Run the user stopped here. Until T3 reports it ended, renders must not
+	 * reopen a live stream for it (that would undo the Stop).
+	 */
+	private interruptedRunId: string | null = null;
+
 	private interruptRun(runId: string): void {
 		if (!this.threadId || this.stopped) return;
+		this.interruptedRunId = runId;
 		this.rpc('orchestration.dispatchCommand', {
 			type: 'run.interrupt',
 			commandId: randomUUID(),
 			threadId: this.threadId,
 			runId,
 			holdQueue: true
-		}).catch((e) => this.recordError(e));
+		}).catch((e) => {
+			// The run keeps going; let the next render show it streaming again.
+			if (this.interruptedRunId === runId) this.interruptedRunId = null;
+			this.recordError(e);
+		});
 	}
 
 	// ── live turn (stream registry) ─────────────────────────────────────
@@ -405,7 +445,9 @@ export class CodingFollower {
 		// A reply still streaming for an earlier message keeps updating in the
 		// DB; only its live stream is handed over to the new turn.
 		if (this.live) this.endLive({ interrupted: false });
-		this.openLive(`${userMessageId}:reply`, userMessageId, null);
+		// A pending idle stop would end this turn while it is being sent.
+		this.cancelIdleStop();
+		this.openLive(this.localMessageId(`${userMessageId}:reply`), userMessageId, null);
 	}
 
 	/** Ends a turn that never started remotely (e.g. launch failed). */
@@ -437,6 +479,20 @@ export class CodingFollower {
 		return !!row && row.conversation_id !== this.conversationId;
 	}
 
+	/**
+	 * The row id for a message id derived from the thread. Several conversations
+	 * can follow the same thread (e.g. two users connected to one T3 server), and
+	 * message ids are global: once another conversation holds the plain id, this
+	 * one stores the message under an id scoped to itself instead. A scoped row
+	 * that already exists wins, so the choice stays stable when the other
+	 * conversation goes away.
+	 */
+	private localMessageId(remoteId: string): string {
+		const scoped = `${this.conversationId}:${remoteId}`;
+		if (this.ownMessage(scoped)) return scoped;
+		return this.isForeignMessage(remoteId) ? scoped : remoteId;
+	}
+
 	private openLive(messageId: string, userMessageId: string | null, runId: string | null): void {
 		if (this.isForeignMessage(messageId)) {
 			log.warn('t3 reply id collides with another conversation; not streaming', {
@@ -452,9 +508,11 @@ export class CodingFollower {
 			userMessageId,
 			runId,
 			interruptWhenBound: false,
-			emitted: new Map()
+			emitted: new Map(),
+			bindTimer: null
 		};
 		this.live = turn;
+		if (!runId) this.armBindTimer(turn);
 		if (!getMessage(this.db, messageId)) {
 			createMessage(this.db, {
 				id: messageId,
@@ -463,13 +521,17 @@ export class CodingFollower {
 				parts: [],
 				status: 'partial'
 			});
+			// A new reply means a new turn (e.g. one started on T3 itself, with no
+			// local user message): it orders the sidebar like a sent message does.
+			if (!this.quietHistory) touchConversation(this.db, this.conversationId);
 		} else {
 			updateMessage(this.db, messageId, { status: 'partial', error: null });
 		}
 		appendChunk(this.conversationId, { type: 'start', messageId }, controller);
 		publishServerEvent(this.userId, {
 			type: 'chat.stream.started',
-			conversationId: this.conversationId
+			conversationId: this.conversationId,
+			startedAt: getStreamStartedAt(this.conversationId) ?? Date.now()
 		});
 		controller.signal.addEventListener('abort', () => this.onLiveAborted(turn), { once: true });
 	}
@@ -491,16 +553,55 @@ export class CodingFollower {
 
 	private pendingInterruptFor: string | null = null;
 
+	/**
+	 * Ends a turn still waiting for its run after {@link UNBOUND_TURN_TIMEOUT_MS}.
+	 * A message queued behind another active run may legitimately wait longer.
+	 */
+	private armBindTimer(turn: LiveTurn): void {
+		turn.bindTimer = setTimeout(() => {
+			turn.bindTimer = null;
+			if (this.live !== turn || turn.runId) return;
+			if (this.hasSnapshot && activeRun(this.state)) {
+				this.armBindTimer(turn);
+				return;
+			}
+			this.endLive({
+				interrupted: true,
+				errorText: UNBOUND_TURN_ERROR,
+				settleError: UNBOUND_TURN_ERROR
+			});
+		}, UNBOUND_TURN_TIMEOUT_MS);
+		turn.bindTimer.unref?.();
+	}
+
 	private endLive(opts: {
 		interrupted: boolean;
 		errorText?: string;
 		keepPendingInterrupt?: boolean;
+		/**
+		 * The follower lets go of a run that hasn't finished: a reply still marked
+		 * partial is settled as failed with this error, as a dead response would
+		 * be (see finalizeInterruptedMessages). Not on shutdown, where the run is
+		 * picked up again on restart.
+		 */
+		settleError?: string;
 	}): void {
 		const turn = this.live;
 		if (!turn) return;
 		this.live = null;
+		if (turn.bindTimer) clearTimeout(turn.bindTimer);
+		turn.bindTimer = null;
 		if (opts.keepPendingInterrupt && turn.userMessageId) {
 			this.pendingInterruptFor = turn.userMessageId;
+		}
+		if (
+			opts.settleError &&
+			!shuttingDown &&
+			this.ownMessage(turn.messageId)?.status === 'partial'
+		) {
+			updateMessage(this.db, turn.messageId, { status: 'failed', error: opts.settleError });
+			// A later render of the run must write its state again.
+			this.persisted.delete(turn.messageId);
 		}
 		const emit = (chunk: UIMessageChunk) =>
 			appendChunk(this.conversationId, chunk, turn.controller);
@@ -518,6 +619,8 @@ export class CodingFollower {
 			type: 'chat.stream.finished',
 			conversationId: this.conversationId
 		});
+		// The idle stop is held off while a turn is live; re-check it now.
+		if (this.hasSnapshot) this.scheduleRender();
 	}
 
 	/** Emits the chunks that turn what the client has seen into `entries`. */
@@ -537,7 +640,7 @@ export class CodingFollower {
 				// T3 sends cumulative text; forward only what's new. A non-append
 				// rewrite can't be expressed as a delta — the persisted message
 				// (reloaded when the stream finishes) has the correct text.
-				if (part.text.length > rec.sent.length && part.text.startsWith(rec.sent)) {
+				if (!rec.ended && part.text.length > rec.sent.length && part.text.startsWith(rec.sent)) {
 					emit({
 						type: `${kind}-delta`,
 						id: key,
@@ -556,6 +659,13 @@ export class CodingFollower {
 			if (!rec) {
 				rec = { started: true, sent: '', ended: false };
 				turn.emitted.set(emittedKey, rec);
+			}
+			if (rec.ended) continue;
+			// A running tool's input can change (a subagent's progress lives there),
+			// so send it again whenever it does; the client updates the part in place.
+			const inputJson = JSON.stringify(part.input ?? null);
+			if (inputJson !== rec.sent) {
+				rec.sent = inputJson;
 				emit({
 					type: 'tool-input-available',
 					toolCallId: part.toolCallId,
@@ -564,7 +674,6 @@ export class CodingFollower {
 					dynamic: true
 				});
 			}
-			if (rec.ended) continue;
 			if (part.state === 'output-available') {
 				rec.ended = true;
 				emit({
@@ -620,6 +729,7 @@ export class CodingFollower {
 		const runs = sortedRuns(this.state);
 		const now = Date.now();
 		let touched = false;
+		let removedNotices = false;
 		const allDirty = this.allRunsDirty;
 		const dirty = new Set(this.dirtyRuns);
 		this.allRunsDirty = false;
@@ -631,6 +741,11 @@ export class CodingFollower {
 			const run = runs.find((r) => r.userMessageId === this.live!.userMessageId);
 			if (run) this.live.runId = String(run.id);
 		}
+		// Its run is gone (thread deleted remotely, dropped from a snapshot, evicted):
+		// nothing would ever finish this turn.
+		if (this.live?.runId && !this.state.runs.has(this.live.runId)) {
+			this.endLive({ interrupted: true, errorText: RUN_GONE_ERROR, settleError: RUN_GONE_ERROR });
+		}
 		if (this.pendingInterruptFor) {
 			const run = runs.find((r) => r.userMessageId === this.pendingInterruptFor);
 			if (run) {
@@ -641,23 +756,35 @@ export class CodingFollower {
 		if (
 			!this.live &&
 			active &&
+			String(active.id) !== this.interruptedRunId &&
 			!hasActiveStream(this.conversationId) &&
-			!shuttingDown &&
-			!this.isForeignMessage(replyMessageId(active))
+			!shuttingDown
 		) {
-			this.openLive(replyMessageId(active), null, String(active.id));
+			const replyId = this.localMessageId(replyMessageId(active));
+			if (!this.isForeignMessage(replyId)) this.openLive(replyId, null, String(active.id));
 		}
 
 		for (const run of runs) {
 			const runId = String(run.id);
 			if (!allDirty && !dirty.has(runId) && this.live?.runId !== runId) continue;
 			const userMessageId = typeof run.userMessageId === 'string' ? run.userMessageId : null;
-			// Mirror user messages that were sent from T3 itself.
-			if (userMessageId && !getMessage(db, userMessageId)) {
+			// Mirror user messages that were sent from T3 itself, but not the notices
+			// the agent's runtime sends itself (they'd read as if the user wrote them).
+			const localUserMessageId = userMessageId && this.localMessageId(userMessageId);
+			if (userMessageId && localUserMessageId && isAgentNotification(this.state, userMessageId)) {
+				if (this.ownMessage(localUserMessageId)?.role === 'user') {
+					// Mirrored before notices were told apart.
+					db.prepare('DELETE FROM messages WHERE id = ? AND conversation_id = ?').run(
+						localUserMessageId,
+						this.conversationId
+					);
+					removedNotices = true;
+				}
+			} else if (userMessageId && localUserMessageId && !getMessage(db, localUserMessageId)) {
 				const text = messageText(this.state, userMessageId);
 				if (text) {
 					createMessage(db, {
-						id: userMessageId,
+						id: localUserMessageId,
 						conversationId: this.conversationId,
 						role: 'user',
 						parts: [{ type: 'text', text }],
@@ -669,7 +796,8 @@ export class CodingFollower {
 
 			const entries = renderRun(this.state, run, this.commandOutputs);
 			const parts = entries.map((e) => e.part);
-			const messageId = this.live?.runId === runId ? this.live.messageId : replyMessageId(run);
+			const messageId =
+				this.live?.runId === runId ? this.live.messageId : this.localMessageId(replyMessageId(run));
 			if (this.isForeignMessage(messageId)) continue;
 			if (this.live?.runId === runId) this.emitDiff(this.live, entries);
 
@@ -687,11 +815,23 @@ export class CodingFollower {
 						: runFailureText(this.state, run)
 					: null;
 				if (existing) {
-					if (existing.parts !== json || existing.status !== status || existing.error !== error) {
-						updateMessage(db, messageId, { parts, status, error });
-						// Re-rendering a reply that had already finished (after a reconnect,
-						// or a thread change such as read state) isn't new activity.
-						if (existing.status === 'partial' || existing.status !== status) touched = true;
+					// Progress on an existing reply isn't new activity: the sidebar orders
+					// by when a turn started (as for normal chats), so a running task keeps
+					// its place instead of jumping up on every save.
+					// A finished run whose items were partly evicted (very long threads)
+					// renders incomplete: keep the parts saved while they were all known.
+					const keepParts = finished && runItemsEvicted(this.state, runId);
+					const partsChanged = !keepParts && existing.parts !== json;
+					if (partsChanged || existing.status !== status || existing.error !== error) {
+						updateMessage(db, messageId, keepParts ? { status, error } : { parts, status, error });
+						// Nothing streams this reply (e.g. a background subagent still at
+						// work after its turn ended), so tell an open chat to reload it.
+						if (this.live?.runId !== runId) {
+							publishServerEvent(this.userId, {
+								type: 'chat.messages.updated',
+								conversationId: this.conversationId
+							});
+						}
 					}
 				} else if (parts.length > 0 || finished) {
 					createMessage(db, {
@@ -729,6 +869,12 @@ export class CodingFollower {
 		}
 
 		if (touched && !this.quietHistory) touchConversation(db, this.conversationId);
+		if (removedNotices) {
+			publishServerEvent(this.userId, {
+				type: 'chat.messages.updated',
+				conversationId: this.conversationId
+			});
+		}
 		this.quietHistory = false;
 		this.syncSummary();
 		this.syncThreadState(runs);
@@ -832,6 +978,7 @@ export class CodingFollower {
 				status: summary.status,
 				branch: summary.branch,
 				prUrl: summary.prUrl,
+				prState: summary.prState,
 				pendingRequest: summary.pendingRequest,
 				runStartedAt: summary.runStartedAt,
 				lastSequence: this.state.lastSequence ?? undefined,
@@ -865,7 +1012,13 @@ export class CodingFollower {
 				});
 			}
 		}
-		if (summary.status === 'running' || summary.status === 'awaiting_input' || this.live) {
+		if (
+			summary.status === 'running' ||
+			summary.status === 'awaiting_input' ||
+			this.live ||
+			// Background subagents keep reporting after the turn that started them.
+			hasRunningSubagent(this.state)
+		) {
 			this.cancelIdleStop();
 		} else {
 			this.scheduleIdleStop();
@@ -881,6 +1034,10 @@ export class CodingFollower {
 				if (!this.state.turnItems.has(id)) this.commandOutputs.delete(id);
 			}
 		}
+		for (const id of this.failedOutputs.keys()) {
+			if (!this.state.turnItems.has(id)) this.failedOutputs.delete(id);
+		}
+		const now = Date.now();
 		const recent = new Set(runs.slice(-OUTPUT_FETCH_RUNS).map((r) => String(r.id)));
 		for (const item of this.state.turnItems.values()) {
 			const id = String(item.id);
@@ -892,6 +1049,11 @@ export class CodingFollower {
 				this.commandOutputs.has(id) ||
 				this.fetchingOutputs.has(id)
 			) {
+				continue;
+			}
+			// A failed fetch is retried on a later render, spaced out and a few times only.
+			const failed = this.failedOutputs.get(id);
+			if (failed && (failed.attempts >= MAX_OUTPUT_ATTEMPTS || now - failed.at < OUTPUT_RETRY_MS)) {
 				continue;
 			}
 			this.fetchingOutputs.add(id);
@@ -910,10 +1072,16 @@ export class CodingFollower {
 							? `${text.slice(0, MAX_OUTPUT_CHARS)}\n… (truncated)`
 							: text
 					);
+					this.failedOutputs.delete(id);
 					this.markDirty(String(item.runId));
 					this.scheduleRender();
 				})
-				.catch(() => this.commandOutputs.set(id, ''))
+				.catch(() => {
+					this.failedOutputs.set(id, {
+						at: Date.now(),
+						attempts: (this.failedOutputs.get(id)?.attempts ?? 0) + 1
+					});
+				})
 				.finally(() => this.fetchingOutputs.delete(id));
 		}
 	}

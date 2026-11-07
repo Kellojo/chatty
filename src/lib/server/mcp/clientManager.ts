@@ -12,10 +12,45 @@ export interface ServerConnection {
 	close: () => Promise<void>;
 }
 
-export async function connectServer(
-	row: McpServerRow,
-	ctx: CallerContext
-): Promise<ServerConnection> {
+/** How long connecting to or listing the tools of one MCP server may take. */
+export const MCP_TIMEOUT_MS = 15_000;
+
+/**
+ * Rejects if `promise` doesn't settle within `ms`. A value that arrives after
+ * the timeout is handed to `onLate` (e.g. to close a connection nobody uses).
+ */
+export async function withTimeout<T>(
+	promise: Promise<T>,
+	label: string,
+	onLate?: (value: T) => void,
+	ms = MCP_TIMEOUT_MS
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			timedOut = true;
+			reject(new Error(`${label} timed out after ${ms / 1000}s`));
+		}, ms);
+	});
+	try {
+		return await Promise.race([promise, timeout]);
+	} finally {
+		clearTimeout(timer);
+		if (timedOut && onLate) promise.then(onLate, () => undefined);
+	}
+}
+
+/** Connects to an MCP server; a dead or slow server fails after MCP_TIMEOUT_MS. */
+export function connectServer(row: McpServerRow, ctx: CallerContext): Promise<ServerConnection> {
+	return withTimeout(
+		openServer(row, ctx),
+		`Connecting to MCP server ${row.name}`,
+		(conn) => void conn.close().catch(() => undefined)
+	);
+}
+
+async function openServer(row: McpServerRow, ctx: CallerContext): Promise<ServerConnection> {
 	if (row.transport === 'builtin') {
 		const factory = BUILTIN_SERVERS[row.name];
 		if (!factory) throw new Error(`Unknown builtin MCP server: ${row.name}`);
@@ -103,7 +138,7 @@ export async function testConnection(db: Db, serverId: string): Promise<TestConn
 	try {
 		const conn = await connectServer(row, TEST_CTX);
 		try {
-			const tools = await conn.client.tools();
+			const tools = await withTimeout(conn.client.tools(), `Listing tools of ${row.name}`);
 			return {
 				ok: true,
 				tools: Object.entries(tools).map(([name, tool]) => ({

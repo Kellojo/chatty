@@ -1,20 +1,42 @@
 <script lang="ts">
-	import { goto, invalidateAll } from '$app/navigation';
+	import { invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import HistoryIcon from '@lucide/svelte/icons/history';
 	import { toast } from 'svelte-sonner';
-	import { Badge } from '$lib/components/ui/badge/index.js';
-	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import AgentHeader from '$lib/components/app/AgentHeader.svelte';
+	import AgentRunStatus from '$lib/components/app/AgentRunStatus.svelte';
+	import EmptyState from '$lib/components/app/EmptyState.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import { formatRunDuration, formatRunError, RUN_TRIGGER_LABELS } from '$lib/agent-labels.js';
 	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
+	import { onServerEvent } from '$lib/state/events.svelte.js';
 	import type { AgentRun } from '$lib/types.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
 
 	let stopBusy = $state<string | null>(null);
+
+	// Runs of this agent starting or finishing elsewhere refresh the list.
+	$effect(() => {
+		const agentId = data.agent.id;
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const off = onServerEvent((event) => {
+			if (event.type !== 'agent.run.started' && event.type !== 'agent.run.finished') return;
+			if (event.agentId !== agentId) return;
+			if (timer) return;
+			timer = setTimeout(() => {
+				timer = null;
+				void invalidateAll();
+			}, 300);
+		});
+		return () => {
+			off();
+			if (timer) clearTimeout(timer);
+		};
+	});
 
 	async function stopRun(run: AgentRun) {
 		stopBusy = run.id;
@@ -31,121 +53,73 @@
 			stopBusy = null;
 		}
 	}
-
-	function statusVariant(run: AgentRun): 'outline' | 'secondary' | 'destructive' {
-		if (run.status === 'running') return 'outline';
-		if (run.status === 'success') return 'secondary';
-		return 'destructive';
-	}
-
-	function statusClass(run: AgentRun): string {
-		if (run.status === 'running') return 'border-info/50 text-info-foreground';
-		if (run.status === 'success') return 'text-success-foreground';
-		return '';
-	}
-
-	function duration(run: AgentRun): string {
-		return run.endedAt ? `${((run.endedAt - run.startedAt) / 1000).toFixed(1)}s` : '—';
-	}
-
-	function truncate(text: string, max = 60): string {
-		return text.length > max ? `${text.slice(0, max)}…` : text;
-	}
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-7xl flex-col gap-4 p-6">
-		<div class="flex flex-col gap-1">
-			<Breadcrumb.Root>
-				<Breadcrumb.List>
-					<Breadcrumb.Item>
-						<Breadcrumb.Link href={resolve('/agents')}>Agents</Breadcrumb.Link>
-					</Breadcrumb.Item>
-					<Breadcrumb.Separator />
-					<Breadcrumb.Item>
-						<Breadcrumb.Page>{data.agent.name}</Breadcrumb.Page>
-					</Breadcrumb.Item>
-				</Breadcrumb.List>
-			</Breadcrumb.Root>
-			<h1 class="text-xl font-semibold">Runs</h1>
-		</div>
+<svelte:head><title>Runs · {data.agent.name} · Chatty</title></svelte:head>
 
-		<Card.Root>
-			<Card.Content>
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head>Status</Table.Head>
-							<Table.Head>Trigger</Table.Head>
-							{#if data.showUser}
-								<Table.Head>User</Table.Head>
-							{/if}
-							<Table.Head>Started</Table.Head>
-							<Table.Head>Duration</Table.Head>
-							<Table.Head>Error</Table.Head>
-							<Table.Head class="text-right">Actions</Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
+<div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
+	<div class="mx-auto w-full max-w-6xl p-4 md:p-6">
+		<div class="flex w-full max-w-4xl flex-col gap-6">
+			<AgentHeader agent={data.agent} active="runs" />
+
+			<SettingsSection
+				flush
+				title={data.runs.length > 0 ? 'Recent runs' : undefined}
+				description={data.runs.length >= 50 ? 'The 50 most recent runs.' : undefined}
+			>
+				{#if data.runs.length === 0}
+					<EmptyState
+						icon={HistoryIcon}
+						title="No runs yet"
+						description="Runs show up here with their status and transcript once the agent starts."
+					/>
+				{:else}
+					<ul class="divide-y divide-border/60" aria-label="Runs">
 						{#each data.runs as run (run.id)}
-							<Table.Row
-								class="cursor-pointer"
-								onclick={() => goto(resolve(`/agents/${data.agent.id}/runs/${run.id}`))}
+							{@const took = formatRunDuration(run)}
+							{@const error = formatRunError(run.error)}
+							<li
+								class="relative flex items-center gap-3 px-6 py-3 hover:bg-accent/40 has-[a:focus-visible]:bg-accent/40 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-inset"
 							>
-								<Table.Cell>
-									<Badge variant={statusVariant(run)} class={statusClass(run)}>
-										{#if run.status === 'running'}
-											<LoaderCircleIcon class="size-3.5 animate-spin" />
-										{/if}
-										{run.status}
-									</Badge>
-								</Table.Cell>
-								<Table.Cell>
-									<Badge variant="secondary">{run.trigger}</Badge>
-								</Table.Cell>
-								{#if data.showUser}
-									<Table.Cell class="whitespace-nowrap text-muted-foreground">
-										{data.users[run.userId] ?? run.userId}
-									</Table.Cell>
-								{/if}
-								<Table.Cell class="whitespace-nowrap text-muted-foreground">
-									<span title={formatDateTime(run.startedAt, data.timeFormat)}>
-										{formatTimeAgo(run.startedAt)}
-									</span>
-								</Table.Cell>
-								<Table.Cell class="text-muted-foreground">{duration(run)}</Table.Cell>
-								<Table.Cell class="max-w-64 truncate text-muted-foreground" title={run.error ?? ''}>
-									{run.error ? truncate(run.error) : '—'}
-								</Table.Cell>
-								<Table.Cell class="text-right">
-									{#if run.status === 'running'}
-										<Button
-											variant="destructive"
-											size="sm"
-											disabled={stopBusy === run.id}
-											onclick={(e) => {
-												e.stopPropagation();
-												stopRun(run);
-											}}
-										>
-											{stopBusy === run.id ? 'Stopping…' : 'Stop'}
-										</Button>
+								<AgentRunStatus status={run.status} />
+								<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+									<a
+										href={resolve(`/agents/${data.agent.id}/runs/${run.id}`)}
+										class="text-sm font-medium outline-none after:absolute after:inset-0 after:content-['']"
+										title={formatTimeAgo(run.startedAt)}
+									>
+										{formatDateTime(run.startedAt, data.timeFormat)}
+									</a>
+									<p class="truncate text-xs text-muted-foreground">
+										{RUN_TRIGGER_LABELS[run.trigger] ?? run.trigger}
+										{#if took}· took {took}{:else if run.status === 'running'}· running{/if}
+										{#if data.showUser}· by {data.users[run.userId] ?? run.userId}{/if}
+									</p>
+									{#if error}
+										<p class="line-clamp-1 text-xs text-muted-foreground" title={error}>{error}</p>
 									{/if}
-								</Table.Cell>
-							</Table.Row>
-						{:else}
-							<Table.Row>
-								<Table.Cell
-									colspan={data.showUser ? 7 : 6}
-									class="text-center text-muted-foreground"
-								>
-									No runs yet.
-								</Table.Cell>
-							</Table.Row>
+								</div>
+								{#if run.status === 'running'}
+									<!-- Above the row link's click target. -->
+									<Button
+										variant="outline"
+										size="sm"
+										class="relative z-10"
+										disabled={stopBusy === run.id}
+										onclick={() => stopRun(run)}
+									>
+										{stopBusy === run.id ? 'Stopping…' : 'Stop'}
+									</Button>
+								{/if}
+								<ChevronRightIcon
+									class="size-4 shrink-0 text-muted-foreground"
+									aria-hidden="true"
+								/>
+							</li>
 						{/each}
-					</Table.Body>
-				</Table.Root>
-			</Card.Content>
-		</Card.Root>
+					</ul>
+				{/if}
+			</SettingsSection>
+		</div>
 	</div>
 </div>

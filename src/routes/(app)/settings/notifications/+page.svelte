@@ -3,8 +3,10 @@
 	import { invalidateAll } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
+	import BellRingIcon from '@lucide/svelte/icons/bell-ring';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { devicePrefs, type DevicePrefs } from '$lib/notifications/prefs.svelte.js';
@@ -124,197 +126,151 @@
 		}
 	}
 
+	const canTest = $derived(prefs.sound || (prefs.desktop && permission === 'granted'));
+	const desktopBlocked = $derived(permission === 'unsupported' || permission === 'denied');
 	const desktopHint = $derived(
 		permission === 'unsupported'
 			? "This browser doesn't support notifications."
 			: permission === 'denied'
-				? 'Blocked for this site. Allow notifications in your browser settings, then turn this on.'
+				? 'Blocked for this site. Allow notifications in your browser settings, then come back to this tab.'
 				: 'Pop up a system notification when no Chatty tab is focused.'
 	);
 </script>
 
 <svelte:head><title>Notifications · Settings · Chatty</title></svelte:head>
 
-{#snippet row(id: string, label: string, description: string, control: import('svelte').Snippet)}
-	<div class="flex items-center justify-between gap-6">
-		<div class="flex min-w-0 flex-col gap-1">
-			<Label for={id}>{label}</Label>
-			<p class="text-sm text-muted-foreground">{description}</p>
-		</div>
-		{@render control()}
-	</div>
-{/snippet}
+<SettingsHeader
+	title="Notifications"
+	description="How Chatty gets your attention when a reply lands or a task needs you. Nothing alerts while you're looking at the conversation."
+>
+	{#snippet actions()}
+		<span title={canTest ? undefined : 'Turn on desktop notifications or a sound first'}>
+			<Button variant="outline" onclick={sendTest} disabled={!canTest}>
+				<BellRingIcon class="size-4" />
+				Send test
+			</Button>
+		</span>
+	{/snippet}
+</SettingsHeader>
 
-{#snippet desktopControl()}
-	<Switch
-		id="pref-desktop"
-		checked={prefs.desktop && permission === 'granted'}
-		disabled={permission === 'unsupported'}
-		onCheckedChange={setDesktop}
-	/>
-{/snippet}
+<SettingsSection title="Notify me about" description="Applies to all your devices.">
+	{#each TRIGGER_ORDER as key (key)}
+		<SettingsRow
+			label={TRIGGER_COPY[key].label}
+			for="trigger-{key}"
+			description={TRIGGER_COPY[key].description}
+		>
+			<Switch
+				id="trigger-{key}"
+				checked={data.settings.notificationTriggers[key]}
+				disabled={triggerBusy}
+				onCheckedChange={(checked) => setTrigger(key, checked)}
+			/>
+		</SettingsRow>
+	{/each}
+</SettingsSection>
 
-{#snippet flashControl()}
-	<Switch
-		id="pref-flash"
-		checked={prefs.titleFlash}
-		onCheckedChange={(checked) => update({ titleFlash: checked })}
-	/>
-{/snippet}
+<SettingsSection title="On this device" description="Saved in this browser only.">
+	<SettingsRow label="Desktop notifications" for="pref-desktop">
+		{#snippet description()}
+			<span class={desktopBlocked ? 'text-amber-700 dark:text-amber-400' : undefined}
+				>{desktopHint}</span
+			>
+		{/snippet}
+		<Switch
+			id="pref-desktop"
+			checked={prefs.desktop && permission === 'granted'}
+			disabled={desktopBlocked}
+			onCheckedChange={setDesktop}
+		/>
+	</SettingsRow>
+	<SettingsRow
+		label="Flash the tab title"
+		for="pref-flash"
+		description="Alternate the title of a background tab until you come back."
+	>
+		<Switch
+			id="pref-flash"
+			checked={prefs.titleFlash}
+			onCheckedChange={(checked) => update({ titleFlash: checked })}
+		/>
+	</SettingsRow>
+	<SettingsRow
+		label="Unread badges"
+		for="pref-badge"
+		description="Show the count in the tab title, a dot on the tab icon and a badge on the installed app."
+	>
+		<Switch
+			id="pref-badge"
+			checked={prefs.badge}
+			onCheckedChange={(checked) => update({ badge: checked })}
+		/>
+	</SettingsRow>
+	<SettingsRow
+		label="Play a sound"
+		for="pref-sound"
+		description="A short sound when something needs your attention. Off by default."
+	>
+		<Switch
+			id="pref-sound"
+			checked={prefs.sound}
+			onCheckedChange={(checked) => {
+				update({ sound: checked });
+				if (checked) playTone(prefs.tone, prefs.volume);
+			}}
+		/>
+	</SettingsRow>
 
-{#snippet badgeControl()}
-	<Switch
-		id="pref-badge"
-		checked={prefs.badge}
-		onCheckedChange={(checked) => update({ badge: checked })}
-	/>
-{/snippet}
-
-{#snippet soundControl()}
-	<Switch
-		id="pref-sound"
-		checked={prefs.sound}
-		onCheckedChange={(checked) => {
-			update({ sound: checked });
-			if (checked) playTone(prefs.tone, prefs.volume);
-		}}
-	/>
-{/snippet}
-
-{#snippet focusedControl()}
-	<Switch
-		id="pref-sound-focused"
-		checked={prefs.soundWhenFocused}
-		onCheckedChange={(checked) => update({ soundWhenFocused: checked })}
-	/>
-{/snippet}
-
-<div class="flex flex-col gap-4">
-	<h2 class="text-xl font-semibold">Notifications</h2>
-	<p class="text-sm text-muted-foreground">
-		How Chatty gets your attention when a reply lands or a task needs you. Nothing alerts while
-		you're looking at the conversation.
-	</p>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Notify me about</Card.Title>
-			<Card.Description>Applies to all your devices.</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-4">
-			{#each TRIGGER_ORDER as key (key)}
-				{#snippet control()}
-					<Switch
-						id="trigger-{key}"
-						checked={data.settings.notificationTriggers[key]}
-						disabled={triggerBusy}
-						onCheckedChange={(checked) => setTrigger(key, checked)}
+	{#if prefs.sound}
+		<div class="flex flex-col gap-4 rounded-xl bg-muted/50 p-4">
+			<SettingsRow label="Tone" for="pref-tone" stack>
+				<Select.Root
+					type="single"
+					value={prefs.tone}
+					onValueChange={(value) => {
+						update({ tone: value as SoundTone });
+						playTone(value as SoundTone, prefs.volume);
+					}}
+				>
+					<Select.Trigger id="pref-tone" class="w-full bg-background sm:w-48">
+						{SOUND_TONE_LABEL[prefs.tone]}
+					</Select.Trigger>
+					<Select.Content>
+						{#each SOUND_TONES as tone (tone)}
+							<Select.Item value={tone}>{SOUND_TONE_LABEL[tone]}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</SettingsRow>
+			<SettingsRow label="Volume" for="pref-volume" stack>
+				<div class="flex w-full items-center gap-3 sm:w-48">
+					<input
+						id="pref-volume"
+						type="range"
+						min="0"
+						max="100"
+						step="5"
+						class="w-full accent-primary"
+						value={Math.round(prefs.volume * 100)}
+						oninput={(e) => update({ volume: Number(e.currentTarget.value) / 100 })}
+						onchange={() => playTone(prefs.tone, prefs.volume)}
 					/>
-				{/snippet}
-				{@render row(
-					`trigger-${key}`,
-					TRIGGER_COPY[key].label,
-					TRIGGER_COPY[key].description,
-					control
-				)}
-			{/each}
-		</Card.Content>
-	</Card.Root>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>On this device</Card.Title>
-			<Card.Description>Saved in this browser only.</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-4">
-			{@render row('pref-desktop', 'Desktop notifications', desktopHint, desktopControl)}
-
-			{@render row(
-				'pref-flash',
-				'Flash the tab title',
-				'Alternate the title of a background tab until you come back.',
-				flashControl
-			)}
-
-			{@render row(
-				'pref-badge',
-				'Unread badges',
-				'Show the count in the tab title, a dot on the tab icon and a badge on the installed app.',
-				badgeControl
-			)}
-		</Card.Content>
-	</Card.Root>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Sound</Card.Title>
-			<Card.Description>Off by default. Saved in this browser only.</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-4">
-			{@render row(
-				'pref-sound',
-				'Play a sound',
-				'Play a short sound when something needs your attention.',
-				soundControl
-			)}
-
-			{#if prefs.sound}
-				<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-					<div class="flex min-w-0 flex-col gap-1">
-						<Label>Tone</Label>
-					</div>
-					<div class="flex items-center gap-2">
-						<Select.Root
-							type="single"
-							value={prefs.tone}
-							onValueChange={(value) => {
-								update({ tone: value as SoundTone });
-								playTone(value as SoundTone, prefs.volume);
-							}}
-						>
-							<Select.Trigger class="w-full shrink-0 sm:w-40">
-								{SOUND_TONE_LABEL[prefs.tone]}
-							</Select.Trigger>
-							<Select.Content>
-								{#each SOUND_TONES as tone (tone)}
-									<Select.Item value={tone}>{SOUND_TONE_LABEL[tone]}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
+					<span class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
+						>{Math.round(prefs.volume * 100)}%</span
+					>
 				</div>
-
-				<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-					<Label for="pref-volume">Volume</Label>
-					<div class="flex items-center gap-3 sm:w-64">
-						<input
-							id="pref-volume"
-							type="range"
-							min="0"
-							max="100"
-							step="5"
-							class="w-full accent-primary"
-							value={Math.round(prefs.volume * 100)}
-							oninput={(e) => update({ volume: Number(e.currentTarget.value) / 100 })}
-							onchange={() => playTone(prefs.tone, prefs.volume)}
-						/>
-						<span class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
-							>{Math.round(prefs.volume * 100)}%</span
-						>
-					</div>
-				</div>
-
-				{@render row(
-					'pref-sound-focused',
-					'Also while Chatty is focused',
-					'By default the sound only plays when you are in another app or tab.',
-					focusedControl
-				)}
-			{/if}
-		</Card.Content>
-	</Card.Root>
-
-	<div class="flex justify-end">
-		<Button variant="outline" size="sm" onclick={sendTest}>Send test notification</Button>
-	</div>
-</div>
+			</SettingsRow>
+			<SettingsRow
+				label="Also while Chatty is focused"
+				for="pref-sound-focused"
+				description="By default the sound only plays when you're in another app or tab."
+			>
+				<Switch
+					id="pref-sound-focused"
+					checked={prefs.soundWhenFocused}
+					onCheckedChange={(checked) => update({ soundWhenFocused: checked })}
+				/>
+			</SettingsRow>
+		</div>
+	{/if}
+</SettingsSection>

@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
-	import * as Card from '$lib/components/ui/card/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
+	import { resolve } from '$app/paths';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
 	import ModelSelect from '$lib/components/app/ModelSelect.svelte';
 	import type { ModelRole } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -34,7 +37,7 @@
 			role: 'compaction',
 			label: 'Chat compaction',
 			description:
-				'Summarizes long conversations when they outgrow the context window. Falls back to the conversation model when unset; a cheap model works well.'
+				'Summarizes long chats near the context limit. Uses the conversation model when unset; a cheap model works well.'
 		},
 		{
 			role: 'speech-to-text',
@@ -110,39 +113,38 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<h2 class="text-xl font-semibold">Model defaults</h2>
-	<p class="text-sm text-muted-foreground">
-		Pick which model serves each purpose. The same model can be used for all of them.
-	</p>
+<svelte:head><title>Model defaults · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Content class="flex flex-col gap-5 pt-6">
-			{#each roleDescriptions as { role, label, description } (role)}
-				<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-					<div class="flex min-w-0 flex-col gap-1">
-						<Label>{label}</Label>
-						<p class="text-sm text-muted-foreground">{description}</p>
-					</div>
-					<ModelSelect
-						groups={enabledGroups}
-						mappings={data.mappings}
-						value={roleValue(data.roles[role])}
-						onselect={(value) => setRole(role, value)}
-						disabled={busy !== null}
-						noneValue=""
-						noneLabel="Not set"
-						capability={roleCapability[role]}
-						class="w-full shrink-0 sm:w-72"
-					/>
-				</div>
-			{/each}
-		</Card.Content>
-	</Card.Root>
+<SettingsHeader
+	title="Model defaults"
+	description="Pick which model serves each purpose. One model can serve all of them."
+/>
 
-	{#if enabledGroups.length === 0}
-		<p class="text-sm text-muted-foreground">
-			No enabled models yet. Add providers and models first.
-		</p>
-	{/if}
-</div>
+{#if enabledGroups.length === 0}
+	<SettingsSection>
+		<div class="flex flex-col items-start gap-3 py-2">
+			<p class="text-sm text-muted-foreground">
+				No enabled models yet. Connect a provider and fetch its models first.
+			</p>
+			<Button size="sm" href={resolve('/settings/providers')}>Go to providers</Button>
+		</div>
+	</SettingsSection>
+{/if}
+
+<SettingsSection>
+	{#each roleDescriptions as { role, label, description } (role)}
+		<SettingsRow {label} {description} stack>
+			<ModelSelect
+				groups={enabledGroups}
+				mappings={data.mappings}
+				value={roleValue(data.roles[role])}
+				onselect={(value) => setRole(role, value)}
+				disabled={busy !== null}
+				noneValue=""
+				noneLabel="Not set"
+				capability={roleCapability[role]}
+				class="w-full sm:w-72"
+			/>
+		</SettingsRow>
+	{/each}
+</SettingsSection>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import BoxIcon from '@lucide/svelte/icons/box';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { mappingModelRef, encodeModelRef } from '$lib/model-ref.js';
@@ -77,13 +78,13 @@
 	const selected = $derived.by(() => {
 		for (const mapping of mappings) {
 			const option = mappingOption(mapping);
-			if (option.value === selectedValue) return { label: `${option.name} (mapping)`, ...option };
+			if (option.value === selectedValue) return { label: `${option.name} · Mapping`, ...option };
 		}
 		for (const { provider, models } of groups) {
 			for (const model of models) {
 				const option = modelOption(model, provider);
 				if (option.value === selectedValue) {
-					return { label: `${option.name} (${provider.name})`, ...option };
+					return { label: `${option.name} · ${provider.name}`, ...option };
 				}
 			}
 		}
@@ -188,6 +189,8 @@
 		<span class="flex min-w-0 flex-1 items-center gap-1.5 text-left">
 			{#if selected.brand}
 				<ProviderIcon brand={selected.brand} class="size-3.5 shrink-0" />
+			{:else if selectedValue}
+				<BoxIcon class="size-3.5 shrink-0 text-muted-foreground" />
 			{/if}
 			<span class="truncate">{label}</span>
 		</span>

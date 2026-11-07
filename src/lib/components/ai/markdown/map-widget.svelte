@@ -5,7 +5,8 @@
 	import MapPinIcon from '@lucide/svelte/icons/map-pin';
 	import StarIcon from '@lucide/svelte/icons/star';
 	import NavigationIcon from '@lucide/svelte/icons/navigation';
-	import LinkIcon from '@lucide/svelte/icons/link';
+	import WidgetCard from './widget-card.svelte';
+	import { cn } from '$lib/utils.js';
 
 	type Marker = {
 		name?: string;
@@ -67,6 +68,8 @@
 	});
 
 	const markers = $derived(validMarkers());
+	// A side list only pays off with several places; a few sit under the map.
+	const sideList = $derived(markers.length > 3);
 
 	function validMarkers(): Marker[] {
 		if (!data) return [];
@@ -88,6 +91,10 @@
 			.replaceAll("'", '&#39;');
 	}
 
+	function directionsUrl(m: Marker): string {
+		return `https://www.google.com/maps/dir/?api=1&destination=${m.lat},${m.lng}`;
+	}
+
 	function buildPopupContent(m: Marker): string {
 		const lines: string[] = [];
 		if (m.name) lines.push(`<strong>${escapeHtml(m.name)}</strong>`);
@@ -104,7 +111,7 @@
 			links.push(`<a href="tel:${escapeHtml(m.phone)}">Call</a>`);
 		}
 		links.push(
-			`<a href="https://www.google.com/maps/dir/?api=1&destination=${m.lat},${m.lng}" target="_blank" rel="noopener noreferrer">Directions</a>`
+			`<a href="${directionsUrl(m)}" target="_blank" rel="noopener noreferrer">Directions</a>`
 		);
 		lines.push(links.join(' · '));
 		return lines.join('<br>');
@@ -117,7 +124,11 @@
 		const [leaf, css] = await Promise.all([import('leaflet'), import('leaflet/dist/leaflet.css')]);
 		void css;
 		leaflet = leaf;
-		map = leaf.map(mapEl, { attributionControl: true });
+		// Wheel zoom only once the map is engaged, so scrolling the chat past it keeps scrolling.
+		map = leaf.map(mapEl, { attributionControl: true, scrollWheelZoom: false });
+		const m = map;
+		m.on('click focus', () => m.scrollWheelZoom.enable());
+		m.on('blur mouseout', () => m.scrollWheelZoom.disable());
 		leaf
 			.tileLayer(tileUrl(), {
 				maxZoom: 19,
@@ -144,18 +155,18 @@
 		all.forEach((m, i) => {
 			const icon = leaf.divIcon({
 				className: 'map-widget-marker',
-				iconSize: [26, 26],
-				iconAnchor: [13, 24],
-				popupAnchor: [0, -22],
-				html: '<div class="map-widget-pin"></div>'
+				iconSize: [32, 32],
+				iconAnchor: [16, 30],
+				popupAnchor: [0, -28],
+				html: `<div class="map-widget-pin"><span>${i + 1}</span></div>`
 			});
 			const marker = leaf.marker([m.lat, m.lng], { title: m.name, icon });
 			marker.bindPopup(buildPopupContent(m), { maxWidth: 260 });
 			marker.on('popupopen', () => {
-				const button = listEl?.querySelectorAll('li button')[i];
-				button?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-				button?.classList.add('map-widget-item-active');
-				setTimeout(() => button?.classList.remove('map-widget-item-active'), 1500);
+				const item = listEl?.querySelectorAll('li')[i];
+				item?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+				item?.classList.add('map-widget-item-active');
+				setTimeout(() => item?.classList.remove('map-widget-item-active'), 1500);
 			});
 			marker.addTo(group);
 		});
@@ -189,69 +200,81 @@
 	});
 </script>
 
-<div
-	class="map-widget my-4 w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm"
+<WidgetCard
+	icon={MapPinIcon}
+	class="map-widget"
+	status={data ? 'ready' : isIncomplete ? 'loading' : 'error'}
+	loadingLabel="Loading map…"
+	errorLabel="Could not render map"
+	skeletonClass="h-64 md:h-80"
+	raw={code}
+	title={data?.title ?? 'Map'}
+	meta={`${markers.length} place${markers.length === 1 ? '' : 's'}`}
 >
-	{#if !data}
-		<div class="flex items-center gap-3 p-4">
-			<MapPinIcon class="size-5 animate-pulse text-muted-foreground" />
-			<span class="text-sm text-muted-foreground">
-				{isIncomplete ? 'Loading map…' : 'Could not render map'}
-			</span>
-		</div>
-	{:else}
-		{#if data.title}
-			<div class="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
-				<MapPinIcon class="size-4 text-muted-foreground" />
-				<span class="text-sm font-medium text-foreground">{data.title}</span>
-				<span class="ml-auto text-xs text-muted-foreground"
-					>{markers.length} place{markers.length === 1 ? '' : 's'}</span
-				>
-			</div>
-		{/if}
-		<div class="flex flex-col md:flex-row">
-			<div class="h-72 w-full shrink-0 md:h-auto md:min-h-80 md:flex-1" bind:this={mapEl}></div>
+	{#if data}
+		<div class={cn('flex flex-col', sideList && 'md:flex-row')}>
 			<div
-				class="max-h-60 overflow-y-auto border-t border-border/60 md:max-h-96 md:w-64 md:shrink-0 md:border-t-0 md:border-l"
+				class={cn(
+					'isolate h-64 w-full shrink-0 bg-muted',
+					sideList ? 'md:h-auto md:min-h-80 md:flex-1' : 'md:h-72'
+				)}
+				bind:this={mapEl}
+			></div>
+			<div
+				class={cn(
+					'max-h-64 overflow-y-auto border-t border-border/60',
+					sideList && 'md:max-h-96 md:w-72 md:shrink-0 md:border-t-0 md:border-l'
+				)}
 				bind:this={listEl}
 			>
-				<ul class="divide-y divide-border/60">
+				<ol class={cn('grid gap-0.5 p-1.5', !sideList && 'sm:grid-cols-2')}>
 					{#each markers as m, i (i)}
-						<li class="flex items-start gap-2 px-3 py-2.5">
+						<li
+							class="group/place relative flex min-w-0 items-start gap-2.5 rounded-xl px-2.5 py-2 transition-colors hover:bg-muted/60 has-[button:focus-visible]:bg-muted/60"
+						>
+							<span
+								class="mt-px flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground tabular-nums"
+								aria-hidden="true">{i + 1}</span
+							>
 							<button
 								type="button"
-								class="flex min-w-0 flex-1 flex-col gap-0.5 text-left transition-colors hover:text-foreground focus:outline-none"
+								class="flex min-w-0 flex-1 flex-col gap-0.5 rounded-sm text-left outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-2 focus-visible:after:ring-ring/50"
 								onclick={() => focusMarker(i)}
 							>
-								<span class="truncate text-sm font-medium text-foreground"
-									>{m.name ?? `Place ${i + 1}`}</span
+								<span class="truncate text-sm font-medium"
+									>{m.name ?? `Place ${i + 1}`}<span class="sr-only">, show on map</span></span
 								>
-								{#if m.address}
-									<span class="truncate text-xs text-muted-foreground">{m.address}</span>
-								{/if}
-							</button>
-							<span class="flex shrink-0 items-center gap-2 pt-0.5 text-xs text-muted-foreground">
-								{#if m.rating !== undefined}
-									<span class="inline-flex items-center gap-0.5">
-										<StarIcon class="size-3 text-amber-500" />{m.rating}
+								{#if m.address || m.rating !== undefined}
+									<span class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+										{#if m.rating !== undefined}
+											<span class="inline-flex shrink-0 items-center gap-0.5 tabular-nums">
+												<StarIcon class="size-3 fill-amber-500 text-amber-500" aria-hidden="true" />
+												{m.rating}
+											</span>
+										{/if}
+										{#if m.address}
+											{#if m.rating !== undefined}<span aria-hidden="true">·</span>{/if}
+											<span class="truncate">{m.address}</span>
+										{/if}
 									</span>
 								{/if}
-								{#if m.website}
-									<LinkIcon class="size-3" />
-								{/if}
-								<a
-									href={`https://www.google.com/maps/dir/?api=1&destination=${m.lat},${m.lng}`}
-									target="_blank"
-									rel="noopener noreferrer"
-									class="inline-flex items-center gap-0.5 text-info underline-offset-2 hover:underline"
-								>
-									<NavigationIcon class="size-3" />Directions
-								</a>
-							</span>
+							</button>
+							<!-- eslint-disable svelte/no-navigation-without-resolve -->
+							<a
+								href={directionsUrl(m)}
+								target="_blank"
+								rel="noopener noreferrer"
+								class="relative z-10 -my-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+								title="Directions"
+								aria-label="Directions to {m.name ?? `place ${i + 1}`}"
+							>
+								<NavigationIcon class="size-3.5" />
+							</a>
+							<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						</li>
 					{/each}
-				</ul>
+				</ol>
 			</div>
 		</div>
 	{/if}
-</div>
+</WidgetCard>

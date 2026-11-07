@@ -7,9 +7,16 @@
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
-	import { Badge } from '$lib/components/ui/badge/index.js';
+	import { resolve } from '$app/paths';
+	import DownloadIcon from '@lucide/svelte/icons/download';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import PlugIcon from '@lucide/svelte/icons/plug';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
+	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
 	import { resolveProviderBrand } from '$lib/provider-brand.js';
 	import type { PageData } from './$types';
@@ -179,80 +186,89 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<div class="flex items-center justify-between">
-		<h2 class="text-xl font-semibold">Providers</h2>
-		<Button onclick={openAdd}>Add provider</Button>
-	</div>
+<svelte:head><title>Providers · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Content>
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Name</Table.Head>
-						<Table.Head>Type</Table.Head>
-						<Table.Head>Base URL</Table.Head>
-						<Table.Head>API key</Table.Head>
-						<Table.Head>Enabled</Table.Head>
-						<Table.Head class="text-right">Actions</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each data.providers as provider (provider.id)}
-						<Table.Row>
-							<Table.Cell class="max-w-40 font-medium" title={provider.name}>
-								{@const brand = resolveProviderBrand(provider)}
-								<span class="flex min-w-0 items-center gap-2">
-									{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
-									<span class="truncate">{provider.name}</span>
-								</span>
-							</Table.Cell>
-							<Table.Cell><Badge variant="outline">{typeLabels[provider.type]}</Badge></Table.Cell>
-							<Table.Cell
-								class="max-w-40 truncate text-muted-foreground"
-								title={provider.baseUrl ?? ''}
-							>
-								{provider.baseUrl ?? '—'}
-							</Table.Cell>
-							<Table.Cell>{provider.hasApiKey ? '••••••' : '—'}</Table.Cell>
-							<Table.Cell>
-								<Switch
-									checked={provider.enabled}
-									onCheckedChange={(checked) => toggleEnabled(provider.id, checked)}
-								/>
-							</Table.Cell>
-							<Table.Cell class="text-right whitespace-nowrap">
-								<div class="flex justify-end gap-2">
-									<Button
-										variant="outline"
-										size="sm"
-										disabled={!provider.enabled}
-										onclick={() => fetchModels(provider.id, provider.name)}
-									>
-										Fetch models
-									</Button>
-									<Button variant="outline" size="sm" onclick={() => openEdit(provider)}
-										>Edit</Button
-									>
-									<Button variant="destructive" size="sm" onclick={() => (deleteId = provider.id)}>
-										Delete
-									</Button>
-								</div>
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row>
-							<Table.Cell colspan={6} class="text-center text-muted-foreground">
-								No providers configured.
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		</Card.Content>
-	</Card.Root>
-</div>
+<SettingsHeader title="Providers">
+	{#snippet description()}
+		LLM APIs Chatty can call. Fetch a provider's models, then choose them in
+		<a class="underline underline-offset-4 hover:text-foreground" href={resolve('/settings/models')}
+			>Models</a
+		>.
+	{/snippet}
+	{#snippet actions()}
+		<Button onclick={openAdd}><PlusIcon class="size-4" />Add provider</Button>
+	{/snippet}
+</SettingsHeader>
+
+<SettingsSection flush>
+	{#if data.providers.length === 0}
+		<div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
+			<div
+				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+			>
+				<PlugIcon class="size-5" />
+			</div>
+			<div class="flex flex-col gap-1">
+				<p class="text-sm font-medium">No providers yet</p>
+				<p class="text-sm text-muted-foreground">
+					Connect Anthropic, OpenAI, OpenRouter or a local server to start chatting.
+				</p>
+			</div>
+			<Button size="sm" onclick={openAdd}><PlusIcon class="size-4" />Add provider</Button>
+		</div>
+	{:else}
+		<ul class="divide-y divide-border/60" aria-label="Providers">
+			{#each data.providers as provider (provider.id)}
+				{@const brand = resolveProviderBrand(provider)}
+				<SettingsListItem title={provider.name} muted={!provider.enabled}>
+					{#snippet leading()}
+						{#if brand}<ProviderIcon {brand} class="size-4" />{:else}<PlugIcon
+								class="size-4"
+							/>{/if}
+					{/snippet}
+					{#snippet meta()}
+						{typeLabels[provider.type]}{#if !provider.hasApiKey}
+							· <span class="text-amber-700 dark:text-amber-400">No API key</span>{/if}
+					{/snippet}
+					<p
+						class="min-w-0 truncate text-xs text-muted-foreground {provider.baseUrl
+							? 'font-mono'
+							: ''}"
+						title={provider.baseUrl ?? undefined}
+					>
+						{provider.baseUrl ?? 'Default endpoint'}
+					</p>
+					{#snippet trailing()}
+						<Switch
+							checked={provider.enabled}
+							aria-label="Enable {provider.name}"
+							onCheckedChange={(checked) => toggleEnabled(provider.id, checked)}
+						/>
+						<RowMenu
+							label="Actions for {provider.name}"
+							items={[
+								{
+									label: 'Fetch models',
+									icon: DownloadIcon,
+									disabled: !provider.enabled,
+									onSelect: () => fetchModels(provider.id, provider.name)
+								},
+								{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(provider) },
+								'separator',
+								{
+									label: 'Delete',
+									icon: Trash2Icon,
+									destructive: true,
+									onSelect: () => (deleteId = provider.id)
+								}
+							]}
+						/>
+					{/snippet}
+				</SettingsListItem>
+			{/each}
+		</ul>
+	{/if}
+</SettingsSection>
 
 <Dialog.Root bind:open={addOpen}>
 	<Dialog.Content>

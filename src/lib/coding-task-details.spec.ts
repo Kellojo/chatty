@@ -21,6 +21,7 @@ const task = (patch: Partial<CodingConversation> = {}): CodingConversation => ({
 	baseBranch: 'main',
 	branch: 'feat/x',
 	prUrl: null,
+	prState: null,
 	status: 'idle',
 	pendingRequest: null,
 	lastError: null,

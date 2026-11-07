@@ -10,6 +10,7 @@
 import type {
 	CodingPendingOption,
 	CodingPendingRequest,
+	CodingPullRequestState,
 	CodingTaskStatus
 } from '$lib/coding-environments.js';
 
@@ -21,6 +22,8 @@ export interface ThreadState {
 	messages: Map<string, Rec>;
 	turnItems: Map<string, Rec>;
 	runtimeRequests: Map<string, Rec>;
+	/** Runs some of whose turn items were dropped by {@link MAX_THREAD_RECORDS}. */
+	evictedItemRuns: Set<string>;
 	lastSequence: number | null;
 }
 
@@ -31,6 +34,7 @@ export function emptyThreadState(): ThreadState {
 		messages: new Map(),
 		turnItems: new Map(),
 		runtimeRequests: new Map(),
+		evictedItemRuns: new Set(),
 		lastSequence: null
 	};
 }
@@ -67,23 +71,47 @@ export const MAX_RUN_CHARS = 2 * 1024 * 1024;
 export const TRUNCATED_MARKER = '\n… (truncated)';
 export const OMITTED_PARTS_NOTICE = '_Earlier steps of this run are not shown._';
 
+type OnEvict = (record: Rec) => void;
+
 /** Inserts or replaces `id` and drops the oldest records beyond the cap. */
-function put(map: Map<string, Rec>, id: string, record: Rec): void {
+function put(map: Map<string, Rec>, id: string, record: Rec, onEvict?: OnEvict): void {
 	map.delete(id); // re-inserting moves it to the newest end
 	map.set(id, record);
-	while (map.size > MAX_THREAD_RECORDS) map.delete(map.keys().next().value!);
+	while (map.size > MAX_THREAD_RECORDS) {
+		const oldest = map.keys().next().value!;
+		const evicted = map.get(oldest);
+		map.delete(oldest);
+		if (evicted) onEvict?.(evicted);
+	}
 }
 
-function fill(map: Map<string, Rec>, list: unknown): void {
+function fill(map: Map<string, Rec>, list: unknown, onEvict?: OnEvict): void {
 	map.clear();
 	if (!Array.isArray(list)) return;
-	for (const entry of list.slice(-MAX_THREAD_RECORDS)) upsert(map, entry);
+	for (const entry of list) upsert(map, entry, onEvict);
 }
 
-function upsert(map: Map<string, Rec>, payload: unknown): void {
+function upsert(map: Map<string, Rec>, payload: unknown, onEvict?: OnEvict): void {
 	const record = obj(payload);
 	const id = str(record?.id);
-	if (record && id) put(map, id, record);
+	if (record && id) put(map, id, record, onEvict);
+}
+
+/** Remembers whose turn items were dropped, so their history isn't re-rendered from a partial set. */
+function itemEvicter(state: ThreadState): OnEvict {
+	return (item) => {
+		const runId = str(item.runId);
+		if (runId) state.evictedItemRuns.add(runId);
+	};
+}
+
+/**
+ * Whether some of this run's turn items were dropped by the per-thread cap.
+ * Rendering such a run yields only part of its history, so a finished run's
+ * persisted reply should be kept rather than overwritten with it.
+ */
+export function runItemsEvicted(state: ThreadState, runId: string): boolean {
+	return state.evictedItemRuns.has(runId);
 }
 
 export function capText(text: string): string {
@@ -118,25 +146,32 @@ export function applyStreamItem(state: ThreadState, item: unknown): boolean {
 	const it = obj(item);
 	if (!it) return false;
 	if (it.kind === 'snapshot') {
-		const projection = obj(it.projection) ?? {};
+		// A snapshot replaces everything, so a malformed one must not wipe state.
+		const projection = obj(it.projection);
+		if (!projection) return false;
 		state.thread = obj(projection.thread);
 		fill(state.runs, projection.runs);
 		fill(state.messages, projection.messages);
-		fill(state.turnItems, projection.turnItems);
+		state.evictedItemRuns.clear();
+		fill(state.turnItems, projection.turnItems, itemEvicter(state));
 		fill(state.runtimeRequests, projection.runtimeRequests);
 		state.lastSequence = num(it.snapshotSequence) ?? state.lastSequence;
 		return true;
 	}
 	if (it.kind !== 'event') return false;
 	const sequence = num(it.sequence);
-	if (sequence !== null) state.lastSequence = sequence;
+	if (sequence !== null) {
+		// Already reflected (e.g. replayed after a snapshot): applying it could regress records.
+		if (state.lastSequence !== null && sequence <= state.lastSequence) return false;
+		state.lastSequence = sequence;
+	}
 	const event = obj(it.event);
 	const type = str(event?.type);
 	if (!event || !type) return false;
 	const payload = event.payload;
 	if (type.startsWith('run.')) upsert(state.runs, payload);
 	else if (type.startsWith('message.')) upsert(state.messages, payload);
-	else if (type.startsWith('turn-item.')) upsert(state.turnItems, payload);
+	else if (type.startsWith('turn-item.')) upsert(state.turnItems, payload, itemEvicter(state));
 	else if (type.startsWith('runtime-request.')) upsert(state.runtimeRequests, payload);
 	else if (type.startsWith('thread.')) {
 		const record = obj(payload);
@@ -238,6 +273,17 @@ export interface RenderedEntry {
 }
 
 const DONE_ITEM = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
+function runningSubagents(state: ThreadState): Rec[] {
+	return [...state.turnItems.values()].filter(
+		(item) => item.type === 'subagent' && !DONE_ITEM.has(String(item.status))
+	);
+}
+
+/** Whether a subagent in the thread is still at work (it can outlive its turn). */
+export function hasRunningSubagent(state: ThreadState): boolean {
+	return runningSubagents(state).length > 0;
+}
+
 const BASE_ITEM_FIELDS = new Set([
 	'id',
 	'runId',
@@ -254,6 +300,12 @@ function itemsForRun(state: ThreadState, runId: string): Rec[] {
 		.sort((a, b) => (num(a.ordinal) ?? 0) - (num(b.ordinal) ?? 0));
 }
 
+/** Final item statuses that aren't a success, with the text shown for them. */
+const STOPPED_ITEM = new Map([
+	['cancelled', 'Cancelled'],
+	['interrupted', 'Interrupted']
+]);
+
 function toolEntry(
 	item: Rec,
 	toolName: string,
@@ -265,7 +317,8 @@ function toolEntry(
 	const final = DONE_ITEM.has(itemStatus);
 	input = capValue(input);
 	output = capValue(output);
-	if (itemStatus === 'failed') {
+	const stopped = STOPPED_ITEM.get(itemStatus);
+	if (itemStatus === 'failed' || stopped) {
 		return {
 			key: id,
 			final,
@@ -275,7 +328,7 @@ function toolEntry(
 				toolCallId: id,
 				state: 'output-error',
 				input,
-				errorText: capText(failureText(item) ?? 'Failed')
+				errorText: capText(failureText(item) ?? stopped ?? 'Failed')
 			}
 		};
 	}
@@ -472,7 +525,10 @@ export function renderRun(
 							provider: str(item.providerInstanceId) ?? str(item.driver),
 							// Background subagents outlive the turn that started them; T3's own
 							// status says whether this one is still at work.
-							running: !DONE_ITEM.has(status)
+							running: !DONE_ITEM.has(status),
+							// So the card can say how long it has been (or was) at work.
+							startedAt: time(item.startedAt),
+							completedAt: time(item.completedAt)
 						},
 						str(item.result) ?? { status },
 						status
@@ -535,6 +591,7 @@ export interface TaskSummary {
 	status: CodingTaskStatus;
 	branch: string | null;
 	prUrl: string | null;
+	prState: CodingPullRequestState | null;
 	title: string | null;
 	pendingRequest: CodingPendingRequest | null;
 	/** Start of the run in progress (ms), null when none is active. */
@@ -549,10 +606,24 @@ const DEFAULT_DECISIONS: CodingPendingOption[] = [
 ];
 
 function pendingRequest(state: ThreadState): CodingPendingRequest | null {
-	const pending = [...state.runtimeRequests.values()].filter((r) => r.status === 'pending');
+	const items = [...state.turnItems.values()];
+	const itemFor = (request: Rec) => items.find((i) => i.requestId === String(request.id));
+	const current = str(activeRun(state)?.id);
+	// A request left pending by a run that has since ended can't be answered, so
+	// only requests of a still-active run count, the latest run's first.
+	const pending = [...state.runtimeRequests.values()]
+		.filter((r) => r.status === 'pending')
+		.map((request) => {
+			const runId = str(request.runId) ?? str(itemFor(request)?.runId);
+			const run = runId ? state.runs.get(runId) : undefined;
+			return { request, runId, active: runId ? !!run && isRunActive(run) : current !== null };
+		})
+		.filter((p) => p.active)
+		.sort((a, b) => Number(b.runId === current) - Number(a.runId === current))
+		.map((p) => p.request);
 	for (const request of pending) {
 		const requestId = String(request.id);
-		const item = [...state.turnItems.values()].find((i) => i.requestId === requestId);
+		const item = itemFor(request);
 		const createdAt = time(request.createdAt) ?? time(item?.startedAt) ?? Date.now();
 		if (request.kind === 'user_input' || item?.type === 'user_input_request') {
 			const questions = Array.isArray(item?.questions) ? item.questions.map(obj) : [];
@@ -601,19 +672,55 @@ function pendingRequest(state: ThreadState): CodingPendingRequest | null {
 	return null;
 }
 
+/** A PR record's state: on the record itself or on T3's cached `snapshot` of it. */
+function pullRequestState(record: Rec): CodingPullRequestState | null {
+	const raw = record.snapshot;
+	let snapshot = obj(raw);
+	if (!snapshot && typeof raw === 'string') {
+		try {
+			snapshot = obj(JSON.parse(raw));
+		} catch {
+			snapshot = null;
+		}
+	}
+	const source = snapshot ?? record;
+	const state = str(source.state)?.toLowerCase();
+	if (state === 'merged' || source.mergedAt) return 'merged';
+	if (state === 'closed') return 'closed';
+	if (state === 'open') return source.isDraft === true ? 'draft' : 'open';
+	return null;
+}
+
+/**
+ * The thread's pull request: the one linked to it, else one it opened, else
+ * one T3 found for its branch (e.g. opened outside the agent), with the last
+ * state T3 observed for it.
+ */
+function pullRequestOf(thread: Rec): { url: string | null; state: CodingPullRequestState | null } {
+	const records = [
+		obj(thread.linkedPullRequest),
+		...(Array.isArray(thread.pullRequests) ? thread.pullRequests.map(obj) : []),
+		obj(thread.branchPullRequest)
+	].filter((r): r is Rec => r !== null && webUrl(str(r.url)) !== null);
+	const url = records[0] ? str(records[0].url) : null;
+	if (!url) return { url: null, state: null };
+	// The linked record may be a bare reference while another carries the state.
+	const same = records.filter((r) => str(r.url)?.toLowerCase() === url.toLowerCase());
+	const state = same.map(pullRequestState).find((s) => s !== null) ?? null;
+	return { url, state };
+}
+
 export function summarizeTask(state: ThreadState): TaskSummary {
 	const thread = state.thread ?? {};
-	const linked = obj(thread.linkedPullRequest);
-	const prs = Array.isArray(thread.pullRequests) ? thread.pullRequests.map(obj) : [];
-	const prUrl = webUrl(
-		str(linked?.url) ?? prs.map((p) => str(p?.url)).find((u) => u !== null) ?? null
-	);
+	const { url: prUrl, state: prState } = pullRequestOf(thread);
 	const pending = pendingRequest(state);
 	const runs = sortedRuns(state);
 	const last = runs.at(-1);
 	let status: CodingTaskStatus;
 	if (pending) status = 'awaiting_input';
-	else if (runs.some(isRunActive)) status = 'running';
+	// Background subagents keep working after their turn ends; the task isn't
+	// done until they are.
+	else if (runs.some(isRunActive) || hasRunningSubagent(state)) status = 'running';
 	else if (!last) status = 'starting';
 	else if (last.status === 'completed') status = 'idle';
 	else if (last.status === 'failed') status = 'failed';
@@ -622,14 +729,30 @@ export function summarizeTask(state: ThreadState): TaskSummary {
 		status,
 		branch: str(thread.branch),
 		prUrl,
+		prState,
 		title: str(thread.title),
 		pendingRequest: pending,
 		runStartedAt: (() => {
 			const run = activeRun(state);
-			return run ? (time(run.startedAt) ?? time(run.requestedAt)) : null;
+			if (run) return time(run.startedAt) ?? time(run.requestedAt);
+			// Only subagents left: time from when the earliest of them started.
+			const starts = runningSubagents(state)
+				.map((item) => time(item.startedAt))
+				.filter((t): t is number => t !== null);
+			return starts.length > 0 ? Math.min(...starts) : null;
 		})(),
 		worktreePath: str(thread.worktreePath)
 	};
+}
+
+/**
+ * Whether a T3 "user" message was really written by the agent's runtime: the
+ * notices that wake the agent when a background task or subagent finishes
+ * ("This agent's report was delivered to you…", "Background task completed.").
+ */
+export function isAgentNotification(state: ThreadState, messageId: string): boolean {
+	const message = state.messages.get(messageId);
+	return !!message && (message.notification != null || message.createdBy === 'agent');
 }
 
 /** Text of a T3 message (used to mirror user messages sent from T3 itself). */

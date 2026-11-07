@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SuggestionsEditor from '$lib/components/app/SuggestionsEditor.svelte';
 	import {
 		DEFAULT_CODING_SUGGESTIONS,
@@ -65,66 +66,63 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<h2 class="text-xl font-semibold">Conversation</h2>
-	<p class="text-sm text-muted-foreground">Chat appearance and response behavior.</p>
+<svelte:head><title>Conversation · Settings · Chatty</title></svelte:head>
 
-	<SuggestionsEditor
-		title="Chat suggestions"
-		description="Quick-start chips on the home page in Chat mode; clicking one sends it."
-		initial={data.settings.suggestions}
-		defaults={DEFAULT_SUGGESTIONS}
-		save={(suggestions) => putSettings({ suggestions })}
-	/>
+<SettingsHeader
+	title="Conversation"
+	description="How the assistant responds and what the start screen suggests."
+/>
 
-	<SuggestionsEditor
-		title="Coding suggestions"
-		description="Quick-start chips on the home page in Code mode; clicking one fills in the task so you can add details."
-		initial={data.settings.codingSuggestions}
-		defaults={DEFAULT_CODING_SUGGESTIONS}
-		save={(codingSuggestions) => putSettings({ codingSuggestions })}
-	/>
+<SettingsSection
+	title="Response instructions"
+	description="Tell the assistant how to respond, e.g. “never use emojis”. Added to every chat, on top of any per-conversation system prompt."
+>
+	<div class="flex flex-col gap-1.5">
+		<Textarea
+			bind:value={instructions}
+			rows={4}
+			maxlength={MAX_GLOBAL_INSTRUCTIONS_LENGTH}
+			placeholder="e.g. Answer concisely and never use emojis."
+			aria-label="Response instructions"
+		/>
+		<div class="flex justify-between gap-4 text-xs text-muted-foreground">
+			<span>Leave empty for no global instructions.</span>
+			<span class="shrink-0 tabular-nums"
+				>{instructions.length.toLocaleString()} / {MAX_GLOBAL_INSTRUCTIONS_LENGTH.toLocaleString()}</span
+			>
+		</div>
+	</div>
+	<div class="flex justify-end gap-2">
+		<Button
+			variant="ghost"
+			size="sm"
+			onclick={resetInstructions}
+			disabled={instructionsBusy || !savedInstructions}
+		>
+			Clear
+		</Button>
+		<Button
+			size="sm"
+			onclick={saveInstructions}
+			disabled={instructionsBusy || instructions.trim() === savedInstructions}
+		>
+			{instructionsBusy ? 'Saving…' : 'Save'}
+		</Button>
+	</div>
+</SettingsSection>
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>Response instructions</Card.Title>
-			<Card.Description>
-				Tell the assistant how to respond (e.g. "never use emojis"). Applies to every chat, in
-				addition to any per-conversation system prompt.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-2">
-			<Textarea
-				bind:value={instructions}
-				rows={4}
-				maxlength={MAX_GLOBAL_INSTRUCTIONS_LENGTH}
-				placeholder="e.g. Answer concisely and never use emojis."
-			/>
-			<div class="flex items-center justify-between">
-				<p class="text-xs text-muted-foreground">
-					This is added to the system prompt of every chat. Leave empty for no global instructions.
-				</p>
-				<span class="shrink-0 text-xs text-muted-foreground"
-					>{instructions.length}/{MAX_GLOBAL_INSTRUCTIONS_LENGTH}</span
-				>
-			</div>
-			<div class="flex justify-end gap-2">
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={resetInstructions}
-					disabled={instructionsBusy || !savedInstructions}
-				>
-					Clear
-				</Button>
-				<Button
-					size="sm"
-					onclick={saveInstructions}
-					disabled={instructionsBusy || instructions.trim() === savedInstructions}
-				>
-					{instructionsBusy ? 'Saving…' : 'Save instructions'}
-				</Button>
-			</div>
-		</Card.Content>
-	</Card.Root>
-</div>
+<SuggestionsEditor
+	title="Chat suggestions"
+	description="Quick-start chips on the home page in Chat mode; clicking one sends it."
+	initial={data.settings.suggestions}
+	defaults={DEFAULT_SUGGESTIONS}
+	save={(suggestions) => putSettings({ suggestions })}
+/>
+
+<SuggestionsEditor
+	title="Coding suggestions"
+	description="Quick-start chips on the home page in Code mode; clicking one fills in the task so you can add details."
+	initial={data.settings.codingSuggestions}
+	defaults={DEFAULT_CODING_SUGGESTIONS}
+	save={(codingSuggestions) => putSettings({ codingSuggestions })}
+/>
