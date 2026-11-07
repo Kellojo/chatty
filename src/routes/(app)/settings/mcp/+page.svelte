@@ -9,13 +9,36 @@
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
-	import * as Table from '$lib/components/ui/table/index.js';
-	import * as Card from '$lib/components/ui/card/index.js';
+	import BlocksIcon from '@lucide/svelte/icons/blocks';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import PlugZapIcon from '@lucide/svelte/icons/plug-zap';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
+	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
+	import RowMenu, { type RowMenuItem } from '$lib/components/app/settings/RowMenu.svelte';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import type { McpServerInfo } from '$lib/types.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	function menuItems(server: McpServerInfo): RowMenuItem[] {
+		const test: RowMenuItem = {
+			label: 'Test connection',
+			icon: PlugZapIcon,
+			disabled: testBusyId === server.id,
+			onSelect: () => runTest(server)
+		};
+		if (server.builtin) return [test];
+		return [
+			test,
+			{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(server) },
+			'separator',
+			{ label: 'Delete', icon: Trash2Icon, destructive: true, onSelect: () => openDelete(server) }
+		];
+	}
 
 	type ConfigurableTransport = 'http' | 'sse' | 'stdio';
 	type TestResult = {
@@ -215,91 +238,78 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4">
-	<div class="flex items-center justify-between">
-		<div class="flex flex-col gap-1">
-			<h2 class="text-xl font-semibold">MCP servers</h2>
-			<p class="text-sm text-muted-foreground">
-				Model Context Protocol servers available to chat and agent modes.
-			</p>
-		</div>
-		<Button onclick={openAdd}>Add server</Button>
-	</div>
+<svelte:head><title>MCP servers · Settings · Chatty</title></svelte:head>
 
-	<Card.Root>
-		<Card.Content>
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Name</Table.Head>
-						<Table.Head>Transport</Table.Head>
-						<Table.Head>URL / command</Table.Head>
-						<Table.Head>Enabled</Table.Head>
-						<Table.Head class="text-right">Actions</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each data.servers as server (server.id)}
-						<Table.Row>
-							<Table.Cell class="max-w-40 font-medium" title={server.name}>
-								<div class="flex items-center gap-2">
-									<span class="truncate">{server.name}</span>
-									{#if server.builtin}
-										<Badge variant="secondary" class="shrink-0">bundled</Badge>
-									{/if}
-								</div>
-							</Table.Cell>
-							<Table.Cell><Badge variant="outline">{server.transport}</Badge></Table.Cell>
-							<Table.Cell
-								class="max-w-48 truncate text-muted-foreground"
-								title={connectionLabel(server)}
-							>
-								{connectionLabel(server)}
-							</Table.Cell>
-							<Table.Cell>
-								<Switch
-									checked={enabledOverride[server.id] ?? server.enabled}
-									onCheckedChange={(checked) => toggleEnabled(server, checked)}
-								/>
-							</Table.Cell>
-							<Table.Cell class="text-right whitespace-nowrap">
-								<div class="flex justify-end gap-2">
-									<Button
-										variant="outline"
-										size="sm"
-										disabled={testBusyId === server.id}
-										onclick={() => runTest(server)}
-									>
-										{#if testBusyId === server.id}
-											<Loader2Icon class="size-4 animate-spin" />
-											Testing…
-										{:else}
-											Test
-										{/if}
-									</Button>
-									{#if !server.builtin}
-										<Button variant="outline" size="sm" onclick={() => openEdit(server)}
-											>Edit</Button
-										>
-										<Button variant="destructive" size="sm" onclick={() => openDelete(server)}>
-											Delete
-										</Button>
-									{/if}
-								</div>
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row>
-							<Table.Cell colspan={5} class="text-center text-muted-foreground">
-								No MCP servers configured.
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		</Card.Content>
-	</Card.Root>
-</div>
+<SettingsHeader
+	title="MCP servers"
+	description="Model Context Protocol servers whose tools are available in chats and agent runs."
+>
+	{#snippet actions()}
+		<Button onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
+	{/snippet}
+</SettingsHeader>
+
+<SettingsSection flush>
+	{#if data.servers.length === 0}
+		<div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
+			<div
+				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+			>
+				<BlocksIcon class="size-5" />
+			</div>
+			<div class="flex flex-col gap-1">
+				<p class="text-sm font-medium">No MCP servers</p>
+				<p class="text-sm text-muted-foreground">
+					Add a remote server over HTTP or run a local one over stdio.
+				</p>
+			</div>
+			<Button size="sm" onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
+		</div>
+	{:else}
+		<ul class="divide-y divide-border/60" aria-label="MCP servers">
+			{#each data.servers as server (server.id)}
+				{@const enabled = enabledOverride[server.id] ?? server.enabled}
+				<SettingsListItem title={server.name} muted={!enabled}>
+					{#snippet leading()}<BlocksIcon class="size-4" />{/snippet}
+					{#snippet badges()}
+						<Badge variant="outline"
+							>{server.transport === 'builtin'
+								? 'Built-in'
+								: transportLabels[server.transport]}</Badge
+						>
+						{#if server.builtin}<Badge variant="secondary">Bundled</Badge>{/if}
+					{/snippet}
+					{#snippet meta()}
+						<span class="font-mono" title={connectionLabel(server)}>{connectionLabel(server)}</span>
+					{/snippet}
+					{#snippet trailing()}
+						<Button
+							variant="ghost"
+							size="sm"
+							class="hidden sm:inline-flex"
+							disabled={testBusyId === server.id}
+							onclick={() => runTest(server)}
+						>
+							{#if testBusyId === server.id}
+								<Loader2Icon class="size-4 animate-spin" />
+								Testing…
+							{:else}
+								<PlugZapIcon class="size-4" />
+								Test
+							{/if}
+						</Button>
+						<Switch
+							checked={enabled}
+							aria-label="Enable {server.name}"
+							onCheckedChange={(checked) => toggleEnabled(server, checked)}
+						/>
+						<RowMenu label="Actions for {server.name}" items={menuItems(server)} />
+					{/snippet}
+				</SettingsListItem>
+			{/each}
+		</ul>
+	{/if}
+</SettingsSection>
 
 <Dialog.Root bind:open={addOpen}>
 	<Dialog.Content>
