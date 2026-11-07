@@ -57,6 +57,7 @@ const time = (v: unknown): number | null => {
 	const ms = Date.parse(str(v) ?? '');
 	return Number.isNaN(ms) ? null : ms;
 };
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 export interface ImportableThread {
 	threadId: string;
@@ -77,6 +78,73 @@ export interface ImportableThread {
 	updatedAt: number;
 }
 
+/** Titles of the live (not archived or deleted) projects in a shell snapshot, by id. */
+export function shellProjects(shell: unknown): Map<string, string> {
+	const projects = new Map<string, string>();
+	for (const entry of list(rec(shell)?.projects)) {
+		const p = rec(entry);
+		const id = str(p?.id);
+		if (p && id && !p.archivedAt && !p.deletedAt) {
+			projects.set(id, threadTitle(p.title) ?? threadTitle(id) ?? 'Project');
+		}
+	}
+	return projects;
+}
+
+/**
+ * Reads a shell thread as an import, or null when it can't be one: deleted,
+ * not top-level (subagent or delegated), outside a live project in `projects`
+ * or missing what a task needs. Archived threads are read like any other.
+ */
+export function parseImportableThread(
+	entry: unknown,
+	projects: ReadonlyMap<string, string>
+): ImportableThread | null {
+	const t = rec(entry);
+	const threadId = str(t?.id);
+	if (!t || !threadId || t.deletedAt) return null;
+	const lineage = rec(t.lineage);
+	if (
+		lineage?.relationshipToParent === 'subagent' ||
+		t.relationshipToParent === 'subagent' ||
+		rec(t.delegatedFrom)
+	) {
+		return null;
+	}
+	const projectId = str(t.projectId);
+	const projectTitle = projectId ? projects.get(projectId) : undefined;
+	if (!projectId || projectTitle === undefined) return null;
+	const selection = rec(t.modelSelection);
+	const providerInstanceId = str(selection?.instanceId) ?? str(t.providerInstanceId);
+	const model = str(selection?.model);
+	const runtimeMode = str(t.runtimeMode);
+	if (!providerInstanceId || !model || !runtimeMode) return null;
+	const updatedAt = time(t.updatedAt) ?? time(t.createdAt);
+	if (updatedAt === null) return null;
+	return {
+		threadId,
+		projectId,
+		projectTitle,
+		title: threadTitle(t.title) ?? 'Coding task',
+		providerInstanceId,
+		model,
+		runtimeMode,
+		workspaceMode: str(t.worktreePath) ? 'worktree' : 'local',
+		branch: str(t.branch),
+		// Provisional; the follower derives the real status from the runs.
+		status: rec(t.pendingRuntimeRequest)
+			? 'awaiting_input'
+			: str(t.activeRunId)
+				? 'running'
+				: 'idle',
+		settled: threadSettled(t) === true,
+		pinned: t.pinnedAt !== null && t.pinnedAt !== undefined,
+		visitedAt: time(t.lastVisitedAt) ?? 0,
+		createdAt: time(t.createdAt) ?? updatedAt,
+		updatedAt
+	};
+}
+
 /**
  * Threads in a shell snapshot worth importing: top-level (not subagent or
  * delegated), not archived, in a live project, unknown to Chatty and active
@@ -86,61 +154,13 @@ export function importableThreads(
 	shell: unknown,
 	opts: { known: ReadonlySet<string>; since: number }
 ): ImportableThread[] {
-	const s = rec(shell);
-	const projects = new Map<string, string>();
-	for (const entry of Array.isArray(s?.projects) ? s.projects : []) {
-		const p = rec(entry);
-		const id = str(p?.id);
-		if (p && id && !p.archivedAt && !p.deletedAt) {
-			projects.set(id, threadTitle(p.title) ?? threadTitle(id) ?? 'Project');
-		}
-	}
+	const projects = shellProjects(shell);
 	const result: ImportableThread[] = [];
-	for (const entry of Array.isArray(s?.threads) ? s.threads : []) {
-		const t = rec(entry);
-		const threadId = str(t?.id);
-		if (!t || !threadId || opts.known.has(threadId)) continue;
-		if (t.archivedAt || t.deletedAt) continue;
-		const lineage = rec(t.lineage);
-		if (
-			lineage?.relationshipToParent === 'subagent' ||
-			t.relationshipToParent === 'subagent' ||
-			rec(t.delegatedFrom)
-		) {
-			continue;
-		}
-		const projectId = str(t.projectId);
-		const projectTitle = projectId ? projects.get(projectId) : undefined;
-		if (!projectId || projectTitle === undefined) continue;
-		const selection = rec(t.modelSelection);
-		const providerInstanceId = str(selection?.instanceId) ?? str(t.providerInstanceId);
-		const model = str(selection?.model);
-		const runtimeMode = str(t.runtimeMode);
-		if (!providerInstanceId || !model || !runtimeMode) continue;
-		const updatedAt = time(t.updatedAt) ?? time(t.createdAt);
-		if (updatedAt === null || updatedAt < opts.since) continue;
-		result.push({
-			threadId,
-			projectId,
-			projectTitle,
-			title: threadTitle(t.title) ?? 'Coding task',
-			providerInstanceId,
-			model,
-			runtimeMode,
-			workspaceMode: str(t.worktreePath) ? 'worktree' : 'local',
-			branch: str(t.branch),
-			// Provisional; the follower derives the real status from the runs.
-			status: rec(t.pendingRuntimeRequest)
-				? 'awaiting_input'
-				: str(t.activeRunId)
-					? 'running'
-					: 'idle',
-			settled: threadSettled(t) === true,
-			pinned: t.pinnedAt !== null && t.pinnedAt !== undefined,
-			visitedAt: time(t.lastVisitedAt) ?? 0,
-			createdAt: time(t.createdAt) ?? updatedAt,
-			updatedAt
-		});
+	for (const entry of list(rec(shell)?.threads)) {
+		if (rec(entry)?.archivedAt) continue;
+		const thread = parseImportableThread(entry, projects);
+		if (!thread || opts.known.has(thread.threadId) || thread.updatedAt < opts.since) continue;
+		result.push(thread);
 	}
 	return result.sort((a, b) => a.updatedAt - b.updatedAt);
 }
@@ -317,8 +337,6 @@ function endMissingThreadTask(
 	});
 }
 
-const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
-
 /** Ids of every thread in a T3 shell, or null when the shell has no thread lists. */
 function shellThreadIds(shell: Rec | null): Set<string> | null {
 	if (!Array.isArray(shell?.threads) || !Array.isArray(shell?.archivedThreads)) return null;
@@ -330,11 +348,22 @@ function shellThreadIds(shell: Rec | null): Set<string> | null {
 	return ids;
 }
 
+/** Loads `env`'s thread list (T3's shell snapshot, archived threads included). */
+export async function loadShell(env: CodingEnvironmentRow): Promise<Rec | null> {
+	return rec(
+		await t3HttpGet(
+			env.base_url,
+			decryptSecret(env.token_enc),
+			'/api/orchestration/shell?omitIdleSubagents=1'
+		)
+	);
+}
+
 /**
  * Whether `env` (read before an await) is still enabled with the same URL and
  * token, so work done with it doesn't revive followers on old credentials.
  */
-function isCurrentEnvironment(db: Db, env: CodingEnvironmentRow): boolean {
+export function isCurrentEnvironment(db: Db, env: CodingEnvironmentRow): boolean {
 	const current = getCodingEnvironment(db, env.user_id, env.id);
 	return (
 		current?.enabled === 1 &&
@@ -358,13 +387,7 @@ export async function syncAllThreads(
 		if (pass.cancelled) return;
 		let shell: Rec | null;
 		try {
-			shell = rec(
-				await t3HttpGet(
-					env.base_url,
-					decryptSecret(env.token_enc),
-					'/api/orchestration/shell?omitIdleSubagents=1'
-				)
-			);
+			shell = await loadShell(env);
 		} catch (e) {
 			log.warn('Could not load T3 threads', {
 				environmentId: env.id,

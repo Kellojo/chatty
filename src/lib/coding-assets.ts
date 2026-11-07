@@ -21,3 +21,48 @@ export function isLocalImagePath(src: string): boolean {
 export function codingAssetUrl(conversationId: string, path: string): string {
 	return `/api/coding/tasks/${encodeURIComponent(conversationId)}/asset?path=${encodeURIComponent(path)}`;
 }
+
+/** `![alt](dest` with the destination bare or in angle brackets. */
+const IMAGE_DESTINATION = /(!\[[^\]\n]*\]\(\s*)(<[^>\n]*>|[^\s)]+)/g;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const INLINE_CODE = /(`+)[^`]*?\1/g;
+
+function escapeDestination(match: string, prefix: string, dest: string): string {
+	const bare = dest.startsWith('<') ? dest.slice(1, -1) : dest;
+	if (!bare.includes('\\') || !isLocalImagePath(bare)) return match;
+	// Already escaped by the writer: every backslash is doubled.
+	if (!/(?<!\\)\\(?!\\)/.test(bare) && /\\\\/.test(bare)) return match;
+	return prefix + dest.replaceAll('\\', '\\\\');
+}
+
+/**
+ * Markdown treats `\.` and similar as escapes, so `C:\me\.t3\a.png` would
+ * parse as `C:\me.t3\a.png`. Agents write Windows paths raw, so double the
+ * backslashes in local image destinations (outside code) before parsing.
+ */
+export function escapeLocalImagePaths(markdown: string): string {
+	if (!markdown.includes('\\') || !markdown.includes('![')) return markdown;
+	let fence: string | null = null;
+	return markdown
+		.split('\n')
+		.map((line) => {
+			const marker = line.match(FENCE)?.[1];
+			if (fence) {
+				if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+				return line;
+			}
+			if (marker) {
+				fence = marker;
+				return line;
+			}
+			let out = '';
+			let last = 0;
+			for (const code of line.matchAll(INLINE_CODE)) {
+				out += line.slice(last, code.index).replace(IMAGE_DESTINATION, escapeDestination);
+				out += code[0];
+				last = code.index + code[0].length;
+			}
+			return out + line.slice(last).replace(IMAGE_DESTINATION, escapeDestination);
+		})
+		.join('\n');
+}

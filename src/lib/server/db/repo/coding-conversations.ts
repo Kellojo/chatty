@@ -243,6 +243,44 @@ export function listKnownThreadIds(db: Db, environmentId: string): Set<string> {
 }
 
 /**
+ * Thread ids linked to one of the owner of `environmentId`'s conversations
+ * (deleted ones included: those come back by restoring them, not importing).
+ */
+export function listLinkedThreadIds(db: Db, environmentId: string): Set<string> {
+	const rows = db
+		.prepare(
+			`SELECT cc.thread_id FROM coding_conversations cc
+			 JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE cc.thread_id IS NOT NULL
+			   AND c.user_id = (SELECT user_id FROM coding_environments WHERE id = ?)`
+		)
+		.all(environmentId) as { thread_id: string }[];
+	return new Set(rows.map((r) => r.thread_id));
+}
+
+/** Threads of `environmentId` whose conversation was deleted from Chatty for good. */
+export function listDismissedThreadIds(db: Db, environmentId: string): Set<string> {
+	const rows = db
+		.prepare('SELECT thread_id FROM coding_dismissed_threads WHERE environment_id = ?')
+		.all(environmentId) as { thread_id: string }[];
+	return new Set(rows.map((r) => r.thread_id));
+}
+
+/** Forgets that `threadIds` were dismissed on `environmentId` (they were imported again). */
+export function undismissThreads(
+	db: Db,
+	environmentId: string,
+	threadIds: readonly string[]
+): void {
+	const del = db.prepare(
+		'DELETE FROM coding_dismissed_threads WHERE environment_id = ? AND thread_id = ?'
+	);
+	db.transaction(() => {
+		for (const id of threadIds) del.run(environmentId, id);
+	})();
+}
+
+/**
  * Links the owner's coding conversations whose environment was removed back to
  * `environmentId` when it serves their thread (the environment was added
  * again), instead of importing the thread once more. Returns their ids.

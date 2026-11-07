@@ -14,11 +14,11 @@
 	import CodeXmlIcon from '@lucide/svelte/icons/code-xml';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { EVENT_LABELS, TRIGGER_LABELS } from '$lib/agent-labels.js';
-	import { describeCron } from '$lib/cron.js';
 	import { guardUnsavedChanges, isSaveShortcut, missingHint } from '$lib/form-guards.js';
 	import ModelSelect from '$lib/components/app/ModelSelect.svelte';
 	import CodingContextBar from '$lib/components/app/CodingContextBar.svelte';
 	import CodingModelSelect from '$lib/components/app/CodingModelSelect.svelte';
+	import CronScheduleInput from '$lib/components/app/CronScheduleInput.svelte';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { untrack } from 'svelte';
 	import { CodingTaskState } from '$lib/state/coding-task.svelte.js';
@@ -96,7 +96,8 @@
 		systemPrompt: agent?.systemPrompt ?? '',
 		modelValue: agent?.providerId && agent?.modelId ? `${agent.providerId}/${agent.modelId}` : '',
 		triggerType: (agent?.triggerType ?? 'manual') as AgentTriggerType,
-		cron: agent?.triggerConfig.cron ?? '',
+		// Switching to a schedule starts from every day at 9:00.
+		cron: agent?.triggerConfig.cron || '0 9 * * *',
 		event: (agent?.triggerConfig.event ?? 'skill.created') as AgentEventName,
 		every: String(agent?.triggerConfig.every ?? 1) as string | number,
 		instructions: agent?.triggerConfig.instructions ?? '',
@@ -114,7 +115,7 @@
 			[
 				!form.name.trim() && 'a name',
 				!form.systemPrompt.trim() && (coding ? 'a task' : 'a system prompt'),
-				form.triggerType === 'schedule' && !form.cron.trim() && 'a cron schedule'
+				form.triggerType === 'schedule' && !form.cron.trim() && 'a schedule'
 			],
 			agent ? 'save' : 'create'
 		);
@@ -166,16 +167,10 @@
 		if (canSave) void save();
 	}
 
-	const cronSummary = $derived(
-		form.triggerType === 'schedule' && form.cron.trim()
-			? describeCron(form.cron.trim(), timeFormat)
-			: null
-	);
-
 	const triggerHelp = $derived(
 		{
 			persona: 'Pick it in the chat top bar to talk to it.',
-			schedule: 'Runs on a cron schedule.',
+			schedule: 'Runs automatically on a repeating schedule.',
 			http: 'Runs when another service calls its endpoint.',
 			manual: 'Runs only when you start it.',
 			event: 'Runs when something happens in Chatty.'
@@ -446,26 +441,7 @@
 			</Select.Root>
 		</SettingsRow>
 		{#if form.triggerType === 'schedule'}
-			<SettingsRow
-				label="Cron schedule"
-				for="agent-cron"
-				description="Five fields in the server's time zone, e.g. */30 * * * * for every 30 minutes."
-				stack
-			>
-				<div class="flex w-full flex-col items-stretch gap-1 sm:w-56 sm:items-end">
-					<Input
-						id="agent-cron"
-						bind:value={form.cron}
-						{readonly}
-						required
-						placeholder="*/30 * * * *"
-						class="font-mono text-sm"
-					/>
-					{#if cronSummary}
-						<span class="text-xs text-muted-foreground">{cronSummary}</span>
-					{/if}
-				</div>
-			</SettingsRow>
+			<CronScheduleInput bind:value={form.cron} {timeFormat} {readonly} />
 		{:else if form.triggerType === 'event'}
 			<SettingsRow label="Event" stack>
 				<Select.Root type="single" bind:value={form.event} disabled={readonly}>

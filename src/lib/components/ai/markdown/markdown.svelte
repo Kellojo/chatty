@@ -11,6 +11,7 @@
 	import MapWidget from './map-widget.svelte';
 	import FileWidget from './file-widget.svelte';
 	import ChatsWidget from './chats-widget.svelte';
+	import { codingAssetUrl, escapeLocalImagePaths, isLocalImagePath } from '$lib/coding-assets.js';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -33,6 +34,18 @@
 		'conversationId',
 		untrack(() => conversationId)
 	);
+
+	// Coding agents embed screenshots by their path on the coding machine.
+	// Streamdown would block those (`C:` reads as a URL scheme), so they are
+	// rewritten to Chatty's relay to the T3 server before its URL checks run.
+	const markdown = $derived(conversationId ? escapeLocalImagePaths(content) : content);
+	function urlTransform(url: string, key: string): string {
+		if (key === 'src' && conversationId && isLocalImagePath(url)) {
+			return codingAssetUrl(conversationId, url);
+		}
+		return url;
+	}
+
 	let currentTheme = $derived(
 		mode.current === 'dark' ? 'github-dark-default' : 'github-light-default'
 	);
@@ -50,7 +63,8 @@
 <!-- wrap-anywhere: long unbroken tokens (inline JSON, hashes, paths) wrap instead of widening the chat. -->
 <div {id} class={cn('wrap-anywhere', className)} {...restProps}>
 	<Streamdown
-		{content}
+		content={markdown}
+		{urlTransform}
 		class="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
 		shikiTheme={currentTheme}
 		baseTheme="shadcn"

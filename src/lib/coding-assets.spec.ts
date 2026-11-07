@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codingAssetUrl, isLocalImagePath } from './coding-assets.js';
+import { codingAssetUrl, escapeLocalImagePaths, isLocalImagePath } from './coding-assets.js';
 
 describe('isLocalImagePath', () => {
 	it('accepts absolute paths to raster images', () => {
@@ -23,5 +23,31 @@ describe('isLocalImagePath', () => {
 		expect(codingAssetUrl('c1', 'C:\\a b\\x.png')).toBe(
 			'/api/coding/tasks/c1/asset?path=C%3A%5Ca%20b%5Cx.png'
 		);
+	});
+});
+
+describe('escapeLocalImagePaths', () => {
+	it('doubles backslashes in local image destinations', () => {
+		expect(escapeLocalImagePaths(String.raw`See ![shot](C:\me\.t3\a.png) here`)).toBe(
+			String.raw`See ![shot](C:\\me\\.t3\\a.png) here`
+		);
+		expect(escapeLocalImagePaths(String.raw`![s](<C:\My Shots\.x\a.png>)`)).toBe(
+			String.raw`![s](<C:\\My Shots\\.x\\a.png>)`
+		);
+		expect(escapeLocalImagePaths(String.raw`![s](\\nas\shots\a.png)`)).toBe(
+			String.raw`![s](\\\\nas\\shots\\a.png)`
+		);
+	});
+
+	it('leaves code, URLs, links and already-escaped paths alone', () => {
+		const untouched = [
+			'```\n' + String.raw`![s](C:\me\.t3\a.png)` + '\n```',
+			'`' + String.raw`![s](C:\me\.t3\a.png)` + '`',
+			String.raw`[link](C:\me\.t3\a.png)`,
+			String.raw`![s](C:\\me\\.t3\\a.png)`,
+			'![s](https://example.com/a.png)',
+			String.raw`![s](C:\me\notes.txt)`
+		];
+		for (const md of untouched) expect(escapeLocalImagePaths(md)).toBe(md);
 	});
 });

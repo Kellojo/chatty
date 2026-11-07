@@ -21,7 +21,7 @@
 	import ChatTopbar from './ChatTopbar.svelte';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
-	import LiveElapsed from './LiveElapsed.svelte';
+	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import { createPullRequestPrompt } from '$lib/coding-task-details.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
@@ -667,19 +667,7 @@
 				onedit={isCoding ? undefined : startEdit}
 			/>
 			{#if waiting}
-				<div
-					class="mx-auto flex w-full max-w-3xl items-center gap-2 px-4 pb-4 text-muted-foreground"
-				>
-					<span class="thinking-dots" aria-hidden="true">
-						<span class="thinking-dot"></span>
-						<span class="thinking-dot"></span>
-						<span class="thinking-dot"></span>
-					</span>
-					<span class="text-sm">
-						Thinking…
-						{#if waitingSince !== null}<LiveElapsed since={waitingSince} class="ml-0.5" />{/if}
-					</span>
-				</div>
+				<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
 			{/if}
 		</ChatContainerContent>
 	</ChatContainer>
@@ -809,39 +797,3 @@
 		/>
 	</div>
 </div>
-
-<style>
-	.thinking-dots {
-		display: inline-flex;
-		align-items: center;
-		gap: 3px;
-	}
-
-	.thinking-dot {
-		width: 5px;
-		height: 5px;
-		border-radius: 9999px;
-		background-color: currentColor;
-		animation: thinking-bounce 1.2s ease-in-out infinite;
-	}
-
-	.thinking-dot:nth-child(2) {
-		animation-delay: 0.15s;
-	}
-
-	.thinking-dot:nth-child(3) {
-		animation-delay: 0.3s;
-	}
-
-	@keyframes thinking-bounce {
-		0%,
-		100% {
-			transform: translateY(0);
-			opacity: 0.4;
-		}
-		50% {
-			transform: translateY(-3px);
-			opacity: 1;
-		}
-	}
-</style>

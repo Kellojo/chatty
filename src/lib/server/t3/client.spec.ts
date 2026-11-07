@@ -29,7 +29,7 @@ describe('exchangePairingToken', () => {
 			'urn:t3:params:oauth:token-type:environment-bootstrap'
 		);
 		expect(body.get('scope')).toBe(
-			'orchestration:read orchestration:operate diagnostics:read source-control:write workspace'
+			'orchestration:read orchestration:operate diagnostics:read source-control:write filesystem:read'
 		);
 	});
 

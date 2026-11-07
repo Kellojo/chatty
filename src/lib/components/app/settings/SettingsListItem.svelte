@@ -32,7 +32,16 @@
 	} = $props();
 </script>
 
-<li class={cn('flex items-center gap-3 px-6', meta || children ? 'py-3' : 'py-2')}>
+<!-- With an href the whole row is the link's click target (a stretched ::after);
+	trailing controls sit above it. -->
+<li
+	class={cn(
+		'flex items-center gap-3 px-6',
+		meta || children ? 'py-3' : 'py-2',
+		href &&
+			'relative hover:bg-accent/40 has-[a:focus-visible]:bg-accent/40 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-inset'
+	)}
+>
 	{#if leading}
 		<div
 			class={cn(
@@ -49,7 +58,7 @@
 				<!-- eslint-disable svelte/no-navigation-without-resolve -- callers pass resolve()d hrefs -->
 				<a
 					{href}
-					class="line-clamp-2 min-w-0 rounded-sm text-sm font-medium wrap-break-word underline-offset-4 hover:underline"
+					class="line-clamp-2 min-w-0 rounded-sm text-sm font-medium wrap-break-word outline-none after:absolute after:inset-0 after:content-['']"
 					title={titleAttr ?? title}>{title}</a
 				>
 				<!-- eslint-enable svelte/no-navigation-without-resolve -->
@@ -67,6 +76,8 @@
 		{@render children?.()}
 	</div>
 	{#if trailing}
-		<div class="flex shrink-0 items-center gap-1 sm:gap-2">{@render trailing()}</div>
+		<div class="relative z-10 flex shrink-0 items-center gap-1 sm:gap-2">
+			{@render trailing()}
+		</div>
 	{/if}
 </li>

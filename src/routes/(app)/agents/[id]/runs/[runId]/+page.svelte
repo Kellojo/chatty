@@ -8,8 +8,10 @@
 	import CodeXmlIcon from '@lucide/svelte/icons/code-xml';
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import AgentRunStatus from '$lib/components/app/AgentRunStatus.svelte';
+	import LiveElapsed from '$lib/components/app/LiveElapsed.svelte';
 	import MessageTimeline from '$lib/components/app/MessageTimeline.svelte';
 	import PageHeader from '$lib/components/app/PageHeader.svelte';
+	import ThinkingIndicator from '$lib/components/app/ThinkingIndicator.svelte';
 	import { formatRunDuration, formatRunError, RUN_TRIGGER_LABELS } from '$lib/agent-labels.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
@@ -29,6 +31,17 @@
 	const messageTimes = $derived(new Map(messages.map((m) => [m.id, m.createdAt])));
 
 	const duration = $derived(formatRunDuration(run));
+
+	// Like a chat: "Thinking…" until the agent produces visible output.
+	const lastMessage = $derived(uiMessages.at(-1));
+	const waiting = $derived(
+		run.status === 'running' &&
+			(!lastMessage ||
+				lastMessage.role !== 'assistant' ||
+				lastMessage.parts.every((p) =>
+					p.type === 'text' || p.type === 'reasoning' ? p.text === '' : p.type === 'step-start'
+				))
+	);
 
 	// Fetches only the transcript tail that can still change (see
 	// transcriptCursor); events arriving mid-fetch fold into one follow-up fetch.
@@ -96,7 +109,7 @@
 	bind:this={container}
 >
 	<div class="mx-auto w-full max-w-6xl p-4 md:p-6">
-		<div class="flex max-w-4xl flex-col gap-4">
+		<div class="flex flex-col gap-4">
 			<PageHeader
 				title="{RUN_TRIGGER_LABELS[run.trigger] ?? run.trigger} run"
 				back={{ href: resolve(`/agents/${data.agent.id}/runs`), label: data.agent.name }}
@@ -108,7 +121,8 @@
 					<span title={formatDateTime(run.startedAt, data.timeFormat)}
 						>Started {formatDateTime(run.startedAt, data.timeFormat)}</span
 					>{#if duration}
-						{` · took ${duration}`}{/if}
+						{` · took ${duration}`}{:else if run.status === 'running'}
+						· running for <LiveElapsed since={run.startedAt} />{/if}
 				{/snippet}
 				{#snippet actions()}
 					{#if data.isCodingTask && run.conversationId}
@@ -151,9 +165,12 @@
 			timeFormat={data.timeFormat}
 			{messageTimes}
 			conversationId={run.conversationId}
-			class="max-w-6xl px-4 md:px-6 [&>*]:max-w-4xl"
+			class="max-w-6xl px-4 md:px-6"
 		/>
-	{:else}
+	{/if}
+	{#if waiting}
+		<ThinkingIndicator since={run.startedAt} class="mx-auto w-full max-w-6xl px-4 pb-6 md:px-6" />
+	{:else if uiMessages.length === 0}
 		<p class="mx-auto w-full max-w-6xl px-4 pb-6 text-sm text-muted-foreground md:px-6">
 			No transcript recorded for this run.
 		</p>

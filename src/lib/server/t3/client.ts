@@ -151,8 +151,8 @@ export const CHATTY_TOKEN_SCOPES = [
 	'diagnostics:read',
 	'source-control:write',
 	// Lets Chatty mint signed URLs for images the agent saved on the T3 machine
-	// (assets.createUrl). T3 only grants that under its broader workspace scope.
-	'workspace'
+	// (assets.createUrl on a `media-file`, which T3 gates on this scope).
+	'filesystem:read'
 ] as const;
 
 /**

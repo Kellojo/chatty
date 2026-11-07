@@ -263,6 +263,26 @@ export async function startAgentRun(
 				flushParts();
 			}
 			const totalUsage = await result.usage;
+			// Same shape as chat replies so the transcript can show generation info.
+			const lastMessageId = assistantMessageIds.at(-1);
+			if (contentful && lastMessageId) {
+				updateMessage(db, lastMessageId, {
+					usage: {
+						providerId: target.providerId,
+						modelId: target.modelId,
+						inputTokens: totalUsage?.inputTokens ?? null,
+						outputTokens: totalUsage?.outputTokens ?? null,
+						totalTokens: totalUsage?.totalTokens ?? null,
+						latencyMs: Date.now() - startedAt,
+						costUsd: computeCostUsd(
+							priceRow?.price_input ?? null,
+							priceRow?.price_output ?? null,
+							totalUsage?.inputTokens,
+							totalUsage?.outputTokens
+						)
+					}
+				});
+			}
 			log.info('LLM inference finished', {
 				runId: run.id,
 				agentId: agent.id,

@@ -178,6 +178,23 @@ export interface CodingModelOption {
 	favorite: boolean;
 }
 
+/** A past T3 Code thread that isn't in Chatty yet and can be imported by hand. */
+export interface CodingHistoryThread {
+	threadId: string;
+	title: string;
+	projectTitle: string;
+	model: string;
+	/** Epoch ms of the thread's last activity. */
+	updatedAt: number;
+	/** Archived on T3. */
+	archived: boolean;
+	/** Its conversation was deleted from Chatty before. */
+	dismissed: boolean;
+}
+
+/** Threads one history import may bring in. */
+export const MAX_HISTORY_IMPORT = 50;
+
 export interface ParsedEnvironmentUrl {
 	/** Server base URL without the `/pair` path, query or fragment. */
 	baseUrl: string;

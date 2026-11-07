@@ -1,6 +1,6 @@
 // Serves images a coding agent saved on its T3 machine, so replies that embed
 // them by local path render in Chatty. T3 signs a short-lived URL for the file
-// (assets.createUrl, needs the token's `workspace` scope) and Chatty relays the
+// (assets.createUrl, needs the token's `filesystem:read` scope) and Chatty relays the
 // bytes; the browser never talks to T3 directly.
 
 import { isLocalImagePath } from '$lib/coding-assets.js';
@@ -128,7 +128,7 @@ function toAssetError(e: unknown): CodingTaskError {
 	if (e instanceof T3ClientError && e.kind === 'unauthorized') {
 		return new CodingTaskError(
 			403,
-			'Re-pair this coding environment to show images from it (it needs workspace access)'
+			'Re-pair this coding environment to show images from it (it needs file read access)'
 		);
 	}
 	// T3 answered but refused (too large, server error): treat as unavailable.

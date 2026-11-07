@@ -21,8 +21,16 @@
 	import EnvironmentStatusBadge from '$lib/components/app/EnvironmentStatusBadge.svelte';
 	import { formatTimeAgo } from '$lib/datetime.js';
 	import LinkIcon from '@lucide/svelte/icons/link';
+	import HistoryIcon from '@lucide/svelte/icons/history';
 	import XIcon from '@lucide/svelte/icons/x';
-	import { parseEnvironmentUrl, type CodingEnvironment } from '$lib/coding-environments.js';
+	import { SvelteSet } from 'svelte/reactivity';
+	import { Badge } from '$lib/components/ui/badge/index.js';
+	import {
+		MAX_HISTORY_IMPORT,
+		parseEnvironmentUrl,
+		type CodingEnvironment,
+		type CodingHistoryThread
+	} from '$lib/coding-environments.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -39,6 +47,26 @@
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<CodingEnvironment | null>(null);
 	let deleteBusy = $state(false);
+
+	let historyOpen = $state(false);
+	let historyTarget = $state<CodingEnvironment | null>(null);
+	let historyThreads = $state<CodingHistoryThread[] | null>(null);
+	let historyError = $state<string | null>(null);
+	let historyFilter = $state('');
+	let historyBusy = $state(false);
+	const historySelected = new SvelteSet<string>();
+
+	const visibleHistory = $derived.by(() => {
+		const q = historyFilter.trim().toLowerCase();
+		const threads = historyThreads ?? [];
+		if (!q) return threads;
+		return threads.filter(
+			(t) => t.title.toLowerCase().includes(q) || t.projectTitle.toLowerCase().includes(q)
+		);
+	});
+	const allVisibleSelected = $derived(
+		visibleHistory.length > 0 && visibleHistory.every((t) => historySelected.has(t.threadId))
+	);
 
 	let syncBusyId = $state<string | null>(null);
 	let enabledOverride = $state<Record<string, boolean>>({});
@@ -156,6 +184,59 @@
 		}
 	}
 
+	async function openHistory(env: CodingEnvironment) {
+		historyTarget = env;
+		historyThreads = null;
+		historyError = null;
+		historyFilter = '';
+		historySelected.clear();
+		historyOpen = true;
+		try {
+			const res = await api(`/api/coding-environments/${env.id}/history`, 'GET');
+			const { threads } = (await res.json()) as { threads: CodingHistoryThread[] };
+			if (historyTarget?.id === env.id) historyThreads = threads;
+		} catch (e) {
+			if (historyTarget?.id === env.id) {
+				historyError = e instanceof Error ? e.message : 'Failed to load sessions';
+			}
+		}
+	}
+
+	function toggleHistory(threadId: string, checked: boolean) {
+		if (!checked) historySelected.delete(threadId);
+		else if (historySelected.size < MAX_HISTORY_IMPORT) historySelected.add(threadId);
+	}
+
+	function toggleAllHistory() {
+		if (allVisibleSelected) {
+			for (const t of visibleHistory) historySelected.delete(t.threadId);
+			return;
+		}
+		for (const t of visibleHistory) {
+			if (historySelected.size >= MAX_HISTORY_IMPORT) break;
+			historySelected.add(t.threadId);
+		}
+	}
+
+	async function importHistory() {
+		if (!historyTarget || historySelected.size === 0) return;
+		historyBusy = true;
+		try {
+			const res = await api(`/api/coding-environments/${historyTarget.id}/history`, 'POST', {
+				threadIds: [...historySelected]
+			});
+			const { imported } = (await res.json()) as { imported: number };
+			toast.success(imported === 1 ? 'Imported 1 session' : `Imported ${imported} sessions`, {
+				description: 'Their history loads in the background.'
+			});
+			historyOpen = false;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Import failed');
+		} finally {
+			historyBusy = false;
+		}
+	}
+
 	async function confirmDelete() {
 		if (!deleteTarget) return;
 		deleteBusy = true;
@@ -261,6 +342,12 @@
 									disabled: syncBusyId === env.id || !env.enabled,
 									onSelect: () => sync(env)
 								},
+								{
+									label: 'Import past sessions',
+									icon: HistoryIcon,
+									disabled: !env.enabled,
+									onSelect: () => openHistory(env)
+								},
 								{ label: 'Edit', icon: PencilIcon, onSelect: () => openForm(env) },
 								'separator',
 								{
@@ -357,6 +444,91 @@
 				</Button>
 			</Dialog.Footer>
 		</form>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={historyOpen}>
+	<Dialog.Content class="sm:max-w-xl">
+		<Dialog.Header>
+			<Dialog.Title>Import past sessions</Dialog.Title>
+			<Dialog.Description>
+				Threads on {historyTarget?.name} that aren't in Chatty yet. Imported sessions show up as coding
+				tasks with their full history and stay in sync with T3 Code.
+			</Dialog.Description>
+		</Dialog.Header>
+		{#if historyError}
+			<p class="text-sm text-destructive">{historyError}</p>
+		{:else if historyThreads === null}
+			<div class="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+				<Loader2Icon class="size-4 animate-spin" />Loading sessions…
+			</div>
+		{:else if historyThreads.length === 0}
+			<p class="py-10 text-center text-sm text-muted-foreground">
+				Every session on this environment is already in Chatty.
+			</p>
+		{:else}
+			<div class="flex items-center gap-2">
+				<Input
+					bind:value={historyFilter}
+					placeholder="Filter by title or project"
+					aria-label="Filter sessions"
+					class="h-8"
+				/>
+				<Button variant="outline" size="sm" onclick={toggleAllHistory}>
+					{allVisibleSelected ? 'Clear' : 'Select all'}
+				</Button>
+			</div>
+			<ul
+				class="-mx-1 max-h-80 divide-y divide-border/60 overflow-y-auto px-1"
+				aria-label="Past sessions"
+			>
+				{#each visibleHistory as thread (thread.threadId)}
+					{@const checked = historySelected.has(thread.threadId)}
+					<li>
+						<label class="flex cursor-pointer items-start gap-3 py-2">
+							<input
+								type="checkbox"
+								class="mt-0.5 size-4 shrink-0 accent-primary"
+								{checked}
+								disabled={!checked && historySelected.size >= MAX_HISTORY_IMPORT}
+								onchange={(e) => toggleHistory(thread.threadId, e.currentTarget.checked)}
+							/>
+							<span class="flex min-w-0 flex-1 flex-col gap-0.5">
+								<span class="flex items-center gap-2">
+									<span class="truncate text-sm font-medium" title={thread.title}
+										>{thread.title}</span
+									>
+									{#if thread.archived}<Badge variant="secondary">Archived</Badge>{/if}
+									{#if thread.dismissed}<Badge variant="outline">Deleted in Chatty</Badge>{/if}
+								</span>
+								<span class="truncate text-xs text-muted-foreground">
+									{thread.projectTitle} · {thread.model} · {formatTimeAgo(thread.updatedAt)}
+								</span>
+							</span>
+						</label>
+					</li>
+				{:else}
+					<li class="py-6 text-center text-sm text-muted-foreground">No matching sessions.</li>
+				{/each}
+			</ul>
+		{/if}
+		<Dialog.Footer class="items-center">
+			{#if historyThreads?.length}
+				<p class="mr-auto text-xs text-muted-foreground">
+					{historySelected.size} selected{historySelected.size >= MAX_HISTORY_IMPORT
+						? ` (max ${MAX_HISTORY_IMPORT} per import)`
+						: ''}
+				</p>
+			{/if}
+			<Button variant="outline" onclick={() => (historyOpen = false)}>Cancel</Button>
+			<Button disabled={historyBusy || historySelected.size === 0} onclick={importHistory}>
+				{#if historyBusy}
+					<Loader2Icon class="size-4 animate-spin" />Importing…
+				{:else}
+					Import{historySelected.size > 0 ? ` ${historySelected.size}` : ''}
+				{/if}
+			</Button>
+		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
 
