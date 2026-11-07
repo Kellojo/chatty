@@ -11,7 +11,7 @@ import {
 	toPublic as mappingToPublic
 } from '$lib/server/db/repo/model-mappings.js';
 import { listModelsGrouped } from '$lib/server/llm/registry.js';
-import { buildTools } from '$lib/server/tools/registry.js';
+import { listToolInfo } from '$lib/server/tools/registry.js';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -21,25 +21,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!agent || (agent.user_id !== null && agent.user_id !== user.id)) {
 		error(404, { message: 'Agent not found' });
 	}
-	const built = await buildTools({ userId: user.id, memoryEnabled: true });
-	try {
-		const tools = Object.entries(built.tools)
-			.map(([name, t]) => ({
-				name,
-				description: typeof t.description === 'string' ? t.description : '',
-				server: built.toolToServer[name] ?? ''
-			}))
-			.sort((a, b) => a.server.localeCompare(b.server) || a.name.localeCompare(b.name));
-		return {
-			agent: toPublic(agent),
-			groups: listModelsGrouped(),
-			mappings: listEnabledModelMappings(db).map(mappingToPublic),
-			tools,
-			codingEnvironments: listCodingEnvironments(db, user.id)
-				.filter((row) => row.enabled === 1)
-				.map(environmentToPublic)
-		};
-	} finally {
-		await built.close();
-	}
+	return {
+		agent: toPublic(agent),
+		groups: listModelsGrouped(),
+		mappings: listEnabledModelMappings(db).map(mappingToPublic),
+		tools: await listToolInfo(user.id),
+		codingEnvironments: listCodingEnvironments(db, user.id)
+			.filter((row) => row.enabled === 1)
+			.map(environmentToPublic)
+	};
 };

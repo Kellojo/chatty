@@ -34,6 +34,12 @@ export interface ModelsByProvider {
 	models: ChatModel[];
 }
 
+export interface ToolInfo {
+	name: string;
+	description: string;
+	server: string;
+}
+
 export interface McpServerInfo {
 	id: string;
 	name: string;

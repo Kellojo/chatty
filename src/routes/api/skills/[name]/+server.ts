@@ -42,7 +42,6 @@ const putSchema = z.object({
 	tools: z.array(z.string().min(1).max(100)).max(50).optional(),
 	enabled: z.boolean().optional(),
 	version: z.string().max(50).nullable().optional(),
-	author: z.string().max(120).nullable().optional(),
 	body: z.string().optional()
 });
 
@@ -64,7 +63,6 @@ export const PUT: RequestHandler = async ({ locals, params, url, request }) => {
 			tools: parsed.data.tools,
 			enabled: parsed.data.enabled,
 			version: parsed.data.version === undefined ? existing.version : parsed.data.version,
-			author: parsed.data.author === undefined ? existing.author : parsed.data.author,
 			body: parsed.data.body ?? existing.body
 		});
 		publishServerEvent(user.id, { type: 'skills.changed' });
