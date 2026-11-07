@@ -9,7 +9,7 @@ import {
 import type { AgentTriggerConfig } from '$lib/types.js';
 import { config } from '../config.js';
 import { getDb, type Db } from '../db/index.js';
-import { getAgent, setAgentRunTimes } from '../db/repo/agents.js';
+import { getAgent, setAgentRunTimes, type AgentRow } from '../db/repo/agents.js';
 import {
 	createAgentRun,
 	finishAgentRun,
@@ -110,52 +110,26 @@ export async function startAgentRun(
 		trigger: input.trigger,
 		conversationId: conversation.id
 	});
-	const workspaceDir = ensureAgentWorkspace(agent.id, run.id);
 
-	const triggerConfig = JSON.parse(agent.trigger_config) as AgentTriggerConfig;
-	const instructions =
-		input.instructions ??
-		triggerConfig.instructions ??
-		(agent.user_id === null
-			? `Review conversations updated since ${new Date(agent.last_run_at ?? 0).toISOString()} and distill durable long-term memory from them. Use search_chats with the "since" parameter to list them, read_chat to review their contents, list_concepts/search_memory to check what already exists, then create_concept/update_concept to persist.`
-			: `Execute your task now. Trigger: ${input.trigger}.`);
-	const uiUserMessage: UIMessage = {
-		id: randomUUID(),
-		role: 'user',
-		parts: [{ type: 'text', text: instructions }]
-	};
-	createMessage(db, {
-		id: uiUserMessage.id,
-		conversationId: conversation.id,
-		role: 'user',
-		parts: uiUserMessage.parts,
-		status: 'complete'
-	});
-
-	const { tools, close } = await buildTools({
-		userId: input.userId,
-		memoryEnabled: true,
-		workspaceDir,
-		agentAllowlist: agent.tool_allowlist
-			? (JSON.parse(agent.tool_allowlist) as string[])
-			: undefined,
-		author: agent.user_id === null ? 'system' : `agent:${agent.id}`,
-		conversationId: conversation.id,
-		agentRunId: run.id
-	});
-
-	const skillNames = JSON.parse(agent.skill_names) as string[];
-	const boundSkillBodies: string[] = [];
-	for (const name of skillNames) {
-		const skill = resolveSkill(input.userId, name);
-		if (skill?.enabled) boundSkillBodies.push(`### Skill: ${skill.title}\n${skill.body}`);
+	// Anything that throws between creating the run row and handing off to `done`
+	// would otherwise leave the run `running` forever, which also blocks the
+	// agent's event triggers until a restart.
+	let prepared: Awaited<ReturnType<typeof prepareRun>>;
+	try {
+		prepared = await prepareRun(db, agent, run, conversation.id, input);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		log.error('Agent run setup failed', { runId: run.id, agentId: agent.id, error: message });
+		finishAgentRun(db, run.id, 'failed', message);
+		publishServerEvent(input.userId, {
+			type: 'agent.run.finished',
+			agentId: agent.id,
+			runId: run.id,
+			status: 'failed'
+		});
+		throw e;
 	}
-	const boundSection =
-		boundSkillBodies.length > 0
-			? `\n\n## Bound skills\nThe following skills are pre-loaded for this run.\n\n${boundSkillBodies.join('\n\n')}`
-			: '';
-	const skillsIndex = 'load_skill' in tools ? skillsIndexPrompt(input.userId) : '';
-	const system = `${agent.system_prompt}${boundSection}${skillsIndex ? `\n\n${skillsIndex}` : ''}\n\n---\nYou are running autonomously as the agent "${agent.name}" (trigger: ${input.trigger}). Current time: ${new Date().toLocaleString('en-US', { timeZone: config.TZ })} (${config.TZ}). Do not ask the user questions; no one is watching live.`;
+	const { uiUserMessage, tools, close, system } = prepared;
 
 	const controller = new AbortController();
 	runControllers.set(run.id, controller);
@@ -167,7 +141,8 @@ export async function startAgentRun(
 		let errorText: string | null = null;
 		const assistantMessageIds: string[] = [];
 		let lastProgressAt = 0;
-		const modelMessages = await convertToModelMessages([uiUserMessage]);
+		// Assigned inside the try below so a failure still runs its cleanup.
+		let modelMessages: Awaited<ReturnType<typeof convertToModelMessages>> = [];
 
 		const runTarget = async (target: { providerId: string; modelId: string }) => {
 			let contentful = false;
@@ -272,6 +247,7 @@ export async function startAgentRun(
 		};
 
 		try {
+			modelMessages = await convertToModelMessages([uiUserMessage]);
 			let lastError: unknown = null;
 			for (let i = 0; i < targets.length; i++) {
 				try {
@@ -336,4 +312,65 @@ export async function startAgentRun(
 	void done.finally(() => activeRuns.delete(done));
 
 	return { run, done };
+}
+
+async function prepareRun(
+	db: Db,
+	agent: AgentRow,
+	run: AgentRunRow,
+	conversationId: string,
+	input: StartAgentRunInput
+) {
+	const workspaceDir = ensureAgentWorkspace(agent.id, run.id);
+
+	const triggerConfig = JSON.parse(agent.trigger_config) as AgentTriggerConfig;
+	const instructions =
+		input.instructions ??
+		triggerConfig.instructions ??
+		(agent.user_id === null
+			? `Review conversations updated since ${new Date(agent.last_run_at ?? 0).toISOString()} and distill durable long-term memory from them. Use search_chats with the "since" parameter to list them, read_chat to review their contents, list_concepts/search_memory to check what already exists, then create_concept/update_concept to persist.`
+			: `Execute your task now. Trigger: ${input.trigger}.`);
+	const uiUserMessage: UIMessage = {
+		id: randomUUID(),
+		role: 'user',
+		parts: [{ type: 'text', text: instructions }]
+	};
+	createMessage(db, {
+		id: uiUserMessage.id,
+		conversationId,
+		role: 'user',
+		parts: uiUserMessage.parts,
+		status: 'complete'
+	});
+
+	const { tools, close } = await buildTools({
+		userId: input.userId,
+		memoryEnabled: true,
+		workspaceDir,
+		agentAllowlist: agent.tool_allowlist
+			? (JSON.parse(agent.tool_allowlist) as string[])
+			: undefined,
+		author: agent.user_id === null ? 'system' : `agent:${agent.id}`,
+		conversationId,
+		agentRunId: run.id
+	});
+
+	try {
+		const skillNames = JSON.parse(agent.skill_names) as string[];
+		const boundSkillBodies: string[] = [];
+		for (const name of skillNames) {
+			const skill = resolveSkill(input.userId, name);
+			if (skill?.enabled) boundSkillBodies.push(`### Skill: ${skill.title}\n${skill.body}`);
+		}
+		const boundSection =
+			boundSkillBodies.length > 0
+				? `\n\n## Bound skills\nThe following skills are pre-loaded for this run.\n\n${boundSkillBodies.join('\n\n')}`
+				: '';
+		const skillsIndex = 'load_skill' in tools ? skillsIndexPrompt(input.userId) : '';
+		const system = `${agent.system_prompt}${boundSection}${skillsIndex ? `\n\n${skillsIndex}` : ''}\n\n---\nYou are running autonomously as the agent "${agent.name}" (trigger: ${input.trigger}). Current time: ${new Date().toLocaleString('en-US', { timeZone: config.TZ })} (${config.TZ}). Do not ask the user questions; no one is watching live.`;
+		return { uiUserMessage, tools, close, system };
+	} catch (e) {
+		await close().catch(() => undefined);
+		throw e;
+	}
 }

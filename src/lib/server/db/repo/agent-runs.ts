@@ -63,6 +63,12 @@ export function getAgentRun(db: Db, id: string): AgentRunRow | undefined {
 	return db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id) as AgentRunRow | undefined;
 }
 
+export function getAgentRunByConversation(db: Db, conversationId: string): AgentRunRow | undefined {
+	return db
+		.prepare('SELECT * FROM agent_runs WHERE conversation_id = ? ORDER BY started_at DESC LIMIT 1')
+		.get(conversationId) as AgentRunRow | undefined;
+}
+
 export function listAgentRuns(db: Db, agentId: string, limit = 50, userId?: string): AgentRunRow[] {
 	if (userId !== undefined) {
 		return db

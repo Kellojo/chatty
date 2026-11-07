@@ -55,7 +55,8 @@
 		'chat.message_completed': 'Chat message completed',
 		'skill.created': 'Skill created',
 		'skill.updated': 'Skill updated',
-		'skill.deleted': 'Skill deleted'
+		'skill.deleted': 'Skill deleted',
+		'coding.thread.finished': 'Coding task finished'
 	};
 
 	// svelte-ignore state_referenced_locally

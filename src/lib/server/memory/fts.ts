@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../frontmatter.js';
 import type { Db } from '../db/index.js';
 import { memoryRoot } from './paths.js';
 
@@ -101,7 +101,7 @@ function upsertFromDisk(db: Db, entry: DiskEntry): void {
 	let tags: string[] = [];
 	let body = '';
 	try {
-		const parsed = matter(fs.readFileSync(entry.abs, 'utf8'));
+		const parsed = parseFrontmatter(fs.readFileSync(entry.abs, 'utf8'));
 		const d = parsed.data as Record<string, unknown>;
 		if (typeof d.title === 'string' && d.title.trim()) title = d.title;
 		if (typeof d.description === 'string') description = d.description;

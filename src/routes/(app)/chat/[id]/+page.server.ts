@@ -1,5 +1,9 @@
 import { error, redirect } from '@sveltejs/kit';
 import { hasActiveStream } from '$lib/server/chat/streams.js';
+import {
+	getCodingConversation,
+	toPublic as codingToPublic
+} from '$lib/server/db/repo/coding-conversations.js';
 import { getDb } from '$lib/server/db/index.js';
 import { listPersonaAgents, toPublic as agentToPublic } from '$lib/server/db/repo/agents.js';
 import {
@@ -40,8 +44,10 @@ export const load: PageServerLoad = ({ locals, params }) => {
 	if (sttRoleModel) {
 		sttModel = { providerId: sttRoleModel.provider_id, modelId: sttRoleModel.model_id };
 	}
+	const coding = getCodingConversation(db, conversation.id);
 	return {
 		conversation: conversationToPublic(conversation),
+		coding: coding ? codingToPublic(coding) : null,
 		messages: listMessages(db, conversation.id).map(messageToPublic),
 		groups: listModelsGrouped(),
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),

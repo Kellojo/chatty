@@ -5,20 +5,25 @@
 	import { page } from '$app/state';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
+	import ArchiveIcon from '@lucide/svelte/icons/archive';
+	import ArchiveRestoreIcon from '@lucide/svelte/icons/archive-restore';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import BrainIcon from '@lucide/svelte/icons/brain';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { authClient } from '$lib/auth-client.js';
@@ -35,12 +40,16 @@
 		conversations,
 		hasMore,
 		unreadIds,
+		settledCount,
+		autoSettleDays,
 		onclose
 	}: {
 		user: { name: string; email: string; image: string | null; role: string };
 		conversations: Conversation[];
 		hasMore: boolean;
 		unreadIds: string[];
+		settledCount: number;
+		autoSettleDays: number;
 		onclose: () => void;
 	} = $props();
 
@@ -87,6 +96,46 @@
 	}
 
 	const allConversations = $derived([...conversations, ...extras]);
+
+	const SETTLED_OPEN_KEY = 'chatty.sidebar.settledOpen';
+	let settledOpen = $state(false);
+	let settledItems = $state<Conversation[] | null>(null);
+	let settledHasMore = $state(false);
+	let settledLoading = $state(false);
+
+	async function loadSettled(reset: boolean) {
+		if (settledLoading && !reset) return;
+		settledLoading = true;
+		try {
+			const offset = reset ? 0 : (settledItems?.length ?? 0);
+			const res = await fetch(`/api/conversations/settled?offset=${offset}`);
+			if (!res.ok) return;
+			const data = (await res.json()) as { conversations: Conversation[]; hasMore: boolean };
+			const previous = reset ? [] : (settledItems ?? []);
+			const known = new Set(previous.map((c) => c.id));
+			settledItems = [...previous, ...data.conversations.filter((c) => !known.has(c.id))];
+			settledHasMore = data.hasMore;
+		} finally {
+			settledLoading = false;
+		}
+	}
+
+	function toggleSettledShelf() {
+		settledOpen = !settledOpen;
+		try {
+			localStorage.setItem(SETTLED_OPEN_KEY, settledOpen ? '1' : '0');
+		} catch {
+			// storage unavailable; the shelf just won't remember its state
+		}
+		if (settledOpen) void loadSettled(true);
+	}
+
+	/** Refreshes everything that depends on settled state after a change. */
+	async function refreshSettled() {
+		if (settledOpen) void loadSettled(true);
+		else settledItems = null;
+		if (searchResults) void search();
+	}
 
 	let query = $state('');
 	let searchInput = $state<HTMLInputElement | null>(null);
@@ -158,6 +207,12 @@
 	}
 
 	onMount(() => {
+		try {
+			settledOpen = localStorage.getItem(SETTLED_OPEN_KEY) === '1';
+		} catch {
+			settledOpen = false;
+		}
+		if (settledOpen) void loadSettled(true);
 		refreshAgentStats();
 		refreshMemoryCount();
 		refreshSkillCount();
@@ -183,6 +238,10 @@
 				case 'chat.created':
 				case 'conversation.updated':
 					scheduleInvalidate();
+					break;
+				case 'conversation.settle_changed':
+					scheduleInvalidate();
+					void refreshSettled();
 					break;
 				case 'agent.run.started':
 				case 'agent.run.finished':
@@ -268,14 +327,40 @@
 		goto(resolve('/'));
 	}
 
-	async function togglePin(event: MouseEvent, id: string) {
-		event.stopPropagation();
+	async function setSettled(c: Conversation, settled: boolean, undo?: { repin: boolean }) {
+		const res = await fetch(`/api/conversations/${c.id}/settle`, {
+			method: settled ? 'POST' : 'DELETE'
+		});
+		if (!res.ok) {
+			toast.error(settled ? 'Failed to settle conversation' : 'Failed to un-settle conversation');
+			return;
+		}
+		// Settling unpins, so undoing a settle restores the pin.
+		if (undo?.repin) await fetch(`/api/conversations/${c.id}/pin`, { method: 'POST' });
+		await invalidateAll();
+		await refreshSettled();
+		if (undo) return;
+		const repin = settled && c.pinned;
+		toast.success(settled ? 'Conversation settled' : 'Conversation un-settled', {
+			action: { label: 'Undo', onClick: () => void setSettled(c, !settled, { repin }) }
+		});
+	}
+
+	function settledTitle(c: Conversation): string {
+		const title = c.title || 'New chat';
+		if (c.settledReason !== 'auto') return title;
+		const after = autoSettleDays > 0 ? ` after ${autoSettleDays} days` : '';
+		return `${title}\nAuto-settled${after} of inactivity`;
+	}
+
+	let menuOpenId = $state<string | null>(null);
+
+	async function togglePin(id: string) {
 		await fetch(`/api/conversations/${id}/pin`, { method: 'POST' });
 		await invalidateAll();
 	}
 
-	function openRename(event: MouseEvent, c: Conversation) {
-		event.stopPropagation();
+	function openRename(c: Conversation) {
 		renameTarget = c;
 		renameText = c.title;
 	}
@@ -311,6 +396,89 @@
 		goto(resolve('/login'));
 	}
 </script>
+
+{#snippet row(c: Conversation)}
+	{@const settled = c.settledAt !== null}
+	<div
+		class="group flex w-full items-center rounded-md text-sm {c.id === currentId
+			? 'bg-accent text-accent-foreground'
+			: 'hover:bg-accent/50'} {settled && c.id !== currentId ? 'text-muted-foreground' : ''}"
+	>
+		<a
+			href={resolve(`/chat/${c.id}`)}
+			class="min-w-0 flex-1 truncate px-2 py-1.5"
+			title={settled ? settledTitle(c) : c.title || 'New chat'}
+			onclick={handleNavigate}
+		>
+			{c.title || 'New chat'}
+		</a>
+		{#if searchResults && settled}
+			<span
+				class="mr-1 shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground group-hover:hidden"
+				>Settled</span
+			>
+		{/if}
+		{#if activeChats.has(c.id) || serverActiveChatIds.has(c.id)}
+			<LoaderCircleIcon class="mr-1 size-3.5 shrink-0 animate-spin text-info-foreground" />
+		{:else if unreadIds.includes(c.id) && page.url.pathname !== '/chat/' + c.id}
+			<span class="size-2 shrink-0 rounded-full bg-info" title="New messages"></span>
+		{/if}
+		<span
+			class="shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex {menuOpenId === c.id
+				? 'flex'
+				: 'hidden'}"
+		>
+			<button
+				class="rounded p-1 text-muted-foreground hover:text-foreground"
+				title={settled ? 'Un-settle' : 'Settle (hide from sidebar)'}
+				aria-label={settled ? 'Un-settle' : 'Settle'}
+				onclick={(e) => {
+					e.stopPropagation();
+					void setSettled(c, !settled);
+				}}
+			>
+				{#if settled}
+					<ArchiveRestoreIcon class="size-4" />
+				{:else}
+					<ArchiveIcon class="size-4" />
+				{/if}
+			</button>
+			<DropdownMenu.Root
+				open={menuOpenId === c.id}
+				onOpenChange={(open) => (menuOpenId = open ? c.id : null)}
+			>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							class="rounded p-1 text-muted-foreground hover:text-foreground"
+							title="More actions"
+							aria-label="More actions"
+						>
+							<EllipsisIcon class="size-4" />
+						</button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="start" class="w-40">
+					{#if !settled}
+						<DropdownMenu.Item onSelect={() => void togglePin(c.id)}>
+							{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
+						</DropdownMenu.Item>
+					{/if}
+					<DropdownMenu.Item onSelect={() => openRename(c)}>
+						<PencilIcon class="size-4" />
+						Rename
+					</DropdownMenu.Item>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item variant="destructive" onSelect={() => (deleteTarget = c)}>
+						<Trash2Icon class="size-4" />
+						Delete
+					</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
+		</span>
+	</div>
+{/snippet}
 
 <svelte:window onkeydown={onGlobalKeydown} />
 
@@ -379,55 +547,15 @@
 		{#each visibleGroups as group (group.label)}
 			<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{group.label}</p>
 			{#each group.items as c (c.id)}
-				<div
-					class="group flex w-full items-center rounded-md text-sm {c.id === currentId
-						? 'bg-accent text-accent-foreground'
-						: 'hover:bg-accent/50'}"
-				>
-					<a
-						href={resolve(`/chat/${c.id}`)}
-						class="min-w-0 flex-1 truncate px-2 py-1.5"
-						title={c.title || 'New chat'}
-						onclick={handleNavigate}
-					>
-						{c.title || 'New chat'}
-					</a>
-					{#if activeChats.has(c.id) || serverActiveChatIds.has(c.id)}
-						<LoaderCircleIcon class="mr-1 size-3.5 shrink-0 animate-spin text-info-foreground" />
-					{:else if unreadIds.includes(c.id) && page.url.pathname !== '/chat/' + c.id}
-						<span class="size-2 shrink-0 rounded-full bg-info" title="New messages"></span>
-					{/if}
-					<span class="hidden shrink-0 gap-0.5 pr-1 group-hover:flex">
-						<button
-							class="rounded p-1 text-muted-foreground hover:text-foreground"
-							title={c.pinned ? 'Unpin' : 'Pin'}
-							onclick={(e) => togglePin(e, c.id)}
-						>
-							{#if c.pinned}<PinOffIcon class="size-4" />{:else}<PinIcon class="size-4" />{/if}
-						</button>
-						<button
-							class="rounded p-1 text-muted-foreground hover:text-foreground"
-							title="Rename"
-							onclick={(e) => openRename(e, c)}
-						>
-							<PencilIcon class="size-4" />
-						</button>
-						<button
-							class="rounded p-1 text-muted-foreground hover:text-destructive"
-							title="Delete"
-							onclick={(e) => {
-								e.stopPropagation();
-								deleteTarget = c;
-							}}
-						>
-							<Trash2Icon class="size-4" />
-						</button>
-					</span>
-				</div>
+				{@render row(c)}
 			{/each}
 		{:else}
 			<p class="px-2 pt-4 text-sm text-muted-foreground">
-				{searchResults ? 'No matches.' : 'No conversations yet.'}
+				{searchResults
+					? 'No matches.'
+					: settledCount > 0
+						? 'No active conversations.'
+						: 'No conversations yet.'}
 			</p>
 		{/each}
 		{#if !searchResults && hasMorePages}
@@ -436,6 +564,41 @@
 					<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
 				{/if}
 			</div>
+		{/if}
+		{#if !searchResults && (settledCount > 0 || (settledItems?.length ?? 0) > 0)}
+			<button
+				type="button"
+				class="mt-3 flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+				aria-expanded={settledOpen}
+				onclick={toggleSettledShelf}
+			>
+				<ChevronRightIcon class="size-3.5 transition-transform {settledOpen ? 'rotate-90' : ''}" />
+				Settled ({settledCount})
+			</button>
+			{#if settledOpen}
+				{#each settledItems ?? [] as c (c.id)}
+					{@render row(c)}
+				{:else}
+					{#if settledLoading}
+						<div class="flex justify-center py-2">
+							<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
+						</div>
+					{/if}
+				{/each}
+				{#if settledHasMore}
+					<button
+						type="button"
+						class="flex w-full items-center justify-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground disabled:opacity-50"
+						disabled={settledLoading}
+						onclick={() => loadSettled(false)}
+					>
+						{#if settledLoading}
+							<LoaderCircleIcon class="size-3.5 animate-spin" />
+						{/if}
+						Show more
+					</button>
+				{/if}
+			{/if}
 		{/if}
 	</nav>
 
@@ -500,31 +663,29 @@
 				>
 			{/if}
 		</a>
-		{#if user.role === 'admin'}
-			<a
-				href={resolve('/requests')}
-				class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
-					'/requests'
-				)
-					? 'bg-accent text-accent-foreground'
-					: 'text-muted-foreground hover:bg-accent/50'}"
-				onclick={handleNavigate}
-			>
-				<ScrollTextIcon class="size-4" />
-				Requests
-				{#if requestStats}
-					<span
-						class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
-						title="{requestStats.running} running of {requestStats.total} requests"
-					>
-						{#if requestStats.running > 0}
-							<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
-						{/if}
-						{formatCount(requestStats.total)}
-					</span>
-				{/if}
-			</a>
-		{/if}
+		<a
+			href={resolve('/usage')}
+			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+				'/usage'
+			)
+				? 'bg-accent text-accent-foreground'
+				: 'text-muted-foreground hover:bg-accent/50'}"
+			onclick={handleNavigate}
+		>
+			<GaugeIcon class="size-4" />
+			Usage
+			{#if user.role === 'admin' && requestStats}
+				<span
+					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
+					title="{requestStats.total} requests all time · {requestStats.running} running"
+				>
+					{#if requestStats.running > 0}
+						<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
+					{/if}
+					{formatCount(requestStats.total)}
+				</span>
+			{/if}
+		</a>
 	</div>
 
 	<div class="flex items-center justify-between gap-2 border-t p-3">

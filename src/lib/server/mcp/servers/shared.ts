@@ -11,12 +11,6 @@ export function err(t: string): CallToolResult {
 	return { content: [{ type: 'text', text: `error: ${t}` }], isError: true };
 }
 
-export function resolveInside(root: string, rel: string): string | null {
-	const abs = path.resolve(root, rel);
-	if (abs !== root && !abs.startsWith(root + path.sep)) return null;
-	return abs;
-}
-
 export function toPosix(p: string): string {
 	return p.split(path.sep).join('/');
 }

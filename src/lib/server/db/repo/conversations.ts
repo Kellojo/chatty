@@ -17,6 +17,8 @@ export interface ConversationRow {
 	pinned: number;
 	agent_id: string | null;
 	last_read_at: number | null;
+	settled_at: number | null;
+	settled_reason: string | null;
 	created_at: number;
 	updated_at: number;
 	deleted_at: number | null;
@@ -36,9 +38,13 @@ export interface Conversation {
 	maxTokens: number | null;
 	pinned: boolean;
 	agentId: string | null;
+	settledAt: number | null;
+	settledReason: SettledReason | null;
 	createdAt: number;
 	updatedAt: number;
 }
+
+export type SettledReason = 'manual' | 'auto';
 
 export function toPublic(row: ConversationRow): Conversation {
 	return {
@@ -55,6 +61,8 @@ export function toPublic(row: ConversationRow): Conversation {
 		maxTokens: row.max_tokens,
 		pinned: row.pinned === 1,
 		agentId: row.agent_id,
+		settledAt: row.settled_at,
+		settledReason: row.settled_reason as SettledReason | null,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
@@ -72,11 +80,39 @@ export function listConversations(
 	return db
 		.prepare(
 			`SELECT * FROM conversations
-			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL
+			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND settled_at IS NULL
 			 ORDER BY pinned DESC, updated_at DESC
 			 LIMIT ? OFFSET ?`
 		)
 		.all(userId, limit, offset) as ConversationRow[];
+}
+
+export function listSettledConversations(
+	db: Db,
+	userId: string,
+	opts: { offset?: number; limit?: number } = {}
+): ConversationRow[] {
+	const limit = opts.limit ?? CONVERSATIONS_PAGE_SIZE;
+	const offset = opts.offset ?? 0;
+	return db
+		.prepare(
+			`SELECT * FROM conversations
+			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND settled_at IS NOT NULL
+			 ORDER BY settled_at DESC, updated_at DESC
+			 LIMIT ? OFFSET ?`
+		)
+		.all(userId, limit, offset) as ConversationRow[];
+}
+
+export function countSettledConversations(db: Db, userId: string): number {
+	return (
+		db
+			.prepare(
+				`SELECT COUNT(*) AS n FROM conversations
+				 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND settled_at IS NOT NULL`
+			)
+			.get(userId) as { n: number }
+	).n;
 }
 
 export function listConversationsSince(db: Db, userId: string, since: number): ConversationRow[] {
@@ -220,6 +256,70 @@ export function togglePin(db: Db, userId: string, id: string): ConversationRow |
 		id
 	);
 	return getConversation(db, userId, id);
+}
+
+/** Hides a conversation from the default sidebar list. Settling also unpins. */
+export function settleConversation(
+	db: Db,
+	userId: string,
+	id: string,
+	reason: SettledReason = 'manual'
+): ConversationRow | undefined {
+	db.prepare(
+		`UPDATE conversations SET settled_at = ?, settled_reason = ?, pinned = 0
+		 WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
+	).run(Date.now(), reason, id, userId);
+	return getConversation(db, userId, id);
+}
+
+/**
+ * Brings a conversation back to the active list. Counts as a look so that it
+ * isn't immediately auto-settled again.
+ */
+export function unsettleConversation(
+	db: Db,
+	userId: string,
+	id: string
+): ConversationRow | undefined {
+	db.prepare(
+		`UPDATE conversations SET settled_at = NULL, settled_reason = NULL, last_read_at = ?
+		 WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
+	).run(Date.now(), id, userId);
+	return getConversation(db, userId, id);
+}
+
+/**
+ * Settles non-pinned chats nobody has looked at since `cutoffMs` (last look =
+ * latest of read, update and creation time). Returns the settled ids per user.
+ */
+export function autoSettleConversations(
+	db: Db,
+	opts: { cutoffMs: number; excludeIds?: Iterable<string>; now?: number }
+): Map<string, string[]> {
+	const exclude = new Set(opts.excludeIds ?? []);
+	const candidates = db
+		.prepare(
+			`SELECT id, user_id FROM conversations
+			 WHERE kind = 'chat' AND deleted_at IS NULL AND settled_at IS NULL AND pinned = 0
+			   AND MAX(COALESCE(last_read_at, 0), updated_at, created_at) < ?`
+		)
+		.all(opts.cutoffMs) as { id: string; user_id: string }[];
+	const settle = db.prepare(
+		`UPDATE conversations SET settled_at = ?, settled_reason = 'auto'
+		 WHERE id = ? AND settled_at IS NULL`
+	);
+	const now = opts.now ?? Date.now();
+	const byUser = new Map<string, string[]>();
+	db.transaction(() => {
+		for (const c of candidates) {
+			if (exclude.has(c.id)) continue;
+			if (settle.run(now, c.id).changes === 0) continue;
+			const ids = byUser.get(c.user_id) ?? [];
+			ids.push(c.id);
+			byUser.set(c.user_id, ids);
+		}
+	})();
+	return byUser;
 }
 
 export function markConversationRead(db: Db, userId: string, id: string): void {

@@ -38,6 +38,9 @@ export interface McpServerInfo {
 	name: string;
 	transport: 'builtin' | 'stdio' | 'http' | 'sse';
 	url: string | null;
+	/** stdio only: executable and arguments spawned on the host. */
+	command: string | null;
+	args: string[];
 	hasToken: boolean;
 	enabled: boolean;
 	builtin: boolean;
@@ -57,6 +60,8 @@ export interface Conversation {
 	maxTokens: number | null;
 	pinned: boolean;
 	agentId: string | null;
+	settledAt: number | null;
+	settledReason: 'manual' | 'auto' | null;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -67,7 +72,8 @@ export const AGENT_EVENT_NAMES = [
 	'chat.message_completed',
 	'skill.created',
 	'skill.updated',
-	'skill.deleted'
+	'skill.deleted',
+	'coding.thread.finished'
 ] as const;
 
 export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
@@ -79,6 +85,17 @@ export type ServerEvent =
 	| { type: 'chat.stream.finished'; conversationId: string }
 	| { type: 'conversation.updated'; conversationId: string }
 	| { type: 'conversation.compacted'; conversationId: string }
+	| { type: 'conversation.settle_changed'; conversationIds: string[]; settled: boolean }
+	/** A coding task's status, pending approval, branch or PR changed. */
+	| { type: 'coding.task.updated'; conversationId: string }
+	/** A coding task's agent run ended (completed, failed or interrupted). */
+	| {
+			type: 'coding.thread.finished';
+			conversationId: string;
+			status: 'completed' | 'failed' | 'interrupted';
+			branch: string | null;
+			prUrl: string | null;
+	  }
 	| {
 			type: 'memory.changed';
 			scope: 'user' | 'shared';

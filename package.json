@@ -89,6 +89,7 @@
 		"runed": "^0.37.1",
 		"stick-to-bottom-svelte": "^1.0.4",
 		"streamdown-svelte": "^3.0.6",
+		"undici": "^6.29.1",
 		"zod": "^4.4.3"
 	}
 }

@@ -5,7 +5,9 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { sanitizeFilename } from '../../workspaces.js';
 import type { CallerContext } from '../types.js';
-import { err, looksTextualAsync, resolveInside, text, toPosix, walkAsync } from './shared.js';
+import { safeFetch } from '../../net/safeFetch.js';
+import { resolveInsideReal } from '../../safePath.js';
+import { err, looksTextualAsync, text, toPosix, walkAsync } from './shared.js';
 
 const MAX_OUT = 64 * 1024;
 const MAX_FILE = 1024 * 1024;
@@ -60,7 +62,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		const dir = scope === 'workspace' ? ctx.workspaceDir : ctx.documentsDir;
 		if (!dir) return { ok: false, error: err('no workspace available') };
 		await fsp.mkdir(dir, { recursive: true });
-		const abs = resolveInside(dir, rel);
+		const abs = await resolveInsideReal(dir, rel);
 		if (!abs) return { ok: false, error: err(`path escapes ${scope} root`) };
 		return { ok: true, base: dir, abs };
 	}
@@ -369,7 +371,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			if (!r.ok) return r.error;
 			let res: Response;
 			try {
-				res = await fetch(url, {
+				res = await safeFetch(url, {
 					headers: { 'user-agent': 'ai-chat/0.1 (+https://localhost)', ...headers },
 					redirect: 'follow',
 					signal: AbortSignal.timeout(60000)

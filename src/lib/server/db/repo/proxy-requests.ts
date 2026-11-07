@@ -161,6 +161,8 @@ export interface ProxyRequestFilters {
 	userId?: string;
 	apiKeyId?: string;
 	model?: string;
+	/** Configured provider the request was served by. */
+	providerId?: string;
 	status?: string;
 	endpoint?: string;
 	source?: string;
@@ -183,6 +185,10 @@ function buildWhere(filters: ProxyRequestFilters): { where: string; args: unknow
 	if (filters.model) {
 		clauses.push('requested_model = ?');
 		args.push(filters.model);
+	}
+	if (filters.providerId) {
+		clauses.push('provider_id = ?');
+		args.push(filters.providerId);
 	}
 	if (filters.status) {
 		clauses.push('status = ?');
@@ -291,21 +297,22 @@ export interface DailyCount {
 export function proxyRequestDailyCounts(
 	db: Db,
 	days: number,
-	filters: ProxyRequestFilters = {}
+	filters: ProxyRequestFilters = {},
+	utcOffsetMinutes = 0
 ): DailyCount[] {
 	const { where, args } = buildWhere(filters);
 	const from = Date.now() - days * 86400000;
 	const extra = where ? ` AND started_at >= ?` : 'WHERE started_at >= ?';
 	return db
 		.prepare(
-			`SELECT date(started_at / 1000, 'unixepoch') AS day,
+			`SELECT date(started_at / 1000 + ?, 'unixepoch') AS day,
 				COUNT(*) AS count,
 				SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS completed,
 				SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
 			 FROM proxy_requests ${where}${extra}
 			 GROUP BY day ORDER BY day`
 		)
-		.all(...args, from) as DailyCount[];
+		.all(utcOffsetMinutes * 60, ...args, from) as DailyCount[];
 }
 
 export interface ModelUsage {
@@ -359,21 +366,82 @@ export interface DailyModelCount {
 export function proxyRequestDailyModelCounts(
 	db: Db,
 	days: number,
-	filters: ProxyRequestFilters = {}
+	filters: ProxyRequestFilters = {},
+	utcOffsetMinutes = 0
 ): DailyModelCount[] {
 	const { where, args } = buildWhere(filters);
 	const from = Date.now() - days * 86400000;
 	const extra = where ? ' AND started_at >= ?' : 'WHERE started_at >= ?';
 	return db
 		.prepare(
-			`SELECT date(started_at / 1000, 'unixepoch') AS day,
+			`SELECT date(started_at / 1000 + ?, 'unixepoch') AS day,
 			        requested_model AS model,
 			        COUNT(*) AS count
 			 FROM proxy_requests ${where}${extra}
 			 GROUP BY day, requested_model
 			 ORDER BY day, count DESC`
 		)
-		.all(...args, from) as DailyModelCount[];
+		.all(utcOffsetMinutes * 60, ...args, from) as DailyModelCount[];
+}
+
+export interface ProviderModelDailyUsage {
+	day: string;
+	providerId: string | null;
+	/** Display name of the configured provider; null when unset or since deleted. */
+	providerName: string | null;
+	model: string;
+	requests: number;
+	inputTokens: number;
+	outputTokens: number;
+	costUsd: number;
+}
+
+/**
+ * Actual spend through Chatty's configured providers, bucketed per day, provider and
+ * served model. `utcOffsetMinutes` shifts the day boundary into the caller's time zone.
+ */
+export function proxyRequestProviderUsage(
+	db: Db,
+	filters: ProxyRequestFilters = {},
+	utcOffsetMinutes = 0
+): ProviderModelDailyUsage[] {
+	const { where, args } = buildWhere(filters);
+	const rows = db
+		.prepare(
+			`SELECT date(pr.started_at / 1000 + ?, 'unixepoch') AS day,
+				pr.provider_id AS provider_id,
+				p.name AS provider_name,
+				COALESCE(pr.model_id, pr.requested_model) AS model,
+				COUNT(*) AS requests,
+				COALESCE(SUM(pr.input_tokens), 0) AS input_tokens,
+				COALESCE(SUM(pr.output_tokens), 0) AS output_tokens,
+				COALESCE(SUM(pr.cost_usd), 0) AS cost_usd
+			 FROM proxy_requests pr
+			 LEFT JOIN providers p ON p.id = pr.provider_id
+			 ${where}
+			 GROUP BY day, pr.provider_id, model
+			 ORDER BY day, cost_usd DESC`
+		)
+		.all(utcOffsetMinutes * 60, ...args) as {
+		day: string;
+		provider_id: string | null;
+		provider_name: string | null;
+		model: string;
+		requests: number;
+		input_tokens: number;
+		output_tokens: number;
+		cost_usd: number;
+	}[];
+	return rows.map((r) => ({
+		day: r.day,
+		providerId: r.provider_id,
+		providerName: r.provider_name,
+		model: r.model,
+		requests: r.requests,
+		inputTokens: r.input_tokens,
+		outputTokens: r.output_tokens,
+		costUsd: r.cost_usd
+	}));
 }
 
 export function failRunningProxyRequests(db: Db): number {

@@ -182,7 +182,7 @@ export function createImageServer(ctx: CallerContext): McpServer {
 					return err(`no image attachment found with id ${attachmentId} — ${hint}`);
 				}
 				try {
-					const bytes = await fsp.readFile(resolveAttachment(row.path));
+					const bytes = await fsp.readFile(await resolveAttachment(row.path));
 					normalized = bytes.toString('base64');
 				} catch {
 					return err(`could not read attachment ${attachmentId} from disk`);

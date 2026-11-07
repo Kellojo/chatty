@@ -1,48 +1,20 @@
 import { json, error } from '@sveltejs/kit';
 import Database from 'better-sqlite3';
-import { z } from 'zod';
 import { requireAdmin } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { createMcpServer, listMcpServers, toPublic } from '$lib/server/db/repo/mcp-servers.js';
+import { mcpServerCreateSchema } from '$lib/server/mcp/serverInput.js';
 import type { RequestHandler } from './$types';
-
-const nameSchema = z
-	.string()
-	.min(1)
-	.max(64)
-	.transform((name) =>
-		name
-			.trim()
-			.toLowerCase()
-			.replace(/[\s_]+/g, '-')
-			.replace(/[^a-z0-9-]/g, '')
-			.replace(/^-+|-+$/g, '')
-			.replace(/-{2,}/g, '-')
-	)
-	.pipe(
-		z
-			.string()
-			.min(1)
-			.max(64)
-			.regex(/^[a-z0-9][a-z0-9-]*$/)
-	);
-
-const createSchema = z.object({
-	name: nameSchema,
-	transport: z.enum(['http', 'sse']),
-	url: z.url(),
-	token: z.string().min(1).nullish(),
-	enabled: z.boolean().optional()
-});
 
 export const GET: RequestHandler = ({ locals }) => {
 	requireAdmin(locals);
 	return json({ servers: listMcpServers(getDb()).map(toPublic) });
 };
 
+// Admin-only: stdio servers run an arbitrary command on the host.
 export const POST: RequestHandler = async ({ locals, request }) => {
 	requireAdmin(locals);
-	const parsed = createSchema.safeParse(await request.json().catch(() => null));
+	const parsed = mcpServerCreateSchema.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });
 	try {
 		const server = createMcpServer(getDb(), parsed.data);

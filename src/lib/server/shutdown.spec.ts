@@ -6,12 +6,19 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 const stopAllAgentRuns = vi.fn(async () => undefined);
 const stopAgentScheduler = vi.fn();
 const stopDailyJobs = vi.fn();
+const stopHourlyJobs = vi.fn();
+const stopCodingEnvironmentSync = vi.fn();
 const closeDb = vi.fn();
 
 vi.mock('./agents/runner.js', () => ({ stopAllAgentRuns }));
 vi.mock('./agents/scheduler.js', () => ({ stopAgentScheduler }));
-vi.mock('./jobs.js', () => ({ stopDailyJobs }));
+vi.mock('./jobs.js', () => ({ stopDailyJobs, stopHourlyJobs }));
 vi.mock('./db/index.js', () => ({ closeDb }));
+vi.mock('./t3/sync.js', () => ({ stopCodingEnvironmentSync }));
+vi.mock('./t3/follower.js', () => ({
+	prepareCodingShutdown: vi.fn(),
+	stopAllCodingFollowers: vi.fn()
+}));
 
 const { registerStream, releaseStream } = await import('./chat/streams.js');
 const { registerShutdownHandlers } = await import('./shutdown.js');
@@ -40,5 +47,7 @@ describe('shutdown', () => {
 		expect(stopAllAgentRuns).toHaveBeenCalledOnce();
 		expect(stopAgentScheduler).toHaveBeenCalledOnce();
 		expect(stopDailyJobs).toHaveBeenCalledOnce();
+		expect(stopHourlyJobs).toHaveBeenCalledOnce();
+		expect(stopCodingEnvironmentSync).toHaveBeenCalledOnce();
 	});
 });

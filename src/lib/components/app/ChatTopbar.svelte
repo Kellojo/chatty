@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import ModelPicker from './ModelPicker.svelte';
+	import CodingTaskBar from './CodingTaskBar.svelte';
 	import { getSidebarState } from './sidebar-state.svelte.js';
 	import { decodeModelRef, encodeModelRef } from '$lib/model-ref.js';
 	import type { Agent, Conversation, ModelMapping, ModelsByProvider } from '$lib/types.js';
+	import type { CodingConversation } from '$lib/coding-environments.js';
 
 	let {
 		conversation,
@@ -11,6 +13,8 @@
 		mappings = [],
 		defaultModel,
 		personas,
+		coding = null,
+		codingEnvironmentName = null,
 		onupdated
 	}: {
 		conversation: Conversation;
@@ -18,6 +22,9 @@
 		mappings?: ModelMapping[];
 		defaultModel?: { providerId: string; modelId: string } | null;
 		personas?: Agent[];
+		/** Set for coding tasks: the remote agent's model is fixed, so show the task instead. */
+		coding?: CodingConversation | null;
+		codingEnvironmentName?: string | null;
 		onupdated: (c: Conversation) => void;
 	} = $props();
 
@@ -69,15 +76,19 @@
 </script>
 
 <header class="flex items-center gap-3 border-b px-4 py-2 {offsetForSidebar ? 'pl-12' : ''}">
-	<ModelPicker
-		{groups}
-		{mappings}
-		value={currentModelValue}
-		onselect={selectModel}
-		disabled={saving}
-	/>
+	{#if coding}
+		<CodingTaskBar {coding} environmentName={codingEnvironmentName} />
+	{:else}
+		<ModelPicker
+			{groups}
+			{mappings}
+			value={currentModelValue}
+			onselect={selectModel}
+			disabled={saving}
+		/>
 
-	{#if personas && conversation.agentId}
-		<span class="text-sm text-muted-foreground">{personaLabel}</span>
+		{#if personas && conversation.agentId}
+			<span class="text-sm text-muted-foreground">{personaLabel}</span>
+		{/if}
 	{/if}
 </header>

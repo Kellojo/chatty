@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { safeFetch } from '../../net/safeFetch.js';
 import { err, text } from './shared.js';
 
 const MAX_BYTES = 1024 * 1024;
@@ -29,7 +30,7 @@ export function createWebfetchServer(): McpServer {
 			const fmt = format ?? 'markdown';
 			let res: Response;
 			try {
-				res = await fetch(url, {
+				res = await safeFetch(url, {
 					headers: { 'user-agent': 'ai-chat/0.1 (+https://localhost)' },
 					signal: AbortSignal.timeout(15000)
 				});

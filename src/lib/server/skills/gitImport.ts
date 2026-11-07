@@ -4,6 +4,7 @@ import path from 'node:path';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/node';
 import matter from 'gray-matter';
+import { parseFrontmatter } from '../frontmatter.js';
 import { walk } from '../mcp/servers/shared.js';
 import { isValidSkillName, skillsRoot, findSkillFile, type SkillScope } from './paths.js';
 import { parseSkillFrontmatter } from './scanner.js';
@@ -146,7 +147,7 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 			let name = dirName;
 			let invalid: string | null = null;
 			try {
-				const parsed = matter(fs.readFileSync(srcSkillFile, 'utf8'));
+				const parsed = parseFrontmatter(fs.readFileSync(srcSkillFile, 'utf8'));
 				const fm = parseSkillFrontmatter(parsed.data);
 				name = fm.name;
 				if (fm.name !== dirName)
@@ -165,7 +166,7 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 			const existed = fs.existsSync(dest);
 			// Stamp the source so re-imports from the same repo are recognizable,
 			// and normalize the file to lowercase skill.md.
-			const parsed = matter(fs.readFileSync(srcSkillFile, 'utf8'));
+			const parsed = parseFrontmatter(fs.readFileSync(srcSkillFile, 'utf8'));
 			parsed.data.source = `git:${gitUrl}`;
 			parsed.data.title ??= name
 				.split('-')

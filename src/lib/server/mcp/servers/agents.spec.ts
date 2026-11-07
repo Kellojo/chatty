@@ -200,6 +200,28 @@ describe('create_agent', () => {
 		expect(isErr(res)).toBe(true);
 		expect(resultText(res)).toContain('providerId and modelId');
 	});
+
+	it('rejects an unknown model like the REST API', async () => {
+		const res = await callTool('create_agent', {
+			name: 'bad',
+			systemPrompt: 'x',
+			triggerType: 'manual',
+			providerId: 'p1',
+			modelId: 'does-not-exist'
+		});
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('Unknown model');
+	});
+
+	it('rejects out-of-range maxSteps like the REST API', async () => {
+		const res = await callTool('create_agent', {
+			name: 'bad',
+			systemPrompt: 'x',
+			triggerType: 'manual',
+			maxSteps: 1000
+		});
+		expect(isErr(res)).toBe(true);
+	});
 });
 
 describe('update_agent', () => {
@@ -230,6 +252,26 @@ describe('update_agent', () => {
 		const res = await callTool('update_agent', { agentId: ownId, triggerType: 'schedule' });
 		expect(isErr(res)).toBe(true);
 		expect(resultText(res)).toContain('cron expression');
+	});
+
+	it('rejects an invalid cron on update', async () => {
+		const res = await callTool('update_agent', {
+			agentId: ownId,
+			triggerType: 'schedule',
+			triggerConfig: { cron: 'not a cron' }
+		});
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('Invalid cron');
+	});
+
+	it('rejects an unknown model on update', async () => {
+		const res = await callTool('update_agent', {
+			agentId: ownId,
+			providerId: 'p1',
+			modelId: 'does-not-exist'
+		});
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('Unknown model');
 	});
 
 	it('updates nextRunAt when enabling a schedule agent', async () => {

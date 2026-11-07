@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
+// The fixture server listens on 127.0.0.1, which the SSRF guard blocks by default.
+process.env.ALLOW_PRIVATE_NETWORK_FETCH = 'true';
 
 const { createWebfetchServer } = await import('./webfetch.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');

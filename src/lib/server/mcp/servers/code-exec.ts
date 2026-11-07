@@ -5,7 +5,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { CallerContext } from '../types.js';
-import { err, resolveInside, text } from './shared.js';
+import { resolveInsideRealSync } from '../../safePath.js';
+import { err, text } from './shared.js';
 
 const MAX_OUTPUT = 64 * 1024; // 64KB
 const MAX_TIMEOUT = 30000; // 30 seconds
@@ -36,6 +37,9 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 		memoryMb: number
 	): Promise<CallToolResult> {
 		let isolate: ivm.Isolate | undefined;
+		// Only a call that took a slot may give one back. Decrementing on the early
+		// returns below drove the counter negative and disabled the cap.
+		let acquired = false;
 
 		try {
 			const workspaceDir = validateWorkspaceDir(ctx.workspaceDir);
@@ -44,6 +48,7 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 				return err(`Too many concurrent executions (max ${MAX_CONCURRENT}). Try again later.`);
 			}
 			activeExecutions++;
+			acquired = true;
 
 			isolate = new ivm.Isolate({ memoryLimit: memoryMb });
 			const context = await isolate.createContext();
@@ -54,7 +59,7 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 			await jail.set(
 				'readFile',
 				new ivm.Callback((relPath: string) => {
-					const abs = resolveInside(workspaceDir, relPath);
+					const abs = resolveInsideRealSync(workspaceDir, relPath);
 					if (!abs) throw new Error('path escapes workspace root');
 					const stat = fs.lstatSync(abs);
 					if (stat.isSymbolicLink()) {
@@ -67,7 +72,7 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 			await jail.set(
 				'writeFile',
 				new ivm.Callback((relPath: string, content: string) => {
-					const abs = resolveInside(workspaceDir, relPath);
+					const abs = resolveInsideRealSync(workspaceDir, relPath);
 					if (!abs) throw new Error('path escapes workspace root');
 					try {
 						fs.lstatSync(abs);
@@ -126,7 +131,7 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 		} catch (e) {
 			return err(`Execution failed: ${e instanceof Error ? e.message : String(e)}`);
 		} finally {
-			activeExecutions--;
+			if (acquired) activeExecutions--;
 			if (isolate) {
 				try {
 					await isolate.dispose();

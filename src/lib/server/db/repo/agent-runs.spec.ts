@@ -5,11 +5,13 @@ import {
 	failRunningAgentRuns,
 	finishAgentRun,
 	getAgentRun,
+	getAgentRunByConversation,
 	listAgentRuns,
 	listRunningAgentIds,
 	toPublic
 } from './agent-runs.js';
 import { createAgent } from './agents.js';
+import { createConversation } from './conversations.js';
 
 let db: Db;
 let agentId: string;
@@ -106,5 +108,13 @@ describe('agent-runs repo', () => {
 		expect(row.error).toBe('Interrupted by server restart');
 		expect(row.ended_at).not.toBeNull();
 		expect(failRunningAgentRuns(db)).toBe(0);
+	});
+
+	it('getAgentRunByConversation finds the run that owns a conversation', () => {
+		const conversationId = createConversation(db, 'u1', { kind: 'agent-run' }).id;
+		createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
+		const run = createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual', conversationId });
+		expect(getAgentRunByConversation(db, conversationId)?.id).toBe(run.id);
+		expect(getAgentRunByConversation(db, 'missing')).toBeUndefined();
 	});
 });

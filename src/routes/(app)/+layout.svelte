@@ -58,6 +58,8 @@
 				conversations={data.conversations}
 				hasMore={data.hasMoreConversations}
 				unreadIds={data.unreadIds}
+				settledCount={data.settledCount}
+				autoSettleDays={data.autoSettleDays}
 				onclose={() => setSidebarOpen(false)}
 			/>
 		</div>
@@ -75,6 +77,8 @@
 					conversations={data.conversations}
 					hasMore={data.hasMoreConversations}
 					unreadIds={data.unreadIds}
+					settledCount={data.settledCount}
+					autoSettleDays={data.autoSettleDays}
 					onclose={() => (mobileOpen = false)}
 				/>
 			</div>

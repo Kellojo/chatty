@@ -1,6 +1,11 @@
 import { error } from '@sveltejs/kit';
+import { START_MODE_COOKIE } from '$lib/coding-environments.js';
 import { getDb } from '$lib/server/db/index.js';
 import { listPersonaAgents, toPublic } from '$lib/server/db/repo/agents.js';
+import {
+	listCodingEnvironments,
+	toPublic as environmentToPublic
+} from '$lib/server/db/repo/coding-environments.js';
 import {
 	listEnabledModelMappings,
 	toPublic as mappingToPublic
@@ -10,7 +15,7 @@ import { getUserSettings } from '$lib/server/db/repo/user-settings.js';
 import { listModelsGrouped } from '$lib/server/llm/registry.js';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = ({ locals, cookies }) => {
 	const user = locals.user;
 	if (!user) error(401, { message: 'Unauthorized' });
 	const db = getDb();
@@ -37,6 +42,11 @@ export const load: PageServerLoad = ({ locals }) => {
 		defaultModel,
 		sttModel,
 		suggestions: getUserSettings(db, user.id).suggestions,
-		personas: listPersonaAgents(db, user.id).map(toPublic)
+		personas: listPersonaAgents(db, user.id).map(toPublic),
+		codingEnvironments: listCodingEnvironments(db, user.id)
+			.filter((row) => row.enabled === 1)
+			.map(environmentToPublic),
+		startMode: (cookies.get(START_MODE_COOKIE) === 'coding' ? 'coding' : 'chat') as
+			'chat' | 'coding'
 	};
 };

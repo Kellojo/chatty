@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createTwoFilesPatch } from 'diff';
 import matter from 'gray-matter';
 import { z } from 'zod';
+import { parseFrontmatter } from '../frontmatter.js';
 import type { Db } from '../db/index.js';
 import { recordMemoryWrite } from '../db/repo/memory-writes.js';
 import { publishServerEvent } from '../events/bus.js';
@@ -64,7 +65,7 @@ function parseConceptFile(scope: MemoryScope, relPath: string, raw: string): Con
 	let data: Record<string, unknown> = {};
 	let body = raw;
 	try {
-		const parsed = matter(raw);
+		const parsed = parseFrontmatter(raw);
 		data = parsed.data as Record<string, unknown>;
 		body = parsed.content;
 	} catch {
@@ -128,7 +129,7 @@ function regenIndex(dirAbs: string): void {
 			let title = e.name.slice(0, -'.md'.length);
 			let description = '';
 			try {
-				const parsed = matter(fs.readFileSync(path.join(dirAbs, e.name), 'utf8'));
+				const parsed = parseFrontmatter(fs.readFileSync(path.join(dirAbs, e.name), 'utf8'));
 				const d = parsed.data as Record<string, unknown>;
 				if (typeof d.title === 'string' && d.title.trim()) title = d.title;
 				if (typeof d.description === 'string') description = d.description;
@@ -317,7 +318,7 @@ export function listTree(scope: MemoryScope, userId: string): MemoryTreeNode[] {
 				let title = e.name.slice(0, -'.md'.length);
 				let description = '';
 				try {
-					const parsed = matter(fs.readFileSync(abs, 'utf8'));
+					const parsed = parseFrontmatter(fs.readFileSync(abs, 'utf8'));
 					const d = parsed.data as Record<string, unknown>;
 					if (typeof d.title === 'string' && d.title.trim()) title = d.title;
 					if (typeof d.description === 'string') description = d.description;

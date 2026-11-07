@@ -102,7 +102,7 @@ describe('emitAgentEvent', () => {
 		expect(runFn).not.toHaveBeenCalled();
 	});
 
-	it('skips an agent that already has a running run', async () => {
+	it('queues events while the agent has a running run', async () => {
 		const agent = seedEventAgent('u1', { event: 'memory.changed' });
 		const run = createAgentRun(db, { agentId: agent.id, userId: 'u1', trigger: 'manual' });
 		const runFn = vi.fn().mockResolvedValue(undefined);
@@ -188,5 +188,59 @@ describe('handleServerEvent', () => {
 		handleServerEvent('u1', { type: 'chat.stream.finished', conversationId: 'c1' }, db, runFn);
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(runFn).not.toHaveBeenCalled();
+	});
+});
+
+describe('event run concurrency', () => {
+	function deferred() {
+		let resolve!: () => void;
+		const promise = new Promise<void>((r) => (resolve = r));
+		return { promise, resolve };
+	}
+
+	it('starts only one run for events arriving in the same tick', async () => {
+		const agent = seedEventAgent('u1', { event: 'memory.changed' });
+		const gate = deferred();
+		const runFn = vi.fn().mockReturnValueOnce(gate.promise).mockResolvedValue(undefined);
+		await Promise.all([
+			emitAgentEvent('memory.changed', 'u1', { path: 'a.md' }, db, runFn),
+			emitAgentEvent('memory.changed', 'u1', { path: 'b.md' }, db, runFn)
+		]);
+		expect(runFn).toHaveBeenCalledTimes(1);
+		expect(runFn.mock.calls[0][2]).toContain('a.md');
+		// The second event waited and runs once the first run is done.
+		gate.resolve();
+		await vi.waitFor(() => expect(runFn).toHaveBeenCalledTimes(2));
+		expect(runFn).toHaveBeenLastCalledWith(agent.id, 'u1', expect.stringContaining('b.md'));
+	});
+
+	it('does not wait for a run before dispatching to other agents', async () => {
+		const first = seedEventAgent('u1', { event: 'memory.changed' });
+		const second = seedEventAgent('u1', { event: 'memory.changed' });
+		const runFn = vi.fn().mockReturnValue(new Promise(() => undefined));
+		await emitAgentEvent('memory.changed', 'u1', {}, db, runFn);
+		expect(runFn.mock.calls.map((c) => c[0]).sort()).toEqual([first.id, second.id].sort());
+	});
+
+	it('coalesces events queued during an external run into one follow-up run', async () => {
+		const agent = seedEventAgent('u1', { event: 'memory.changed' });
+		const run = createAgentRun(db, { agentId: agent.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md' }, db, runFn);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'b.md' }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+
+		finishAgentRun(db, run.id, 'success');
+		handleServerEvent(
+			'u1',
+			{ type: 'agent.run.finished', agentId: agent.id, runId: run.id, status: 'success' },
+			db,
+			runFn
+		);
+		expect(runFn).toHaveBeenCalledTimes(1);
+		const instructions = runFn.mock.calls[0][2] as string;
+		expect(instructions).toContain('occurrence #1');
+		expect(instructions).toContain('occurrence #2');
+		expect(instructions).toContain('b.md');
 	});
 });

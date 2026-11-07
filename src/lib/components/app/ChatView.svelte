@@ -18,6 +18,7 @@
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import XIcon from '@lucide/svelte/icons/x';
 	import ChatTopbar from './ChatTopbar.svelte';
+	import CodingPendingRequest from './CodingPendingRequest.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
@@ -37,6 +38,7 @@
 		type UIMessage
 	} from '$lib/types.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
+	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
 
 	let {
 		conversation: initialConversation,
@@ -47,7 +49,8 @@
 		timeFormat = 'auto',
 		personas,
 		sttModel = null,
-		initiallyGenerating = false
+		initiallyGenerating = false,
+		coding: initialCoding = null
 	}: {
 		conversation: Conversation;
 		initialMessages: ChatMessage[];
@@ -58,6 +61,8 @@
 		timeFormat?: TimeFormat;
 		personas?: Agent[];
 		initiallyGenerating?: boolean;
+		/** Set when this conversation is a coding task run by a remote agent. */
+		coding?: CodingConversation | null;
 	} = $props();
 
 	// svelte-ignore state_referenced_locally
@@ -123,6 +128,62 @@
 		if (existing) activeChats.delete(id);
 		return createChat();
 	}
+
+	// ── coding task ──────────────────────────────────────────────────────────
+	// svelte-ignore state_referenced_locally
+	let coding = $state(initialCoding);
+	let codingEnvironmentName = $state<string | null>(null);
+	// The remote agent can't rewind or read attachments, so hide those affordances.
+	const isCoding = $derived(coding !== null);
+
+	// Page data reloads (invalidate) carry fresh task state too.
+	$effect(() => {
+		if (initialCoding) coding = initialCoding;
+	});
+
+	async function refreshCoding() {
+		const res = await fetch(`/api/coding/tasks/${encodeURIComponent(conversation.id)}`);
+		if (!res.ok) return;
+		const data = (await res.json()) as { coding: CodingConversation };
+		coding = data.coding;
+	}
+
+	$effect(() => {
+		if (!isCoding) return;
+		const id = conversation.id;
+		const refresh = () => void refreshCoding().catch(() => undefined);
+		const offEvent = onServerEvent((event) => {
+			if (
+				(event.type === 'coding.task.updated' || event.type === 'coding.thread.finished') &&
+				event.conversationId === id
+			) {
+				refresh();
+			}
+		});
+		const offResync = onServerEventResync(refresh);
+		return () => {
+			offEvent();
+			offResync();
+		};
+	});
+
+	const codingEnvironmentId = $derived(coding?.environmentId ?? null);
+	$effect(() => {
+		const environmentId = codingEnvironmentId;
+		if (!environmentId) return;
+		let cancelled = false;
+		void fetch('/api/coding/options')
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data: { environments?: CodingEnvironment[] } | null) => {
+				if (cancelled) return;
+				codingEnvironmentName =
+					data?.environments?.find((e) => e.id === environmentId)?.name ?? null;
+			})
+			.catch(() => undefined);
+		return () => {
+			cancelled = true;
+		};
+	});
 
 	let chat = $state(initChat());
 	let pendingTruncateFrom = $state<string | undefined>(undefined);
@@ -445,12 +506,12 @@
 	class="relative flex h-full min-h-0 flex-1 flex-col"
 	role="region"
 	aria-label="Chat"
-	ondragenter={fileDrop.ondragenter}
-	ondragover={fileDrop.ondragover}
-	ondragleave={fileDrop.ondragleave}
-	ondrop={fileDrop.ondrop}
+	ondragenter={isCoding ? undefined : fileDrop.ondragenter}
+	ondragover={isCoding ? undefined : fileDrop.ondragover}
+	ondragleave={isCoding ? undefined : fileDrop.ondragleave}
+	ondrop={isCoding ? undefined : fileDrop.ondrop}
 >
-	{#if fileDrop.dragActive}
+	{#if fileDrop.dragActive && !isCoding}
 		<div
 			class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-info bg-background/70"
 		>
@@ -464,6 +525,8 @@
 		{mappings}
 		{defaultModel}
 		{personas}
+		{coding}
+		{codingEnvironmentName}
 		onupdated={(updated) => (conversation = updated)}
 	/>
 
@@ -475,8 +538,8 @@
 				{timeFormat}
 				{messageTimes}
 				conversationId={conversation.id}
-				onregenerate={regenerate}
-				onedit={startEdit}
+				onregenerate={isCoding ? undefined : regenerate}
+				onedit={isCoding ? undefined : startEdit}
 			/>
 			{#if waiting}
 				<div
@@ -494,6 +557,17 @@
 	</ChatContainer>
 
 	<div class="mx-auto w-full max-w-3xl px-4 pb-4">
+		{#if coding?.pendingRequest}
+			{#key coding.pendingRequest.requestId}
+				<CodingPendingRequest
+					conversationId={conversation.id}
+					request={coding.pendingRequest}
+					onresponded={() => void refreshCoding().catch(() => undefined)}
+				/>
+			{/key}
+		{:else if coding?.status === 'failed' && coding.lastError}
+			<p class="mb-2 px-1 text-sm break-words text-destructive">{coding.lastError}</p>
+		{/if}
 		{#if selectedFiles.length > 0}
 			<div class="mb-2 flex flex-wrap gap-2">
 				{#each selectedFiles as file, i (file.name + i)}
@@ -557,9 +631,11 @@
 			/>
 			<PromptInputActions class="justify-between">
 				<div class="flex items-center gap-1">
-					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
-						<PaperclipIcon class="size-4" />
-					</Button>
+					{#if !isCoding}
+						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
+							<PaperclipIcon class="size-4" />
+						</Button>
+					{/if}
 					<MicButton {speech} />
 				</div>
 				{#if streaming && !hasContent}

@@ -1,41 +1,7 @@
-import { error } from '@sveltejs/kit';
-import { requireAdmin } from '$lib/server/auth/guards.js';
-import { getDb } from '$lib/server/db/index.js';
-import { getProxyRequest, toPublic } from '$lib/server/db/repo/proxy-requests.js';
-import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
+import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals, params }) => {
-	const user = requireAdmin(locals);
-	const db = getDb();
-	const row = getProxyRequest(db, params.id);
-	if (!row) error(404, { message: 'Request not found' });
-	const request = toPublic(row);
-
-	const userRow = db.prepare('SELECT name, email FROM "user" WHERE id = ?').get(request.userId) as
-		{ name: string; email: string } | undefined;
-	const userName = userRow ? userRow.name || userRow.email : request.userId;
-
-	let keyLabel: string | null = null;
-	if (request.apiKeyId) {
-		const keyRow = db.prepare('SELECT label FROM api_keys WHERE id = ?').get(request.apiKeyId) as
-			{ label: string } | undefined;
-		keyLabel = keyRow?.label ?? null;
-	}
-
-	let mappingName: string | null = null;
-	if (request.mappingId) {
-		const mappingRow = db
-			.prepare('SELECT name FROM model_mappings WHERE id = ?')
-			.get(request.mappingId) as { name: string } | undefined;
-		mappingName = mappingRow?.name ?? null;
-	}
-
-	return {
-		request,
-		userName,
-		keyLabel,
-		mappingName,
-		timeFormat: getTimeFormat(db, user.id)
-	};
+// Moved under the Usage section; keep old links and bookmarks working.
+export const load: PageServerLoad = ({ params, url }) => {
+	redirect(308, `/usage/requests/${encodeURIComponent(params.id)}${url.search}`);
 };

@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
+	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
@@ -16,7 +17,7 @@
 
 	let { data }: { data: PageData } = $props();
 
-	type RemoteTransport = 'http' | 'sse';
+	type ConfigurableTransport = 'http' | 'sse' | 'stdio';
 	type TestResult = {
 		name: string;
 		ok: boolean;
@@ -24,25 +25,60 @@
 		error?: string;
 	};
 
-	const transportLabels: Record<RemoteTransport, string> = {
+	const transportLabels: Record<ConfigurableTransport, string> = {
 		http: 'HTTP',
-		sse: 'SSE'
+		sse: 'SSE',
+		stdio: 'stdio (local command)'
 	};
 
 	let addOpen = $state(false);
 	let addName = $state('');
-	let addTransport = $state<RemoteTransport>('http');
+	let addTransport = $state<ConfigurableTransport>('http');
 	let addUrl = $state('');
 	let addToken = $state('');
+	let addCommand = $state('');
+	let addArgs = $state('');
 	let addBusy = $state(false);
 
 	let editOpen = $state(false);
 	let editId = $state<string | null>(null);
 	let editName = $state('');
-	let editTransport = $state<RemoteTransport>('http');
+	let editTransport = $state<ConfigurableTransport>('http');
 	let editUrl = $state('');
 	let editToken = $state('');
+	let editCommand = $state('');
+	let editArgs = $state('');
 	let editBusy = $state(false);
+
+	/** One argument per line; blank lines are ignored. */
+	function parseArgs(value: string): string[] {
+		return value
+			.split('\n')
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
+	}
+
+	function connectionBody(
+		transport: ConfigurableTransport,
+		url: string,
+		command: string,
+		args: string
+	): Record<string, unknown> {
+		return transport === 'stdio'
+			? { transport, command, args: parseArgs(args) }
+			: { transport, url };
+	}
+
+	const argsPlaceholder = '-y\n@modelcontextprotocol/server-everything';
+	const stdioHint =
+		'Runs the command on the Chatty host (no shell) each time tools are loaded, with a minimal environment (PATH, HOME, …). Only add commands you trust.';
+
+	function connectionLabel(server: McpServerInfo): string {
+		if (server.transport === 'stdio') {
+			return [server.command ?? '', ...server.args].join(' ').trim() || '—';
+		}
+		return server.url ?? '—';
+	}
 
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<McpServerInfo | null>(null);
@@ -72,6 +108,8 @@
 		addTransport = 'http';
 		addUrl = '';
 		addToken = '';
+		addCommand = '';
+		addArgs = '';
 	}
 
 	function openAdd() {
@@ -85,9 +123,8 @@
 		try {
 			await api('/api/mcp-servers', 'POST', {
 				name: addName,
-				transport: addTransport,
-				url: addUrl,
-				token: addToken || null
+				...connectionBody(addTransport, addUrl, addCommand, addArgs),
+				...(addTransport === 'stdio' ? {} : { token: addToken || null })
 			});
 			toast.success(`Server "${addName}" added`);
 			addOpen = false;
@@ -103,9 +140,12 @@
 	function openEdit(server: McpServerInfo) {
 		editId = server.id;
 		editName = server.name;
-		editTransport = server.transport === 'sse' ? 'sse' : 'http';
+		editTransport =
+			server.transport === 'sse' || server.transport === 'stdio' ? server.transport : 'http';
 		editUrl = server.url ?? '';
 		editToken = '';
+		editCommand = server.command ?? '';
+		editArgs = server.args.join('\n');
 		editOpen = true;
 	}
 
@@ -116,9 +156,8 @@
 		try {
 			await api(`/api/mcp-servers/${editId}`, 'PATCH', {
 				name: editName,
-				transport: editTransport,
-				url: editUrl,
-				...(editToken ? { token: editToken } : {})
+				...connectionBody(editTransport, editUrl, editCommand, editArgs),
+				...(editToken && editTransport !== 'stdio' ? { token: editToken } : {})
 			});
 			toast.success('Server updated');
 			editOpen = false;
@@ -194,7 +233,7 @@
 					<Table.Row>
 						<Table.Head>Name</Table.Head>
 						<Table.Head>Transport</Table.Head>
-						<Table.Head>URL</Table.Head>
+						<Table.Head>URL / command</Table.Head>
 						<Table.Head>Enabled</Table.Head>
 						<Table.Head class="text-right">Actions</Table.Head>
 					</Table.Row>
@@ -211,8 +250,11 @@
 								</div>
 							</Table.Cell>
 							<Table.Cell><Badge variant="outline">{server.transport}</Badge></Table.Cell>
-							<Table.Cell class="max-w-48 truncate text-muted-foreground" title={server.url ?? ''}>
-								{server.url ?? '—'}
+							<Table.Cell
+								class="max-w-48 truncate text-muted-foreground"
+								title={connectionLabel(server)}
+							>
+								{connectionLabel(server)}
 							</Table.Cell>
 							<Table.Cell>
 								<Switch
@@ -264,7 +306,8 @@
 		<Dialog.Header>
 			<Dialog.Title>Add server</Dialog.Title>
 			<Dialog.Description>
-				Connect a remote MCP server over HTTP or SSE. Tokens are encrypted at rest.
+				Connect a remote MCP server over HTTP or SSE (tokens are encrypted at rest), or run a local
+				command over stdio.
 			</Dialog.Description>
 		</Dialog.Header>
 		<form onsubmit={submitAdd} class="flex flex-col gap-4">
@@ -279,23 +322,36 @@
 					<Select.Content>
 						<Select.Item value="http">{transportLabels.http}</Select.Item>
 						<Select.Item value="sse">{transportLabels.sse}</Select.Item>
+						<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
 					</Select.Content>
 				</Select.Root>
 			</div>
-			<div class="flex flex-col gap-2">
-				<Label for="add-url">URL</Label>
-				<Input
-					id="add-url"
-					type="url"
-					bind:value={addUrl}
-					required
-					placeholder="https://example.com/mcp"
-				/>
-			</div>
-			<div class="flex flex-col gap-2">
-				<Label for="add-token">Token (optional)</Label>
-				<Input id="add-token" type="password" bind:value={addToken} autocomplete="off" />
-			</div>
+			{#if addTransport === 'stdio'}
+				<div class="flex flex-col gap-2">
+					<Label for="add-command">Command</Label>
+					<Input id="add-command" bind:value={addCommand} required placeholder="npx" />
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="add-args">Arguments (one per line)</Label>
+					<Textarea id="add-args" bind:value={addArgs} rows={3} placeholder={argsPlaceholder} />
+				</div>
+				<p class="text-xs text-muted-foreground">{stdioHint}</p>
+			{:else}
+				<div class="flex flex-col gap-2">
+					<Label for="add-url">URL</Label>
+					<Input
+						id="add-url"
+						type="url"
+						bind:value={addUrl}
+						required
+						placeholder="https://example.com/mcp"
+					/>
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="add-token">Token (optional)</Label>
+					<Input id="add-token" type="password" bind:value={addToken} autocomplete="off" />
+				</div>
+			{/if}
 			<Dialog.Footer>
 				<Button type="submit" disabled={addBusy}>{addBusy ? 'Adding…' : 'Add server'}</Button>
 			</Dialog.Footer>
@@ -321,23 +377,36 @@
 					<Select.Content>
 						<Select.Item value="http">{transportLabels.http}</Select.Item>
 						<Select.Item value="sse">{transportLabels.sse}</Select.Item>
+						<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
 					</Select.Content>
 				</Select.Root>
 			</div>
-			<div class="flex flex-col gap-2">
-				<Label for="edit-url">URL</Label>
-				<Input id="edit-url" type="url" bind:value={editUrl} required />
-			</div>
-			<div class="flex flex-col gap-2">
-				<Label for="edit-token">Token</Label>
-				<Input
-					id="edit-token"
-					type="password"
-					bind:value={editToken}
-					autocomplete="off"
-					placeholder="Leave empty to keep current token"
-				/>
-			</div>
+			{#if editTransport === 'stdio'}
+				<div class="flex flex-col gap-2">
+					<Label for="edit-command">Command</Label>
+					<Input id="edit-command" bind:value={editCommand} required />
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="edit-args">Arguments (one per line)</Label>
+					<Textarea id="edit-args" bind:value={editArgs} rows={3} />
+				</div>
+				<p class="text-xs text-muted-foreground">{stdioHint}</p>
+			{:else}
+				<div class="flex flex-col gap-2">
+					<Label for="edit-url">URL</Label>
+					<Input id="edit-url" type="url" bind:value={editUrl} required />
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="edit-token">Token</Label>
+					<Input
+						id="edit-token"
+						type="password"
+						bind:value={editToken}
+						autocomplete="off"
+						placeholder="Leave empty to keep current token"
+					/>
+				</div>
+			{/if}
 			<Dialog.Footer>
 				<Button type="submit" disabled={editBusy}>{editBusy ? 'Saving…' : 'Save changes'}</Button>
 			</Dialog.Footer>

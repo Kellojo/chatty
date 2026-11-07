@@ -18,8 +18,13 @@
 		{ href: '/settings/defaults', label: 'Model Defaults', adminOnly: true, group: 'Models' },
 		{ href: '/settings/api', label: 'API', adminOnly: false, group: 'Other' },
 		{ href: '/settings/memory', label: 'Memory', adminOnly: false, group: 'Other' },
-		{ href: '/settings/mcp', label: 'MCP', adminOnly: true, group: 'Other' },
-		{ href: '/settings/search', label: 'Search', adminOnly: true, group: 'Other' }
+		{
+			href: '/settings/environments',
+			label: 'Coding environments',
+			adminOnly: false,
+			group: 'Other'
+		},
+		{ href: '/settings/mcp', label: 'MCP', adminOnly: true, group: 'Other' }
 	] as const;
 
 	const isAdmin = $derived(data.user.role === 'admin');

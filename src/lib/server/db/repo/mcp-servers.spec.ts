@@ -39,6 +39,31 @@ describe('mcp-servers repo', () => {
 		expect(repo.getMcpServer(db, created.id)).toBeUndefined();
 	});
 
+	it('stores command and args for stdio servers', () => {
+		const created = repo.createMcpServer(db, {
+			name: 'local',
+			transport: 'stdio',
+			command: 'node',
+			args: ['server.js', '--flag']
+		});
+		expect(repo.toPublic(created)).toMatchObject({
+			transport: 'stdio',
+			command: 'node',
+			args: ['server.js', '--flag'],
+			url: null,
+			hasToken: false
+		});
+		const updated = repo.updateMcpServer(db, created.id, { args: ['other.js'] })!;
+		expect(repo.toPublic(updated).args).toEqual(['other.js']);
+		expect(updated.command).toBe('node');
+	});
+
+	it('parseMcpArgs tolerates malformed values', () => {
+		expect(repo.parseMcpArgs('not json')).toEqual([]);
+		expect(repo.parseMcpArgs('{"a":1}')).toEqual([]);
+		expect(repo.parseMcpArgs('["a",1,"b"]')).toEqual(['a', 'b']);
+	});
+
 	it('refuses to delete builtin servers', () => {
 		expect(repo.deleteMcpServer(db, 'builtin-fs')).toBe(false);
 		expect(repo.getMcpServer(db, 'builtin-fs')).toBeDefined();

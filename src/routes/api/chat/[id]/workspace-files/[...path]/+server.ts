@@ -1,11 +1,12 @@
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { error } from '@sveltejs/kit';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getConversation } from '$lib/server/db/repo/conversations.js';
-import { conversationWorkspace } from '$lib/server/workspaces.js';
+import { contentDisposition, untrustedFileHeaders } from '$lib/server/http/untrustedFile.js';
+import { resolveInsideReal } from '$lib/server/safePath.js';
+import { workspaceForConversation } from '$lib/server/workspaces.js';
 import type { RequestHandler } from './$types';
 
 const MIME_MAP: Record<string, string> = {
@@ -48,23 +49,21 @@ const MIME_MAP: Record<string, string> = {
 export const GET: RequestHandler = async ({ locals, params }) => {
 	const user = requireUser(locals);
 	const db = getDb();
-	if (!getConversation(db, user.id, params.id)) error(404, { message: 'Conversation not found' });
+	const conversation = getConversation(db, user.id, params.id);
+	if (!conversation) error(404, { message: 'Conversation not found' });
 
 	const filePath = params.path;
 	if (!filePath) error(400, { message: 'No file path specified' });
 
-	const workspaceDir = conversationWorkspace(params.id);
-	const abs = path.resolve(workspaceDir, filePath);
-	if (abs !== workspaceDir && !abs.startsWith(workspaceDir + path.sep)) {
-		error(403, { message: 'Path escapes workspace' });
-	}
+	const workspaceDir = workspaceForConversation(db, conversation);
+	if (!workspaceDir) error(404, { message: 'File not found' });
+	// Resolves symlinks too, so a link planted in the workspace can't expose
+	// files outside it. A missing workspace also resolves to null.
+	const abs = await resolveInsideReal(workspaceDir, filePath);
+	if (!abs) error(404, { message: 'File not found' });
 
-	let stat: fs.Stats;
-	try {
-		stat = await fsp.stat(abs);
-	} catch {
-		error(404, { message: 'File not found' });
-	}
+	const stat = await fsp.stat(abs).catch(() => null);
+	if (!stat) error(404, { message: 'File not found' });
 
 	if (stat.isDirectory()) {
 		error(400, { message: 'Path is a directory' });
@@ -78,9 +77,10 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 
 	return new Response(new Uint8Array(content), {
 		headers: {
+			...untrustedFileHeaders(mime),
 			'content-type': mime,
-			'content-length': String(stat.size),
-			'content-disposition': `${disposition}; filename="${path.basename(filePath)}"`,
+			'content-length': String(content.length),
+			'content-disposition': contentDisposition(disposition, path.basename(filePath)),
 			'cache-control': 'private, max-age=3600'
 		}
 	});
