@@ -4,6 +4,7 @@ import type {
 	CodingConversation,
 	CodingDiffStat,
 	CodingPendingRequest,
+	CodingPullRequestState,
 	CodingTaskStatus,
 	CodingWorkspaceMode
 } from '$lib/coding-environments.js';
@@ -21,6 +22,7 @@ export interface CodingConversationRow {
 	base_branch: string | null;
 	branch: string | null;
 	pr_url: string | null;
+	pr_state: CodingPullRequestState | null;
 	status: CodingTaskStatus;
 	pending_request: string | null;
 	last_sequence: number | null;
@@ -63,6 +65,7 @@ export function toPublic(row: CodingConversationRow): CodingConversation {
 		baseBranch: row.base_branch,
 		branch: row.branch,
 		prUrl: row.pr_url,
+		prState: row.pr_url ? row.pr_state : null,
 		status: row.status,
 		pendingRequest: parsePending(row.pending_request),
 		lastError: row.last_error,
@@ -140,6 +143,7 @@ export interface CodingConversationPatch {
 	status?: CodingTaskStatus;
 	branch?: string | null;
 	prUrl?: string | null;
+	prState?: CodingPullRequestState | null;
 	pendingRequest?: CodingPendingRequest | null;
 	lastSequence?: number;
 	lastError?: string | null;
@@ -166,6 +170,7 @@ export function updateCodingConversation(
 	if (patch.status !== undefined) set('status', patch.status);
 	if (patch.branch !== undefined) set('branch', patch.branch);
 	if (patch.prUrl !== undefined) set('pr_url', patch.prUrl);
+	if (patch.prState !== undefined) set('pr_state', patch.prState);
 	if (patch.pendingRequest !== undefined) {
 		set('pending_request', patch.pendingRequest ? JSON.stringify(patch.pendingRequest) : null);
 	}

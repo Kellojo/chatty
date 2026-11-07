@@ -978,6 +978,7 @@ export class CodingFollower {
 				status: summary.status,
 				branch: summary.branch,
 				prUrl: summary.prUrl,
+				prState: summary.prState,
 				pendingRequest: summary.pendingRequest,
 				runStartedAt: summary.runStartedAt,
 				lastSequence: this.state.lastSequence ?? undefined,

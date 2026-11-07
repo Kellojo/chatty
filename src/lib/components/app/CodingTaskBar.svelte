@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button/index.js';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
-	import GitPullRequestIcon from '@lucide/svelte/icons/git-pull-request';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
 	import { agentIsFree, hasPullRequestWork, pullRequestNumber } from '$lib/coding-task-details.js';
 	import type { CodingConversation } from '$lib/coding-environments.js';
-	import { CODING_STATUS_STYLE } from '$lib/coding-status.js';
+	import { CODING_PR_STATE_STYLE, CODING_STATUS_STYLE } from '$lib/coding-status.js';
+	import PullRequestIcon from './PullRequestIcon.svelte';
 	import CodingRunTimer from './CodingRunTimer.svelte';
 	import DiffStat from './DiffStat.svelte';
 
@@ -71,18 +71,22 @@
 	<div class="ml-auto flex shrink-0 items-center gap-2">
 		{#if coding.prUrl}
 			{@const number = pullRequestNumber(coding.prUrl)}
+			{@const prState = coding.prState ? CODING_PR_STATE_STYLE[coding.prState].label : null}
 			<Button
 				href={coding.prUrl}
 				target="_blank"
 				rel="noopener noreferrer"
 				variant="outline"
 				size="sm"
-				aria-label="Open pull request {number ?? ''}"
-				title="Open pull request"
+				aria-label="Open pull request {number ?? ''}{prState ? ` (${prState.toLowerCase()})` : ''}"
+				title={prState ? `Open pull request (${prState.toLowerCase()})` : 'Open pull request'}
 			>
-				<GitPullRequestIcon />
+				<PullRequestIcon state={coding.prState} />
 				<span class="sm:hidden">{number ?? 'PR'}</span>
 				<span class="hidden sm:inline">{number ? `PR ${number}` : 'Pull request'}</span>
+				{#if prState}
+					<span class="hidden text-muted-foreground sm:inline">· {prState}</span>
+				{/if}
 			</Button>
 		{:else if canCreatePr && agentFree}
 			<!-- Offered only once the agent is free; a disabled button mid-run is just noise.

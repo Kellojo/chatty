@@ -42,7 +42,9 @@
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { CodingTaskStatus } from '$lib/coding-environments.js';
+	import { CODING_PR_STATE_STYLE } from '$lib/coding-status.js';
 	import CodingRunTimer from './CodingRunTimer.svelte';
+	import PullRequestIcon from './PullRequestIcon.svelte';
 
 	let {
 		user,
@@ -378,6 +380,11 @@
 		return c.title || (c.coding ? 'New task' : 'New chat');
 	}
 
+	/** Second line of a chat row: the model it talks to, without the vendor prefix. */
+	function chatSource(c: Conversation): string {
+		return c.modelId?.split('/').pop() || 'Chat';
+	}
+
 	function settledTitle(c: Conversation): string {
 		const title = displayTitle(c);
 		if (c.settledReason !== 'auto') return title;
@@ -494,7 +501,12 @@
 		!settled && (state === 'needs-you' || state === 'failed' || state === 'unread')}
 	{@const codingStatus = c.coding ? CODING_STATUS[c.coding.status] : undefined}
 	{@const stateLabel = ROW_STATE_LABEL[state]}
-	{@const chatStartedAt = serverActiveChats.get(c.id)}
+	{@const runStartedAt =
+		state !== 'working'
+			? null
+			: c.coding
+				? c.coding.runStartedAt
+				: (serverActiveChats.get(c.id) ?? null)}
 	<div
 		class="group mb-0.5 flex w-full items-start rounded-md text-sm {c.id === currentId
 			? 'bg-accent text-accent-foreground'
@@ -502,7 +514,7 @@
 	>
 		<a
 			href={resolve(`/chat/${c.id}`)}
-			class="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+			class="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
 			title={rowTitle(c, state)}
 			onclick={handleNavigate}
 		>
@@ -516,38 +528,69 @@
 				/>
 				<span class="sr-only">Chat:</span>
 			{/if}
+			<!-- Chats and coding tasks share one layout: title + state mark, then where
+			     it runs (project or model), its timer or status, and the PR. -->
 			<span class="flex min-w-0 flex-1 flex-col">
-				<span
-					class="truncate {attention
-						? 'font-semibold'
-						: (state === 'idle' || state === 'working') && !settled && c.id !== currentId
-							? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground'
-							: ''}">{displayTitle(c)}</span
-				>
-				{#if c.coding}
-					<span class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-						<span class="sr-only">,</span>
-						<span class="truncate">{c.coding.projectTitle}</span>
-						{#if state === 'working' && c.coding.runStartedAt}
-							<span class="shrink-0" aria-hidden="true">·</span>
-							<span class="shrink-0" aria-hidden="true">
-								<CodingRunTimer startedAt={c.coding.runStartedAt} dot={false} />
-							</span>
-						{/if}
-						{#if codingStatus}
-							<span class="shrink-0" aria-hidden="true">·</span>
-							<span class="shrink-0 {codingStatus.tone}">{codingStatus.label}</span>
-						{/if}
-					</span>
-				{:else if state === 'working' && chatStartedAt}
-					<span class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-						<span class="truncate" aria-hidden="true">Working</span>
+				<span class="flex min-w-0 items-center gap-2 leading-5">
+					<span
+						class="min-w-0 flex-1 truncate {attention
+							? 'font-semibold'
+							: (state === 'idle' || state === 'working') && !settled && c.id !== currentId
+								? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground'
+								: ''}">{displayTitle(c)}</span
+					>
+					{#if state === 'working' || attention}
+						<!-- Gives way to the row actions on hover. -->
+						<span
+							class="size-3 shrink-0 items-center justify-center group-focus-within:hidden group-hover:hidden {menuOpenId ===
+							c.id
+								? 'hidden'
+								: 'flex'}"
+							aria-hidden="true"
+						>
+							{#if state === 'working'}
+								<LoaderCircleIcon
+									class="size-3 animate-spin text-info motion-reduce:animate-none"
+								/>
+							{:else}
+								<span
+									class="size-2 rounded-full {state === 'needs-you'
+										? 'bg-amber-700 dark:bg-amber-400'
+										: state === 'failed'
+											? 'bg-destructive'
+											: 'bg-success'}"
+								></span>
+							{/if}
+						</span>
+					{/if}
+				</span>
+				<span class="flex min-w-0 items-center gap-1 text-xs leading-4 text-muted-foreground">
+					<span class="sr-only">,</span>
+					<span class="truncate">{c.coding ? c.coding.projectTitle : chatSource(c)}</span>
+					{#if runStartedAt}
 						<span class="shrink-0" aria-hidden="true">·</span>
 						<span class="shrink-0" aria-hidden="true">
-							<CodingRunTimer startedAt={chatStartedAt} dot={false} />
+							<CodingRunTimer startedAt={runStartedAt} dot={false} />
 						</span>
-					</span>
-				{/if}
+					{:else if state === 'working' && !c.coding}
+						<span class="shrink-0" aria-hidden="true">·</span>
+						<span class="shrink-0" aria-hidden="true">Working</span>
+					{/if}
+					{#if codingStatus}
+						<span class="shrink-0" aria-hidden="true">·</span>
+						<span class="shrink-0 {codingStatus.tone}">{codingStatus.label}</span>
+					{/if}
+					{#if c.coding?.pullRequest}
+						{@const prState = c.coding.pullRequest.state}
+						{@const prLabel = prState
+							? `Pull request ${CODING_PR_STATE_STYLE[prState].label.toLowerCase()}`
+							: 'Has a pull request'}
+						<span class="ml-auto inline-flex shrink-0 items-center pl-2" title={prLabel}>
+							<PullRequestIcon state={prState} class="size-3" />
+							<span class="sr-only">, {prLabel}</span>
+						</span>
+					{/if}
+				</span>
 			</span>
 			{#if stateLabel && stateLabel !== codingStatus?.label}
 				<span class="sr-only">, {stateLabel}</span>
@@ -555,30 +598,9 @@
 		</a>
 		{#if searchResults && settled}
 			<span
-				class="mt-2.5 mr-1 shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground group-hover:hidden"
+				class="mt-2 mr-1 shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground group-hover:hidden"
 				>Settled</span
 			>
-		{/if}
-		{#if state === 'working' || attention}
-			<span
-				class="mt-2 mr-1.5 h-5 shrink-0 items-center gap-1 text-muted-foreground group-focus-within:hidden group-hover:hidden {menuOpenId ===
-				c.id
-					? 'hidden'
-					: 'flex'}"
-				aria-hidden="true"
-			>
-				{#if state === 'working'}
-					<LoaderCircleIcon class="size-3 animate-spin text-info motion-reduce:animate-none" />
-				{:else}
-					<span
-						class="size-2 rounded-full {state === 'needs-you'
-							? 'bg-amber-700 dark:bg-amber-400'
-							: state === 'failed'
-								? 'bg-destructive'
-								: 'bg-success'}"
-					></span>
-				{/if}
-			</span>
 		{/if}
 		<span
 			class="mt-1.5 shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex {menuOpenId ===

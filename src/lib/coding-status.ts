@@ -1,4 +1,4 @@
-import type { CodingTaskStatus } from '$lib/coding-environments.js';
+import type { CodingPullRequestState, CodingTaskStatus } from '$lib/coding-environments.js';
 
 /**
  * How a coding task's status is shown: one quiet style for every state, a dot
@@ -23,3 +23,14 @@ export const CODING_STATUS_STYLE: Record<
 export function isCodingTaskStatus(value: unknown): value is CodingTaskStatus {
 	return typeof value === 'string' && Object.hasOwn(CODING_STATUS_STYLE, value);
 }
+
+/** How a pull request's state is shown: GitHub's familiar colours, on the icon only. */
+export const CODING_PR_STATE_STYLE: Record<
+	CodingPullRequestState,
+	{ label: string; tone: string }
+> = {
+	open: { label: 'Open', tone: 'text-emerald-600 dark:text-emerald-400' },
+	draft: { label: 'Draft', tone: 'text-muted-foreground' },
+	merged: { label: 'Merged', tone: 'text-violet-600 dark:text-violet-400' },
+	closed: { label: 'Closed', tone: 'text-destructive' }
+};

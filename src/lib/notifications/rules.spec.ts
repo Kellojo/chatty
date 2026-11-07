@@ -37,7 +37,7 @@ function conv(id: string, overrides: Partial<Conversation> = {}): Conversation {
 
 function coding(id: string, status: CodingTaskStatus, overrides: Partial<Conversation> = {}) {
 	return conv(id, {
-		coding: { projectTitle: 'repo', status, runStartedAt: null, diff: null },
+		coding: { projectTitle: 'repo', status, runStartedAt: null, diff: null, pullRequest: null },
 		...overrides
 	});
 }

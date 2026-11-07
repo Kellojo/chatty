@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { CodingConversationSummary, CodingTaskStatus } from '$lib/coding-environments.js';
+import {
+	isCodingPullRequestState,
+	type CodingConversationSummary,
+	type CodingTaskStatus
+} from '$lib/coding-environments.js';
 import type { Db } from '../index.js';
 
 export interface ConversationRow {
@@ -29,6 +33,8 @@ export interface ConversationRow {
 	coding_run_started_at?: number | null;
 	coding_diff_insertions?: number | null;
 	coding_diff_deletions?: number | null;
+	coding_pr_url?: string | null;
+	coding_pr_state?: string | null;
 }
 
 export interface Conversation {
@@ -82,7 +88,12 @@ export function toPublic(row: ConversationRow): Conversation {
 					diff:
 						row.coding_diff_insertions == null || row.coding_diff_deletions == null
 							? null
-							: { insertions: row.coding_diff_insertions, deletions: row.coding_diff_deletions }
+							: { insertions: row.coding_diff_insertions, deletions: row.coding_diff_deletions },
+					pullRequest: row.coding_pr_url
+						? {
+								state: isCodingPullRequestState(row.coding_pr_state) ? row.coding_pr_state : null
+							}
+						: null
 				}
 			: null,
 		createdAt: row.created_at,
@@ -95,7 +106,7 @@ export const CONVERSATIONS_PAGE_SIZE = 50;
 /** Conversation columns plus the coding-task summary the sidebar shows. */
 const CODING_SUMMARY_COLUMNS = `cc.project_title AS coding_project_title, cc.status AS coding_status,
 	cc.run_started_at AS coding_run_started_at, cc.diff_insertions AS coding_diff_insertions,
-	cc.diff_deletions AS coding_diff_deletions`;
+	cc.diff_deletions AS coding_diff_deletions, cc.pr_url AS coding_pr_url, cc.pr_state AS coding_pr_state`;
 
 const SIDEBAR_SELECT = `SELECT c.*, ${CODING_SUMMARY_COLUMNS}
 	FROM conversations c

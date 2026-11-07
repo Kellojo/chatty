@@ -10,6 +10,7 @@
 import type {
 	CodingPendingOption,
 	CodingPendingRequest,
+	CodingPullRequestState,
 	CodingTaskStatus
 } from '$lib/coding-environments.js';
 
@@ -590,6 +591,7 @@ export interface TaskSummary {
 	status: CodingTaskStatus;
 	branch: string | null;
 	prUrl: string | null;
+	prState: CodingPullRequestState | null;
 	title: string | null;
 	pendingRequest: CodingPendingRequest | null;
 	/** Start of the run in progress (ms), null when none is active. */
@@ -670,13 +672,47 @@ function pendingRequest(state: ThreadState): CodingPendingRequest | null {
 	return null;
 }
 
+/** A PR record's state: on the record itself or on T3's cached `snapshot` of it. */
+function pullRequestState(record: Rec): CodingPullRequestState | null {
+	const raw = record.snapshot;
+	let snapshot = obj(raw);
+	if (!snapshot && typeof raw === 'string') {
+		try {
+			snapshot = obj(JSON.parse(raw));
+		} catch {
+			snapshot = null;
+		}
+	}
+	const source = snapshot ?? record;
+	const state = str(source.state)?.toLowerCase();
+	if (state === 'merged' || source.mergedAt) return 'merged';
+	if (state === 'closed') return 'closed';
+	if (state === 'open') return source.isDraft === true ? 'draft' : 'open';
+	return null;
+}
+
+/**
+ * The thread's pull request: the one linked to it, else one it opened, else
+ * one T3 found for its branch (e.g. opened outside the agent), with the last
+ * state T3 observed for it.
+ */
+function pullRequestOf(thread: Rec): { url: string | null; state: CodingPullRequestState | null } {
+	const records = [
+		obj(thread.linkedPullRequest),
+		...(Array.isArray(thread.pullRequests) ? thread.pullRequests.map(obj) : []),
+		obj(thread.branchPullRequest)
+	].filter((r): r is Rec => r !== null && webUrl(str(r.url)) !== null);
+	const url = records[0] ? str(records[0].url) : null;
+	if (!url) return { url: null, state: null };
+	// The linked record may be a bare reference while another carries the state.
+	const same = records.filter((r) => str(r.url)?.toLowerCase() === url.toLowerCase());
+	const state = same.map(pullRequestState).find((s) => s !== null) ?? null;
+	return { url, state };
+}
+
 export function summarizeTask(state: ThreadState): TaskSummary {
 	const thread = state.thread ?? {};
-	const linked = obj(thread.linkedPullRequest);
-	const prs = Array.isArray(thread.pullRequests) ? thread.pullRequests.map(obj) : [];
-	const prUrl = webUrl(
-		str(linked?.url) ?? prs.map((p) => str(p?.url)).find((u) => u !== null) ?? null
-	);
+	const { url: prUrl, state: prState } = pullRequestOf(thread);
 	const pending = pendingRequest(state);
 	const runs = sortedRuns(state);
 	const last = runs.at(-1);
@@ -693,6 +729,7 @@ export function summarizeTask(state: ThreadState): TaskSummary {
 		status,
 		branch: str(thread.branch),
 		prUrl,
+		prState,
 		title: str(thread.title),
 		pendingRequest: pending,
 		runStartedAt: (() => {

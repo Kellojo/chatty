@@ -81,6 +81,42 @@ describe('applyStreamItem', () => {
 		});
 	});
 
+	it('reports the pull request state T3 last observed', () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({ thread: { id: 't1' }, runs: [run({ status: 'completed' })] })
+		);
+		expect(summarizeTask(state)).toMatchObject({ prUrl: null, prState: null });
+
+		// A PR T3 found for the branch counts as already created.
+		applyStreamItem(
+			state,
+			event(11, 'thread.updated', {
+				branchPullRequest: { url: 'https://github.com/o/r/pull/7', state: 'open', isDraft: true }
+			})
+		);
+		expect(summarizeTask(state)).toMatchObject({
+			prUrl: 'https://github.com/o/r/pull/7',
+			prState: 'draft'
+		});
+
+		// A bare linked reference takes its state from T3's cached snapshot.
+		applyStreamItem(
+			state,
+			event(12, 'thread.pull-request-link-updated', {
+				linkedPullRequest: { url: 'https://github.com/o/r/pull/7', number: 7 },
+				pullRequests: [
+					{
+						url: 'https://github.com/o/r/pull/7',
+						snapshot: JSON.stringify({ state: 'closed', mergedAt: '2026-11-07T00:00:00Z' })
+					}
+				]
+			})
+		);
+		expect(summarizeTask(state).prState).toBe('merged');
+	});
+
 	it('ignores unknown event types but still advances the sequence', () => {
 		const state = emptyThreadState();
 		expect(applyStreamItem(state, event(5, 'something.new', {}))).toBe(false);

@@ -26,6 +26,7 @@ function codingSummary(conversationId: string) {
 		branch: c.branch,
 		baseBranch: c.baseBranch,
 		pullRequest: c.prUrl,
+		pullRequestState: c.prState,
 		linesAdded: c.diff?.insertions ?? null,
 		linesRemoved: c.diff?.deletions ?? null,
 		runStartedAt: c.status === 'running' ? c.runStartedAt : null,
@@ -43,7 +44,7 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 		'search_chats',
 		{
 			description:
-				"Search the current user's chat conversations by title and message content, and/or list chats updated since a timestamp. Coding threads (T3 sessions) include a `coding` field: project, status (starting, running, awaiting_input, idle, failed, interrupted), provider, model, branch, pull request, lines added/removed and any pending question or error. " +
+				"Search the current user's chat conversations by title and message content, and/or list chats updated since a timestamp. Coding threads (T3 sessions) include a `coding` field: project, status (starting, running, awaiting_input, idle, failed, interrupted), provider, model, branch, pull request (and its state: open, draft, merged or closed), lines added/removed and any pending question or error. " +
 				'To show the user an overview of the results, reply with a ```chats fenced code block containing {"title":"optional","chats":[...]}, ' +
 				'where chats are result objects copied verbatim, each optionally with a one-line "summary" (no extra text inside the fence).',
 			inputSchema: {

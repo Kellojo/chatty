@@ -4,9 +4,17 @@
 	import MessageSquareIcon from '@lucide/svelte/icons/message-square';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
-	import GitPullRequestIcon from '@lucide/svelte/icons/git-pull-request';
-	import type { CodingTaskStatus } from '$lib/coding-environments.js';
-	import { CODING_STATUS_STYLE, isCodingTaskStatus } from '$lib/coding-status.js';
+	import {
+		isCodingPullRequestState,
+		type CodingPullRequestState,
+		type CodingTaskStatus
+	} from '$lib/coding-environments.js';
+	import {
+		CODING_PR_STATE_STYLE,
+		CODING_STATUS_STYLE,
+		isCodingTaskStatus
+	} from '$lib/coding-status.js';
+	import PullRequestIcon from '$lib/components/app/PullRequestIcon.svelte';
 	import { pullRequestNumber } from '$lib/coding-task-details.js';
 	import DiffStat from '$lib/components/app/DiffStat.svelte';
 	import WidgetCard from './widget-card.svelte';
@@ -21,6 +29,7 @@
 		model: string | null;
 		branch: string | null;
 		pullRequest: string | null;
+		pullRequestState: CodingPullRequestState | null;
 		linesAdded: number;
 		linesRemoved: number;
 		waitingFor: string | null;
@@ -60,6 +69,7 @@
 			model: str(c.model),
 			branch: str(c.branch) ?? str(c.baseBranch),
 			pullRequest: pr && /^https?:\/\//.test(pr) ? pr : null,
+			pullRequestState: isCodingPullRequestState(c.pullRequestState) ? c.pullRequestState : null,
 			linesAdded: num(c.linesAdded) ?? 0,
 			linesRemoved: num(c.linesRemoved) ?? 0,
 			waitingFor: str(rec(c.waitingFor)?.title),
@@ -190,10 +200,15 @@
 										target="_blank"
 										rel="noopener noreferrer"
 										class="relative z-10 inline-flex items-center gap-1 rounded-sm underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-										title="Open pull request"
+										title={coding.pullRequestState
+											? `Open pull request (${CODING_PR_STATE_STYLE[coding.pullRequestState].label.toLowerCase()})`
+											: 'Open pull request'}
 									>
-										<GitPullRequestIcon class="size-3" aria-hidden="true" />
+										<PullRequestIcon state={coding.pullRequestState} class="size-3" />
 										{number ? `PR ${number}` : 'PR'}
+										{#if coding.pullRequestState}
+											· {CODING_PR_STATE_STYLE[coding.pullRequestState].label}
+										{/if}
 									</a>
 									<!-- eslint-enable svelte/no-navigation-without-resolve -->
 								{/if}
