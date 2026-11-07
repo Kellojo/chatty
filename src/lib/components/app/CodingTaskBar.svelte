@@ -2,12 +2,14 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
+	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import { agentIsFree, hasPullRequestWork, pullRequestNumber } from '$lib/coding-task-details.js';
 	import type { CodingConversation } from '$lib/coding-environments.js';
 	import { CODING_PR_STATE_STYLE, CODING_STATUS_STYLE } from '$lib/coding-status.js';
 	import PullRequestIcon from './PullRequestIcon.svelte';
 	import CodingRunTimer from './CodingRunTimer.svelte';
 	import DiffStat from './DiffStat.svelte';
+	import CodingBrowserPreview from './CodingBrowserPreview.svelte';
 
 	let {
 		coding,
@@ -30,6 +32,9 @@
 		coding.status === 'running' || coding.status === 'starting' ? coding.runStartedAt : null
 	);
 	const branch = $derived(coding.branch ?? coding.baseBranch);
+	/** Browser tabs live on the T3 thread, so there is nothing to show before it exists. */
+	const hasThread = $derived(!!coding.threadId && !!coding.environmentId);
+	let previewOpen = $state(false);
 </script>
 
 <!-- Only what changes how you act: where the work lives, how big it is, its state and the PR.
@@ -69,6 +74,18 @@
 		</div>
 	</div>
 	<div class="ml-auto flex shrink-0 items-center gap-2">
+		{#if hasThread}
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				class="text-muted-foreground hover:text-foreground"
+				title="Browser preview"
+				aria-label="Open the agent's browser preview"
+				onclick={() => (previewOpen = true)}
+			>
+				<GlobeIcon />
+			</Button>
+		{/if}
 		{#if coding.prUrl}
 			{@const number = pullRequestNumber(coding.prUrl)}
 			{@const prState = coding.prState ? CODING_PR_STATE_STYLE[coding.prState].label : null}
@@ -105,3 +122,7 @@
 		{/if}
 	</div>
 </div>
+
+{#if hasThread}
+	<CodingBrowserPreview conversationId={coding.conversationId} bind:open={previewOpen} />
+{/if}

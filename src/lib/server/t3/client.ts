@@ -152,7 +152,10 @@ export const CHATTY_TOKEN_SCOPES = [
 	'source-control:write',
 	// Lets Chatty mint signed URLs for images the agent saved on the T3 machine
 	// (assets.createUrl on a `media-file`, which T3 gates on this scope).
-	'filesystem:read'
+	'filesystem:read',
+	// Lets you click and type in the coding agent's browser preview tabs
+	// (watching them only needs orchestration:read).
+	'preview:operate'
 ] as const;
 
 /**
@@ -186,11 +189,25 @@ export async function exchangePairingToken(baseUrl: string, pairingToken: string
 	return token;
 }
 
-async function issueWebSocketTicket(baseUrl: string, token: string): Promise<string> {
-	const res = await fetchWithTimeout(joinUrl(baseUrl, '/api/auth/websocket-ticket'), {
+/**
+ * Mints a WebSocket ticket. `media` tickets are scoped to T3's media sockets
+ * (the browser preview stream); servers that predate per-use tickets answer
+ * 404 there and get a general ticket, which they accept for every socket.
+ */
+async function issueWebSocketTicket(
+	baseUrl: string,
+	token: string,
+	use?: 'media'
+): Promise<string> {
+	const path = use ? `/api/auth/websocket-ticket/${use}` : '/api/auth/websocket-ticket';
+	const res = await fetchWithTimeout(joinUrl(baseUrl, path), {
 		method: 'POST',
 		headers: { authorization: `Bearer ${token}`, accept: 'application/json' }
 	});
+	if (use && res.status === 404) {
+		await res.body?.cancel().catch(() => {});
+		return issueWebSocketTicket(baseUrl, token);
+	}
 	if (res.status === 401 || res.status === 403) {
 		throw new T3ClientError('Access token was rejected (expired or revoked?)', 'unauthorized');
 	}
@@ -517,16 +534,43 @@ export async function t3HttpGet<T = unknown>(
 
 export async function connectT3(baseUrl: string, token: string): Promise<T3Connection> {
 	const ticket = await issueWebSocketTicket(baseUrl, token);
-	const url = new URL(joinUrl(baseUrl, '/ws'));
+	const ws = await openSocket(baseUrl, '/ws', {
+		orchestrationProtocol: String(ORCHESTRATION_PROTOCOL_VERSION),
+		wsTicket: ticket
+	});
+	return new T3Connection(ws);
+}
+
+/**
+ * Opens one of T3's media sockets (e.g. `/api/preview-stream/ws`), which carry
+ * their own protocol rather than RPC. The caller owns the open socket.
+ */
+export async function openT3MediaSocket(
+	baseUrl: string,
+	token: string,
+	path: string,
+	params: Record<string, string>
+): Promise<WebSocket> {
+	const ticket = await issueWebSocketTicket(baseUrl, token, 'media');
+	return openSocket(baseUrl, path, { ...params, wsTicket: ticket });
+}
+
+async function openSocket(
+	baseUrl: string,
+	path: string,
+	params: Record<string, string>
+): Promise<WebSocket> {
+	const url = new URL(joinUrl(baseUrl, path));
 	url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-	url.searchParams.set('orchestrationProtocol', String(ORCHESTRATION_PROTOCOL_VERSION));
-	url.searchParams.set('wsTicket', ticket);
+	for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
 
 	// Same DNS guard as the HTTP calls (undici's WebSocket honours `dispatcher`);
 	// IP-literal hosts were already refused by the ticket request above. The DOM
 	// typings only know the `protocols` form of the second argument.
 	const init = { dispatcher: linkLocalGuardedAgent } as unknown as string[];
 	const ws = new WebSocket(url, init);
+	// Text frames (RPC) are unaffected; binary ones (preview frames) arrive as bytes.
+	ws.binaryType = 'arraybuffer';
 	await new Promise<void>((resolve, reject) => {
 		const timer = setTimeout(() => {
 			ws.close();
@@ -549,5 +593,5 @@ export async function connectT3(baseUrl: string, token: string): Promise<T3Conne
 			{ once: true }
 		);
 	});
-	return new T3Connection(ws);
+	return ws;
 }
