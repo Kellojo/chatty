@@ -23,14 +23,29 @@ beforeEach(() => {
 
 describe('models repo', () => {
 	it('upsertFetchedModels inserts only missing models', () => {
-		expect(upsertFetchedModels(db, providerId, [{ id: 'a' }, { id: 'b' }])).toEqual({
+		expect(upsertFetchedModels(db, providerId, [{ id: 'a' }, { id: 'b' }])).toMatchObject({
 			added: 2,
 			total: 2
 		});
-		expect(upsertFetchedModels(db, providerId, [{ id: 'b' }, { id: 'c' }])).toEqual({
+		expect(upsertFetchedModels(db, providerId, [{ id: 'b' }, { id: 'c' }])).toMatchObject({
 			added: 1,
 			total: 2
 		});
+	});
+
+	it('upsertFetchedModels reports stored models the provider no longer lists without deleting them', () => {
+		upsertFetchedModels(db, providerId, [{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+		const otherProvider = createProvider(db, { name: 'Q', type: 'anthropic' }).id;
+		upsertFetchedModels(db, otherProvider, [{ id: 'z' }]);
+
+		const result = upsertFetchedModels(db, providerId, [{ id: 'b' }]);
+		expect(result.stale.map((m) => m.modelId)).toEqual(['a', 'c']);
+		expect(findModel(db, providerId, 'a')).toBeDefined();
+		expect(findModel(db, providerId, 'c')).toBeDefined();
+
+		expect(
+			upsertFetchedModels(db, providerId, [{ id: 'a' }, { id: 'b' }, { id: 'c' }]).stale
+		).toEqual([]);
 	});
 
 	it('upsertFetchedModels fully syncs provider pricing, clearing it when absent', () => {

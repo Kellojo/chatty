@@ -206,8 +206,9 @@ export function upsertFetchedModels(
 	db: Db,
 	providerId: string,
 	fetched: FetchedModel[]
-): { added: number; total: number } {
+): { added: number; total: number; stale: ChatModel[] } {
 	let added = 0;
+	let stale: ChatModel[] = [];
 	db.transaction(() => {
 		for (const model of fetched) {
 			const existing = findModel(db, providerId, model.id);
@@ -238,6 +239,12 @@ export function upsertFetchedModels(
 				});
 			}
 		}
+		// Models we have stored that the provider no longer lists. They're reported
+		// back (not deleted) so the user can decide whether to remove them.
+		const fetchedIds = new Set(fetched.map((m) => m.id));
+		stale = listModels(db, providerId)
+			.filter((row) => !fetchedIds.has(row.model_id))
+			.map(toPublic);
 	})();
-	return { added, total: fetched.length };
+	return { added, total: fetched.length, stale };
 }

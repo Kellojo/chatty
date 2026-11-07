@@ -24,6 +24,7 @@
 	let { data }: { data: PageData } = $props();
 
 	type ProviderType = 'anthropic' | 'openai-compatible';
+	type StaleModel = { id: string; modelId: string; displayName: string };
 
 	let addOpen = $state(false);
 	let addName = $state('');
@@ -41,6 +42,12 @@
 
 	let deleteId = $state<string | null>(null);
 	let deleteBusy = $state(false);
+
+	// Models a sync found stored locally but no longer offered by the provider.
+	let staleProviderName = $state('');
+	let staleModels = $state<StaleModel[]>([]);
+	let staleSelected = $state<string[]>([]);
+	let staleBusy = $state(false);
 
 	const typeLabels: Record<ProviderType, string> = {
 		anthropic: 'Anthropic',
@@ -156,9 +163,16 @@
 	async function fetchModels(id: string, name: string) {
 		const promise = api(`/api/providers/${id}/fetch-models`, 'POST')
 			.then(async (res) => {
-				const result = (await res.json()) as { added: number; total: number };
+				const result = (await res.json()) as { added: number; total: number; stale: StaleModel[] };
 				await invalidateAll();
-				return `${result.total} models found, ${result.added} new`;
+				if (result.stale.length > 0) {
+					staleProviderName = name;
+					staleModels = result.stale;
+					staleSelected = result.stale.map((m) => m.id);
+				}
+				const parts = [`${result.total} models found`, `${result.added} new`];
+				if (result.stale.length > 0) parts.push(`${result.stale.length} no longer available`);
+				return parts.join(', ');
 			})
 			.catch((e: unknown) => {
 				throw e instanceof Error ? e : new Error('Failed to fetch models');
@@ -168,6 +182,27 @@
 			success: (msg) => msg,
 			error: (e: unknown) => (e instanceof Error ? e.message : 'Failed to fetch models')
 		});
+	}
+
+	function toggleStale(id: string, checked: boolean) {
+		staleSelected = checked
+			? [...staleSelected, id]
+			: staleSelected.filter((selected) => selected !== id);
+	}
+
+	async function removeStale() {
+		staleBusy = true;
+		const ids = [...staleSelected];
+		const results = await Promise.allSettled(
+			ids.map((id) => api(`/api/models/${encodeURIComponent(id)}`, 'DELETE'))
+		);
+		const failed = results.filter((r) => r.status === 'rejected').length;
+		const removed = ids.length - failed;
+		if (removed > 0) toast.success(`Removed ${removed} model${removed === 1 ? '' : 's'}`);
+		if (failed > 0) toast.error(`Failed to remove ${failed} model${failed === 1 ? '' : 's'}`);
+		staleBusy = false;
+		staleModels = [];
+		await invalidateAll();
 	}
 
 	async function confirmDelete() {
@@ -372,6 +407,61 @@
 			<Button variant="outline" onclick={() => (deleteId = null)}>Cancel</Button>
 			<Button variant="destructive" disabled={deleteBusy} onclick={confirmDelete}>
 				{deleteBusy ? 'Deleting…' : 'Delete'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root
+	open={staleModels.length > 0}
+	onOpenChange={(open) => !open && !staleBusy && (staleModels = [])}
+>
+	<Dialog.Content>
+		<Dialog.Header>
+			<Dialog.Title>Models no longer available</Dialog.Title>
+			<Dialog.Description>
+				{staleProviderName} no longer lists {staleModels.length === 1
+					? 'this model'
+					: `these ${staleModels.length} models`}. Select the ones to remove. Conversations keep
+				their history.
+			</Dialog.Description>
+		</Dialog.Header>
+		<ul
+			class="flex max-h-72 flex-col divide-y divide-border/60 overflow-y-auto rounded-md border"
+			aria-label="Unavailable models"
+		>
+			{#each staleModels as model (model.id)}
+				<li>
+					<label class="flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-muted/50">
+						<input
+							type="checkbox"
+							class="mt-0.5 size-4 shrink-0 accent-primary"
+							checked={staleSelected.includes(model.id)}
+							onchange={(e) => toggleStale(model.id, e.currentTarget.checked)}
+						/>
+						<span class="flex min-w-0 flex-col">
+							<span class="truncate text-sm">{model.displayName}</span>
+							{#if model.displayName !== model.modelId}
+								<span class="truncate font-mono text-xs text-muted-foreground">{model.modelId}</span
+								>
+							{/if}
+						</span>
+					</label>
+				</li>
+			{/each}
+		</ul>
+		<Dialog.Footer>
+			<Button variant="outline" disabled={staleBusy} onclick={() => (staleModels = [])}
+				>Keep all</Button
+			>
+			<Button
+				variant="destructive"
+				disabled={staleBusy || staleSelected.length === 0}
+				onclick={removeStale}
+			>
+				{staleBusy
+					? 'Removing…'
+					: `Remove ${staleSelected.length} model${staleSelected.length === 1 ? '' : 's'}`}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
