@@ -8,7 +8,8 @@
 		value,
 		onselect,
 		disabled = false,
-		placeholder = 'Select model'
+		placeholder = 'Select model',
+		class: className = 'w-40 sm:w-64'
 	}: {
 		groups: ModelsByProvider[];
 		mappings?: ModelMapping[];
@@ -16,7 +17,8 @@
 		onselect: (value: string) => void;
 		disabled?: boolean;
 		placeholder?: string;
+		class?: string;
 	} = $props();
 </script>
 
-<ModelSelect {groups} {mappings} {value} {onselect} {disabled} {placeholder} class="w-40 sm:w-64" />
+<ModelSelect {groups} {mappings} {value} {onselect} {disabled} {placeholder} class={className} />

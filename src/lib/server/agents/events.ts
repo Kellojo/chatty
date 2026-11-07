@@ -5,7 +5,7 @@ import {
 	type ServerEvent
 } from '$lib/types.js';
 import { getDb, type Db } from '../db/index.js';
-import { listRunningAgentIds } from '../db/repo/agent-runs.js';
+import { isAgentRunConversation, listRunningAgentIds } from '../db/repo/agent-runs.js';
 import {
 	getAgent,
 	incrementAgentEventCounter,
@@ -15,6 +15,7 @@ import {
 } from '../db/repo/agents.js';
 import { subscribeAllServerEvents } from '../events/bus.js';
 import { createLogger } from '../logger.js';
+import { settleCodingAgentRun } from './coding-runs.js';
 
 const log = createLogger('agents');
 
@@ -61,6 +62,17 @@ function parseTriggerConfig(agent: AgentRow): AgentTriggerConfig {
 
 function describeOccurrence(o: Occurrence): string {
 	return `"${o.event}" (occurrence #${o.count}). Payload: ${o.payloadJson}`;
+}
+
+/**
+ * Coding agents ignore events about conversations that agent runs created
+ * (their own tasks included): a coding agent on `coding.thread.finished` or
+ * `chat.created` would otherwise trigger itself, or another coding agent, in
+ * an endless, costly loop.
+ */
+function fromAgentRun(db: Db, payload: Record<string, unknown>): boolean {
+	const conversationId = payload.conversationId;
+	return typeof conversationId === 'string' && isAgentRunConversation(db, conversationId);
 }
 
 export function buildEventInstructions(
@@ -163,6 +175,7 @@ export async function emitAgentEvent(
 		for (const agent of listEventAgents(db, event)) {
 			try {
 				if (!enabledFor(db, agent, userId)) continue;
+				if (agent.coding_target && fromAgentRun(db, payload)) continue;
 				const count = incrementAgentEventCounter(db, agent.id, userId, event);
 				const triggerConfig = parseTriggerConfig(agent);
 				const rawEvery = triggerConfig.every;
@@ -208,6 +221,8 @@ export function handleServerEvent(
 		if (pending.has(event.agentId)) drainAgent(event.agentId, db, runFn);
 		return;
 	}
+	// Settle a coding agent's run before other agents react to its thread ending.
+	if (event.type === 'coding.thread.finished') settleCodingAgentRun(event, db);
 	if (!(AGENT_EVENT_NAMES as readonly string[]).includes(event.type)) return;
 	const { type, ...payload } = event;
 	void emitAgentEvent(type as AgentEventName, userId, payload, db, runFn);

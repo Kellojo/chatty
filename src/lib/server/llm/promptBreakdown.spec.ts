@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jsonSchema } from 'ai';
+import { jsonSchema, type Tool, type UIMessage } from 'ai';
 import { z } from 'zod';
 import { estimateMessagesChars, estimateToolChars } from './promptBreakdown.js';
 
@@ -10,10 +10,11 @@ describe('estimateToolChars', () => {
 	});
 
 	it('counts name, description and plain JSON-schema input', () => {
+		// Not a valid `Tool` type-wise, but providers may hand over raw JSON Schema at runtime.
 		const tool = {
 			description: 'demo',
 			inputSchema: { type: 'object', properties: { q: { type: 'string' } } }
-		};
+		} as unknown as Tool;
 		const chars = estimateToolChars({ my_tool: tool });
 		// name (7) + description (4) + schema chars (>0)
 		expect(chars).toBeGreaterThan('my_tool'.length + 'demo'.length);
@@ -52,7 +53,7 @@ describe('estimateMessagesChars', () => {
 	});
 
 	it('counts tool call input and result output', () => {
-		const messages = [
+		const messages: UIMessage[] = [
 			{
 				id: 'm',
 				role: 'assistant',
@@ -60,19 +61,20 @@ describe('estimateMessagesChars', () => {
 					{
 						type: 'tool-weather',
 						toolCallId: 't',
-						toolName: 'weather',
+						state: 'input-available',
 						input: { city: 'Lisbon' }
 					}
 				]
 			},
 			{
 				id: 'm2',
-				role: 'tool',
+				role: 'assistant',
 				parts: [
 					{
 						type: 'tool-weather',
 						toolCallId: 't',
-						toolName: 'weather',
+						state: 'output-available',
+						input: undefined,
 						output: { text: 'sunny' }
 					}
 				]
@@ -83,17 +85,16 @@ describe('estimateMessagesChars', () => {
 
 	it('uses a fixed budget for file parts, not their raw data', () => {
 		const big = 'x'.repeat(100_000);
-		const messages = [
+		const messages: UIMessage[] = [
 			{
 				id: 'm',
 				role: 'user',
 				parts: [
 					{
 						type: 'file',
-						url: 'data:image/png;base64,AAAA',
+						url: `data:image/png;base64,${big}`,
 						mediaType: 'image/png',
-						filename: 'a.png',
-						data: big
+						filename: 'a.png'
 					}
 				]
 			}

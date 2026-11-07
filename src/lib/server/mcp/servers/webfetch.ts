@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { readBodyLimited } from '../../net/readBody.js';
 import { safeFetch } from '../../net/safeFetch.js';
 import { err, text } from './shared.js';
 
@@ -38,13 +39,20 @@ export function createWebfetchServer(): McpServer {
 				return err(`fetch failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
 			if (!res.ok) return err(`fetch failed with status ${res.status}`);
-			const body = Buffer.from(await res.arrayBuffer())
-				.subarray(0, MAX_BYTES)
-				.toString('utf-8');
-			if (fmt === 'html') return text(body);
+			let limited;
+			try {
+				limited = await readBodyLimited(res, MAX_BYTES);
+			} catch (e) {
+				return err(`fetch failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+			const body = limited.body.toString('utf-8');
+			const suffix = limited.truncated ? '\n… truncated' : '';
+			if (fmt === 'html') return text(body + suffix);
 			const contentType = res.headers.get('content-type') ?? '';
-			if (/text\/html|application\/xhtml/i.test(contentType)) return text(htmlToText(body));
-			return text(body);
+			if (/text\/html|application\/xhtml/i.test(contentType)) {
+				return text(htmlToText(body) + suffix);
+			}
+			return text(body + suffix);
 		}
 	);
 	return server;

@@ -1,4 +1,5 @@
 import type { UIMessage } from 'ai';
+import type { AgentCodingTarget, CodingConversationSummary } from './coding-environments.js';
 
 export type { UIMessage };
 
@@ -62,6 +63,8 @@ export interface Conversation {
 	agentId: string | null;
 	settledAt: number | null;
 	settledReason: 'manual' | 'auto' | null;
+	/** Set when the conversation is a coding task run on a T3 Code server. */
+	coding: CodingConversationSummary | null;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -135,6 +138,8 @@ export interface Agent {
 	triggerType: AgentTriggerType;
 	triggerConfig: AgentTriggerConfig;
 	maxSteps: number | null;
+	/** Set for coding agents: each run is a T3 coding task with this target. */
+	codingTarget: AgentCodingTarget | null;
 	enabled: boolean;
 	lastRunAt: number | null;
 	nextRunAt: number | null;
@@ -262,11 +267,24 @@ export interface ChatMessage {
 	createdAt: number;
 }
 
+/** Client-side message metadata: usage for the info dialog, status for failed or stopped replies. */
+export interface UIMessageMetadata {
+	usage?: MessageUsage;
+	status?: 'partial' | 'failed';
+	error?: string | null;
+}
+
 export function chatMessageToUIMessage(message: ChatMessage): UIMessage {
+	const metadata: UIMessageMetadata = {};
+	if (message.usage) metadata.usage = message.usage;
+	if (message.status !== 'complete') {
+		metadata.status = message.status;
+		metadata.error = message.error;
+	}
 	return {
 		id: message.id,
 		role: message.role,
 		parts: message.parts as UIMessage['parts'],
-		metadata: message.usage ? { usage: message.usage } : undefined
+		metadata: Object.keys(metadata).length > 0 ? metadata : undefined
 	};
 }

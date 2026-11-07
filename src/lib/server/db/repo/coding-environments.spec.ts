@@ -7,6 +7,8 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 const { openDatabase } = await import('../index.js');
 const { decryptSecret } = await import('../../crypto.js');
 const repo = await import('./coding-environments.js');
+const conversations = await import('./conversations.js');
+const coding = await import('./coding-conversations.js');
 
 type Db = ReturnType<typeof openDatabase>;
 let db: Db;
@@ -77,8 +79,8 @@ describe('coding environments repo', () => {
 		expect(repo.listCodingEnvironments(db, 'u2')).toEqual([]);
 		expect(repo.getCodingEnvironment(db, 'u2', row.id)).toBeUndefined();
 		expect(repo.updateCodingEnvironment(db, 'u2', row.id, { name: 'x' })).toBeUndefined();
-		expect(repo.deleteCodingEnvironment(db, 'u2', row.id)).toBe(false);
-		expect(repo.deleteCodingEnvironment(db, 'u1', row.id)).toBe(true);
+		expect(repo.deleteCodingEnvironment(db, 'u2', row.id)).toBeUndefined();
+		expect(repo.deleteCodingEnvironment(db, 'u1', row.id)).toBeDefined();
 	});
 
 	it('resets status when the connection details change', () => {
@@ -169,5 +171,49 @@ describe('coding environments repo', () => {
 		repo.deleteCodingEnvironment(db, 'u1', row.id);
 		expect(repo.listUsageLimits(db, 'u1')).toEqual([]);
 		expect(repo.listUsageDaily(db, 'u1', '2026-01-01')).toEqual([]);
+	});
+
+	it('settles and ends its tasks when the environment is removed', () => {
+		const env = repo.createCodingEnvironment(db, 'u1', {
+			name: 'a',
+			baseUrl: 'http://a',
+			token: 't'
+		});
+		const task = (status: 'running' | 'idle', settled = false) => {
+			const c = conversations.createConversation(db, 'u1', { title: status });
+			coding.createCodingConversation(db, {
+				conversationId: c.id,
+				environmentId: env.id,
+				projectId: 'p',
+				projectTitle: 'P',
+				providerInstanceId: 'codex',
+				model: 'm',
+				runtimeMode: 'full-access',
+				workspaceMode: 'worktree',
+				baseBranch: null
+			});
+			coding.updateCodingConversation(db, c.id, {
+				status,
+				runStartedAt: status === 'running' ? 1 : null
+			});
+			if (settled) conversations.settleConversation(db, 'u1', c.id);
+			return c.id;
+		};
+		const running = task('running');
+		const idle = task('idle');
+		const alreadySettled = task('idle', true);
+
+		const result = repo.deleteCodingEnvironment(db, 'u1', env.id)!;
+		expect(result.endedIds).toEqual([running]);
+		expect(result.settledIds.sort()).toEqual([running, idle].sort());
+		expect(result.taskIds).toHaveLength(3);
+		for (const id of [running, idle, alreadySettled]) {
+			expect(conversations.getConversation(db, 'u1', id)?.settled_at).not.toBeNull();
+			expect(coding.getCodingConversation(db, id)).toMatchObject({
+				status: 'idle',
+				run_started_at: null,
+				environment_id: null
+			});
+		}
 	});
 });

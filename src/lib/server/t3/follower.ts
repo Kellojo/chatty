@@ -6,7 +6,10 @@
 //   `coding_conversations` and is announced with `coding.task.updated`.
 //
 // One follower per conversation, kept alive while the task is active and for a
-// grace period after it goes idle. It reconnects with backoff if the socket drops.
+// grace period after it goes idle. It reconnects with backoff if the socket drops,
+// and gives up after MAX_FAILED_ATTEMPTS attempts in a row that never got the
+// thread (unreachable server, or one that never sends a snapshot) unless a
+// Chatty turn is live; thread sync and the next turn re-create it on demand.
 
 import { randomUUID } from 'node:crypto';
 import type { UIMessageChunk } from 'ai';
@@ -24,40 +27,49 @@ import {
 	updateCodingConversation
 } from '../db/repo/coding-conversations.js';
 import type { CodingEnvironmentRow } from '../db/repo/coding-environments.js';
-import {
-	getConversation,
-	setConversationTitle,
-	touchConversation
-} from '../db/repo/conversations.js';
+import { getConversation, touchConversation } from '../db/repo/conversations.js';
 import { createMessage, getMessage, updateMessage } from '../db/repo/messages.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
-import { connectT3, T3ClientError, type T3Connection, type T3Stream } from './client.js';
+import { connectT3, t3HttpGet, T3ClientError, type T3Connection, type T3Stream } from './client.js';
+import { parseDiffStat } from './diff.js';
 import {
 	activeRun,
 	applyStreamItem,
 	emptyThreadState,
 	isRunActive,
 	isRunFinished,
+	MAX_THREAD_RECORDS,
 	messageText,
 	renderRun,
 	replyMessageId,
 	runFailureText,
 	sortedRuns,
+	streamItemRun,
 	summarizeTask,
 	type RenderedEntry,
 	type ThreadState
 } from './projection.js';
+import { queueThreadStatePush, reconcileThreadState, remoteThreadState } from './thread-state.js';
 
 const log = createLogger('t3-follower');
 
 const RENDER_DEBOUNCE_MS = 120;
 const PERSIST_INTERVAL_MS = 1000;
 const IDLE_STOP_MS = 5 * 60 * 1000;
+const MIN_RECONNECT_MS = 2000;
 const MAX_RECONNECT_MS = 60_000;
+/** Consecutive attempts without a snapshot before the follower gives up (~4 min of backoff). */
+export const MAX_FAILED_ATTEMPTS = 8;
+/** How long a subscription may stay silent before the attempt counts as failed. */
+export const SNAPSHOT_TIMEOUT_MS = 30_000;
+export const GAVE_UP_ERROR =
+	'Lost connection to the coding environment. Send a message to reconnect.';
 const MAX_OUTPUT_CHARS = 16_000;
 /** Only fetch omitted command output for the most recent runs. */
 const OUTPUT_FETCH_RUNS = 3;
+/** Wait for edits to settle before re-reading the change size. */
+const DIFF_DEBOUNCE_MS = 2000;
 
 type Rec = Record<string, unknown>;
 
@@ -85,25 +97,48 @@ export class CodingFollower {
 	private connecting: Promise<T3Connection> | null = null;
 	private stream: T3Stream | null = null;
 	private stopped = false;
-	private reconnectDelay = 2000;
+	private reconnectDelay = MIN_RECONNECT_MS;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
+	/** Subscription attempts in a row that ended without a snapshot. */
+	private failedAttempts = 0;
+	/** Whether the current (or last) subscription attempt received a snapshot. */
+	private attemptGotSnapshot = false;
 	private renderTimer: ReturnType<typeof setTimeout> | null = null;
 	private idleTimer: ReturnType<typeof setTimeout> | null = null;
 	private live: LiveTurn | null = null;
 	private readonly persisted = new Map<string, { json: string; at: number; status: string }>();
 	private readonly commandOutputs = new Map<string, string>();
 	private readonly fetchingOutputs = new Set<string>();
+	/**
+	 * Runs whose parts may have changed since they were last rendered. Rendering
+	 * is synchronous and grows with the run's size, so re-rendering a long
+	 * thread's whole history on every streamed delta stalls the event loop.
+	 */
+	private readonly dirtyRuns = new Set<string>();
+	private allRunsDirty = true;
 	private lastSummaryJson = '';
 	private lastStatus: string | null = null;
+	private lastRemoteStateJson: string | null = null;
+	private diffKey: string | null = null;
+	private diffTimer: ReturnType<typeof setTimeout> | null = null;
+	private diffInFlight = false;
+	private diffWarned = false;
+	/** Project checkout path, for tasks without a worktree; undefined = not looked up yet. */
+	private projectRoot: string | null | undefined = undefined;
 	private hasSnapshot = false;
+	/** Imported thread: its first render is past history and must not bump the chat. */
+	private quietHistory: boolean;
 
 	constructor(
 		readonly conversationId: string,
 		readonly userId: string,
 		private env: CodingEnvironmentRow,
 		private threadId: string | null,
-		private readonly db: Db = getDb()
+		private readonly db: Db = getDb(),
+		opts: { quietHistory?: boolean } = {}
 	) {
+		this.quietHistory = opts.quietHistory === true;
 		const row = getCodingConversation(db, conversationId);
 		this.lastStatus = row?.status ?? null;
 	}
@@ -133,42 +168,95 @@ export class CodingFollower {
 	async follow(): Promise<void> {
 		if (this.stopped || !this.threadId || this.stream) return;
 		this.cancelIdleStop();
+		await this.subscribe();
+	}
+
+	/**
+	 * Opens the thread subscription. Reconnects come through here rather than
+	 * {@link follow}, so they don't hold off the idle stop.
+	 */
+	private async subscribe(): Promise<void> {
+		if (this.stopped || !this.threadId || this.stream) return;
+		this.attemptGotSnapshot = false;
 		try {
 			const conn = await this.connection();
 			if (this.stream || this.stopped) return;
-			this.stream = conn.stream(
+			const stream = conn.stream(
 				'orchestration.subscribeThread',
 				{ threadId: this.threadId },
 				{
 					onValue: (value) => {
 						if (applyStreamItem(this.state, value)) {
-							if ((value as Rec)?.kind === 'snapshot') this.hasSnapshot = true;
-							this.reconnectDelay = 2000;
+							this.markDirty(streamItemRun(value));
+							if ((value as Rec)?.kind === 'snapshot') {
+								this.hasSnapshot = true;
+								this.attemptGotSnapshot = true;
+								this.failedAttempts = 0;
+								this.reconnectDelay = MIN_RECONNECT_MS;
+								this.clearSnapshotTimer();
+							}
 							this.scheduleRender();
 						}
 					},
 					onEnd: (error) => {
-						this.stream = null;
+						if (this.stopped) return;
+						if (this.stream === stream) this.stream = null;
+						this.clearSnapshotTimer();
 						if (error) this.recordError(error);
 						this.scheduleReconnect();
 					}
 				}
 			);
+			this.stream = stream;
+			// A server that accepts the subscription but never sends the thread
+			// would otherwise keep this follower (and its socket) forever.
+			this.clearSnapshotTimer();
+			this.snapshotTimer = setTimeout(() => {
+				this.snapshotTimer = null;
+				if (this.attemptGotSnapshot || this.stream !== stream) return;
+				stream.cancel();
+				this.stream = null;
+				this.recordError(
+					new T3ClientError('The coding environment did not send the task', 'remote')
+				);
+				this.scheduleReconnect();
+			}, SNAPSHOT_TIMEOUT_MS);
+			this.snapshotTimer.unref?.();
 		} catch (e) {
 			this.recordError(e);
 			this.scheduleReconnect();
 		}
 	}
 
+	private clearSnapshotTimer(): void {
+		if (this.snapshotTimer) clearTimeout(this.snapshotTimer);
+		this.snapshotTimer = null;
+	}
+
 	private scheduleReconnect(): void {
 		if (this.stopped || this.reconnectTimer || !this.threadId) return;
+		if (!this.attemptGotSnapshot) this.failedAttempts++;
+		if (this.failedAttempts >= MAX_FAILED_ATTEMPTS && !this.live) {
+			this.giveUp();
+			return;
+		}
 		const delay = this.reconnectDelay;
 		this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_MS);
 		this.reconnectTimer = setTimeout(() => {
 			this.reconnectTimer = null;
-			void this.follow();
+			void this.subscribe();
 		}, delay);
 		this.reconnectTimer.unref?.();
+	}
+
+	/** Stops after repeated failed attempts; see the header comment. */
+	private giveUp(): void {
+		log.warn('Giving up on a coding task after repeated connection failures', {
+			conversationId: this.conversationId,
+			attempts: this.failedAttempts
+		});
+		this.recordError(new T3ClientError(GAVE_UP_ERROR, 'unreachable'));
+		this.stop();
 	}
 
 	private recordError(e: unknown): void {
@@ -192,12 +280,18 @@ export class CodingFollower {
 		this.stopped = true;
 		this.cancelIdleStop();
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+		this.clearSnapshotTimer();
 		if (this.renderTimer) clearTimeout(this.renderTimer);
+		if (this.diffTimer) clearTimeout(this.diffTimer);
 		this.stream?.cancel();
 		this.stream = null;
 		this.conn?.close();
 		this.conn = null;
 		if (followers.get(this.conversationId) === this) followers.delete(this.conversationId);
+	}
+
+	get environmentId(): string {
+		return this.env.id;
 	}
 
 	updateEnvironment(env: CodingEnvironmentRow): void {
@@ -301,13 +395,37 @@ export class CodingFollower {
 		const live = this.live;
 		if (!live || live.runId) return;
 		this.endLive({ interrupted: false });
-		const row = getMessage(this.db, live.messageId);
+		const row = this.ownMessage(live.messageId);
 		if (row && row.parts === '[]') {
-			this.db.prepare('DELETE FROM messages WHERE id = ?').run(live.messageId);
+			this.db
+				.prepare('DELETE FROM messages WHERE id = ? AND conversation_id = ?')
+				.run(live.messageId, this.conversationId);
 		}
 	}
 
+	/**
+	 * Message ids are derived from data the remote T3 server controls (run
+	 * userMessageIds), so a row is only ours to touch if it belongs to this
+	 * conversation — otherwise a hostile or shared T3 server could overwrite
+	 * another conversation's (or user's) messages.
+	 */
+	private ownMessage(id: string): ReturnType<typeof getMessage> {
+		const row = getMessage(this.db, id);
+		return row && row.conversation_id === this.conversationId ? row : undefined;
+	}
+
+	private isForeignMessage(id: string): boolean {
+		const row = getMessage(this.db, id);
+		return !!row && row.conversation_id !== this.conversationId;
+	}
+
 	private openLive(messageId: string, userMessageId: string | null, runId: string | null): void {
+		if (this.isForeignMessage(messageId)) {
+			log.warn('t3 reply id collides with another conversation; not streaming', {
+				conversationId: this.conversationId
+			});
+			return;
+		}
 		const controller = new AbortController();
 		registerStream(this.conversationId, controller);
 		const turn: LiveTurn = {
@@ -451,6 +569,11 @@ export class CodingFollower {
 
 	// ── rendering ───────────────────────────────────────────────────────
 
+	private markDirty(runId: string | 'all' | null): void {
+		if (runId === 'all') this.allRunsDirty = true;
+		else if (runId) this.dirtyRuns.add(runId);
+	}
+
 	private scheduleRender(): void {
 		if (this.renderTimer || this.stopped) return;
 		this.renderTimer = setTimeout(() => {
@@ -458,6 +581,7 @@ export class CodingFollower {
 			try {
 				this.render();
 			} catch (e) {
+				this.allRunsDirty = true;
 				log.error('Failed to render coding task', {
 					conversationId: this.conversationId,
 					error: e instanceof Error ? e.message : String(e)
@@ -478,6 +602,10 @@ export class CodingFollower {
 		const runs = sortedRuns(this.state);
 		const now = Date.now();
 		let touched = false;
+		const allDirty = this.allRunsDirty;
+		const dirty = new Set(this.dirtyRuns);
+		this.allRunsDirty = false;
+		this.dirtyRuns.clear();
 
 		// Bind a pre-opened turn to its run, or open one for a run started elsewhere.
 		const active = activeRun(this.state);
@@ -492,12 +620,19 @@ export class CodingFollower {
 				if (isRunActive(run)) this.interruptRun(String(run.id));
 			}
 		}
-		if (!this.live && active && !hasActiveStream(this.conversationId) && !shuttingDown) {
+		if (
+			!this.live &&
+			active &&
+			!hasActiveStream(this.conversationId) &&
+			!shuttingDown &&
+			!this.isForeignMessage(replyMessageId(active))
+		) {
 			this.openLive(replyMessageId(active), null, String(active.id));
 		}
 
 		for (const run of runs) {
 			const runId = String(run.id);
+			if (!allDirty && !dirty.has(runId) && this.live?.runId !== runId) continue;
 			const userMessageId = typeof run.userMessageId === 'string' ? run.userMessageId : null;
 			// Mirror user messages that were sent from T3 itself.
 			if (userMessageId && !getMessage(db, userMessageId)) {
@@ -517,6 +652,7 @@ export class CodingFollower {
 			const entries = renderRun(this.state, run, this.commandOutputs);
 			const parts = entries.map((e) => e.part);
 			const messageId = this.live?.runId === runId ? this.live.messageId : replyMessageId(run);
+			if (this.isForeignMessage(messageId)) continue;
 			if (this.live?.runId === runId) this.emitDiff(this.live, entries);
 
 			const finished = isRunFinished(run);
@@ -525,8 +661,8 @@ export class CodingFollower {
 			const prev = this.persisted.get(messageId);
 			const changed = !prev || prev.json !== json || prev.status !== status;
 			const due = !prev || finished || now - prev.at >= PERSIST_INTERVAL_MS;
-			if (changed && due && (parts.length > 0 || finished || getMessage(db, messageId))) {
-				const existing = getMessage(db, messageId);
+			if (changed && due && (parts.length > 0 || finished || this.ownMessage(messageId))) {
+				const existing = this.ownMessage(messageId);
 				const error = finished
 					? run.status === 'completed'
 						? null
@@ -535,7 +671,9 @@ export class CodingFollower {
 				if (existing) {
 					if (existing.parts !== json || existing.status !== status || existing.error !== error) {
 						updateMessage(db, messageId, { parts, status, error });
-						touched = true;
+						// Re-rendering a reply that had already finished (after a reconnect,
+						// or a thread change such as read state) isn't new activity.
+						if (existing.status === 'partial' || existing.status !== status) touched = true;
 					}
 				} else if (parts.length > 0 || finished) {
 					createMessage(db, {
@@ -551,30 +689,122 @@ export class CodingFollower {
 				}
 				this.persisted.set(messageId, { json, at: now, status });
 			} else if (changed && !due) {
+				this.dirtyRuns.add(runId);
 				this.scheduleRender(); // flush the throttled update later
 			}
 
 			if (finished && this.live?.runId === runId) {
-				this.endLive({
-					interrupted: run.status !== 'completed',
-					errorText:
-						run.status === 'failed' ? (runFailureText(this.state, run) ?? undefined) : undefined
-				});
+				// Announced before the stream finishes, as for normal chats: clients
+				// read a finish without it as an error or stop (see message-queue-runner).
 				if (run.status === 'completed') {
 					publishServerEvent(this.userId, {
 						type: 'chat.message_completed',
 						conversationId: this.conversationId
 					});
 				}
+				this.endLive({
+					interrupted: run.status !== 'completed',
+					errorText:
+						run.status === 'failed' ? (runFailureText(this.state, run) ?? undefined) : undefined
+				});
 			}
 		}
 
-		if (touched) touchConversation(db, this.conversationId);
-		this.syncSummary(conversation.title);
+		if (touched && !this.quietHistory) touchConversation(db, this.conversationId);
+		this.quietHistory = false;
+		this.syncSummary();
+		this.syncThreadState(runs);
+		this.scheduleDiffRefresh(runs);
 		this.fetchMissingOutputs(runs);
 	}
 
-	private syncSummary(conversationTitle: string): void {
+	// ── change size (+/-) ───────────────────────────────────────────────
+
+	/** Re-reads the change size on the first render and whenever edits or runs finish. */
+	private scheduleDiffRefresh(runs: Rec[]): void {
+		let edits = 0;
+		for (const item of this.state.turnItems.values()) {
+			if (item.type === 'file_change' && item.status !== 'running') edits++;
+		}
+		const finished = runs.filter(isRunFinished).length;
+		const key = `${finished}:${edits}:${String(this.state.thread?.worktreePath ?? '')}`;
+		if (key === this.diffKey) return;
+		this.diffKey = key;
+		if (this.diffTimer) clearTimeout(this.diffTimer);
+		this.diffTimer = setTimeout(() => {
+			this.diffTimer = null;
+			void this.refreshDiff();
+		}, DIFF_DEBOUNCE_MS);
+		this.diffTimer.unref?.();
+	}
+
+	private async refreshDiff(): Promise<void> {
+		if (this.diffInFlight || this.stopped) return;
+		this.diffInFlight = true;
+		try {
+			const worktree = this.state.thread?.worktreePath;
+			const cwd =
+				typeof worktree === 'string' && worktree ? worktree : await this.projectWorkspaceRoot();
+			if (!cwd) return;
+			const diff = parseDiffStat(await this.rpc('vcs.refreshStatus', { cwd, localOnly: true }));
+			if (!diff) return;
+			const row = getCodingConversation(this.db, this.conversationId);
+			if (
+				!row ||
+				(row.diff_insertions === diff.insertions && row.diff_deletions === diff.deletions)
+			) {
+				return;
+			}
+			updateCodingConversation(this.db, this.conversationId, { diff });
+			publishServerEvent(this.userId, {
+				type: 'coding.task.updated',
+				conversationId: this.conversationId
+			});
+		} catch (e) {
+			if (!this.diffWarned) {
+				this.diffWarned = true;
+				log.warn('Could not read the change size of a coding task', {
+					conversationId: this.conversationId,
+					error: e instanceof Error ? e.message : String(e)
+				});
+			}
+		} finally {
+			this.diffInFlight = false;
+		}
+	}
+
+	private async projectWorkspaceRoot(): Promise<string | null> {
+		if (this.projectRoot !== undefined) return this.projectRoot;
+		const row = getCodingConversation(this.db, this.conversationId);
+		const body = (await t3HttpGet(
+			this.env.base_url,
+			decryptSecret(this.env.token_enc),
+			'/api/projects'
+		)) as { projects?: { id?: unknown; workspaceRoot?: unknown }[] } | null;
+		const project = (Array.isArray(body?.projects) ? body.projects : []).find(
+			(p) => p?.id === row?.project_id
+		);
+		this.projectRoot = typeof project?.workspaceRoot === 'string' ? project.workspaceRoot : null;
+		return this.projectRoot;
+	}
+
+	/** Mirrors the thread's title, pinned, settled and read state (see ./thread-state.ts). */
+	private syncThreadState(runs: Rec[]): void {
+		const latest = runs.at(-1);
+		const remote = remoteThreadState(this.state.thread, {
+			completedAt:
+				latest && isRunFinished(latest) ? Date.parse(String(latest.completedAt)) || null : null,
+			running: activeRun(this.state) !== null
+		});
+		const json = JSON.stringify(remote);
+		if (json === this.lastRemoteStateJson) return;
+		this.lastRemoteStateJson = json;
+		if (reconcileThreadState(this.db, this.userId, this.conversationId, remote)) {
+			queueThreadStatePush(this.db, this.userId, [this.conversationId]);
+		}
+	}
+
+	private syncSummary(): void {
 		const summary = summarizeTask(this.state);
 		const json = JSON.stringify(summary);
 		const statusChanged = summary.status !== this.lastStatus;
@@ -585,17 +815,10 @@ export class CodingFollower {
 				branch: summary.branch,
 				prUrl: summary.prUrl,
 				pendingRequest: summary.pendingRequest,
+				runStartedAt: summary.runStartedAt,
 				lastSequence: this.state.lastSequence ?? undefined,
 				lastError: null
 			});
-			// Adopt T3's generated title while ours is still the provisional one.
-			if (summary.title && summary.title !== conversationTitle && conversationTitle.length <= 51) {
-				setConversationTitle(this.db, this.conversationId, summary.title);
-				publishServerEvent(this.userId, {
-					type: 'conversation.updated',
-					conversationId: this.conversationId
-				});
-			}
 			publishServerEvent(this.userId, {
 				type: 'coding.task.updated',
 				conversationId: this.conversationId
@@ -631,14 +854,20 @@ export class CodingFollower {
 		}
 	}
 
-	/** Command output is omitted from the live stream; fetch it once per command. */
+	/** Command and tool output is omitted from the live stream; fetch it once per item. */
 	private fetchMissingOutputs(runs: Rec[]): void {
 		if (!this.threadId) return;
+		// Turn items are capped (see projection.ts); drop outputs of evicted ones.
+		if (this.commandOutputs.size > MAX_THREAD_RECORDS) {
+			for (const id of this.commandOutputs.keys()) {
+				if (!this.state.turnItems.has(id)) this.commandOutputs.delete(id);
+			}
+		}
 		const recent = new Set(runs.slice(-OUTPUT_FETCH_RUNS).map((r) => String(r.id)));
 		for (const item of this.state.turnItems.values()) {
 			const id = String(item.id);
 			if (
-				item.type !== 'command_execution' ||
+				(item.type !== 'command_execution' && item.type !== 'dynamic_tool') ||
 				item.outputOmitted !== true ||
 				!recent.has(String(item.runId)) ||
 				(item.status !== 'completed' && item.status !== 'failed') ||
@@ -651,13 +880,19 @@ export class CodingFollower {
 			this.rpc('orchestration.getTurnItem', { threadId: this.threadId, itemId: id })
 				.then((result) => {
 					const output = (result as { item?: { output?: unknown } } | null)?.item?.output;
-					const text = typeof output === 'string' ? output : '';
+					const text =
+						typeof output === 'string'
+							? output
+							: output === undefined
+								? ''
+								: JSON.stringify(output, null, 2);
 					this.commandOutputs.set(
 						id,
 						text.length > MAX_OUTPUT_CHARS
 							? `${text.slice(0, MAX_OUTPUT_CHARS)}\n… (truncated)`
 							: text
 					);
+					this.markDirty(String(item.runId));
 					this.scheduleRender();
 				})
 				.catch(() => this.commandOutputs.set(id, ''))
@@ -688,6 +923,8 @@ export function ensureFollower(input: {
 	userId: string;
 	env: CodingEnvironmentRow;
 	threadId: string | null;
+	/** See {@link CodingFollower.quietHistory}; only applies to a new follower. */
+	quietHistory?: boolean;
 }): CodingFollower {
 	const existing = followers.get(input.conversationId);
 	if (existing) {
@@ -698,7 +935,9 @@ export function ensureFollower(input: {
 		input.conversationId,
 		input.userId,
 		input.env,
-		input.threadId
+		input.threadId,
+		getDb(),
+		{ quietHistory: input.quietHistory }
 	);
 	followers.set(input.conversationId, follower);
 	return follower;
@@ -707,6 +946,17 @@ export function ensureFollower(input: {
 /** Call before shutdown aborts streams: remote runs must keep going. */
 export function prepareCodingShutdown(): void {
 	shuttingDown = true;
+}
+
+/**
+ * Stops followers of an environment that was deleted, disabled or re-pointed,
+ * so they don't keep using the old URL and token. Still-relevant ones are
+ * re-created on demand (thread sync, next turn) with the current row.
+ */
+export function stopFollowersForEnvironment(environmentId: string): void {
+	for (const follower of [...followers.values()]) {
+		if (follower.environmentId === environmentId) follower.stop();
+	}
 }
 
 export function stopAllCodingFollowers(): void {

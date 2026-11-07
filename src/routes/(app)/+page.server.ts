@@ -19,6 +19,7 @@ export const load: PageServerLoad = ({ locals, cookies }) => {
 	const user = locals.user;
 	if (!user) error(401, { message: 'Unauthorized' });
 	const db = getDb();
+	const settings = getUserSettings(db, user.id);
 	const roleModel = findRoleModel(db, 'chat');
 	let defaultModel: { providerId: string; modelId: string } | null = null;
 	if (roleModel) {
@@ -41,7 +42,8 @@ export const load: PageServerLoad = ({ locals, cookies }) => {
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		defaultModel,
 		sttModel,
-		suggestions: getUserSettings(db, user.id).suggestions,
+		suggestions: settings.suggestions,
+		codingSuggestions: settings.codingSuggestions,
 		personas: listPersonaAgents(db, user.id).map(toPublic),
 		codingEnvironments: listCodingEnvironments(db, user.id)
 			.filter((row) => row.enabled === 1)

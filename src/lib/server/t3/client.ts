@@ -10,12 +10,16 @@
 // T3 Code moves fast; everything decoded from it is treated as untrusted and
 // parsed defensively (see ./usage.ts).
 
+import net from 'node:net';
+import { isLinkLocalOrReserved, linkLocalGuardedAgent } from '../net/safeFetch.js';
+
 export const ORCHESTRATION_PROTOCOL_VERSION = 2;
 
 const HTTP_TIMEOUT_MS = 10_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 const CALL_TIMEOUT_MS = 60_000;
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 export class T3ClientError extends Error {
 	constructor(
@@ -43,16 +47,45 @@ function str(value: unknown): string | null {
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+	const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+	// The URL is user-configured. T3 servers legitimately live on loopback/LAN/
+	// tailnet addresses, but never on link-local (cloud metadata) ranges.
+	if (net.isIP(host) && isLinkLocalOrReserved(host)) {
+		throw new T3ClientError('Server unreachable', 'unreachable');
+	}
 	try {
 		return await fetch(url, {
 			...init,
 			redirect: 'error',
-			signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
-		});
+			signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+			// undici-specific option honoured by Node's built-in fetch.
+			dispatcher: linkLocalGuardedAgent
+		} as RequestInit);
 	} catch (e) {
 		const reason = e instanceof Error && e.name === 'TimeoutError' ? 'timed out' : 'unreachable';
 		throw new T3ClientError(`Server ${reason}`, 'unreachable');
 	}
+}
+
+/** Parses a JSON body, refusing (and cancelling) bodies over `MAX_BODY_BYTES`. */
+async function readJson(res: Response): Promise<unknown> {
+	const declared = Number(res.headers.get('content-length'));
+	if (declared > MAX_BODY_BYTES) {
+		await res.body?.cancel();
+		throw new T3ClientError('Response too large', 'remote');
+	}
+	if (!res.body) return null;
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	for await (const chunk of res.body) {
+		size += chunk.byteLength;
+		if (size > MAX_BODY_BYTES) {
+			await res.body.cancel().catch(() => {});
+			throw new T3ClientError('Response too large', 'remote');
+		}
+		chunks.push(chunk);
+	}
+	return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
 export async function fetchEnvironmentDescriptor(baseUrl: string): Promise<EnvironmentDescriptor> {
@@ -65,7 +98,7 @@ export async function fetchEnvironmentDescriptor(baseUrl: string): Promise<Envir
 			'incompatible'
 		);
 	}
-	const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+	const body = (await readJson(res).catch(() => null)) as Record<string, unknown> | null;
 	if (!body || typeof body !== 'object') {
 		throw new T3ClientError(
 			'Not a T3 Code server (invalid environment descriptor)',
@@ -87,7 +120,10 @@ export const CHATTY_TOKEN_SCOPES = [
 	'orchestration:read',
 	'orchestration:operate',
 	'diagnostics:read',
-	'source-control:write'
+	'source-control:write',
+	// Lets Chatty mint signed URLs for images the agent saved on the T3 machine
+	// (assets.createUrl). T3 only grants that under its broader workspace scope.
+	'workspace'
 ] as const;
 
 /**
@@ -115,7 +151,7 @@ export async function exchangePairingToken(baseUrl: string, pairingToken: string
 		);
 	}
 	if (!res.ok) throw new T3ClientError(`Pairing failed (${res.status})`, 'remote');
-	const body = (await res.json().catch(() => null)) as { access_token?: unknown } | null;
+	const body = (await readJson(res).catch(() => null)) as { access_token?: unknown } | null;
 	const token = str(body?.access_token);
 	if (!token) throw new T3ClientError('Pairing response was malformed', 'protocol');
 	return token;
@@ -130,7 +166,7 @@ async function issueWebSocketTicket(baseUrl: string, token: string): Promise<str
 		throw new T3ClientError('Access token was rejected (expired or revoked?)', 'unauthorized');
 	}
 	if (!res.ok) throw new T3ClientError(`Ticket request failed (${res.status})`, 'remote');
-	const body = (await res.json().catch(() => null)) as { ticket?: unknown } | null;
+	const body = (await readJson(res).catch(() => null)) as { ticket?: unknown } | null;
 	const ticket = str(body?.ticket);
 	if (!ticket) throw new T3ClientError('Ticket response was malformed', 'protocol');
 	return ticket;
@@ -376,6 +412,40 @@ export class T3Connection {
  * Authenticated JSON GET against the server's HTTP API (e.g. `/api/projects`).
  * Sends the orchestration protocol header the `/api/orchestration/*` routes require.
  */
+/**
+ * Downloads a binary T3 resource (a signed `/api/assets/…` URL), capped at
+ * `maxBytes`. Returns null when T3 doesn't have it.
+ */
+export async function t3FetchBinary(
+	baseUrl: string,
+	token: string,
+	path: string,
+	maxBytes: number
+): Promise<{ contentType: string; bytes: Uint8Array } | null> {
+	const res = await fetchWithTimeout(joinUrl(baseUrl, path), {
+		headers: { authorization: `Bearer ${token}` }
+	});
+	if (res.status === 404) return null;
+	if (res.status === 401 || res.status === 403) {
+		throw new T3ClientError('Access token was rejected or lacks permission', 'unauthorized');
+	}
+	if (!res.ok || !res.body) throw new T3ClientError(`Request failed (${res.status})`, 'remote');
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	for await (const chunk of res.body) {
+		size += chunk.byteLength;
+		if (size > maxBytes) {
+			await res.body.cancel().catch(() => {});
+			throw new T3ClientError('File too large', 'remote');
+		}
+		chunks.push(chunk);
+	}
+	return {
+		contentType: res.headers.get('content-type') ?? 'application/octet-stream',
+		bytes: Buffer.concat(chunks)
+	};
+}
+
 export async function t3HttpGet<T = unknown>(
 	baseUrl: string,
 	token: string,
@@ -392,7 +462,7 @@ export async function t3HttpGet<T = unknown>(
 		throw new T3ClientError('Access token was rejected or lacks permission', 'unauthorized');
 	}
 	if (!res.ok) throw new T3ClientError(`Request to ${path} failed (${res.status})`, 'remote');
-	return (await res.json()) as T;
+	return (await readJson(res)) as T;
 }
 
 export async function connectT3(baseUrl: string, token: string): Promise<T3Connection> {

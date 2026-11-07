@@ -19,6 +19,7 @@ import {
 	connectT3,
 	fetchEnvironmentDescriptor
 } from './client.js';
+import { startThreadSync, stopThreadSync } from './thread-sync.js';
 import { dayInZone, parseUsageLimits, parseUsageSummary } from './usage.js';
 
 const log = createLogger('t3-sync');
@@ -128,9 +129,11 @@ export function startCodingEnvironmentSync(db: Db = getDb()): void {
 	tick();
 	timer = setInterval(tick, SYNC_INTERVAL_MS);
 	timer.unref?.();
+	startThreadSync(db);
 }
 
 export function stopCodingEnvironmentSync(): void {
 	if (timer) clearInterval(timer);
 	timer = null;
+	stopThreadSync();
 }

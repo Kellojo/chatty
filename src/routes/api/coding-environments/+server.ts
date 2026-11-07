@@ -2,6 +2,8 @@ import { json, error } from '@sveltejs/kit';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import {
+	MAX_CODING_ENVIRONMENTS_PER_USER,
+	countCodingEnvironments,
 	createCodingEnvironment,
 	listCodingEnvironments,
 	toPublic
@@ -20,6 +22,16 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const user = requireUser(locals);
 	const parsed = environmentCreateSchema.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });
+	const db = getDb();
+	const checkLimit = () => {
+		if (countCodingEnvironments(db, user.id) >= MAX_CODING_ENVIRONMENTS_PER_USER) {
+			error(400, {
+				message: `You can connect at most ${MAX_CODING_ENVIRONMENTS_PER_USER} coding environments. Remove one to add another.`
+			});
+		}
+	};
+	// Checked before contacting the server, and again before inserting.
+	checkLimit();
 	let connection: Awaited<ReturnType<typeof resolveEnvironmentConnection>>;
 	try {
 		connection = await resolveEnvironmentConnection(parsed.data);
@@ -28,7 +40,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		throw e;
 	}
 	if (!connection.token) error(400, { message: 'Paste a pairing link or enter an access token' });
-	const db = getDb();
+	checkLimit();
 	const row = createCodingEnvironment(db, user.id, {
 		name: parsed.data.name,
 		baseUrl: connection.baseUrl,

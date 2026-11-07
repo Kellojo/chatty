@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { CodingConversationSummary, CodingTaskStatus } from '$lib/coding-environments.js';
 import type { Db } from '../index.js';
 
 export interface ConversationRow {
@@ -22,6 +23,12 @@ export interface ConversationRow {
 	created_at: number;
 	updated_at: number;
 	deleted_at: number | null;
+	/** Present only on queries that join `coding_conversations` (see SIDEBAR_SELECT). */
+	coding_project_title?: string | null;
+	coding_status?: string | null;
+	coding_run_started_at?: number | null;
+	coding_diff_insertions?: number | null;
+	coding_diff_deletions?: number | null;
 }
 
 export interface Conversation {
@@ -40,9 +47,13 @@ export interface Conversation {
 	agentId: string | null;
 	settledAt: number | null;
 	settledReason: SettledReason | null;
+	/** Set when the conversation is a coding task run on a T3 Code server. */
+	coding: ConversationCodingSummary | null;
 	createdAt: number;
 	updatedAt: number;
 }
+
+export type ConversationCodingSummary = CodingConversationSummary;
 
 export type SettledReason = 'manual' | 'auto';
 
@@ -63,12 +74,32 @@ export function toPublic(row: ConversationRow): Conversation {
 		agentId: row.agent_id,
 		settledAt: row.settled_at,
 		settledReason: row.settled_reason as SettledReason | null,
+		coding: row.coding_status
+			? {
+					projectTitle: row.coding_project_title ?? '',
+					status: row.coding_status as CodingTaskStatus,
+					runStartedAt: row.coding_run_started_at ?? null,
+					diff:
+						row.coding_diff_insertions == null || row.coding_diff_deletions == null
+							? null
+							: { insertions: row.coding_diff_insertions, deletions: row.coding_diff_deletions }
+				}
+			: null,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
 }
 
 export const CONVERSATIONS_PAGE_SIZE = 50;
+
+/** Conversation columns plus the coding-task summary the sidebar shows. */
+const CODING_SUMMARY_COLUMNS = `cc.project_title AS coding_project_title, cc.status AS coding_status,
+	cc.run_started_at AS coding_run_started_at, cc.diff_insertions AS coding_diff_insertions,
+	cc.diff_deletions AS coding_diff_deletions`;
+
+const SIDEBAR_SELECT = `SELECT c.*, ${CODING_SUMMARY_COLUMNS}
+	FROM conversations c
+	LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id`;
 
 export function listConversations(
 	db: Db,
@@ -79,9 +110,9 @@ export function listConversations(
 	const offset = opts.offset ?? 0;
 	return db
 		.prepare(
-			`SELECT * FROM conversations
-			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND settled_at IS NULL
-			 ORDER BY pinned DESC, updated_at DESC
+			`${SIDEBAR_SELECT}
+			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.settled_at IS NULL
+			 ORDER BY c.pinned DESC, c.updated_at DESC
 			 LIMIT ? OFFSET ?`
 		)
 		.all(userId, limit, offset) as ConversationRow[];
@@ -96,9 +127,9 @@ export function listSettledConversations(
 	const offset = opts.offset ?? 0;
 	return db
 		.prepare(
-			`SELECT * FROM conversations
-			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND settled_at IS NOT NULL
-			 ORDER BY settled_at DESC, updated_at DESC
+			`${SIDEBAR_SELECT}
+			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.settled_at IS NOT NULL
+			 ORDER BY c.settled_at DESC, c.updated_at DESC
 			 LIMIT ? OFFSET ?`
 		)
 		.all(userId, limit, offset) as ConversationRow[];
@@ -258,6 +289,14 @@ export function togglePin(db: Db, userId: string, id: string): ConversationRow |
 	return getConversation(db, userId, id);
 }
 
+export function setConversationPinned(db: Db, userId: string, id: string, pinned: boolean): void {
+	db.prepare('UPDATE conversations SET pinned = ? WHERE id = ? AND user_id = ?').run(
+		pinned ? 1 : 0,
+		id,
+		userId
+	);
+}
+
 /** Hides a conversation from the default sidebar list. Settling also unpins. */
 export function settleConversation(
 	db: Db,
@@ -330,6 +369,25 @@ export function markConversationRead(db: Db, userId: string, id: string): void {
 	);
 }
 
+/** Sets when the user last looked at the conversation (may move it backwards, i.e. mark unread). */
+export function setConversationReadAt(db: Db, userId: string, id: string, readAt: number): void {
+	db.prepare('UPDATE conversations SET last_read_at = ? WHERE id = ? AND user_id = ?').run(
+		readAt,
+		id,
+		userId
+	);
+}
+
+/** Creation time of the conversation's newest assistant message, or null if there is none. */
+export function latestAssistantMessageAt(db: Db, id: string): number | null {
+	const row = db
+		.prepare(
+			`SELECT MAX(created_at) AS at FROM messages WHERE conversation_id = ? AND role = 'assistant'`
+		)
+		.get(id) as { at: number | null } | undefined;
+	return row?.at ?? null;
+}
+
 export function listUnreadChatIds(db: Db, userId: string): string[] {
 	return (
 		db
@@ -355,13 +413,15 @@ export function searchConversations(db: Db, userId: string, query: string): Conv
 	if (!ftsQuery) return [];
 	return db
 		.prepare(
-			`SELECT DISTINCT c.* FROM conversations c
+			`SELECT DISTINCT c.*, ${CODING_SUMMARY_COLUMNS}
+			 FROM conversations c
+			 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
 			 LEFT JOIN messages_fts f ON f.conversation_id = c.id AND messages_fts MATCH ?
 			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
-			   AND (c.title LIKE ? OR f.conversation_id IS NOT NULL)
+			   AND (c.title LIKE ? OR cc.project_title LIKE ? OR f.conversation_id IS NOT NULL)
 			 ORDER BY c.pinned DESC, c.updated_at DESC`
 		)
-		.all(ftsQuery, userId, `%${query}%`) as ConversationRow[];
+		.all(ftsQuery, userId, `%${query}%`, `%${query}%`) as ConversationRow[];
 }
 
 export function countConversations(db: Db): number {

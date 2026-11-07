@@ -38,6 +38,16 @@ export function formatSpend(usd: number | null): string {
 	return `${sign}$${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** Short money for chart axes: "$0", "$0.5", "$2.25", "$200", "$1.2k". */
+export function formatSpendCompact(usd: number): string {
+	if (!Number.isFinite(usd)) return '—';
+	const sign = usd < 0 ? '-' : '';
+	const abs = Math.abs(usd);
+	if (abs >= 1000) return `${sign}$${formatCount(abs)}`;
+	if (abs >= 10 || Number.isInteger(abs)) return `${sign}$${Math.round(abs)}`;
+	return `${sign}$${Number(abs.toFixed(2))}`;
+}
+
 export function formatLatency(ms: number | null): string {
 	if (ms == null) return '—';
 	if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -68,4 +78,13 @@ export function formatDurationMs(ms: number | null): string {
 
 export function formatUsdPerMillion(value: number): string {
 	return `$${Number(value.toPrecision(6))}`;
+}
+
+/** Compact running time for live timers: `42s`, `4m 05s`, `1h 12m`. */
+export function formatElapsed(ms: number): string {
+	const total = Math.max(0, Math.floor(ms / 1000));
+	if (total < 60) return `${total}s`;
+	const m = Math.floor(total / 60);
+	if (m < 60) return `${m}m ${String(total % 60).padStart(2, '0')}s`;
+	return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
 }

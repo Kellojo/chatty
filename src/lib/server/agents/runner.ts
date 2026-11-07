@@ -80,6 +80,10 @@ export async function startAgentRun(
 	if (shuttingDown) throw new Error('Server is shutting down');
 	const agent = getAgent(db, input.agentId);
 	if (!agent) throw new Error('Agent not found');
+	if (agent.coding_target) {
+		const { startCodingAgentRun } = await import('./coding-runs.js');
+		return startCodingAgentRun(agent, input, db);
+	}
 
 	let ref: { providerId: string; modelId: string };
 	if (agent.provider_id && agent.model_id) {

@@ -13,14 +13,18 @@
 	import ProviderBillingBadge from '$lib/components/app/usage/ProviderBillingBadge.svelte';
 	import UsageTile from '$lib/components/app/usage/UsageTile.svelte';
 	import {
+		formatApiValue,
 		mostUsedWindow,
+		remainingPercent,
 		paygColor,
-		periodQuery,
+		NO_COST_REPORTED,
+		formatBilled,
+		rangeQuery,
 		subscriptionColor,
 		type BillingType
 	} from '$lib/components/app/usage/usage.js';
 	import { providerLabel } from '$lib/coding-environments.js';
-	import { formatCount, formatSpend } from '$lib/formats.js';
+	import { formatCount, formatSpend, formatSpendCompact } from '$lib/formats.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -33,22 +37,23 @@
 
 	const payg = $derived(data.payg);
 	const subs = $derived(data.subscriptions);
-	const days = $derived(data.periodDays);
+	const rangeLabel = $derived(data.rangeLabel);
 	const hasEnvironments = $derived(subs.environments.length > 0);
-	const plus = $derived(subs.anyUnpriced ? '+' : '');
 
 	/** Requests tab for the same period and scope as these numbers. */
 	function requestsHref(extra: Record<string, string> = {}): string {
-		return `${resolve('/usage/requests')}${periodQuery(data.period, { user: data.requestsUser, ...extra })}`;
+		return `${resolve('/usage/requests')}${rangeQuery(data.rangeParams, { user: data.requestsUser, ...extra })}`;
 	}
 	const subscriptionsHref = $derived(
-		`${resolve('/usage/subscriptions')}${periodQuery(data.period)}`
+		`${resolve('/usage/subscriptions')}${rangeQuery(data.rangeParams)}`
 	);
 
 	// ── pay-as-you-go ──
 	const delta = $derived.by(() => {
-		if (payg.previousRequests === 0) return null;
-		const prev = payg.previousCostUsd;
+		// Only compare billed amounts that both periods actually reported.
+		if (!payg.previous || payg.previous.pricedRequests === 0 || payg.pricedRequests === 0)
+			return null;
+		const prev = payg.previous.costUsd;
 		if (prev <= 0) return { pct: null, up: payg.totalCostUsd > 0 };
 		const pct = Math.round(((payg.totalCostUsd - prev) / prev) * 100);
 		return { pct, up: pct >= 0 };
@@ -56,18 +61,23 @@
 	const paygSeries = $derived(
 		payg.providers.map((p) => ({ key: p.key, label: p.name, color: paygColor(p.colorSlot) }))
 	);
+	// With nothing billed, chart requests instead of a row of $0s.
+	const paygAllFree = $derived(payg.totalCostUsd === 0 && payg.totalRequests > 0);
 	const paygRows = $derived(
 		payg.dailyRows.map((row) => {
 			const out: Record<string, string | number> = { day: row.day };
-			for (const s of paygSeries) out[s.key] = Math.round((row.cost[s.key] ?? 0) * 10_000) / 10_000;
+			for (const s of paygSeries)
+				out[s.key] = paygAllFree
+					? (row.requests[s.key] ?? 0)
+					: Math.round((row.cost[s.key] ?? 0) * 10_000) / 10_000;
 			return out;
 		})
 	);
-	/** Requests were made but nothing was billed: a free or local model server. */
-	const isFree = (p: { costUsd: number; requests: number }) => p.requests > 0 && p.costUsd === 0;
+	/** No request reported a cost: the price is unknown (same rule as the request log). */
+	const noCost = (p: { pricedRequests: number }) => p.pricedRequests === 0;
 
 	// ── subscriptions ──
-	const topWindow = $derived(mostUsedWindow(subs.accounts));
+	const topWindow = $derived(mostUsedWindow(subs.accounts, now));
 	const subSeries = $derived(
 		subs.providers.map((p) => ({
 			key: p.provider,
@@ -94,7 +104,7 @@
 		countLabel: string;
 		costUsd: number;
 		priced: boolean;
-		free: boolean;
+		pricedRequests: number;
 		href: string;
 	}
 	const providerRows = $derived<ProviderRow[]>([
@@ -108,7 +118,7 @@
 			countLabel: p.requests === 1 ? 'request' : 'requests',
 			costUsd: p.costUsd,
 			priced: true,
-			free: isFree(p),
+			pricedRequests: p.pricedRequests,
 			href: requestsHref({ provider: p.providerId ?? '' })
 		})),
 		...subs.providers.map((p) => ({
@@ -121,7 +131,7 @@
 			countLabel: p.sessions === 1 ? 'session' : 'sessions',
 			costUsd: p.costUsd,
 			priced: p.priced,
-			free: false,
+			pricedRequests: 0,
 			href: `${subscriptionsHref}#provider-${p.provider}`
 		}))
 	]);
@@ -134,8 +144,8 @@
 <div class="flex flex-col gap-6">
 	<div class="flex flex-col gap-2">
 		<p class="text-sm text-muted-foreground">
-			Your usage over the last {days} days. What you were billed and what your subscriptions covered are
-			shown side by side and never added together.
+			Your usage, {rangeLabel}. What you were billed and what your subscriptions covered are shown
+			side by side and never added together.
 		</p>
 		<EnvironmentStatusChips environments={subs.environments} {now} />
 	</div>
@@ -144,13 +154,14 @@
 	<div class="grid gap-3 md:grid-cols-2">
 		<UsageTile
 			billing="payg"
-			label="Spend"
-			value={formatSpend(payg.totalCostUsd)}
+			label="Billed"
+			value={formatBilled(payg.totalCostUsd, { pricedRequests: payg.pricedRequests })}
+			caption={payg.totalRequests > 0 && payg.pricedRequests === 0 ? 'No cost reported' : undefined}
 			subtitle="Billed per token by the providers configured in Chatty."
 		>
 			<span class="text-sm text-foreground/80 tabular-nums">
-				{formatCount(payg.totalTokens)} tokens · {formatCount(payg.totalRequests)}
-				{payg.totalRequests === 1 ? 'request' : 'requests'}
+				Your {formatCount(payg.totalRequests)}
+				{payg.totalRequests === 1 ? 'request' : 'requests'} · {formatCount(payg.totalTokens)} tokens
 			</span>
 			{#if delta}
 				<span class="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
@@ -160,12 +171,17 @@
 						<TrendingDownIcon class="size-3.5" aria-hidden="true" />
 					{/if}
 					{#if delta.pct === null}
-						{formatSpend(payg.previousCostUsd)} in the previous {days} days
+						{formatBilled(payg.previous?.costUsd ?? 0)} in the previous period
 					{:else}
-						{delta.pct > 0 ? '+' : ''}{delta.pct}% vs previous {days} days ({formatSpend(
-							payg.previousCostUsd
+						{delta.pct > 0 ? '+' : ''}{delta.pct}% vs previous period ({formatBilled(
+							payg.previous?.costUsd ?? 0
 						)})
 					{/if}
+				</span>
+			{/if}
+			{#if payg.pricedRequests > 0 && payg.pricedRequests < payg.totalRequests}
+				<span class="text-xs text-muted-foreground tabular-nums">
+					{formatCount(payg.totalRequests - payg.pricedRequests)} without a reported cost
 				</span>
 			{/if}
 		</UsageTile>
@@ -173,22 +189,20 @@
 		{#if hasEnvironments}
 			<UsageTile
 				billing="subscription"
-				label="Value used"
-				value="{formatSpend(subs.totalValueUsd)}{plus}"
+				label="API value"
+				value={formatApiValue(subs.totalValueUsd, subs.anyUnpriced)}
 				subtitle="Included in your plans, shown at API prices — not billed."
 			>
 				<span class="text-sm text-foreground/80 tabular-nums">
-					{formatCount(subs.totalTokens)} tokens · {formatCount(subs.totalSessions)}
-					{subs.totalSessions === 1 ? 'session' : 'sessions'}
+					Your {formatCount(subs.totalSessions)}
+					{subs.totalSessions === 1 ? 'session' : 'sessions'} · {formatCount(subs.totalTokens)} tokens
 				</span>
 				{#if topWindow}
-					<PlanLimitBar
-						window={topWindow.window}
-						label="{topWindow.account.accountLabel} · {topWindow.window.windowLabel}"
-						ariaLabel="Most-used plan limit: {topWindow.account.accountLabel} {topWindow.window
-							.windowLabel}"
-						{now}
-					/>
+					<span class="text-xs text-muted-foreground tabular-nums">
+						Lowest remaining: {topWindow.account.accountLabel}
+						{topWindow.window.windowLabel.toLowerCase()} · {remainingPercent(topWindow.window)}%
+						left
+					</span>
 				{/if}
 			</UsageTile>
 		{:else}
@@ -196,7 +210,7 @@
 			<Card.Root class="rounded-2xl border-dashed border-border/60">
 				<Card.Content class="flex h-full flex-col items-start gap-2">
 					<div class="flex w-full flex-wrap items-center justify-between gap-2">
-						<span class="text-sm text-muted-foreground">Value used</span>
+						<span class="text-sm text-muted-foreground">API value</span>
 						<ProviderBillingBadge billing="subscription" />
 					</div>
 					<p class="text-sm text-muted-foreground">
@@ -211,29 +225,67 @@
 		{/if}
 	</div>
 
+	<!-- Plan limits: their own full-width strip, so the chart columns below mirror each other. -->
+	{#if hasEnvironments && subs.accounts.length > 0}
+		<Card.Root class="gap-3 rounded-2xl border-border/40">
+			<Card.Header>
+				<Card.Title class="flex flex-wrap items-center gap-2 text-sm font-medium">
+					Plan limits
+					<ProviderBillingBadge billing="subscription" />
+				</Card.Title>
+			</Card.Header>
+			<Card.Content>
+				<div class="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-x-8 gap-y-5">
+					{#each subs.accounts as account (account.key)}
+						<div class="flex flex-col gap-2">
+							<span class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+								<span
+									class="size-2 shrink-0 rounded-full"
+									style:background-color={subscriptionColor(account.provider)}
+								></span>
+								<span class="truncate">
+									{account.accountLabel}{account.accountPlan ? ` · ${account.accountPlan}` : ''}
+								</span>
+							</span>
+							{#each account.windows as w (w.windowId)}
+								<PlanLimitBar window={w} ariaLabel="{account.accountLabel} {w.windowLabel}" {now} />
+							{/each}
+						</div>
+					{/each}
+				</div>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
+	<!-- Mirrored columns: daily chart → provider list → drill-down link. -->
+	<!-- Equal heights, with the drill-down links pinned to the bottom of both cards. -->
 	<div class="grid gap-4 {hasEnvironments ? 'lg:grid-cols-2' : ''}">
-		<!-- Pay-as-you-go column -->
-		<Card.Root class="rounded-2xl border-border/40">
+		<Card.Root class="h-full rounded-2xl border-border/40">
 			<Card.Header class="pb-3">
 				<Card.Title class="flex flex-wrap items-center gap-2 text-sm font-medium">
-					Daily cost
+					{paygAllFree ? 'Requests per day' : 'Billed per day'}
 					<ProviderBillingBadge billing="payg" />
 				</Card.Title>
-				<Card.Description>Actual cost per day, by provider.</Card.Description>
+				<Card.Description>
+					{#if paygAllFree}
+						Nothing was billed {rangeLabel}, so this shows requests per day.
+					{:else}
+						Billed cost per day, by provider{payg.chartCapped ? ' (most recent 365 days)' : ''}.
+					{/if}
+				</Card.Description>
 			</Card.Header>
 			<Card.Content class="flex flex-1 flex-col gap-4">
 				{#if payg.providers.length === 0}
-					<p class="py-6 text-center text-sm text-muted-foreground">
-						No requests in the last {days} days.
-					</p>
+					<p class="text-sm text-muted-foreground">No requests, {rangeLabel}.</p>
 				{:else}
 					<DailyStackedChart
 						rows={paygRows}
 						series={paygSeries}
-						valueFormat={formatSpend}
-						emptyText="No billable spend in this period."
+						valueFormat={paygAllFree ? formatCount : formatSpend}
+						axisFormat={paygAllFree ? formatCount : formatSpendCompact}
+						class="max-h-[200px] min-h-[200px]"
 					/>
-					<ul class="flex flex-col gap-2" aria-label="Top providers by cost">
+					<ul class="flex flex-col gap-2" aria-label="Pay-as-you-go providers">
 						{#each payg.providers.slice(0, 5) as p (p.key)}
 							<li class="flex items-center gap-2 text-sm">
 								<span
@@ -241,15 +293,17 @@
 									style:background-color={paygColor(p.colorSlot)}
 								></span>
 								<span class="min-w-0 flex-1 truncate" title={p.name}>{p.name}</span>
-								{#if isFree(p)}
-									<span class="text-xs text-muted-foreground">free / local</span>
+								{#if noCost(p)}
+									<span class="text-xs text-muted-foreground" title={NO_COST_REPORTED}
+										>no cost reported</span
+									>
 								{:else if payg.totalCostUsd > 0}
 									<span class="text-xs text-muted-foreground tabular-nums">
 										{Math.round((p.costUsd / payg.totalCostUsd) * 100)}%
 									</span>
 								{/if}
-								<span class="w-20 text-right font-medium tabular-nums"
-									>{formatSpend(p.costUsd)}</span
+								<span class="w-24 text-right font-medium tabular-nums"
+									>{formatBilled(p.costUsd, { pricedRequests: p.pricedRequests })}</span
 								>
 							</li>
 						{/each}
@@ -259,58 +313,54 @@
 					href={requestsHref()}
 					class="mt-auto inline-flex items-center gap-1 self-start text-sm font-medium underline-offset-4 hover:underline"
 				>
-					View requests <ArrowRightIcon class="size-3.5" aria-hidden="true" />
+					View your requests <ArrowRightIcon class="size-3.5" aria-hidden="true" />
 				</a>
 			</Card.Content>
 		</Card.Root>
 
-		<!-- Subscriptions column: only once something is connected -->
 		{#if hasEnvironments}
-			<Card.Root class="rounded-2xl border-border/40">
+			<Card.Root class="h-full rounded-2xl border-border/40">
 				<Card.Header class="pb-3">
 					<Card.Title class="flex flex-wrap items-center gap-2 text-sm font-medium">
-						Plan limits
+						Daily value
 						<ProviderBillingBadge billing="subscription" />
 					</Card.Title>
-					<Card.Description>Where each plan stands, and its value per day.</Card.Description>
+					<Card.Description>
+						API value per day, by provider.{subs.note ? ` ${subs.note}` : ''}
+					</Card.Description>
 				</Card.Header>
 				<Card.Content class="flex flex-1 flex-col gap-4">
-					{#if subs.accounts.length > 0}
-						<div class="flex flex-col gap-4">
-							{#each subs.accounts as account (account.key)}
-								<div class="flex flex-col gap-2">
-									<span class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-										<span
-											class="size-2 shrink-0 rounded-full"
-											style:background-color={subscriptionColor(account.provider)}
-										></span>
-										<span class="truncate">
-											{account.accountLabel}{account.accountPlan ? ` · ${account.accountPlan}` : ''}
-										</span>
-									</span>
-									{#each account.windows as w (w.windowId)}
-										<PlanLimitBar
-											window={w}
-											ariaLabel="{account.accountLabel} {w.windowLabel}"
-											{now}
-										/>
-									{/each}
-								</div>
-							{/each}
-						</div>
+					{#if subs.providers.length === 0}
+						<p class="text-sm text-muted-foreground">
+							No subscription usage synced, {rangeLabel}.
+						</p>
 					{:else}
-						<p class="text-sm text-muted-foreground">No plan limits reported yet.</p>
-					{/if}
-					<div class="flex flex-col gap-1">
-						<span class="text-xs text-muted-foreground">API-equivalent value per day</span>
 						<DailyStackedChart
 							rows={subRows}
 							series={subSeries}
 							valueFormat={formatSpend}
-							emptyText="No subscription usage synced in this period."
-							class="max-h-[160px] min-h-[160px]"
+							axisFormat={formatSpendCompact}
+							emptyText="No priced subscription usage in this period."
+							class="max-h-[200px] min-h-[200px]"
 						/>
-					</div>
+						<ul class="flex flex-col gap-2" aria-label="Subscription providers">
+							{#each subs.providers.slice(0, 5) as p (p.provider)}
+								<li class="flex items-center gap-2 text-sm">
+									<span
+										class="size-2.5 shrink-0 rounded-full"
+										style:background-color={subscriptionColor(p.provider)}
+									></span>
+									<span class="min-w-0 flex-1 truncate">{providerLabel(p.provider)}</span>
+									<span class="text-xs text-muted-foreground tabular-nums">
+										{formatCount(p.tokens)} tokens
+									</span>
+									<span class="w-24 text-right text-muted-foreground tabular-nums">
+										{formatApiValue(p.costUsd, !p.priced)}
+									</span>
+								</li>
+							{/each}
+						</ul>
+					{/if}
 					<a
 						href={subscriptionsHref}
 						class="mt-auto inline-flex items-center gap-1 self-start text-sm font-medium underline-offset-4 hover:underline"
@@ -335,71 +385,117 @@
 			<Card.Content>
 				{#if providerRows.length === 0}
 					<p class="py-6 text-center text-sm text-muted-foreground">
-						No usage in the last {days} days.
+						No usage, {rangeLabel}.
 					</p>
 				{:else}
-					<Table.Root>
-						<Table.Header>
-							<Table.Row>
-								<Table.Head>Provider</Table.Head>
-								<Table.Head>Billing</Table.Head>
-								<Table.Head class="text-right">Tokens</Table.Head>
-								<Table.Head class="text-right">Volume</Table.Head>
-								<Table.Head class="text-right">Billed</Table.Head>
-								<Table.Head class="text-right">API value</Table.Head>
-							</Table.Row>
-						</Table.Header>
-						<Table.Body>
-							{#each providerRows as row (row.key)}
-								<Table.Row>
-									<Table.Cell>
-										<a
-											href={row.href}
-											class="group inline-flex max-w-56 items-center gap-2 font-medium underline-offset-4 hover:underline"
-										>
-											<span class="size-2 shrink-0 rounded-full" style:background-color={row.color}
-											></span>
-											<span class="truncate" title={row.name}>{row.name}</span>
-											<ChevronRightIcon
-												class="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground"
-												aria-hidden="true"
-											/>
-										</a>
-									</Table.Cell>
-									<Table.Cell><ProviderBillingBadge billing={row.billing} /></Table.Cell>
-									<Table.Cell class="text-right tabular-nums" title={row.tokens.toLocaleString()}>
-										{formatCount(row.tokens)}
-									</Table.Cell>
-									<Table.Cell class="text-right whitespace-nowrap tabular-nums">
-										{formatCount(row.count)}
-										<span class="text-muted-foreground">{row.countLabel}</span>
-									</Table.Cell>
-									<Table.Cell class="text-right whitespace-nowrap tabular-nums">
+					<!-- Phones: one stacked item per provider instead of a sideways-scrolling table. -->
+					<ul class="flex flex-col divide-y divide-border/60 md:hidden">
+						{#each providerRows as row (row.key)}
+							<li>
+								<a href={row.href} class="flex flex-col gap-1 py-3">
+									<span class="flex items-center gap-2">
+										<span class="size-2 shrink-0 rounded-full" style:background-color={row.color}
+										></span>
+										<span class="min-w-0 flex-1 truncate font-medium">{row.name}</span>
+										<ProviderBillingBadge billing={row.billing} />
+									</span>
+									<span class="flex items-baseline gap-2 pl-4 text-xs text-muted-foreground">
+										<span class="min-w-0 flex-1 truncate tabular-nums">
+											{formatCount(row.tokens)} tokens · {formatCount(row.count)}
+											{row.countLabel}{row.billing === 'payg' && row.pricedRequests === 0
+												? ' · no cost reported'
+												: ''}
+										</span>
 										{#if row.billing === 'payg'}
-											<span class="font-medium">{formatSpend(row.costUsd)}</span>
-											{#if row.free}
-												<span class="block text-xs text-muted-foreground">free / local</span>
+											{#if row.pricedRequests > 0}
+												<span class="text-sm font-medium text-foreground tabular-nums">
+													{formatBilled(row.costUsd, { pricedRequests: row.pricedRequests })}
+												</span>
 											{/if}
 										{:else}
-											<span class="text-muted-foreground" aria-label="not billed">—</span>
-										{/if}
-									</Table.Cell>
-									<Table.Cell class="text-right whitespace-nowrap tabular-nums">
-										{#if row.billing === 'subscription'}
-											<span
-												class="text-muted-foreground"
-												title="API-equivalent value — covered by your plan, not billed"
-											>
-												≈ {formatSpend(row.costUsd)}{row.priced ? '' : '+'}
+											<span class="text-sm tabular-nums">
+												{formatApiValue(row.costUsd, !row.priced)}
 											</span>
-										{:else}
-											<span class="text-muted-foreground" aria-label="not applicable">—</span>
 										{/if}
-									</Table.Cell>
+									</span>
+								</a>
+							</li>
+						{/each}
+					</ul>
+					<div class="hidden md:block">
+						<Table.Root>
+							<Table.Header>
+								<Table.Row>
+									<Table.Head>Provider</Table.Head>
+									<Table.Head>Billing</Table.Head>
+									<Table.Head class="text-right">Tokens</Table.Head>
+									<Table.Head class="text-right">Volume</Table.Head>
+									<Table.Head class="text-right">Billed</Table.Head>
+									<Table.Head class="text-right">API value</Table.Head>
 								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
+							</Table.Header>
+							<Table.Body>
+								{#each providerRows as row (row.key)}
+									<Table.Row>
+										<Table.Cell>
+											<a
+												href={row.href}
+												class="group inline-flex max-w-56 items-center gap-2 font-medium underline-offset-4 hover:underline"
+											>
+												<span
+													class="size-2 shrink-0 rounded-full"
+													style:background-color={row.color}
+												></span>
+												<span class="truncate" title={row.name}>{row.name}</span>
+												<ChevronRightIcon
+													class="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground"
+													aria-hidden="true"
+												/>
+											</a>
+										</Table.Cell>
+										<Table.Cell><ProviderBillingBadge billing={row.billing} /></Table.Cell>
+										<Table.Cell class="text-right tabular-nums" title={row.tokens.toLocaleString()}>
+											{formatCount(row.tokens)}
+										</Table.Cell>
+										<Table.Cell class="text-right whitespace-nowrap tabular-nums">
+											{formatCount(row.count)}
+											<span class="text-muted-foreground">{row.countLabel}</span>
+										</Table.Cell>
+										<Table.Cell class="text-right whitespace-nowrap tabular-nums">
+											{#if row.billing === 'payg'}
+												<span
+													class="font-medium"
+													title={row.pricedRequests === 0 ? NO_COST_REPORTED : undefined}
+												>
+													{formatBilled(row.costUsd, { pricedRequests: row.pricedRequests })}
+												</span>
+											{:else}
+												<!-- "—" is reserved for "no cost reported"; subscriptions are prepaid. -->
+												<span
+													class="text-muted-foreground"
+													title="Included in your plan — not billed per token"
+												>
+													Included
+												</span>
+											{/if}
+										</Table.Cell>
+										<Table.Cell class="text-right whitespace-nowrap tabular-nums">
+											{#if row.billing === 'subscription'}
+												<span
+													class="text-muted-foreground"
+													title="API-equivalent value — covered by your plan, not billed"
+												>
+													{formatApiValue(row.costUsd, !row.priced)}
+												</span>
+											{:else}
+												<span class="sr-only">Not applicable</span>
+											{/if}
+										</Table.Cell>
+									</Table.Row>
+								{/each}
+							</Table.Body>
+						</Table.Root>
+					</div>
 					{#if subs.anyUnpriced}
 						<p class="mt-3 text-xs text-muted-foreground">
 							+ Some subscription records had no known price, so the value is a lower bound.

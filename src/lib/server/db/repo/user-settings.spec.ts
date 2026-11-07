@@ -25,14 +25,38 @@ describe('user-settings repo', () => {
 		expect(repo.getUserSettings(db, 'u1')).toEqual({
 			theme: 'system',
 			suggestions: repo.getSuggestions(db, 'u1'),
+			codingSuggestions: repo.getCodingSuggestions(db, 'u1'),
 			globalInstructions: '',
 			timeFormat: 'auto',
-			sidebarOpen: true
+			sidebarOpen: true,
+			favoriteModels: [],
+			notificationTriggers: {
+				replies: true,
+				needsYou: true,
+				codingFinished: true,
+				failures: true,
+				agentRuns: false
+			}
 		});
 		expect(repo.getTheme(db, 'u1')).toBe('system');
 		expect(repo.getTimeFormat(db, 'u1')).toBe('auto');
 		expect(repo.getSidebarOpen(db, 'u1')).toBe(true);
 		expect(repo.getSuggestions(db, 'u1').length).toBeGreaterThan(0);
+	});
+
+	it('merges stored notification triggers over the defaults', () => {
+		repo.setUserSetting(db, 'u1', 'notificationTriggers', {
+			replies: false,
+			bogus: 1,
+			agentRuns: 'x'
+		});
+		expect(repo.getNotificationTriggers(db, 'u1')).toEqual({
+			replies: false,
+			needsYou: true,
+			codingFinished: true,
+			failures: true,
+			agentRuns: false
+		});
 	});
 
 	it('round-trips sidebarOpen per user', () => {
@@ -49,6 +73,15 @@ describe('user-settings repo', () => {
 			JSON.stringify('open')
 		);
 		expect(repo.getSidebarOpen(db, 'u1')).toBe(true);
+	});
+
+	it('round-trips favoriteModels and drops invalid or duplicate entries', () => {
+		repo.setUserSetting(db, 'u1', 'favoriteModels', ['p1/m1', 'p1/m1', 42, 'nope', 'p2/a/b']);
+		expect(repo.getFavoriteModels(db, 'u1')).toEqual(['p1/m1', 'p2/a/b']);
+		seedUser(db, 'u2');
+		expect(repo.getFavoriteModels(db, 'u2')).toEqual([]);
+		repo.setUserSetting(db, 'u1', 'favoriteModels', 'p1/m1');
+		expect(repo.getFavoriteModels(db, 'u1')).toEqual([]);
 	});
 
 	it('round-trips values per user', () => {

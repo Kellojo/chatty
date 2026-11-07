@@ -8,7 +8,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const window = usageWindow(url);
 	return {
 		period: window.period,
-		periodDays: window.days.length,
+		rangeLabel: window.label,
 		subscriptions: loadSubscriptionUsage(getDb(), user.id, window)
 	};
 };

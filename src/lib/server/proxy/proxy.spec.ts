@@ -181,13 +181,15 @@ describe('GET /api/v1/models', () => {
 			id: 'm1',
 			object: 'model',
 			created: 0,
-			owned_by: 'P'
+			owned_by: 'P',
+			context_length: null
 		});
 		expect(res.body.data).toContainEqual({
 			id: 'fast',
 			object: 'model',
 			created: 0,
-			owned_by: 'ai-chat'
+			owned_by: 'ai-chat',
+			context_length: null
 		});
 		expect(res.body.data.map((m) => m.id)).not.toContain('disabled-model');
 	});

@@ -46,7 +46,8 @@
 	<LinkSafetyModal {...props} />
 {/snippet}
 
-<div {id} class={cn(className)} {...restProps}>
+<!-- wrap-anywhere: long unbroken tokens (inline JSON, hashes, paths) wrap instead of widening the chat. -->
+<div {id} class={cn('wrap-anywhere', className)} {...restProps}>
 	<Streamdown
 		{content}
 		class="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
@@ -75,8 +76,17 @@
 			h4: { base: 'mt-6 mb-2 text-lg font-semibold text-foreground' },
 			h5: { base: 'mt-5 mb-2 text-base font-semibold text-foreground' },
 			h6: { base: 'mt-5 mb-2 text-sm font-semibold text-foreground' },
-			ul: { base: 'ml-0 list-outside list-disc pl-6 whitespace-normal text-foreground' },
-			ol: { base: 'ml-0 list-outside pl-6 whitespace-normal text-foreground' },
+			paragraph: { base: 'my-3 leading-7 text-foreground' },
+			ul: {
+				base: 'my-3 in-[li]:my-1 ml-0 list-outside list-disc pl-6 whitespace-normal text-foreground'
+			},
+			ol: { base: 'my-3 in-[li]:my-1 ml-0 list-outside pl-6 whitespace-normal text-foreground' },
+			th: {
+				base: 'min-w-0 max-w-[400px] px-3 py-2 text-left text-sm font-semibold break-words text-foreground'
+			},
+			td: { base: 'min-w-0 max-w-[400px] px-3 py-2 text-sm break-words text-foreground' },
+			codespan: { base: 'rounded bg-muted px-1 py-0.5 font-mono text-[0.9em] text-foreground' },
+			li: { base: 'py-0.5 leading-7 marker:text-muted-foreground', checkbox: 'mr-2' },
 			code: {
 				base: 'relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-white p-2 [--sdm-bg:theme(colors.white)] dark:bg-sidebar dark:[--sdm-bg:transparent]',
 				header: 'flex h-8 items-center justify-between pr-1 text-muted-foreground text-xs',

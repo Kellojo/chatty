@@ -51,6 +51,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 							triggerConfig: pub.triggerConfig,
 							enabled: pub.enabled,
 							builtin: r.user_id === null,
+							coding: r.coding_target !== null,
 							lastRunAt: pub.lastRunAt,
 							nextRunAt: pub.nextRunAt
 						};
@@ -131,6 +132,12 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 			if (existing.user_id === null) {
 				log.warn('update_agent builtin attempt', { userId: ctx.userId, agentId });
 				return err('built-in agents cannot be modified');
+			}
+			// Their prompt becomes work done in the user's repositories, so only
+			// the user changes it (on the Agents page), never a chat model.
+			if (existing.coding_target) {
+				log.warn('update_agent coding agent attempt', { userId: ctx.userId, agentId });
+				return err('coding agents can only be changed by the user on the Agents page');
 			}
 			const prepared = prepareAgentUpdate(db, existing, patch, { mergeTriggerConfig: true });
 			if (!prepared.ok) return err(prepared.error);

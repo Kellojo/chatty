@@ -36,7 +36,7 @@
 	let enabledOverride = $state<Record<string, boolean>>({});
 
 	const tokenCommand =
-		't3 auth session issue --scope orchestration:read --scope orchestration:operate --scope diagnostics:read --scope source-control:write --token-only';
+		't3 auth session issue --scope orchestration:read --scope orchestration:operate --scope diagnostics:read --scope source-control:write --scope workspace --token-only';
 
 	async function api(path: string, method: string, body?: unknown): Promise<Response> {
 		const res = await fetch(path, {
@@ -291,8 +291,8 @@
 					<LinkIcon class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
 					<p class="flex-1 text-muted-foreground">
 						<span class="font-medium text-foreground">Pairing link detected.</span>
-						Chatty will exchange it for a token that can read usage and start coding tasks. The link works
-						once.
+						Chatty will exchange it for a token that can read usage, start coding tasks and show images
+						the agent saves. The link works once.
 					</p>
 					<button
 						type="button"

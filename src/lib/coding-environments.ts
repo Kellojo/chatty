@@ -67,9 +67,25 @@ export type CodingWorkspaceMode = 'worktree' | 'local';
 export const CODING_AUTONOMY_VALUES = ['supervised', 'auto-edits', 'auto', 'full-access'] as const;
 export type CodingAutonomy = (typeof CODING_AUTONOMY_VALUES)[number];
 
+/** Where a coding agent's runs start: everything needed to create a coding task. */
+export interface AgentCodingTarget {
+	environmentId: string;
+	projectId: string;
+	/** Project title when the target was saved (display only; the id is authoritative). */
+	projectTitle: string;
+	providerInstanceId: string;
+	model: string;
+	autonomy: CodingAutonomy;
+	workspaceMode: CodingWorkspaceMode;
+	/** Base branch for worktree runs; null for the project checkout. */
+	baseBranch: string | null;
+}
+
 export interface CodingPendingOption {
 	id: string;
 	label: string;
+	/** Explanation of what choosing this option means (questions only). */
+	description?: string;
 }
 
 /** An approval or question from the coding agent waiting on the user. */
@@ -102,6 +118,30 @@ export interface CodingConversation {
 	status: CodingTaskStatus;
 	pendingRequest: CodingPendingRequest | null;
 	lastError: string | null;
+	/** Start of the agent run in progress (ms), null when nothing runs. */
+	runStartedAt: number | null;
+	/** Lines changed on the task's branch / working tree, null until known. */
+	diff: CodingDiffStat | null;
+}
+
+export interface CodingDiffStat {
+	insertions: number;
+	deletions: number;
+}
+
+/** What the conversation list shows about a coding task. */
+export interface CodingConversationSummary {
+	projectTitle: string;
+	status: CodingTaskStatus;
+	/** Start of the agent run in progress (ms), null when nothing runs. */
+	runStartedAt: number | null;
+	diff: CodingDiffStat | null;
+}
+
+/** A provider instance + model slug on a T3 server. */
+export interface CodingModelRef {
+	providerInstanceId: string;
+	model: string;
 }
 
 export interface CodingProjectOption {
@@ -109,6 +149,8 @@ export interface CodingProjectOption {
 	title: string;
 	defaultBranch: string | null;
 	isGitRepo: boolean;
+	/** T3's default model for new threads in this project (already resolved to an available one). */
+	defaultModel: CodingModelRef | null;
 	/** Per-project overrides of the environment defaults, from T3's settings. */
 	defaultAutonomy: CodingAutonomy | null;
 	defaultWorkspaceMode: CodingWorkspaceMode | null;
@@ -120,6 +162,8 @@ export interface CodingModelOption {
 	providerLabel: string;
 	model: string;
 	label: string;
+	/** Starred in T3. */
+	favorite: boolean;
 }
 
 export interface ParsedEnvironmentUrl {

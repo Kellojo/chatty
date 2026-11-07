@@ -31,7 +31,7 @@
 	import { decodeModelRef } from '$lib/model-ref.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
-	import { DEFAULT_SUGGESTIONS } from '$lib/user-settings.js';
+	import { DEFAULT_CODING_SUGGESTIONS, DEFAULT_SUGGESTIONS } from '$lib/user-settings.js';
 	import { START_MODE_COOKIE } from '$lib/coding-environments.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -65,7 +65,9 @@
 
 	// Starting a coding task is heavier than a chat message, so these fill the
 	// input for review instead of sending right away.
-	const CODING_SUGGESTIONS = ['Explain the codebase', 'Fix failing tests', 'Find and fix a bug'];
+	const codingSuggestions = $derived(
+		data.codingSuggestions.length > 0 ? data.codingSuggestions : DEFAULT_CODING_SUGGESTIONS
+	);
 
 	function focusPrompt(): HTMLTextAreaElement | null {
 		const textarea = document.querySelector<HTMLTextAreaElement>(
@@ -385,7 +387,7 @@
 	{#if coding}
 		{#if codingTask.project}
 			<div class="mt-2 flex max-w-2xl flex-wrap justify-center gap-2">
-				{#each CODING_SUGGESTIONS as suggestion (suggestion)}
+				{#each codingSuggestions as suggestion (suggestion)}
 					<PromptSuggestion onclick={() => useSuggestion(suggestion)}>{suggestion}</PromptSuggestion
 					>
 				{/each}

@@ -40,6 +40,7 @@ import {
 } from '../db/repo/attachments.js';
 import { getAgent } from '../db/repo/agents.js';
 import { getCodingConversation } from '../db/repo/coding-conversations.js';
+import { queueThreadStatePush } from '../t3/thread-state.js';
 import { CodingTaskError, startCodingTurn } from '../t3/tasks.js';
 import { latestSummary } from '../db/repo/conversation-summaries.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
@@ -151,8 +152,10 @@ function historyFromDb(db: Db, conversationId: string): UIMessage[] {
 	const rows = listMessages(db, conversationId);
 	const summary = latestSummary(db, conversationId);
 	const visible = summary ? rows.filter((r) => r.rowid > summary.through_rowid) : rows;
-	const messages = visible.map((row) => {
-		const message = toPublic(row);
+	// A failed response with no output only carries an error for the UI; an empty
+	// assistant turn is not valid model input.
+	const messages = visible.map(toPublic).flatMap((message) => {
+		if (message.role === 'assistant' && message.parts.length === 0) return [];
 		return {
 			id: message.id,
 			role: message.role,
@@ -297,6 +300,7 @@ function afterUserMessage(
 			conversationIds: [conversation.id],
 			settled: false
 		});
+		queueThreadStatePush(db, userId, [conversation.id]);
 	}
 	if (conversation.title === '') {
 		const raw = extractText(message.parts).trim().replace(/\s+/g, ' ');
@@ -549,7 +553,10 @@ export async function handleChatRequest(
 							recordStep({ status: 'complete', usage: step.usage });
 							for (const tr of step.toolResults) {
 								if (tr.toolName === 'generate_image' || tr.toolName === 'edit_image') {
-									const ids = attachmentIdsFromOutput(tr.output);
+									// Only ids belonging to this conversation: tool output is untrusted.
+									const ids = attachmentIdsFromOutput(tr.output).filter(
+										(id) => getConversationAttachment(db, conversation.id, id) !== undefined
+									);
 									if (ids.length === 0) continue;
 									linkAttachmentsToMessage(db, assistantMessageId, ids);
 									for (const id of ids) {
@@ -646,7 +653,9 @@ export async function handleChatRequest(
 				// 'partial' only ever means "still being generated", so that anything
 				// left in that state after a restart is known to be a dead response.
 				const status = isAborted || errorText ? 'failed' : 'complete';
-				if (responseMessage.parts.length > 0 || status === 'complete') {
+				// A failure is kept even without output so the error stays visible in the
+				// conversation; only an empty interrupted response is dropped.
+				if (responseMessage.parts.length > 0 || status === 'complete' || errorText) {
 					updateMessage(db, assistantMessageId, {
 						parts: responseMessage.parts,
 						status,

@@ -1,6 +1,8 @@
 import type { Db } from '../index.js';
+import { createConversation } from './conversations.js';
 import type {
 	CodingConversation,
+	CodingDiffStat,
 	CodingPendingRequest,
 	CodingTaskStatus,
 	CodingWorkspaceMode
@@ -23,6 +25,17 @@ export interface CodingConversationRow {
 	pending_request: string | null;
 	last_sequence: number | null;
 	last_error: string | null;
+	/** Settled state last agreed with the T3 thread (0/1), NULL if never compared. */
+	remote_settled: number | null;
+	/** Title last agreed with the T3 thread, NULL if never compared. */
+	remote_title: string | null;
+	/** Pinned state last agreed with the T3 thread (0/1), NULL if never compared. */
+	remote_pinned: number | null;
+	/** The thread's `lastVisitedAt` (ms, 0 = never) when last seen, NULL if never seen. */
+	remote_visited_at: number | null;
+	run_started_at: number | null;
+	diff_insertions: number | null;
+	diff_deletions: number | null;
 	created_at: number;
 	updated_at: number;
 }
@@ -52,7 +65,12 @@ export function toPublic(row: CodingConversationRow): CodingConversation {
 		prUrl: row.pr_url,
 		status: row.status,
 		pendingRequest: parsePending(row.pending_request),
-		lastError: row.last_error
+		lastError: row.last_error,
+		runStartedAt: row.run_started_at,
+		diff:
+			row.diff_insertions === null || row.diff_deletions === null
+				? null
+				: { insertions: row.diff_insertions, deletions: row.diff_deletions }
 	};
 }
 
@@ -125,6 +143,12 @@ export interface CodingConversationPatch {
 	pendingRequest?: CodingPendingRequest | null;
 	lastSequence?: number;
 	lastError?: string | null;
+	remoteSettled?: boolean;
+	remoteTitle?: string;
+	remotePinned?: boolean;
+	remoteVisitedAt?: number;
+	runStartedAt?: number | null;
+	diff?: CodingDiffStat;
 }
 
 export function updateCodingConversation(
@@ -147,6 +171,15 @@ export function updateCodingConversation(
 	}
 	if (patch.lastSequence !== undefined) set('last_sequence', patch.lastSequence);
 	if (patch.lastError !== undefined) set('last_error', patch.lastError);
+	if (patch.remoteSettled !== undefined) set('remote_settled', patch.remoteSettled ? 1 : 0);
+	if (patch.remoteTitle !== undefined) set('remote_title', patch.remoteTitle);
+	if (patch.remotePinned !== undefined) set('remote_pinned', patch.remotePinned ? 1 : 0);
+	if (patch.remoteVisitedAt !== undefined) set('remote_visited_at', patch.remoteVisitedAt);
+	if (patch.runStartedAt !== undefined) set('run_started_at', patch.runStartedAt);
+	if (patch.diff !== undefined) {
+		set('diff_insertions', patch.diff.insertions);
+		set('diff_deletions', patch.diff.deletions);
+	}
 	if (sets.length > 0) {
 		set('updated_at', Date.now());
 		db.prepare(`UPDATE coding_conversations SET ${sets.join(', ')} WHERE conversation_id = ?`).run(
@@ -169,4 +202,101 @@ export function listLiveCodingConversations(
 			   AND cc.status IN ('starting', 'running', 'awaiting_input')`
 		)
 		.all() as (CodingConversationRow & { user_id: string })[];
+}
+
+/** Tasks on `environmentId` that have a remote thread (their metadata is synced). */
+export function listThreadCodingConversations(
+	db: Db,
+	environmentId: string
+): (CodingConversationRow & { user_id: string })[] {
+	return db
+		.prepare(
+			`SELECT cc.*, c.user_id AS user_id FROM coding_conversations cc
+			 JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE c.deleted_at IS NULL AND cc.thread_id IS NOT NULL AND cc.environment_id = ?`
+		)
+		.all(environmentId) as (CodingConversationRow & { user_id: string })[];
+}
+
+/**
+ * Thread ids on `environmentId` Chatty already knows: linked to a conversation
+ * (even a deleted one) or dismissed after its conversation was purged.
+ */
+export function listKnownThreadIds(db: Db, environmentId: string): Set<string> {
+	const rows = db
+		.prepare(
+			`SELECT thread_id FROM coding_conversations WHERE environment_id = ? AND thread_id IS NOT NULL
+			 UNION SELECT thread_id FROM coding_dismissed_threads WHERE environment_id = ?`
+		)
+		.all(environmentId, environmentId) as { thread_id: string }[];
+	return new Set(rows.map((r) => r.thread_id));
+}
+
+export interface ImportCodingConversationInput extends Omit<
+	CreateCodingConversationInput,
+	'conversationId'
+> {
+	userId: string;
+	threadId: string;
+	title: string;
+	status: CodingTaskStatus;
+	branch: string | null;
+	settled: boolean;
+	pinned: boolean;
+	/** The thread's `lastVisitedAt` (ms, 0 = never visited). */
+	visitedAt: number;
+	createdAt: number;
+	updatedAt: number;
+}
+
+/**
+ * Creates the conversation + task record for a thread that was started on the
+ * T3 server itself. It starts out read as far as T3 has seen it (the thread
+ * state sync takes it from there); the follower fills in the history.
+ */
+export function importCodingConversation(db: Db, input: ImportCodingConversationInput): string {
+	return db.transaction(() => {
+		const conversation = createConversation(db, input.userId, {
+			kind: 'chat',
+			mode: 'agent',
+			title: input.title
+		});
+		db.prepare(
+			`UPDATE conversations
+			 SET created_at = ?, updated_at = ?, last_read_at = ?, settled_at = ?, settled_reason = ?,
+			     pinned = ?
+			 WHERE id = ?`
+		).run(
+			input.createdAt,
+			input.updatedAt,
+			input.visitedAt,
+			input.settled ? input.updatedAt : null,
+			input.settled ? 'manual' : null,
+			input.pinned ? 1 : 0,
+			conversation.id
+		);
+		createCodingConversation(db, { ...input, conversationId: conversation.id });
+		updateCodingConversation(db, conversation.id, {
+			threadId: input.threadId,
+			status: input.status,
+			branch: input.branch,
+			remoteSettled: input.settled,
+			remoteTitle: input.title,
+			remotePinned: input.pinned,
+			remoteVisitedAt: input.visitedAt
+		});
+		return conversation.id;
+	})();
+}
+
+/** Number of not-deleted coding conversations on `environmentId` that have a remote thread. */
+export function countThreadCodingConversations(db: Db, environmentId: string): number {
+	const row = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM coding_conversations cc
+			 JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE c.deleted_at IS NULL AND cc.thread_id IS NOT NULL AND cc.environment_id = ?`
+		)
+		.get(environmentId) as { n: number };
+	return row.n;
 }

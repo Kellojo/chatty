@@ -73,6 +73,8 @@ export default defineConfig(({ mode }) => {
 				workbox: {
 					// Serve the precached app shell for navigations when offline.
 					navigateFallback: '/',
+					// Notification click handling (see static/notification-sw.js).
+					importScripts: ['/notification-sw.js'],
 					// HTML/data payloads can exceed the default 2 MiB precache limit.
 					maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
 					runtimeCaching: [

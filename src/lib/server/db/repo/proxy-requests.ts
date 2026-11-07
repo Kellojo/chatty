@@ -244,6 +244,8 @@ export interface ProxyRequestStats {
 	inputTokens: number;
 	outputTokens: number;
 	costUsd: number;
+	/** Requests that reported a cost (possibly 0). */
+	pricedRequests: number;
 	distinctModels: number;
 	cavemanSaved: number;
 }
@@ -259,6 +261,7 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 				COALESCE(SUM(input_tokens), 0) AS input_tokens,
 				COALESCE(SUM(output_tokens), 0) AS output_tokens,
 				COALESCE(SUM(cost_usd), 0) AS cost_usd,
+				COUNT(cost_usd) AS priced_requests,
 				COUNT(DISTINCT requested_model) AS distinct_models,
 			COALESCE(SUM(CAST(json_extract(compression, '$.caveman.estSaved') AS INTEGER)), 0) AS caveman_saved
 		 FROM proxy_requests ${where}`
@@ -271,6 +274,7 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 		input_tokens: number;
 		output_tokens: number;
 		cost_usd: number;
+		priced_requests: number;
 		distinct_models: number;
 		caveman_saved: number;
 	};
@@ -282,6 +286,7 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 		inputTokens: row.input_tokens,
 		outputTokens: row.output_tokens,
 		costUsd: row.cost_usd,
+		pricedRequests: row.priced_requests,
 		distinctModels: row.distinct_models,
 		cavemanSaved: row.caveman_saved
 	};
@@ -320,6 +325,8 @@ export interface ModelUsage {
 	count: number;
 	totalTokens: number;
 	costUsd: number;
+	/** Requests that reported a cost (possibly 0). */
+	pricedRequests: number;
 	avgLatencyMs: number | null;
 }
 
@@ -335,6 +342,7 @@ export function proxyRequestTopModels(
 				COUNT(*) AS count,
 				COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS total_tokens,
 				COALESCE(SUM(cost_usd), 0) AS cost_usd,
+				COUNT(cost_usd) AS priced_requests,
 				AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms END) AS avg_latency
 			 FROM proxy_requests ${where}
 			 GROUP BY requested_model
@@ -346,6 +354,7 @@ export function proxyRequestTopModels(
 		count: number;
 		total_tokens: number;
 		cost_usd: number;
+		priced_requests: number;
 		avg_latency: number | null;
 	}[];
 	return rows.map((r) => ({
@@ -353,6 +362,7 @@ export function proxyRequestTopModels(
 		count: r.count,
 		totalTokens: r.total_tokens,
 		costUsd: r.cost_usd,
+		pricedRequests: r.priced_requests,
 		avgLatencyMs: r.avg_latency
 	}));
 }
@@ -391,6 +401,8 @@ export interface ProviderModelDailyUsage {
 	providerName: string | null;
 	model: string;
 	requests: number;
+	/** Requests that reported a cost (possibly 0); the rest had no known price. */
+	pricedRequests: number;
 	inputTokens: number;
 	outputTokens: number;
 	costUsd: number;
@@ -413,6 +425,7 @@ export function proxyRequestProviderUsage(
 				p.name AS provider_name,
 				COALESCE(pr.model_id, pr.requested_model) AS model,
 				COUNT(*) AS requests,
+				COUNT(pr.cost_usd) AS priced_requests,
 				COALESCE(SUM(pr.input_tokens), 0) AS input_tokens,
 				COALESCE(SUM(pr.output_tokens), 0) AS output_tokens,
 				COALESCE(SUM(pr.cost_usd), 0) AS cost_usd
@@ -428,6 +441,7 @@ export function proxyRequestProviderUsage(
 		provider_name: string | null;
 		model: string;
 		requests: number;
+		priced_requests: number;
 		input_tokens: number;
 		output_tokens: number;
 		cost_usd: number;
@@ -438,10 +452,23 @@ export function proxyRequestProviderUsage(
 		providerName: r.provider_name,
 		model: r.model,
 		requests: r.requests,
+		pricedRequests: r.priced_requests,
 		inputTokens: r.input_tokens,
 		outputTokens: r.output_tokens,
 		costUsd: r.cost_usd
 	}));
+}
+
+/** When the earliest matching request started, or null when there is none. */
+export function proxyRequestFirstStartedAt(
+	db: Db,
+	filters: ProxyRequestFilters = {}
+): number | null {
+	const { where, args } = buildWhere(filters);
+	const row = db
+		.prepare(`SELECT MIN(started_at) AS first FROM proxy_requests ${where}`)
+		.get(...args) as { first: number | null };
+	return row.first;
 }
 
 export function failRunningProxyRequests(db: Db): number {

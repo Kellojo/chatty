@@ -12,6 +12,12 @@
 	const sections = [
 		{ href: '/settings/account', label: 'Account', adminOnly: false, group: 'General' },
 		{ href: '/settings/conversation', label: 'Conversation', adminOnly: false, group: 'General' },
+		{
+			href: '/settings/notifications',
+			label: 'Notifications',
+			adminOnly: false,
+			group: 'General'
+		},
 		{ href: '/settings/providers', label: 'Providers', adminOnly: true, group: 'Models' },
 		{ href: '/settings/models', label: 'Models', adminOnly: true, group: 'Models' },
 		{ href: '/settings/mappings', label: 'Mappings', adminOnly: true, group: 'Models' },

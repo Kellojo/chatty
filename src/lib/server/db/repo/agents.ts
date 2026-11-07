@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { AgentCodingTarget } from '$lib/coding-environments.js';
 import type { Agent, AgentTriggerConfig, AgentTriggerType } from '$lib/types.js';
 import type { Db } from '../index.js';
 
@@ -15,6 +16,8 @@ export interface AgentRow {
 	trigger_type: string;
 	trigger_config: string;
 	max_steps: number | null;
+	/** JSON AgentCodingTarget; set for coding agents. */
+	coding_target: string | null;
 	enabled: number;
 	last_run_at: number | null;
 	next_run_at: number | null;
@@ -36,12 +39,23 @@ export function toPublic(row: AgentRow): Agent {
 		triggerType: row.trigger_type as AgentTriggerType,
 		triggerConfig: JSON.parse(row.trigger_config) as AgentTriggerConfig,
 		maxSteps: row.max_steps,
+		codingTarget: parseCodingTarget(row),
 		enabled: row.enabled === 1,
 		lastRunAt: row.last_run_at,
 		nextRunAt: row.next_run_at,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
+}
+
+/** The agent's coding target, or null for a model agent. */
+export function parseCodingTarget(row: Pick<AgentRow, 'coding_target'>): AgentCodingTarget | null {
+	if (!row.coding_target) return null;
+	try {
+		return JSON.parse(row.coding_target) as AgentCodingTarget;
+	} catch {
+		return null;
+	}
 }
 
 export interface CreateAgentInput {
@@ -55,6 +69,7 @@ export interface CreateAgentInput {
 	triggerType: AgentTriggerType;
 	triggerConfig?: AgentTriggerConfig;
 	maxSteps?: number | null;
+	codingTarget?: AgentCodingTarget | null;
 	enabled?: boolean;
 	nextRunAt?: number | null;
 }
@@ -64,9 +79,9 @@ export function createAgent(db: Db, userId: string | null, input: CreateAgentInp
 	const now = Date.now();
 	db.prepare(
 		`INSERT INTO agents (id, user_id, name, description, system_prompt, provider_id, model_id,
-		 skill_names, tool_allowlist, trigger_type, trigger_config, max_steps, enabled, next_run_at,
-		 created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 skill_names, tool_allowlist, trigger_type, trigger_config, max_steps, coding_target, enabled,
+		 next_run_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
@@ -80,6 +95,7 @@ export function createAgent(db: Db, userId: string | null, input: CreateAgentInp
 		input.triggerType,
 		JSON.stringify(input.triggerConfig ?? {}),
 		input.maxSteps ?? null,
+		input.codingTarget ? JSON.stringify(input.codingTarget) : null,
 		input.enabled === false ? 0 : 1,
 		input.nextRunAt ?? null,
 		now,
@@ -212,6 +228,7 @@ export interface UpdateAgentInput {
 	triggerType?: AgentTriggerType;
 	triggerConfig?: AgentTriggerConfig;
 	maxSteps?: number | null;
+	codingTarget?: AgentCodingTarget | null;
 	enabled?: boolean;
 	nextRunAt?: number | null;
 	lastRunAt?: number | null;
@@ -223,7 +240,7 @@ export function updateAgent(db: Db, id: string, patch: UpdateAgentInput): AgentR
 	db.prepare(
 		`UPDATE agents SET name = ?, description = ?, system_prompt = ?, provider_id = ?, model_id = ?,
 		 skill_names = ?, tool_allowlist = ?, trigger_type = ?, trigger_config = ?, max_steps = ?,
-		 enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
+		 coding_target = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
 		 WHERE id = ?`
 	).run(
 		patch.name ?? existing.name,
@@ -242,6 +259,11 @@ export function updateAgent(db: Db, id: string, patch: UpdateAgentInput): AgentR
 			? JSON.stringify(patch.triggerConfig)
 			: existing.trigger_config,
 		patch.maxSteps !== undefined ? patch.maxSteps : existing.max_steps,
+		patch.codingTarget !== undefined
+			? patch.codingTarget
+				? JSON.stringify(patch.codingTarget)
+				: null
+			: existing.coding_target,
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
 		patch.nextRunAt !== undefined ? patch.nextRunAt : existing.next_run_at,
 		patch.lastRunAt !== undefined ? patch.lastRunAt : existing.last_run_at,

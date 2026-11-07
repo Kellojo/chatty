@@ -10,6 +10,8 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
+	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
+	import { resolveProviderBrand } from '$lib/provider-brand.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -199,8 +201,12 @@
 				<Table.Body>
 					{#each data.providers as provider (provider.id)}
 						<Table.Row>
-							<Table.Cell class="max-w-40 truncate font-medium" title={provider.name}>
-								{provider.name}
+							<Table.Cell class="max-w-40 font-medium" title={provider.name}>
+								{@const brand = resolveProviderBrand(provider)}
+								<span class="flex min-w-0 items-center gap-2">
+									{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
+									<span class="truncate">{provider.name}</span>
+								</span>
 							</Table.Cell>
 							<Table.Cell><Badge variant="outline">{typeLabels[provider.type]}</Badge></Table.Cell>
 							<Table.Cell

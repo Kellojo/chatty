@@ -3,7 +3,17 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { mappingModelRef, encodeModelRef } from '$lib/model-ref.js';
-	import type { ModelMapping, ModelsByProvider } from '$lib/types.js';
+	import ProviderIcon from './ProviderIcon.svelte';
+	import ModelOptionItem from './ModelOptionItem.svelte';
+	import ModelFavoritesGroup from './ModelFavoritesGroup.svelte';
+	import {
+		resolveBrand,
+		resolveModelBrand,
+		resolveProviderBrand,
+		type Brand
+	} from '$lib/provider-brand.js';
+	import { getFavoriteModels } from '$lib/state/favorite-models.svelte.js';
+	import type { ChatModel, ModelMapping, ModelsByProvider, Provider } from '$lib/types.js';
 
 	let {
 		groups,
@@ -29,6 +39,8 @@
 		class?: string;
 	} = $props();
 
+	const favorites = getFavoriteModels();
+
 	let selectedValue = $state(untrack(() => value));
 	let query = $state('');
 
@@ -38,22 +50,49 @@
 		}
 	});
 
-	const label = $derived.by(() => {
+	interface Option {
+		value: string;
+		name: string;
+		/** Where the model comes from; shown next to favourites, which leave their group. */
+		source: string;
+		brand: Brand | null;
+	}
+
+	const mappingOption = (mapping: ModelMapping): Option => ({
+		value: encodeModelRef(mappingModelRef(mapping)),
+		name: mapping.name,
+		source: 'Mapping',
+		brand:
+			resolveBrand(mapping.name) ??
+			(mapping.targets[0] ? resolveModelBrand(mapping.targets[0]) : null)
+	});
+
+	const modelOption = (model: ChatModel, provider: Provider): Option => ({
+		value: `${model.providerId}/${model.modelId}`,
+		name: model.displayName,
+		source: provider.name,
+		brand: resolveModelBrand(model, provider)
+	});
+
+	const selected = $derived.by(() => {
 		for (const mapping of mappings) {
-			if (encodeModelRef(mappingModelRef(mapping)) === selectedValue) {
-				return `${mapping.name} (mapping)`;
-			}
+			const option = mappingOption(mapping);
+			if (option.value === selectedValue) return { label: `${option.name} (mapping)`, ...option };
 		}
-		for (const group of groups) {
-			for (const model of group.models) {
-				if (`${model.providerId}/${model.modelId}` === selectedValue) {
-					return `${model.displayName} (${group.provider.name})`;
+		for (const { provider, models } of groups) {
+			for (const model of models) {
+				const option = modelOption(model, provider);
+				if (option.value === selectedValue) {
+					return { label: `${option.name} (${provider.name})`, ...option };
 				}
 			}
 		}
-		if (selectedValue) return selectedValue.split('/').slice(1).join('/') || selectedValue;
-		return placeholder;
+		const fallback = selectedValue
+			? selectedValue.split('/').slice(1).join('/') || selectedValue
+			: placeholder;
+		return { label: fallback, brand: null };
 	});
+	const label = $derived(selected.label);
 
 	const capabilityGroups = $derived.by(() => {
 		if (!capability) return groups;
@@ -92,7 +131,34 @@
 		return capabilityMappings.filter((m) => m.name.toLowerCase().includes(q));
 	});
 
-	const isEmpty = $derived(filteredGroups.length === 0 && filteredMappings.length === 0);
+	const optionGroups = $derived(
+		filteredGroups.map((group) => ({
+			provider: group.provider,
+			options: group.models.map((model) => modelOption(model, group.provider))
+		}))
+	);
+	const allMappingOptions = $derived(filteredMappings.map(mappingOption));
+	const allOptions = $derived([...allMappingOptions, ...optionGroups.flatMap((g) => g.options)]);
+
+	// Favourites are listed once, at the top, in the order they were starred.
+	const favoriteOptions = $derived.by(() => {
+		if (!favorites) return [];
+		const byValue = new Map(allOptions.map((o) => [o.value, o]));
+		return favorites.refs.flatMap((ref) => byValue.get(ref) ?? []);
+	});
+	const isFavorite = (v: string) => favorites?.has(v) ?? false;
+
+	const mappingOptions = $derived(allMappingOptions.filter((o) => !isFavorite(o.value)));
+	const providerGroups = $derived(
+		optionGroups
+			.map((group) => ({
+				provider: group.provider,
+				options: group.options.filter((o) => !isFavorite(o.value))
+			}))
+			.filter((group) => group.options.length > 0)
+	);
+
+	const isEmpty = $derived(allOptions.length === 0);
 
 	const showNone = $derived.by(() => {
 		if (noneValue === undefined) return false;
@@ -108,9 +174,23 @@
 	}
 </script>
 
+{#snippet item(option: Option, showSource = false)}
+	<ModelOptionItem
+		value={option.value}
+		name={option.name}
+		brand={option.brand}
+		source={showSource ? option.source : undefined}
+	/>
+{/snippet}
+
 <Select.Root type="single" bind:value={selectedValue as never} onValueChange={onSelect}>
 	<Select.Trigger class={className} {disabled} title={label}>
-		<span class="min-w-0 flex-1 truncate text-left">{label}</span>
+		<span class="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+			{#if selected.brand}
+				<ProviderIcon brand={selected.brand} class="size-3.5 shrink-0" />
+			{/if}
+			<span class="truncate">{label}</span>
+		</span>
 	</Select.Trigger>
 	<Select.Content
 		class="h-[min(24rem,var(--bits-select-content-available-height))] w-(--bits-select-anchor-width) min-w-72"
@@ -133,23 +213,28 @@
 		{#if showNone}
 			<Select.Item value={noneValue ?? ''}>{noneLabel}</Select.Item>
 		{/if}
-		{#if filteredMappings.length > 0}
+		<ModelFavoritesGroup count={favoriteOptions.length} searching={query.trim() !== ''}>
+			{#each favoriteOptions as option (option.value)}
+				{@render item(option, true)}
+			{/each}
+		</ModelFavoritesGroup>
+		{#if mappingOptions.length > 0}
 			<Select.Group>
 				<Select.Label>Mapped models</Select.Label>
-				{#each filteredMappings as mapping (mapping.id)}
-					<Select.Item value={encodeModelRef(mappingModelRef(mapping))}>
-						{mapping.name}
-					</Select.Item>
+				{#each mappingOptions as option (option.value)}
+					{@render item(option)}
 				{/each}
 			</Select.Group>
 		{/if}
-		{#each filteredGroups as group (group.provider.id)}
+		{#each providerGroups as group (group.provider.id)}
 			<Select.Group>
-				<Select.Label>{group.provider.name}</Select.Label>
-				{#each group.models as model (model.id)}
-					<Select.Item value={`${model.providerId}/${model.modelId}`}>
-						{model.displayName}
-					</Select.Item>
+				{@const groupBrand = resolveProviderBrand(group.provider)}
+				<Select.Label class="flex items-center gap-1.5">
+					{#if groupBrand}<ProviderIcon brand={groupBrand} class="size-3 shrink-0" />{/if}
+					{group.provider.name}
+				</Select.Label>
+				{#each group.options as option (option.value)}
+					{@render item(option)}
 				{/each}
 			</Select.Group>
 		{/each}

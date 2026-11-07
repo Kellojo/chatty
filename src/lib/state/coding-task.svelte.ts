@@ -4,9 +4,11 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import type {
+	AgentCodingTarget,
 	CodingAutonomy,
 	CodingEnvironment,
 	CodingModelOption,
+	CodingModelRef,
 	CodingProjectOption,
 	CodingWorkspaceMode
 } from '$lib/coding-environments.js';
@@ -25,7 +27,7 @@ export interface CodingTaskDraft {
 export interface CodingOptions {
 	projects: CodingProjectOption[];
 	models: CodingModelOption[];
-	defaultModel: { providerInstanceId: string; model: string } | null;
+	defaultModel: CodingModelRef | null;
 	/** The environment's own default for new threads, when it reports one. */
 	defaultAutonomy: CodingAutonomy | null;
 	defaultWorkspaceMode: CodingWorkspaceMode | null;
@@ -45,8 +47,8 @@ interface BranchesResult {
 interface Stored {
 	environmentId?: string;
 	projectId?: string;
-	providerInstanceId?: string;
-	model?: string;
+	/** Only set once the user picked a model themselves (otherwise T3's default wins). */
+	modelChoice?: CodingModelRef;
 	/** Only set once the user picked an autonomy level themselves. */
 	autonomyChoice?: CodingAutonomy;
 	/** Branch name, or LOCAL for the project checkout. */
@@ -92,7 +94,7 @@ export const AUTONOMY_OPTIONS: {
 
 const isAutonomy = (v: unknown): v is CodingAutonomy => AUTONOMY_OPTIONS.some((a) => a.value === v);
 
-export const encodeCodingModel = (m: { providerInstanceId: string; model: string }) =>
+export const encodeCodingModel = (m: CodingModelRef) =>
 	JSON.stringify([m.providerInstanceId, m.model]);
 
 function readStored(): Stored {
@@ -128,6 +130,8 @@ export class CodingTaskState {
 	autonomy = $state<CodingAutonomy>('auto');
 	/** True once the user picked autonomy explicitly (otherwise the environment default wins). */
 	private autonomyChosen = false;
+	/** The model the user picked explicitly; null follows T3's default. */
+	private modelChoice: CodingModelRef | null = null;
 
 	options = $state<CodingOptions | null>(null);
 	optionsLoading = $state(false);
@@ -137,16 +141,41 @@ export class CodingTaskState {
 	branchesError = $state<string | null>(null);
 
 	private readonly stored: Stored;
+	/** False when editing a saved target (e.g. a coding agent): selections stay out of localStorage. */
+	private readonly remember: boolean;
 	// Successful responses only; failures are retried on the next selection.
 	private readonly optionsCache = new SvelteMap<string, CodingOptions>();
 	private readonly branchesCache = new SvelteMap<string, BranchesResult>();
 
-	constructor(environments: CodingEnvironment[]) {
+	/**
+	 * `initial` starts from a saved target (a coding agent's) instead of the
+	 * last selection. `remember` (default: true without `initial`) controls
+	 * whether picks update the start page's remembered selection.
+	 */
+	constructor(
+		environments: CodingEnvironment[],
+		opts: { initial?: AgentCodingTarget | null; remember?: boolean } = {}
+	) {
 		this.environments = environments;
-		this.stored = readStored();
+		const initial = opts.initial;
+		this.remember = opts.remember ?? !initial;
+		this.stored = initial
+			? {
+					environmentId: initial.environmentId,
+					projectId: initial.projectId,
+					modelChoice: { providerInstanceId: initial.providerInstanceId, model: initial.model },
+					autonomyChoice: initial.autonomy,
+					branch:
+						initial.workspaceMode === 'local' ? LOCAL_CHECKOUT : (initial.baseBranch ?? undefined)
+				}
+			: readStored();
 		if (isAutonomy(this.stored.autonomyChoice)) {
 			this.autonomy = this.stored.autonomyChoice;
 			this.autonomyChosen = true;
+		}
+		const choice = this.stored.modelChoice;
+		if (choice?.providerInstanceId && choice.model) {
+			this.modelChoice = { providerInstanceId: choice.providerInstanceId, model: choice.model };
 		}
 	}
 
@@ -221,6 +250,11 @@ export class CodingTaskState {
 		return null;
 	});
 
+	/** T3's default model for this project (override, project setting, then server-wide). */
+	readonly defaultModel = $derived(
+		this.project?.defaultModel ?? this.options?.defaultModel ?? null
+	);
+
 	/** T3's own default for this project (project override, else the environment's). */
 	readonly defaultAutonomy = $derived(
 		this.project?.defaultAutonomy ?? this.options?.defaultAutonomy ?? null
@@ -240,8 +274,15 @@ export class CodingTaskState {
 		this.persist();
 	}
 
+	/** Picking T3's default again goes back to following it. */
 	setModel(value: string): void {
 		this.modelValue = value;
+		const picked = this.options?.models.find((m) => encodeCodingModel(m) === value);
+		const isDefault = !!this.defaultModel && value === encodeCodingModel(this.defaultModel);
+		this.modelChoice =
+			picked && !isDefault
+				? { providerInstanceId: picked.providerInstanceId, model: picked.model }
+				: null;
 		this.persist();
 	}
 
@@ -283,17 +324,7 @@ export class CodingTaskState {
 
 		const stored = this.stored;
 		const remembered = stored.environmentId === id;
-		const storedModel =
-			remembered && stored.providerInstanceId && stored.model
-				? result.models.find(
-						(m) => m.providerInstanceId === stored.providerInstanceId && m.model === stored.model
-					)
-				: undefined;
-		const defaultModel = result.defaultModel
-			? result.models.find((m) => encodeCodingModel(m) === encodeCodingModel(result.defaultModel!))
-			: undefined;
-		const model = storedModel ?? defaultModel ?? result.models[0];
-		this.modelValue = model ? encodeCodingModel(model) : '';
+		this.applyDefaults();
 
 		const wanted = opts.projectId ?? (remembered ? stored.projectId : undefined);
 		const nextProject = result.projects.find((p) => p.id === wanted) ?? result.projects[0];
@@ -308,7 +339,7 @@ export class CodingTaskState {
 		this.branchesError = null;
 		this.branchValue = '';
 		if (!id || !envId) return;
-		this.applyDefaultAutonomy();
+		this.applyDefaults();
 		const key = `${envId}\n${id}`;
 		let result = this.branchesCache.get(key);
 		if (!result) {
@@ -322,7 +353,7 @@ export class CodingTaskState {
 			} catch (e) {
 				if (this.projectId === id && this.environmentId === envId) {
 					this.branchesError = e instanceof Error ? e.message : 'Could not load branches';
-					this.applyDefaultAutonomy();
+					this.applyDefaults();
 					this.branchValue = this.pickBranch(id);
 					this.persist();
 				}
@@ -333,7 +364,7 @@ export class CodingTaskState {
 		}
 		if (this.projectId !== id || this.environmentId !== envId) return;
 		this.branches = result;
-		this.applyDefaultAutonomy();
+		this.applyDefaults();
 		this.branchValue = this.pickBranch(id);
 		this.persist();
 	}
@@ -363,23 +394,33 @@ export class CodingTaskState {
 		return preferred?.name ?? LOCAL_CHECKOUT;
 	}
 
-	/** Until the user picks one, use T3's default: the project's override, else the environment's. */
-	private applyDefaultAutonomy(): void {
-		if (this.autonomyChosen) return;
-		const fallback = this.project?.defaultAutonomy ?? this.options?.defaultAutonomy;
-		if (fallback) this.autonomy = fallback;
+	/**
+	 * Until the user picks their own, use T3's defaults for the current
+	 * project (or the environment, before a project is selected).
+	 */
+	private applyDefaults(): void {
+		if (!this.autonomyChosen && this.defaultAutonomy) this.autonomy = this.defaultAutonomy;
+
+		const models = this.options?.models ?? [];
+		const choice = this.modelChoice;
+		const model =
+			(choice && models.find((m) => encodeCodingModel(m) === encodeCodingModel(choice))) ??
+			(this.defaultModel &&
+				models.find((m) => encodeCodingModel(m) === encodeCodingModel(this.defaultModel!))) ??
+			models[0];
+		this.modelValue = model ? encodeCodingModel(model) : '';
 	}
 
 	private persist(): void {
 		const next: Stored = {
 			environmentId: this.environmentId || undefined,
 			projectId: this.projectId || undefined,
-			providerInstanceId: this.selectedModel?.providerInstanceId,
-			model: this.selectedModel?.model,
+			// Kept even while unavailable here, so it still applies on other environments.
+			modelChoice: this.modelChoice ?? undefined,
 			autonomyChoice: this.autonomyChosen ? this.autonomy : undefined,
 			branch: this.branchValue || undefined
 		};
 		Object.assign(this.stored, next);
-		writeStored(next);
+		if (this.remember) writeStored(next);
 	}
 }

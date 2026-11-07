@@ -10,13 +10,8 @@ import {
 	type ProxyRequestFilters
 } from '$lib/server/db/repo/proxy-requests.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
-import { isUsagePeriod, parseUsagePeriod } from '$lib/components/app/usage/usage.js';
-import {
-	localDays,
-	startOfLocalDay,
-	utcOffsetMinutes,
-	windowForPeriod
-} from '../usage-data.server.js';
+import { isUsagePeriod } from '$lib/components/app/usage/usage.js';
+import { localDays, startOfLocalDay, usageWindow, utcOffsetMinutes } from '../usage-data.server.js';
 import type { PageServerLoad } from './$types';
 
 const PAGE_SIZE = 50;
@@ -24,38 +19,14 @@ const DAY_MS = 86_400_000;
 /** Longest span the per-day model chart draws; wider ranges show their most recent days. */
 const MAX_CHART_DAYS = 90;
 
-const RANGE_PRESETS = ['24h', '7d', '30d', '90d', 'all', 'custom'] as const;
-export type RangePreset = (typeof RANGE_PRESETS)[number];
-
-const RANGE_LABELS: Record<RangePreset, string> = {
-	'24h': 'last 24 hours',
-	'7d': 'last 7 days',
-	'30d': 'last 30 days',
-	'90d': 'last 90 days',
-	all: 'all time',
-	custom: 'selected dates'
-};
-
-function isRangePreset(value: string | null): value is RangePreset {
-	return (RANGE_PRESETS as readonly string[]).includes(value ?? '');
-}
-
-function parseDateStart(value: string): number | undefined {
-	if (!value) return undefined;
-	const ms = Date.parse(`${value}T00:00:00`);
-	return Number.isNaN(ms) ? undefined : ms;
-}
-
 export const load: PageServerLoad = ({ locals, url }) => {
 	const user = requireUser(locals);
 	// Admins see everyone's requests; everyone else only ever sees their own.
 	const isAdmin = (user as { role?: string }).role === 'admin';
 	const db = getDb();
 
-	// Without an explicit range, the log follows the Usage section's shared period.
+	// The time range is the Usage section's shared one, so totals match the Overview exactly.
 	const periodParam = url.searchParams.get('period');
-	const period = parseUsagePeriod(periodParam);
-	const defaultRange: RangePreset = period;
 
 	const searchFilter = url.searchParams.get('search') ?? '';
 	const userFilter = isAdmin ? (url.searchParams.get('user') ?? '') : '';
@@ -65,15 +36,6 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const statusFilter = url.searchParams.get('status') ?? '';
 	const endpointFilter = url.searchParams.get('endpoint') ?? '';
 	const sourceFilter = url.searchParams.get('source') ?? '';
-	const rangeParam = url.searchParams.get('range');
-	// Bare `from`/`to` (old links) imply a custom range; nothing at all means the default.
-	const range: RangePreset = isRangePreset(rangeParam)
-		? rangeParam
-		: url.searchParams.has('from') || url.searchParams.has('to')
-			? 'custom'
-			: defaultRange;
-	const fromFilter = range === 'custom' ? (url.searchParams.get('from') ?? '') : '';
-	const toFilter = range === 'custom' ? (url.searchParams.get('to') ?? '') : '';
 
 	const filters: ProxyRequestFilters = {};
 	if (!isAdmin) filters.userId = user.id;
@@ -86,16 +48,10 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	if (sourceFilter) filters.source = sourceFilter;
 	if (searchFilter) filters.search = searchFilter;
 	const nowMs = Date.now();
-	if (range === '24h') filters.from = nowMs - DAY_MS;
-	else if (isUsagePeriod(range)) {
-		// Whole local days, exactly the window the Overview totals use.
-		filters.from = windowForPeriod(range, nowMs).startMs;
-	} else if (range === 'custom') {
-		const fromMs = parseDateStart(fromFilter);
-		if (fromMs !== undefined) filters.from = fromMs;
-		const toMs = parseDateStart(toFilter);
-		if (toMs !== undefined) filters.to = toMs + 86399999;
-	}
+	const window = usageWindow(url, nowMs);
+	const range = window.range;
+	if (window.fromMs !== undefined) filters.from = window.fromMs;
+	if (window.toMs !== undefined) filters.to = window.toMs;
 
 	const page = Math.max(1, Number.parseInt(url.searchParams.get('page') ?? '1', 10) || 1);
 	const { rows, total } = listProxyRequests(db, filters, PAGE_SIZE, (page - 1) * PAGE_SIZE);
@@ -213,7 +169,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		keys,
 		isAdmin,
 		viewerId: user.id,
-		period,
+		period: window.period,
 		filters: {
 			period: isUsagePeriod(periodParam) ? periodParam : '',
 			search: searchFilter,
@@ -224,12 +180,12 @@ export const load: PageServerLoad = ({ locals, url }) => {
 			status: statusFilter,
 			endpoint: endpointFilter,
 			source: sourceFilter,
-			range: range === defaultRange ? '' : range,
-			from: fromFilter,
-			to: toFilter
+			range: url.searchParams.get('range') ?? '',
+			from: window.customFrom,
+			to: window.customTo
 		},
 		range,
-		rangeLabel: RANGE_LABELS[range],
+		rangeLabel: window.label,
 		chartDaysCapped: (filters.from ?? 0) < axisStartMs,
 		page,
 		totalPages: Math.max(1, Math.ceil(total / PAGE_SIZE)),

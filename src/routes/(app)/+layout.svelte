@@ -1,15 +1,20 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
+	import { FavoriteModels, setFavoriteModels } from '$lib/state/favorite-models.svelte.js';
 	import { MediaQuery } from 'svelte/reactivity';
 	import Sidebar from '$lib/components/app/Sidebar.svelte';
+	import AttentionNotifier from '$lib/components/app/AttentionNotifier.svelte';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import { startServerEvents } from '$lib/state/events.svelte.js';
+	import { startMessageQueueRunner } from '$lib/state/message-queue-runner.js';
 	import { setSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 
 	const isDesktop = new MediaQuery('(min-width: 768px)');
+
+	setFavoriteModels(new FavoriteModels(untrack(() => data.settings.favoriteModels)));
 
 	let sidebarOpen = $state(data.sidebarOpen);
 	let mobileOpen = $state(false);
@@ -43,8 +48,21 @@
 		}
 	}
 
-	onMount(() => startServerEvents());
+	onMount(() => {
+		const stopEvents = startServerEvents();
+		const stopQueueRunner = startMessageQueueRunner();
+		return () => {
+			stopQueueRunner();
+			stopEvents();
+		};
+	});
 </script>
+
+<AttentionNotifier
+	conversations={data.conversations}
+	unreadIds={data.unreadIds}
+	triggers={data.settings.notificationTriggers}
+/>
 
 <div class="flex h-screen overflow-hidden">
 	<!-- Desktop sidebar: in-flow, collapsible -->

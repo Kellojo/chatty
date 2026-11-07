@@ -8,6 +8,7 @@ import {
 } from './db/repo/conversations.js';
 import { publishServerEvent } from './events/bus.js';
 import { createLogger } from './logger.js';
+import { queueThreadStatePush } from './t3/thread-state.js';
 import {
 	gcAgentWorkspaces,
 	gcOrphanConversationWorkspaces,
@@ -104,6 +105,7 @@ export function runAutoSettle(
 			conversationIds,
 			settled: true
 		});
+		queueThreadStatePush(db, userId, conversationIds);
 	}
 	if (total > 0) log.info(`Auto-settled ${total} conversation(s) idle > ${days}d`);
 	return total;

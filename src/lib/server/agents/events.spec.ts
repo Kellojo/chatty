@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type Db } from '../db/index.js';
 import { createAgent, setAgentOverride } from '../db/repo/agents.js';
 import { createAgentRun, finishAgentRun } from '../db/repo/agent-runs.js';
+import { createConversation } from '../db/repo/conversations.js';
 import { emitAgentEvent, handleServerEvent } from './events.js';
 
 let db: Db;
@@ -242,5 +243,77 @@ describe('event run concurrency', () => {
 		expect(instructions).toContain('occurrence #1');
 		expect(instructions).toContain('occurrence #2');
 		expect(instructions).toContain('b.md');
+	});
+});
+
+describe('coding agents', () => {
+	const codingTarget = {
+		environmentId: 'env-1',
+		projectId: 'proj-1',
+		projectTitle: 'Project',
+		providerInstanceId: 'codex',
+		model: 'gpt-x',
+		autonomy: 'supervised' as const,
+		workspaceMode: 'worktree' as const,
+		baseBranch: 'main'
+	};
+
+	function seedCodingEventAgent(event: 'chat.created' | 'coding.thread.finished') {
+		return createAgent(db, 'u1', {
+			name: 'coder',
+			systemPrompt: 'x',
+			triggerType: 'event',
+			triggerConfig: { event },
+			codingTarget
+		});
+	}
+
+	it('ignores events about conversations created by agent runs', async () => {
+		const agent = seedCodingEventAgent('chat.created');
+		const conv = createConversation(db, 'u1', { kind: 'chat' });
+		createAgentRun(db, {
+			agentId: agent.id,
+			userId: 'u1',
+			trigger: 'event',
+			conversationId: conv.id
+		});
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('chat.created', 'u1', { conversationId: conv.id }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+	});
+
+	it('still runs for conversations the user started', async () => {
+		seedCodingEventAgent('chat.created');
+		const conv = createConversation(db, 'u1', { kind: 'chat' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('chat.created', 'u1', { conversationId: conv.id }, db, runFn);
+		expect(runFn).toHaveBeenCalledTimes(1);
+	});
+
+	it('lets model agents react to coding agent runs finishing', async () => {
+		const coder = seedCodingEventAgent('coding.thread.finished');
+		const reviewer = createAgent(db, 'u1', {
+			name: 'reviewer',
+			systemPrompt: 'x',
+			triggerType: 'event',
+			triggerConfig: { event: 'coding.thread.finished' }
+		});
+		const conv = createConversation(db, 'u1', { kind: 'chat' });
+		createAgentRun(db, {
+			agentId: coder.id,
+			userId: 'u1',
+			trigger: 'manual',
+			conversationId: conv.id
+		});
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent(
+			'coding.thread.finished',
+			'u1',
+			{ conversationId: conv.id, status: 'completed' },
+			db,
+			runFn
+		);
+		expect(runFn).toHaveBeenCalledTimes(1);
+		expect(runFn).toHaveBeenCalledWith(reviewer.id, 'u1', expect.any(String));
 	});
 });

@@ -54,20 +54,63 @@ function time(value: unknown): number | null {
 	return Number.isNaN(ms) ? null : ms;
 }
 
+// Limits on what a (possibly hostile or broken) T3 server can make Chatty
+// hold and persist for one thread.
+/** Records kept per kind (runs, messages, turn items, requests); the oldest are dropped. */
+export const MAX_THREAD_RECORDS = 5000;
+/** Characters kept of one part's text, or of one tool input/output (as JSON). */
+export const MAX_PART_CHARS = 256 * 1024;
+/** Parts rendered per run; earlier ones are replaced by a notice. */
+export const MAX_RUN_PARTS = 300;
+/** Characters (as JSON) rendered per run; earlier parts are replaced by a notice. */
+export const MAX_RUN_CHARS = 2 * 1024 * 1024;
+export const TRUNCATED_MARKER = '\n… (truncated)';
+export const OMITTED_PARTS_NOTICE = '_Earlier steps of this run are not shown._';
+
+/** Inserts or replaces `id` and drops the oldest records beyond the cap. */
+function put(map: Map<string, Rec>, id: string, record: Rec): void {
+	map.delete(id); // re-inserting moves it to the newest end
+	map.set(id, record);
+	while (map.size > MAX_THREAD_RECORDS) map.delete(map.keys().next().value!);
+}
+
 function fill(map: Map<string, Rec>, list: unknown): void {
 	map.clear();
 	if (!Array.isArray(list)) return;
-	for (const entry of list) {
-		const record = obj(entry);
-		const id = str(record?.id);
-		if (record && id) map.set(id, record);
-	}
+	for (const entry of list.slice(-MAX_THREAD_RECORDS)) upsert(map, entry);
 }
 
 function upsert(map: Map<string, Rec>, payload: unknown): void {
 	const record = obj(payload);
 	const id = str(record?.id);
-	if (record && id) map.set(id, record);
+	if (record && id) put(map, id, record);
+}
+
+export function capText(text: string): string {
+	return text.length > MAX_PART_CHARS ? text.slice(0, MAX_PART_CHARS) + TRUNCATED_MARKER : text;
+}
+
+/** Room for the other fields next to one capped string (e.g. `{ exitCode, output }`). */
+const VALUE_SLACK_CHARS = 16 * 1024;
+
+/**
+ * Strings are cut to {@link MAX_PART_CHARS}. An object too large as JSON gets
+ * its top-level strings cut; if it is still too large, it becomes a truncated
+ * JSON preview.
+ */
+export function capValue(value: unknown): unknown {
+	if (typeof value === 'string') return capText(value);
+	if (!value || typeof value !== 'object') return value;
+	if (JSON.stringify(value).length <= MAX_PART_CHARS) return value;
+	if (!Array.isArray(value)) {
+		const capped = Object.fromEntries(
+			Object.entries(value).map(([k, v]) => [k, typeof v === 'string' ? capText(v) : v])
+		);
+		const json = JSON.stringify(capped);
+		if (json.length <= MAX_PART_CHARS + VALUE_SLACK_CHARS) return capped;
+		return { truncated: true, preview: capText(json) };
+	}
+	return { truncated: true, preview: capText(JSON.stringify(value)) };
 }
 
 /** Applies one `ThreadStreamItem` (snapshot or event). Returns true if state changed. */
@@ -104,6 +147,23 @@ export function applyStreamItem(state: ThreadState, item: unknown): boolean {
 	return true;
 }
 
+/**
+ * Which run's rendering a stream item can change: its id, `'all'` when that
+ * isn't known (snapshots, messages, runtime requests), or null when no run's
+ * parts depend on it (thread metadata). Lets callers re-render only that run.
+ */
+export function streamItemRun(item: unknown): string | 'all' | null {
+	const it = obj(item);
+	if (it?.kind !== 'event') return 'all';
+	const event = obj(it.event);
+	const type = str(event?.type) ?? '';
+	const payload = obj(event?.payload);
+	if (type.startsWith('thread.')) return null;
+	if (type.startsWith('run.')) return str(payload?.id) ?? 'all';
+	if (type.startsWith('turn-item.')) return str(payload?.runId) ?? 'all';
+	return 'all';
+}
+
 // ── runs ─────────────────────────────────────────────────────────────────
 
 const ACTIVE_RUN = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
@@ -126,6 +186,17 @@ export function activeRun(state: ThreadState): Rec | null {
 	return runs.at(-1) ?? null;
 }
 
+/** Only http(s) links from the remote server are rendered as hrefs. */
+function webUrl(value: string | null): string | null {
+	if (!value) return null;
+	try {
+		const { protocol } = new URL(value);
+		return protocol === 'https:' || protocol === 'http:' ? value : null;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Chatty message id for a run's reply. Derived from the user message that
  * started the run (Chatty sends its own message ids to T3), so the mapping
@@ -141,7 +212,13 @@ export function replyMessageId(run: Rec): string {
 /** A UIMessage part as persisted in Chatty's `messages.parts`. */
 export type RenderedPart =
 	| { type: 'text'; text: string; state?: 'streaming' | 'done' }
-	| { type: 'reasoning'; text: string; state?: 'streaming' | 'done' }
+	| {
+			type: 'reasoning';
+			text: string;
+			state?: 'streaming' | 'done';
+			/** When the step ran on the coding machine (ms), for "Thought for 12s". */
+			providerMetadata?: { t3: { startedAt: number | null; completedAt: number | null } };
+	  }
 	| {
 			type: 'dynamic-tool';
 			toolName: string;
@@ -186,6 +263,8 @@ function toolEntry(
 ): RenderedEntry {
 	const id = String(item.id);
 	const final = DONE_ITEM.has(itemStatus);
+	input = capValue(input);
+	output = capValue(output);
 	if (itemStatus === 'failed') {
 		return {
 			key: id,
@@ -196,7 +275,7 @@ function toolEntry(
 				toolCallId: id,
 				state: 'output-error',
 				input,
-				errorText: failureText(item) ?? 'Failed'
+				errorText: capText(failureText(item) ?? 'Failed')
 			}
 		};
 	}
@@ -248,7 +327,7 @@ export function renderRun(
 				entries.push({
 					key: id,
 					final: !streaming,
-					part: { type: 'text', text, state: streaming ? 'streaming' : 'done' }
+					part: { type: 'text', text: capText(text), state: streaming ? 'streaming' : 'done' }
 				});
 				break;
 			}
@@ -258,14 +337,26 @@ export function renderRun(
 				entries.push({
 					key: id,
 					final,
-					part: { type: 'reasoning', text, state: final ? 'done' : 'streaming' }
+					part: {
+						type: 'reasoning',
+						text: capText(text),
+						state: final ? 'done' : 'streaming',
+						// Lets the timeline say "Thought for 12s" and time a live thought.
+						providerMetadata: {
+							t3: { startedAt: time(item.startedAt), completedAt: time(item.completedAt) }
+						}
+					}
 				});
 				break;
 			}
 			case 'proposed_plan': {
 				const markdown = str(item.markdown);
 				if (markdown) {
-					entries.push({ key: id, final, part: { type: 'text', text: markdown, state: 'done' } });
+					entries.push({
+						key: id,
+						final,
+						part: { type: 'text', text: capText(markdown), state: 'done' }
+					});
 				}
 				break;
 			}
@@ -345,10 +436,65 @@ export function renderRun(
 						toolCallId: id,
 						state: 'output-error',
 						input: {},
-						errorText: failureText(item) ?? str(item.title) ?? 'The coding agent reported an error'
+						errorText: capText(
+							failureText(item) ?? str(item.title) ?? 'The coding agent reported an error'
+						)
 					}
 				});
 				break;
+			case 'dynamic_tool': {
+				// The agent's own tools (Read, Grep, MCP tools…): keep the real name and
+				// arguments so the timeline can say what happened.
+				const toolName = str(item.toolName) ?? str(item.title) ?? 'tool';
+				const fetched = commandOutputs.get(id);
+				const output =
+					item.output !== undefined
+						? item.output
+						: fetched !== undefined
+							? fetched
+							: item.outputOmitted === true
+								? { note: 'Output not loaded' }
+								: { status };
+				entries.push(toolEntry(item, toolName, item.input ?? {}, output, status));
+				break;
+			}
+			case 'subagent':
+				entries.push(
+					toolEntry(
+						item,
+						'subagent',
+						{
+							description: str(item.title) ?? str(item.prompt),
+							prompt: str(item.prompt),
+							// Kept on the input: a running step has no output yet, and this is
+							// what the subagent is doing right now.
+							progress: str(item.progress),
+							provider: str(item.providerInstanceId) ?? str(item.driver),
+							// Background subagents outlive the turn that started them; T3's own
+							// status says whether this one is still at work.
+							running: !DONE_ITEM.has(status)
+						},
+						str(item.result) ?? { status },
+						status
+					)
+				);
+				break;
+			case 'checkpoint': {
+				const files = Array.isArray(item.files) ? item.files.map(obj) : [];
+				entries.push(
+					toolEntry(
+						item,
+						'checkpoint',
+						{ files: files.map((f) => str(f?.path)).filter((p): p is string => p !== null) },
+						{
+							additions: files.reduce((n, f) => n + (num(f?.additions) ?? 0), 0),
+							deletions: files.reduce((n, f) => n + (num(f?.deletions) ?? 0), 0)
+						},
+						status
+					)
+				);
+				break;
+			}
 			default:
 				if (type) {
 					entries.push(
@@ -357,7 +503,30 @@ export function renderRun(
 				}
 		}
 	}
-	return entries;
+	return limitRunEntries(String(run.id), entries);
+}
+
+/**
+ * Keeps the latest parts of a run within {@link MAX_RUN_PARTS} and
+ * {@link MAX_RUN_CHARS}, with a notice in place of the earlier ones.
+ */
+function limitRunEntries(runId: string, entries: RenderedEntry[]): RenderedEntry[] {
+	let start = entries.length;
+	let chars = 0;
+	while (start > 0 && entries.length - start < MAX_RUN_PARTS) {
+		chars += JSON.stringify(entries[start - 1].part).length;
+		if (chars > MAX_RUN_CHARS) break;
+		start--;
+	}
+	if (start === 0) return entries;
+	return [
+		{
+			key: `${runId}:omitted`,
+			final: true,
+			part: { type: 'text', text: OMITTED_PARTS_NOTICE, state: 'done' }
+		},
+		...entries.slice(start)
+	];
 }
 
 // ── task-level state ─────────────────────────────────────────────────────
@@ -368,6 +537,10 @@ export interface TaskSummary {
 	prUrl: string | null;
 	title: string | null;
 	pendingRequest: CodingPendingRequest | null;
+	/** Start of the run in progress (ms), null when none is active. */
+	runStartedAt: number | null;
+	/** Worktree the thread works in; null means the project checkout. */
+	worktreePath: string | null;
 }
 
 const DEFAULT_DECISIONS: CodingPendingOption[] = [
@@ -394,7 +567,14 @@ function pendingRequest(state: ThreadState): CodingPendingRequest | null {
 				options: options
 					.map(obj)
 					.filter((o): o is Rec => o !== null && str(o.label) !== null)
-					.map((o) => ({ id: str(o.value) ?? String(o.label), label: String(o.label) })),
+					.map((o) => {
+						const description = str(o.description);
+						return {
+							id: str(o.value) ?? String(o.label),
+							label: String(o.label),
+							...(description ? { description } : {})
+						};
+					}),
 				allowFreeText: question?.allowCustomAnswer !== false || options.length === 0,
 				createdAt
 			};
@@ -425,7 +605,9 @@ export function summarizeTask(state: ThreadState): TaskSummary {
 	const thread = state.thread ?? {};
 	const linked = obj(thread.linkedPullRequest);
 	const prs = Array.isArray(thread.pullRequests) ? thread.pullRequests.map(obj) : [];
-	const prUrl = str(linked?.url) ?? prs.map((p) => str(p?.url)).find((u) => u !== null) ?? null;
+	const prUrl = webUrl(
+		str(linked?.url) ?? prs.map((p) => str(p?.url)).find((u) => u !== null) ?? null
+	);
 	const pending = pendingRequest(state);
 	const runs = sortedRuns(state);
 	const last = runs.at(-1);
@@ -441,7 +623,12 @@ export function summarizeTask(state: ThreadState): TaskSummary {
 		branch: str(thread.branch),
 		prUrl,
 		title: str(thread.title),
-		pendingRequest: pending
+		pendingRequest: pending,
+		runStartedAt: (() => {
+			const run = activeRun(state);
+			return run ? (time(run.startedAt) ?? time(run.requestedAt)) : null;
+		})(),
+		worktreePath: str(thread.worktreePath)
 	};
 }
 

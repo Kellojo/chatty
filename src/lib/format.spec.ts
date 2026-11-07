@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { formatCost, formatCount, formatSpend } from './formats.js';
+import {
+	formatCost,
+	formatCount,
+	formatElapsed,
+	formatSpend,
+	formatSpendCompact
+} from './formats.js';
 
 describe('formatCount', () => {
 	it('formats small numbers plainly', () => {
@@ -51,5 +57,24 @@ describe('formatSpend', () => {
 		expect(formatSpend(12.345)).toBe('$12.35');
 		expect(formatSpend(1234.5)).toBe('$1,234.50');
 		expect(formatSpend(-2)).toBe('-$2.00');
+	});
+});
+
+describe('formatSpendCompact', () => {
+	it('keeps axis labels short', () => {
+		expect(formatSpendCompact(0)).toBe('$0');
+		expect(formatSpendCompact(0.5)).toBe('$0.5');
+		expect(formatSpendCompact(2.25)).toBe('$2.25');
+		expect(formatSpendCompact(200)).toBe('$200');
+		expect(formatSpendCompact(1234)).toBe('$1.2k');
+	});
+});
+
+describe('formatElapsed', () => {
+	it('shows seconds, then minutes, then hours', () => {
+		expect(formatElapsed(-5)).toBe('0s');
+		expect(formatElapsed(42_900)).toBe('42s');
+		expect(formatElapsed(245_000)).toBe('4m 05s');
+		expect(formatElapsed(4_320_000)).toBe('1h 12m');
 	});
 });

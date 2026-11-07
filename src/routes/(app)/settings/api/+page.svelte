@@ -456,8 +456,8 @@
 				Classify content, route requests, and score inputs with the Decisions API. Supports
 				predicate, choice, and score question types. Assign a model with the
 				<code class="rounded bg-muted px-1 py-0.5 text-xs">decisions</code> capability on the
-				Defaults page — by default no model is assigned and the endpoint returns an error.
-				Requires an API key with the
+				Defaults page — by default no model is assigned and the endpoint returns an error. Requires
+				an API key with the
 				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> scope.
 			</Card.Description>
 		</Card.Header>

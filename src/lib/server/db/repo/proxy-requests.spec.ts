@@ -10,6 +10,7 @@ import {
 	listProxyRequests,
 	proxyRequestDailyCounts,
 	proxyRequestDailyModelCounts,
+	proxyRequestFirstStartedAt,
 	proxyRequestTopModels,
 	proxyRequestProviderUsage,
 	proxyRequestStats,
@@ -220,6 +221,7 @@ describe('proxy-requests repo', () => {
 			inputTokens: 10,
 			outputTokens: 27,
 			costUsd: 0.001,
+			pricedRequests: 1,
 			distinctModels: 2,
 			cavemanSaved: 5
 		});
@@ -309,6 +311,7 @@ describe('proxyRequestProviderUsage', () => {
 				providerName: 'OpenRouter',
 				model: 'gpt-x',
 				requests: 2,
+				pricedRequests: 2,
 				inputTokens: 30,
 				outputTokens: 10,
 				costUsd: 0.03
@@ -319,6 +322,7 @@ describe('proxyRequestProviderUsage', () => {
 				providerName: 'OpenRouter',
 				model: 'gpt-y',
 				requests: 1,
+				pricedRequests: 0,
 				inputTokens: 1,
 				outputTokens: 1,
 				costUsd: 0
@@ -329,6 +333,7 @@ describe('proxyRequestProviderUsage', () => {
 				providerName: 'OpenRouter',
 				model: 'gpt-x',
 				requests: 1,
+				pricedRequests: 1,
 				inputTokens: 3,
 				outputTokens: 3,
 				costUsd: 0.5
@@ -388,6 +393,21 @@ describe('proxyRequestProviderUsage', () => {
 			to: periodStart - 1
 		});
 		expect(previous).toMatchObject({ total: 1, costUsd: 0.75 });
+	});
+
+	it('counts requests that reported a cost separately from unpriced ones', () => {
+		served('u1', 'p1', 'gpt-x', base, { input: 1, output: 1, cost: 0 });
+		served('u1', 'p1', 'gpt-x', base + 1, { input: 1, output: 1, cost: null });
+		const [row] = proxyRequestProviderUsage(db, { userId: 'u1' });
+		expect(row).toMatchObject({ requests: 2, pricedRequests: 1, costUsd: 0 });
+	});
+
+	it('finds the earliest matching request', () => {
+		expect(proxyRequestFirstStartedAt(db, { userId: 'u1' })).toBeNull();
+		served('u1', 'p1', 'gpt-x', base, { input: 1, output: 1, cost: 1 });
+		served('u1', 'p1', 'gpt-x', base - 5 * DAY, { input: 1, output: 1, cost: 1 });
+		served('u2', 'p1', 'gpt-x', base - 9 * DAY, { input: 1, output: 1, cost: 1 });
+		expect(proxyRequestFirstStartedAt(db, { userId: 'u1' })).toBe(base - 5 * DAY);
 	});
 
 	it('shifts day boundaries by the UTC offset', () => {

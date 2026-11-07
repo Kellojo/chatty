@@ -76,6 +76,19 @@ describe('conversations repo', () => {
 		expect(new Set(hits.map((c) => c.id))).toEqual(new Set([byTitle.id, byContent.id]));
 	});
 
+	it('searchConversations matches a coding task by its project name', () => {
+		const task = createConversation(db, 'u1', { title: 'fix the tests' });
+		db.prepare(
+			`INSERT INTO coding_conversations (conversation_id, project_id, project_title,
+			   provider_instance_id, model, runtime_mode, created_at, updated_at)
+			 VALUES (?, 'p1', 'kellojo-website', 'codex', 'gpt', 'full-access', 0, 0)`
+		).run(task.id);
+		createConversation(db, 'u1', { title: 'unrelated' });
+		const hits = searchConversations(db, 'u1', 'website');
+		expect(hits.map((c) => c.id)).toEqual([task.id]);
+		expect(hits[0].coding_project_title).toBe('kellojo-website');
+	});
+
 	it('pages with limit and offset', () => {
 		const ids = Array.from({ length: 5 }, (_, i) => {
 			const c = createConversation(db, 'u1', { title: `c${i}` });

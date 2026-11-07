@@ -7,10 +7,10 @@
 	import EnvironmentCard from '$lib/components/app/usage/EnvironmentCard.svelte';
 	import PlanLimitCard from '$lib/components/app/usage/PlanLimitCard.svelte';
 	import PlanLimitBar from '$lib/components/app/usage/PlanLimitBar.svelte';
-	import { subscriptionColor } from '$lib/components/app/usage/usage.js';
+	import { formatApiValue, subscriptionColor } from '$lib/components/app/usage/usage.js';
 	import type { CodingUsageLimitWindow } from '$lib/coding-environments.js';
 	import { providerLabel } from '$lib/coding-environments.js';
-	import { formatCount, formatSpend } from '$lib/formats.js';
+	import { formatCount, formatSpend, formatSpendCompact } from '$lib/formats.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -25,8 +25,7 @@
 	let metric = $state<Metric>('cost');
 
 	const subs = $derived(data.subscriptions);
-	const days = $derived(data.periodDays);
-	const plus = $derived(subs.anyUnpriced ? '+' : '');
+	const rangeLabel = $derived(data.rangeLabel);
 
 	const series = $derived(
 		subs.providers.map((p) => ({
@@ -100,11 +99,13 @@
 		<section class="flex flex-col gap-3" aria-labelledby="envs-heading">
 			<div class="flex items-center justify-between gap-2">
 				<h2 id="envs-heading" class="text-base font-semibold">Coding environments</h2>
-				<Button variant="ghost" size="sm" href={resolve('/settings/environments')}>Manage</Button>
+				<Button variant="ghost" size="sm" href={resolve('/settings/environments')}>
+					Manage environments
+				</Button>
 			</div>
-			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+			<div class="grid gap-3 {subs.environments.length > 1 ? 'sm:grid-cols-2 lg:grid-cols-3' : ''}">
 				{#each subs.environments as env (env.id)}
-					<EnvironmentCard environment={env} {now} />
+					<EnvironmentCard environment={env} {now} compact={subs.environments.length === 1} />
 				{/each}
 			</div>
 		</section>
@@ -113,7 +114,8 @@
 		{#if subs.accounts.length > 0}
 			<section class="flex flex-col gap-3" aria-labelledby="limits-heading">
 				<h2 id="limits-heading" class="text-base font-semibold">Plan limits</h2>
-				<div class="grid gap-3 md:grid-cols-2">
+				<!-- A lone account uses the full width instead of half of it. -->
+				<div class="grid gap-3 {subs.accounts.length > 1 ? 'md:grid-cols-2' : ''}">
 					{#each subs.accounts as account (account.key)}
 						<PlanLimitCard {account} {now} />
 					{/each}
@@ -125,8 +127,11 @@
 		{#if subs.providers.length > 0}
 			<section class="flex flex-col gap-3" aria-labelledby="providers-heading">
 				<h2 id="providers-heading" class="text-base font-semibold">Usage by provider</h2>
+				{#if subs.note}
+					<p class="text-sm text-muted-foreground">{subs.note}</p>
+				{/if}
 
-				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+				<div class="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
 					{#each subs.providers as p (p.provider)}
 						<!-- Anchor target for the Overview's "By provider" links. -->
 						<Card.Root
@@ -141,47 +146,59 @@
 									></span>
 									{providerLabel(p.provider)}
 								</span>
+								<!-- Same units on every card: tokens first, value second. -->
 								<span class="text-2xl font-semibold tabular-nums">
-									{formatSpend(p.costUsd)}{p.priced ? '' : '+'}
+									{formatCount(p.tokens)} tokens
 								</span>
-								<span class="text-xs text-muted-foreground">API-equivalent value · not billed</span>
+								<span class="text-sm text-muted-foreground tabular-nums">
+									{#if p.costUsd === 0 && !p.priced}
+										Not priced — no API list price known
+									{:else}
+										{formatApiValue(p.costUsd, !p.priced)} API value · not billed
+									{/if}
+								</span>
 								<span class="text-xs text-muted-foreground tabular-nums">
-									{formatCount(p.tokens)} tokens · {formatCount(p.sessions)}
+									{formatCount(p.sessions)}
 									{p.sessions === 1 ? 'session' : 'sessions'}
 								</span>
 							</Card.Content>
 						</Card.Root>
 					{/each}
 				</div>
+			</section>
 
+			<!-- Daily value -->
+			<section class="flex flex-col gap-3" aria-labelledby="daily-heading">
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<h2 id="daily-heading" class="text-base font-semibold">
+						{metric === 'cost' ? 'Daily value' : 'Daily tokens'}
+					</h2>
+					<div class="flex rounded-lg border p-0.5" role="group" aria-label="Metric">
+						{#each [['cost', 'Value'], ['tokens', 'Tokens']] as [value, label] (value)}
+							<button
+								type="button"
+								class="rounded-md px-2.5 py-1 text-xs {metric === value
+									? 'bg-accent font-medium text-accent-foreground'
+									: 'text-muted-foreground hover:text-foreground'}"
+								aria-pressed={metric === value}
+								onclick={() => (metric = value as Metric)}
+							>
+								{label}
+							</button>
+						{/each}
+					</div>
+				</div>
 				<Card.Root class="rounded-2xl border-border/40">
-					<Card.Header class="flex flex-row flex-wrap items-start justify-between gap-3 pb-3">
+					<Card.Header class="pb-3">
 						<div class="flex flex-col gap-1">
-							<Card.Title class="text-sm font-medium">
-								{metric === 'cost' ? 'API-equivalent value per day' : 'Tokens per day'}
-							</Card.Title>
 							<Card.Description>
 								{#if metric === 'cost'}
-									{formatSpend(subs.totalValueUsd)}{plus} API-equivalent value over {days} days — covered
+									{formatApiValue(subs.totalValueUsd, subs.anyUnpriced)} API value, {rangeLabel} — covered
 									by your subscriptions, not billed per token.
 								{:else}
 									Input, cached and output tokens combined.
 								{/if}
 							</Card.Description>
-						</div>
-						<div class="flex rounded-lg border p-0.5" role="group" aria-label="Metric">
-							{#each [['cost', 'Value'], ['tokens', 'Tokens']] as [value, label] (value)}
-								<button
-									type="button"
-									class="rounded-md px-2.5 py-1 text-xs {metric === value
-										? 'bg-accent font-medium text-accent-foreground'
-										: 'text-muted-foreground hover:text-foreground'}"
-									aria-pressed={metric === value}
-									onclick={() => (metric = value as Metric)}
-								>
-									{label}
-								</button>
-							{/each}
 						</div>
 					</Card.Header>
 					<Card.Content>
@@ -189,15 +206,17 @@
 							rows={chartRows}
 							{series}
 							valueFormat={metric === 'cost' ? formatSpend : formatCount}
+							axisFormat={metric === 'cost' ? formatSpendCompact : formatCount}
 							emptyText="No usage recorded in this period."
 						/>
 					</Card.Content>
 				</Card.Root>
+			</section>
 
+			<!-- By model -->
+			<section class="flex flex-col gap-3" aria-labelledby="models-heading">
+				<h2 id="models-heading" class="text-base font-semibold">By model</h2>
 				<Card.Root class="rounded-2xl border-border/40">
-					<Card.Header class="pb-3">
-						<Card.Title class="text-sm font-medium">By model</Card.Title>
-					</Card.Header>
 					<Card.Content>
 						<Table.Root>
 							<Table.Header>
@@ -206,7 +225,7 @@
 									<Table.Head>Model</Table.Head>
 									<Table.Head class="text-right">Tokens</Table.Head>
 									<Table.Head class="text-right">Sessions</Table.Head>
-									<Table.Head class="text-right">API-equiv. value</Table.Head>
+									<Table.Head class="text-right">API value</Table.Head>
 								</Table.Row>
 							</Table.Header>
 							<Table.Body>
@@ -234,7 +253,7 @@
 											<Table.Cell
 												class="text-right whitespace-nowrap text-muted-foreground tabular-nums"
 											>
-												≈ {formatSpend(m.costUsd)}{m.priced ? '' : '+'}
+												{formatApiValue(m.costUsd, !m.priced)}
 											</Table.Cell>
 										</Table.Row>
 									{/each}
@@ -251,7 +270,7 @@
 			</section>
 		{:else}
 			<p class="text-sm text-muted-foreground">
-				No usage synced in the last {days} days. Sync an environment once it is online.
+				No usage synced, {rangeLabel}. Sync an environment once it is online.
 			</p>
 		{/if}
 	{/if}

@@ -25,6 +25,21 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		keyLabel = keyRow?.label ?? null;
 	}
 
+	// Show the provider's name, not its id (the id stays available as a tooltip).
+	const providerName = request.providerId
+		? ((
+				db.prepare('SELECT name FROM providers WHERE id = ?').get(request.providerId) as
+					{ name: string } | undefined
+			)?.name ?? null)
+		: null;
+
+	// Admins can see others' requests, but /chat only opens the viewer's own conversations.
+	const conversationOpenable = request.conversationId
+		? db
+				.prepare('SELECT 1 FROM conversations WHERE id = ? AND user_id = ? AND deleted_at IS NULL')
+				.get(request.conversationId, user.id) !== undefined
+		: false;
+
 	let mappingName: string | null = null;
 	if (request.mappingId) {
 		const mappingRow = db
@@ -37,6 +52,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		request,
 		userName,
 		keyLabel,
+		providerName,
+		conversationOpenable,
 		mappingName,
 		timeFormat: getTimeFormat(db, user.id)
 	};

@@ -1,10 +1,16 @@
 // Shared validation for creating/updating agents. Used by the REST API
 // (/api/agents) and the `agents` MCP tools so both enforce the same rules.
 import { z } from 'zod';
+import { CODING_AUTONOMY_VALUES } from '$lib/coding-environments.js';
 import { AGENT_EVENT_NAMES, type AgentTriggerConfig, type AgentTriggerType } from '$lib/types.js';
 import { computeNextRunAt, isValidCron } from './agents/scheduler.js';
 import type { Db } from './db/index.js';
-import type { AgentRow, CreateAgentInput, UpdateAgentInput } from './db/repo/agents.js';
+import {
+	parseCodingTarget,
+	type AgentRow,
+	type CreateAgentInput,
+	type UpdateAgentInput
+} from './db/repo/agents.js';
 import { isSelectableModelRef } from './llm/mapped.js';
 
 export const AGENT_TRIGGER_TYPES = ['persona', 'schedule', 'http', 'manual', 'event'] as const;
@@ -32,8 +38,32 @@ export const agentCreateSchema = z.object({
 
 export const agentPatchSchema = agentCreateSchema.partial();
 
-export type AgentCreateBody = z.infer<typeof agentCreateSchema>;
-export type AgentPatchBody = z.infer<typeof agentPatchSchema>;
+const targetId = z.string().trim().min(1).max(256);
+
+/** Where a coding agent's runs start. Checked against the remote environment on save. */
+export const agentCodingTargetSchema = z.object({
+	environmentId: targetId,
+	projectId: targetId,
+	providerInstanceId: targetId,
+	model: targetId,
+	autonomy: z.enum(CODING_AUTONOMY_VALUES),
+	workspaceMode: z.enum(['worktree', 'local']),
+	baseBranch: z.string().trim().min(1).max(256).nullable().optional()
+});
+
+/**
+ * The REST API's agent bodies: the shared ones plus `codingTarget`. The `agents`
+ * MCP tools deliberately use the schemas without it, so a chat model can't turn
+ * an agent into one that runs code in the user's repositories.
+ */
+export const agentRestCreateSchema = agentCreateSchema.extend({
+	codingTarget: agentCodingTargetSchema.nullable().optional()
+});
+export const agentRestPatchSchema = agentRestCreateSchema.partial();
+
+export type AgentCreateBody = z.infer<typeof agentRestCreateSchema>;
+export type AgentPatchBody = z.infer<typeof agentRestPatchSchema>;
+export type AgentCodingTargetBody = z.infer<typeof agentCodingTargetSchema>;
 
 export type AgentInputResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -49,6 +79,10 @@ function validateTrigger(
 		return 'Event trigger requires an event name';
 	}
 	return null;
+}
+
+function validateCodingTrigger(triggerType: AgentTriggerType, coding: boolean): string | null {
+	return coding && triggerType === 'persona' ? 'Coding agents cannot be chat personas' : null;
 }
 
 function validateModel(
@@ -80,17 +114,20 @@ function nextRunAtFor(
 export function prepareAgentCreate(
 	db: Db,
 	input: AgentCreateBody
-): AgentInputResult<CreateAgentInput> {
+): AgentInputResult<Omit<CreateAgentInput, 'codingTarget'>> {
+	// The route resolves `codingTarget` against the environment; it isn't passed through.
+	const { codingTarget, ...rest } = input;
 	const triggerConfig = input.triggerConfig ?? {};
 	const enabled = input.enabled !== false;
 	const error =
 		validateTrigger(input.triggerType, triggerConfig) ??
+		validateCodingTrigger(input.triggerType, !!codingTarget) ??
 		validateModel(db, input.providerId, input.modelId);
 	if (error) return { ok: false, error };
 	return {
 		ok: true,
 		value: {
-			...input,
+			...rest,
 			triggerConfig,
 			enabled,
 			nextRunAt: nextRunAtFor(input.triggerType, triggerConfig, enabled)
@@ -113,7 +150,7 @@ export function prepareAgentUpdate(
 	existing: AgentRow,
 	patch: AgentPatchBody,
 	options: PrepareAgentUpdateOptions = {}
-): AgentInputResult<UpdateAgentInput> {
+): AgentInputResult<Omit<UpdateAgentInput, 'codingTarget'>> {
 	const existingConfig = JSON.parse(existing.trigger_config) as AgentTriggerConfig;
 	const triggerConfig =
 		patch.triggerConfig === undefined
@@ -123,6 +160,13 @@ export function prepareAgentUpdate(
 				: patch.triggerConfig;
 	const triggerType = patch.triggerType ?? (existing.trigger_type as AgentTriggerType);
 	const enabled = patch.enabled ?? existing.enabled === 1;
+	// The route resolves `codingTarget` against the environment; it isn't passed through.
+	const { codingTarget, ...rest } = patch;
+	const coding = codingTarget !== undefined ? !!codingTarget : !!parseCodingTarget(existing);
+	if (patch.triggerType !== undefined || codingTarget !== undefined) {
+		const error = validateCodingTrigger(triggerType, coding);
+		if (error) return { ok: false, error };
+	}
 
 	const triggerChanged =
 		patch.triggerType !== undefined ||
@@ -143,7 +187,7 @@ export function prepareAgentUpdate(
 	return {
 		ok: true,
 		value: {
-			...patch,
+			...rest,
 			triggerConfig: patch.triggerConfig !== undefined ? triggerConfig : undefined,
 			...(triggerChanged ? { nextRunAt: nextRunAtFor(triggerType, triggerConfig, enabled) } : {})
 		}

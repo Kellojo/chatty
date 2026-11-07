@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.resetModules();
 delete process.env.ALLOW_PRIVATE_NETWORK_FETCH;
-const { isBlockedAddress, safeFetch } = await import('./safeFetch.js');
+const { isBlockedAddress, isLinkLocalOrReserved, safeFetch } = await import('./safeFetch.js');
 
 describe('isBlockedAddress', () => {
 	it.each([
@@ -30,6 +30,17 @@ describe('isBlockedAddress', () => {
 			expect(isBlockedAddress(ip)).toBe(false);
 		}
 	);
+});
+
+describe('isLinkLocalOrReserved', () => {
+	it('blocks metadata and link-local but allows loopback, LAN and tailnet', () => {
+		for (const ip of ['169.254.169.254', '::ffff:169.254.169.254', 'fe80::1', '0.0.0.0', '::']) {
+			expect(isLinkLocalOrReserved(ip)).toBe(true);
+		}
+		for (const ip of ['127.0.0.1', '10.0.0.5', '192.168.1.2', '100.101.102.103', '::1']) {
+			expect(isLinkLocalOrReserved(ip)).toBe(false);
+		}
+	});
 });
 
 describe('safeFetch', () => {

@@ -17,7 +17,7 @@
 	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import ActivityHistogram from '$lib/components/app/ActivityHistogram.svelte';
 	import DailyStackedChart from '$lib/components/app/usage/DailyStackedChart.svelte';
-	import { modelColors } from '$lib/components/app/usage/usage.js';
+	import { NO_COST_REPORTED, formatBilled, modelColors } from '$lib/components/app/usage/usage.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
@@ -26,15 +26,11 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
-	import {
-		formatCount,
-		formatCost,
-		formatLatency,
-		formatSpend,
-		formatTokens
-	} from '$lib/formats.js';
+	import { formatCount, formatLatency, formatTokens } from '$lib/formats.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
 	import type { ProxyRequestStatus } from '$lib/types.js';
+	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
+	import { resolveBrand } from '$lib/provider-brand.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -56,16 +52,9 @@
 	});
 
 	// Filter state (values from URL params, not two-way bound to Select)
-	let searchValue = $state('');
-	let fromValue = $state('');
-	let toValue = $state('');
+	// Follows the URL, but stays editable until the search is applied.
+	let searchValue = $derived(data.filters.search);
 	let filtersOpen = $state(false);
-
-	$effect.pre(() => {
-		searchValue = data.filters.search;
-		fromValue = data.filters.from;
-		toValue = data.filters.to;
-	});
 
 	/** Requests page URL with the current filters, `updates` applied (empty value removes). */
 	function requestsUrl(updates: Record<string, string>): string {
@@ -92,10 +81,6 @@
 
 	function applySearch() {
 		navigate(filterUrl({ search: searchValue }));
-	}
-
-	function applyDate() {
-		navigate(filterUrl({ range: 'custom', from: fromValue, to: toValue }));
 	}
 
 	function setFilter(key: string, value: string | undefined) {
@@ -223,10 +208,14 @@
 		})
 	);
 
-	function sourceVariant(source: string): 'outline' | 'secondary' | 'default' {
-		if (source === 'chat') return 'default';
-		if (source === 'agent') return 'secondary';
-		return 'outline';
+	// Quiet pills: the source is context, the status pill is what should stand out.
+	function sourceVariant(source: string): 'outline' | 'secondary' {
+		return source === 'agent' ? 'secondary' : 'outline';
+	}
+
+	/** A provider's display name; ids only as a fallback. */
+	function providerName(id: string): string {
+		return data.filterOptions.providers.find((p) => p.id === id)?.name ?? id;
 	}
 
 	// Color follows the model (its position among every model this viewer has used).
@@ -249,15 +238,21 @@
 		onValueChange={(v) => setFilter('model', v)}
 	>
 		<Select.Trigger aria-label="Model" class={triggerClass}>
-			<span class="truncate {data.filters.model ? '' : 'text-muted-foreground'}">
-				{data.filters.model || 'All models'}
+			{@const filterBrand = data.filters.model ? resolveBrand(data.filters.model) : null}
+			<span class="flex min-w-0 items-center gap-1.5">
+				{#if filterBrand}<ProviderIcon brand={filterBrand} class="size-3.5 shrink-0" />{/if}
+				<span class="truncate {data.filters.model ? '' : 'text-muted-foreground'}">
+					{data.filters.model || 'All models'}
+				</span>
 			</span>
 		</Select.Trigger>
 		<Select.Content>
 			<Select.Item value="">All models</Select.Item>
 			{#each data.filterOptions.models as model (model)}
-				<Select.Item value={model}>
-					{model.length > 50 ? model.slice(0, 50) + '...' : model}
+				{@const brand = resolveBrand(model)}
+				<Select.Item value={model} label={model}>
+					{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
+					<span class="truncate">{model.length > 50 ? model.slice(0, 50) + '...' : model}</span>
 				</Select.Item>
 			{/each}
 		</Select.Content>
@@ -519,26 +514,6 @@
 			</Popover.Root>
 		</div>
 
-		{#if data.range === 'custom'}
-			<div class="flex flex-wrap items-center gap-2">
-				<span class="text-sm text-muted-foreground">Custom dates</span>
-				<Input
-					type="date"
-					aria-label="From date"
-					class="w-[calc(50%-0.25rem)] sm:w-[160px]"
-					bind:value={fromValue}
-					onchange={applyDate}
-				/>
-				<Input
-					type="date"
-					aria-label="To date"
-					class="w-[calc(50%-0.25rem)] sm:w-[160px]"
-					bind:value={toValue}
-					onchange={applyDate}
-				/>
-			</div>
-		{/if}
-
 		{#if hasActiveFilters}
 			<div class="flex flex-wrap items-center gap-2">
 				<FilterIcon class="size-3.5 text-muted-foreground" />
@@ -604,10 +579,15 @@
 		<Card.Root class="rounded-2xl border-border/40">
 			<Card.Content class="flex flex-col gap-1">
 				<span class="flex items-center justify-between gap-2 text-sm text-muted-foreground">
-					Actual cost
+					Billed
 					<DollarSignIcon class="size-4 shrink-0" aria-hidden="true" />
 				</span>
-				<span class="text-2xl font-semibold tabular-nums">{formatSpend(data.stats.costUsd)}</span>
+				<span class="text-2xl font-semibold tabular-nums">
+					{formatBilled(data.stats.costUsd, { pricedRequests: data.stats.pricedRequests })}
+				</span>
+				{#if data.stats.total > 0 && data.stats.pricedRequests === 0}
+					<span class="text-sm font-medium text-muted-foreground">No cost reported</span>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 	</div>
@@ -650,174 +630,203 @@
 			</div>
 		</Card.Header>
 		<Card.Content>
-			<Table.Root>
-				<Table.Header class="bg-muted/30">
-					<Table.Row class="hover:bg-transparent">
-						<Table.Head
-							class="w-[150px] pl-4 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							Endpoint
-						</Table.Head>
-						<Table.Head
-							class="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							Model
-						</Table.Head>
-						<Table.Head
-							class="w-[90px] text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							Source
-						</Table.Head>
-						<Table.Head
-							class="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							{data.isAdmin ? 'User / Key' : 'API key'}
-						</Table.Head>
-						<Table.Head
-							class="w-[130px] text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							Status
-						</Table.Head>
-						<Table.Head
-							class="w-[90px] text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							Started
-						</Table.Head>
-						<Table.Head
-							class="w-[90px] text-right text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							Latency
-						</Table.Head>
-						<Table.Head
-							class="w-[110px] text-right text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							Tokens
-						</Table.Head>
-						<Table.Head
-							class="w-[90px] pr-4 text-right text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-						>
-							Cost
-						</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each data.requests as request (request.id)}
-						<Table.Row
-							class="group cursor-pointer transition-colors hover:bg-muted/40"
-							onclick={() => goto(resolve(`/usage/requests/${request.id}`))}
-						>
-							<Table.Cell class="pl-4">
+			<!-- Phones: two-line rows, each one a link to the request. -->
+			<ul class="flex flex-col divide-y divide-border/60 md:hidden">
+				{#each data.requests as request (request.id)}
+					<li>
+						<a href={resolve(`/usage/requests/${request.id}`)} class="flex flex-col gap-1 py-3">
+							<span class="flex items-center gap-2">
 								<span
-									class="inline-flex items-center gap-1.5 font-mono text-xs text-foreground"
-									title={request.endpoint}
+									class="min-w-0 flex-1 truncate text-sm font-medium"
+									title={request.requestedModel}
 								>
-									<BracesIcon class="size-3 shrink-0 text-muted-foreground" />
-									{request.endpoint}
+									{request.requestedModel}
 								</span>
-							</Table.Cell>
-							<Table.Cell class="max-w-[220px]">
-								<div class="flex flex-col gap-0.5">
-									<span
-										class="truncate text-sm font-medium group-hover:text-primary"
-										title={request.requestedModel}
-									>
-										{request.requestedModel}
-									</span>
-									{#if request.modelId && request.modelId !== request.requestedModel}
-										<span class="truncate text-xs text-muted-foreground" title={request.modelId}>
-											{request.modelId}
-											{#if request.fallbackIndex > 0}
-												<Badge variant="outline" class="ml-1 text-[10px]">
-													+{request.fallbackIndex}
-												</Badge>
-											{/if}
-										</span>
-									{:else if request.providerId}
-										<span class="truncate text-xs text-muted-foreground" title={request.providerId}>
-											{request.providerId}
-										</span>
-									{/if}
-								</div>
-							</Table.Cell>
-							<Table.Cell>
-								<Badge variant={sourceVariant(request.source)} class="capitalize">
-									{request.source}
-								</Badge>
-							</Table.Cell>
-							<Table.Cell class="max-w-[160px] text-muted-foreground">
-								<div class="flex flex-col gap-0.5">
-									{#if data.isAdmin}
-										<span class="truncate text-sm">
-											{data.users[request.userId] ?? request.userId}
-										</span>
-									{/if}
-									<span class="truncate {data.isAdmin ? 'text-xs' : 'text-sm'}">
-										{request.apiKeyId ? (data.keys[request.apiKeyId] ?? request.apiKeyId) : '—'}
-									</span>
-								</div>
-							</Table.Cell>
-							<Table.Cell>
-								<div class="flex items-center gap-2">
-									<span
-										class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {statusTone(
-											request.status
-										)}"
-									>
-										<span class="size-1.5 rounded-full {statusDot(request.status)}"></span>
-										{request.status}
-									</span>
-									{#if request.httpStatus !== null}
-										<span
-											class="font-mono text-xs text-muted-foreground tabular-nums"
-											title="HTTP status"
-										>
-											{request.httpStatus}
-										</span>
-									{/if}
-								</div>
-							</Table.Cell>
-							<Table.Cell class="text-sm whitespace-nowrap text-muted-foreground">
-								<span title={formatDateTime(request.startedAt, data.timeFormat)}>
+								<span
+									class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {statusTone(
+										request.status
+									)}"
+								>
+									<span class="size-1.5 rounded-full {statusDot(request.status)}"></span>
+									{request.status}
+								</span>
+								<span
+									class="shrink-0 text-xs text-muted-foreground"
+									title={formatDateTime(request.startedAt, data.timeFormat)}
+								>
 									{formatTimeAgo(request.startedAt)}
 								</span>
-							</Table.Cell>
-							<Table.Cell class="text-right text-sm whitespace-nowrap text-muted-foreground">
-								{formatLatency(request.latencyMs)}
-							</Table.Cell>
-							<Table.Cell
-								class="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums"
-								title="Input / output"
-							>
-								{formatTokens(request.inputTokens, request.outputTokens)}
-							</Table.Cell>
-							<Table.Cell class="pr-4 text-right text-sm whitespace-nowrap tabular-nums">
-								{#if request.costUsd !== null}
-									<span class={request.costUsd === 0 ? 'text-muted-foreground' : 'font-medium'}>
-										{formatCost(request.costUsd)}
-									</span>
-								{:else}
-									<span class="text-muted-foreground">—</span>
+							</span>
+							<span class="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
+								<!-- Stats never truncate; the user name gives way first. -->
+								<span class="shrink-0">
+									{formatTokens(request.inputTokens, request.outputTokens)} tokens ·
+									{formatLatency(request.latencyMs)} ·
+									<span class="capitalize">{request.source}</span>
+								</span>
+								{#if data.isAdmin}
+									<span class="min-w-0 truncate"
+										>· {data.users[request.userId] ?? request.userId}</span
+									>
 								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row class="hover:bg-transparent">
-							<Table.Cell colspan={9} class="py-14 text-center">
-								<div class="flex flex-col items-center gap-2 text-muted-foreground">
-									<InboxIcon class="size-6" />
-									<span class="text-sm">
-										{#if hasActiveFilters}
-											No requests match your filters.
-										{:else}
-											No requests in this period.
-										{/if}
+								<!-- No cost reported: left to the detail page rather than a bare "—". -->
+								{#if request.costUsd !== null}
+									<span class="ml-auto shrink-0 text-sm text-foreground">
+										{formatBilled(request.costUsd, { precise: true })}
 									</span>
-								</div>
-							</Table.Cell>
+								{/if}
+							</span>
+						</a>
+					</li>
+				{:else}
+					<li class="flex flex-col items-center gap-2 py-10 text-muted-foreground">
+						<InboxIcon class="size-6" />
+						<span class="text-sm">
+							{hasActiveFilters ? 'No requests match your filters.' : 'No requests in this period.'}
+						</span>
+					</li>
+				{/each}
+			</ul>
+			<div class="hidden md:block">
+				<Table.Root>
+					<Table.Header class="bg-muted/30">
+						<Table.Row class="hover:bg-transparent">
+							<Table.Head class="w-[150px] pl-4">Endpoint</Table.Head>
+							<Table.Head>Model</Table.Head>
+							<Table.Head class="w-[90px]">Source</Table.Head>
+							<Table.Head>
+								{data.isAdmin ? 'User / Key' : 'API key'}
+							</Table.Head>
+							<Table.Head class="w-[130px]">Status</Table.Head>
+							<Table.Head class="w-[90px]">Started</Table.Head>
+							<Table.Head class="w-[90px] text-right">Latency</Table.Head>
+							<Table.Head class="w-[110px] text-right">Tokens</Table.Head>
+							<Table.Head class="w-[90px] pr-4 text-right">Billed</Table.Head>
 						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
+					</Table.Header>
+					<Table.Body>
+						{#each data.requests as request (request.id)}
+							<Table.Row
+								class="group cursor-pointer transition-colors hover:bg-muted/40"
+								onclick={() => goto(resolve(`/usage/requests/${request.id}`))}
+							>
+								<Table.Cell class="pl-4">
+									<span
+										class="inline-flex items-center gap-1.5 font-mono text-xs text-foreground"
+										title={request.endpoint}
+									>
+										<BracesIcon class="size-3 shrink-0 text-muted-foreground" />
+										{request.endpoint}
+									</span>
+								</Table.Cell>
+								<Table.Cell class="max-w-[220px]">
+									<div class="flex flex-col gap-0.5">
+										<span
+											class="truncate text-sm font-medium group-hover:text-primary"
+											title={request.requestedModel}
+										>
+											{request.requestedModel}
+										</span>
+										{#if request.modelId && request.modelId !== request.requestedModel}
+											<span class="truncate text-xs text-muted-foreground" title={request.modelId}>
+												{request.modelId}
+												{#if request.fallbackIndex > 0}
+													<Badge variant="outline" class="ml-1 text-[10px]">
+														+{request.fallbackIndex}
+													</Badge>
+												{/if}
+											</span>
+										{:else if request.providerId}
+											<span class="truncate text-xs text-muted-foreground">
+												{providerName(request.providerId)}
+											</span>
+										{/if}
+									</div>
+								</Table.Cell>
+								<Table.Cell>
+									<Badge variant={sourceVariant(request.source)} class="capitalize">
+										{request.source}
+									</Badge>
+								</Table.Cell>
+								<Table.Cell class="max-w-[160px] text-muted-foreground">
+									<div class="flex flex-col gap-0.5">
+										{#if data.isAdmin}
+											<span class="truncate text-sm">
+												{data.users[request.userId] ?? request.userId}
+											</span>
+										{/if}
+										<!-- Key line only when a key was used; non-admins see just this column. -->
+										{#if request.apiKeyId}
+											<span class="truncate {data.isAdmin ? 'text-xs' : 'text-sm'}">
+												{data.keys[request.apiKeyId] ?? request.apiKeyId}
+											</span>
+										{:else if !data.isAdmin}
+											<span class="text-sm">—</span>
+										{/if}
+									</div>
+								</Table.Cell>
+								<Table.Cell>
+									<div class="flex items-center gap-2">
+										<span
+											class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {statusTone(
+												request.status
+											)}"
+										>
+											<span class="size-1.5 rounded-full {statusDot(request.status)}"></span>
+											{request.status}
+										</span>
+										{#if request.httpStatus !== null}
+											<span
+												class="font-mono text-xs text-muted-foreground tabular-nums"
+												title="HTTP status"
+											>
+												{request.httpStatus}
+											</span>
+										{/if}
+									</div>
+								</Table.Cell>
+								<Table.Cell class="text-sm whitespace-nowrap text-muted-foreground">
+									<span title={formatDateTime(request.startedAt, data.timeFormat)}>
+										{formatTimeAgo(request.startedAt)}
+									</span>
+								</Table.Cell>
+								<Table.Cell class="text-right text-sm whitespace-nowrap text-muted-foreground">
+									{formatLatency(request.latencyMs)}
+								</Table.Cell>
+								<Table.Cell
+									class="text-right text-sm whitespace-nowrap text-muted-foreground tabular-nums"
+									title="Input / output"
+								>
+									{formatTokens(request.inputTokens, request.outputTokens)}
+								</Table.Cell>
+								<Table.Cell class="pr-4 text-right text-sm whitespace-nowrap tabular-nums">
+									<span
+										class={request.costUsd ? 'font-medium' : 'text-muted-foreground'}
+										title={request.costUsd === null ? NO_COST_REPORTED : undefined}
+									>
+										{formatBilled(request.costUsd, { precise: true })}
+									</span>
+								</Table.Cell>
+							</Table.Row>
+						{:else}
+							<Table.Row class="hover:bg-transparent">
+								<Table.Cell colspan={9} class="py-14 text-center">
+									<div class="flex flex-col items-center gap-2 text-muted-foreground">
+										<InboxIcon class="size-6" />
+										<span class="text-sm">
+											{#if hasActiveFilters}
+												No requests match your filters.
+											{:else}
+												No requests in this period.
+											{/if}
+										</span>
+									</div>
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			</div>
 		</Card.Content>
 	</Card.Root>
 
@@ -877,7 +886,9 @@
 											{m.model}
 										</a>
 										<span class="shrink-0 text-xs text-muted-foreground tabular-nums">
-											{m.count.toLocaleString()} · {formatSpend(m.costUsd)}
+											{m.count.toLocaleString()}{m.pricedRequests > 0
+												? ` · ${formatBilled(m.costUsd, { pricedRequests: m.pricedRequests })}`
+												: ''}
 										</span>
 									</div>
 									<div class="h-1.5 overflow-hidden rounded-full bg-muted">

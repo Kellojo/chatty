@@ -90,6 +90,24 @@
 	}
 </script>
 
+{#snippet nameField(id: string, value: string, placeholder: string)}
+	<div class="grid gap-2">
+		<Label for={id}>Name</Label>
+		<Input
+			{id}
+			{value}
+			oninput={(e) => {
+				title = e.currentTarget.value;
+				// Clearing the field brings the suggested name back.
+				titleEdited = title.length > 0;
+			}}
+			{placeholder}
+			autocomplete="off"
+			disabled={busy}
+		/>
+	</div>
+{/snippet}
+
 <Dialog.Root bind:open>
 	<Dialog.Content
 		class="sm:max-w-lg"
@@ -129,44 +147,45 @@
 				</Tabs.List>
 			</Tabs.Root>
 
-			{#if mode === 'clone'}
-				<div class="grid gap-2">
-					<Label for="project-repository">Repository</Label>
-					<Input
-						id="project-repository"
-						bind:value={repository}
-						placeholder="owner/repo or https://github.com/owner/repo"
-						autocomplete="off"
-						spellcheck={false}
-						disabled={busy}
-					/>
-					<p class="text-xs text-muted-foreground">
-						{busy
-							? 'Cloning can take a minute for large repositories.'
-							: 'Paste a GitHub link or type owner/repo. Other git URLs work too.'}
-					</p>
+			<!-- Both panels share one grid cell, so the dialog keeps the height of the
+			     taller one and doesn't jump when switching tabs. -->
+			<div class="grid *:col-start-1 *:row-start-1">
+				<div
+					class={['grid content-start gap-5', mode !== 'clone' && 'invisible']}
+					inert={mode !== 'clone'}
+				>
+					<div class="grid gap-2">
+						<Label for="project-repository">Repository</Label>
+						<Input
+							id="project-repository"
+							bind:value={repository}
+							placeholder="owner/repo or https://github.com/owner/repo"
+							autocomplete="off"
+							spellcheck={false}
+							disabled={busy}
+						/>
+						<p class="text-xs text-muted-foreground">
+							{busy
+								? 'Cloning can take a minute for large repositories.'
+								: 'Paste a GitHub link or type owner/repo. Other git URLs work too.'}
+						</p>
+					</div>
+					{@render nameField(
+						'project-clone-title',
+						titleEdited ? title : suggestedTitle,
+						'Filled in from the repository'
+					)}
 				</div>
-			{/if}
 
-			<div class="grid gap-2">
-				<Label for="project-title">Name</Label>
-				<Input
-					id="project-title"
-					value={effectiveTitle}
-					oninput={(e) => {
-						title = e.currentTarget.value;
-						// Clearing the field brings the suggested name back.
-						titleEdited = title.length > 0;
-					}}
-					placeholder={mode === 'clone' ? 'Filled in from the repository' : 'my-new-app'}
-					autocomplete="off"
-					disabled={busy}
-				/>
-				{#if mode === 'empty'}
+				<div
+					class={['grid content-start gap-2', mode !== 'empty' && 'invisible']}
+					inert={mode !== 'empty'}
+				>
+					{@render nameField('project-title', title, 'my-new-app')}
 					<p class="text-xs text-muted-foreground">
 						Starts as a fresh git repository with a README and a first commit.
 					</p>
-				{/if}
+				</div>
 			</div>
 
 			{#if error}

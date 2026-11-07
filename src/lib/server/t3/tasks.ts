@@ -10,7 +10,7 @@ import type {
 	CodingProjectOption,
 	CodingWorkspaceMode
 } from '$lib/coding-environments.js';
-import { providerLabel, repositoryName } from '$lib/coding-environments.js';
+import { repositoryName, type CodingModelRef } from '$lib/coding-environments.js';
 import { createStreamReplayResponse } from '../chat/replay.js';
 import { decryptSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
@@ -23,11 +23,17 @@ import {
 } from '../db/repo/coding-conversations.js';
 import { getCodingEnvironment, type CodingEnvironmentRow } from '../db/repo/coding-environments.js';
 import { createConversation, getConversation } from '../db/repo/conversations.js';
-import { extractText } from '../db/repo/messages.js';
+import { createMessage, extractText } from '../db/repo/messages.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { connectT3, t3HttpGet, T3ClientError, type T3Connection } from './client.js';
 import { ensureFollower, getFollower } from './follower.js';
+import {
+	parseFavorites,
+	parseModelSelection,
+	parseModels,
+	resolveDefaultModel
+} from './options.js';
 
 const log = createLogger('t3-tasks');
 
@@ -95,7 +101,7 @@ interface RemoteProject {
 	title: string;
 	workspaceRoot: string | null;
 	isGitRepo: boolean;
-	defaultModel: { providerInstanceId: string; model: string } | null;
+	defaultModel: CodingModelRef | null;
 	defaultWorkspaceMode: CodingWorkspaceMode | null;
 }
 
@@ -110,46 +116,10 @@ async function listRemoteProjects(env: CodingEnvironmentRow): Promise<RemoteProj
 			title: str(p.title) ?? String(p.id),
 			workspaceRoot: str(p.workspaceRoot),
 			isGitRepo: rec(p.repositoryIdentity) !== null,
-			defaultModel: modelSelection(p.defaultModelSelection),
+			defaultModel: parseModelSelection(p.defaultModelSelection),
 			defaultWorkspaceMode: workspaceModeFromEnvMode(p.defaultThreadEnvMode)
 		}))
 		.sort((a, b) => a.title.localeCompare(b.title));
-}
-
-function modelSelection(value: unknown): { providerInstanceId: string; model: string } | null {
-	const selection = rec(value);
-	const instanceId = str(selection?.instanceId);
-	const model = str(selection?.model);
-	return instanceId && model ? { providerInstanceId: instanceId, model } : null;
-}
-
-function parseModels(config: unknown): CodingModelOption[] {
-	const providers = Array.isArray(rec(config)?.providers)
-		? (rec(config)!.providers as unknown[])
-		: [];
-	const options: CodingModelOption[] = [];
-	for (const entry of providers) {
-		const p = rec(entry);
-		const instanceId = str(p?.instanceId);
-		const driver = str(p?.driver);
-		if (!p || !instanceId || !driver) continue;
-		if (p.enabled === false || p.installed === false || p.availability === 'unavailable') continue;
-		if (p.status === 'error' || p.status === 'disabled') continue;
-		const label = str(p.displayName) ?? providerLabel(driver);
-		for (const m of Array.isArray(p.models) ? p.models : []) {
-			const model = rec(m);
-			const slug = str(model?.slug);
-			if (!model || !slug || model.isLegacy === true) continue;
-			options.push({
-				providerInstanceId: instanceId,
-				provider: driver,
-				providerLabel: label,
-				model: slug,
-				label: str(model.name) ?? slug
-			});
-		}
-	}
-	return options;
 }
 
 export async function getCodingOptions(
@@ -159,7 +129,7 @@ export async function getCodingOptions(
 ): Promise<{
 	projects: CodingProjectOption[];
 	models: CodingModelOption[];
-	defaultModel: { providerInstanceId: string; model: string } | null;
+	defaultModel: CodingModelRef | null;
 	defaultAutonomy: CodingAutonomy | null;
 	defaultWorkspaceMode: CodingWorkspaceMode | null;
 }> {
@@ -169,34 +139,34 @@ export async function getCodingOptions(
 			listRemoteProjects(env),
 			withConnection(env, (conn) => conn.call('server.getConfig', {}))
 		]);
-		const models = parseModels(config);
 		// T3 resolves a new thread's defaults as: project override, then the
-		// user's server-wide settings. Mirror that so Chatty starts the same way.
+		// project's own setting, then the user's server-wide settings. Mirror
+		// that so Chatty starts the same way.
 		const settings = rec(rec(config)?.settings);
+		const models = parseModels(config, parseFavorites(settings));
 		const overrides = rec(settings?.projectSettingsOverrides);
 		const override = (projectId: string) => rec(overrides?.[projectId]);
-		const available = (m: { providerInstanceId: string; model: string } | null) =>
-			m && models.some((o) => o.providerInstanceId === m.providerInstanceId && o.model === m.model)
-				? m
-				: null;
-		const defaultModel =
-			available(modelSelection(settings?.defaultModelSelection)) ??
-			available(projects.find((p) => p.defaultModel)?.defaultModel ?? null) ??
-			(models[0]
-				? { providerInstanceId: models[0].providerInstanceId, model: models[0].model }
-				: null);
+		const serverDefault = parseModelSelection(settings?.defaultModelSelection);
 		return {
 			projects: projects.map((p) => ({
 				id: p.id,
 				title: p.title,
 				defaultBranch: null,
 				isGitRepo: p.isGitRepo,
+				defaultModel: resolveDefaultModel(
+					[
+						parseModelSelection(override(p.id)?.defaultModelSelection),
+						p.defaultModel,
+						serverDefault
+					],
+					models
+				),
 				defaultAutonomy: autonomyFromRuntimeMode(override(p.id)?.defaultRuntimeMode),
 				defaultWorkspaceMode:
 					workspaceModeFromEnvMode(override(p.id)?.defaultThreadEnvMode) ?? p.defaultWorkspaceMode
 			})),
 			models,
-			defaultModel,
+			defaultModel: resolveDefaultModel([serverDefault], models),
 			defaultAutonomy: autonomyFromRuntimeMode(settings?.defaultRuntimeMode),
 			defaultWorkspaceMode: workspaceModeFromEnvMode(settings?.defaultThreadEnvMode)
 		};
@@ -328,18 +298,18 @@ export interface CreateCodingTaskInput {
 	model: string;
 	autonomy: CodingAutonomy;
 	workspaceMode: CodingWorkspaceMode;
-	baseBranch?: string;
+	baseBranch?: string | null;
 }
 
 /**
- * Creates the conversation + task record. Nothing runs remotely yet: the task
- * starts with the first message sent through the normal chat flow.
+ * Checks a coding target against the user's environments and the remote
+ * project list. Used before creating a task and when saving a coding agent.
  */
-export async function createCodingTask(
+export async function resolveCodingTarget(
 	userId: string,
-	input: CreateCodingTaskInput,
+	input: Pick<CreateCodingTaskInput, 'environmentId' | 'projectId' | 'workspaceMode'>,
 	db: Db = getDb()
-) {
+): Promise<{ env: CodingEnvironmentRow; project: RemoteProject }> {
 	const env = requireEnvironment(db, userId, input.environmentId);
 	let project: RemoteProject | undefined;
 	try {
@@ -351,9 +321,32 @@ export async function createCodingTask(
 	if (input.workspaceMode === 'worktree' && !project.isGitRepo) {
 		throw new CodingTaskError(400, 'Worktrees need a git repository; use the project checkout');
 	}
+	return { env, project };
+}
+
+/**
+ * Creates the conversation + task record. Nothing runs remotely yet: the task
+ * starts with the first message sent through the normal chat flow (or
+ * `launchCodingTask`).
+ */
+export async function createCodingTask(
+	userId: string,
+	input: CreateCodingTaskInput,
+	db: Db = getDb(),
+	opts: {
+		title?: string;
+		/** Runs before `chat.created` is published (e.g. to link an agent run first). */
+		onCreated?: (conversationId: string) => void;
+	} = {}
+) {
+	const { env, project } = await resolveCodingTarget(userId, input, db);
 
 	const conversation = db.transaction(() => {
-		const conv = createConversation(db, userId, { kind: 'chat', mode: 'agent' });
+		const conv = createConversation(db, userId, {
+			kind: 'chat',
+			mode: 'agent',
+			title: opts.title?.trim().slice(0, 200) ?? ''
+		});
 		createCodingConversation(db, {
 			conversationId: conv.id,
 			environmentId: env.id,
@@ -365,10 +358,54 @@ export async function createCodingTask(
 			workspaceMode: input.workspaceMode,
 			baseBranch: input.workspaceMode === 'worktree' ? (input.baseBranch ?? null) : null
 		});
+		opts.onCreated?.(conv.id);
 		return conv;
 	})();
 	publishServerEvent(userId, { type: 'chat.created', conversationId: conversation.id });
 	return { conversation, coding: getCodingConversation(db, conversation.id)! };
+}
+
+/** Longest first message a launch accepts (hand-offs, agent prompts). */
+export const MAX_LAUNCH_PROMPT = 20_000;
+
+/** A conversation title from the start of a prompt. */
+function titleFromPrompt(text: string): string {
+	const raw = text.trim().replace(/\s+/g, ' ');
+	if (raw.length <= 50) return raw;
+	const cut = raw.lastIndexOf(' ', 50);
+	return (cut > 10 ? raw.slice(0, cut) : raw.slice(0, 50)) + '…';
+}
+
+/**
+ * Creates a coding task and sends `prompt` as its first message, so the remote
+ * agent starts right away. The task stays (with its error) when launching fails.
+ */
+export async function launchCodingTask(
+	userId: string,
+	input: CreateCodingTaskInput & { prompt: string; title?: string },
+	db: Db = getDb(),
+	opts: { onCreated?: (conversationId: string) => void } = {}
+) {
+	const prompt = input.prompt.trim();
+	if (!prompt) throw new CodingTaskError(400, 'Message is empty');
+	if (prompt.length > MAX_LAUNCH_PROMPT) throw new CodingTaskError(400, 'Message is too long');
+	const created = await createCodingTask(userId, input, db, {
+		title: input.title || titleFromPrompt(prompt),
+		onCreated: opts.onCreated
+	});
+	const messageId = randomUUID();
+	createMessage(db, {
+		id: messageId,
+		conversationId: created.conversation.id,
+		role: 'user',
+		parts: [{ type: 'text', text: prompt }],
+		status: 'complete'
+	});
+	await sendCodingTurn(userId, created.coding, { id: messageId, text: prompt }, db);
+	return {
+		conversation: created.conversation,
+		coding: getCodingConversation(db, created.conversation.id)!
+	};
 }
 
 /**
@@ -381,15 +418,27 @@ export async function startCodingTurn(
 	message: UIMessage,
 	db: Db = getDb()
 ): Promise<Response> {
-	if (!coding.environment_id) {
-		throw new CodingTaskError(409, 'The coding environment for this task was removed');
-	}
-	const env = requireEnvironment(db, userId, coding.environment_id);
 	const text = extractText(message.parts).trim();
 	if (!text) throw new CodingTaskError(400, 'Message is empty');
 	if (message.parts.some((p) => p.type === 'file')) {
 		throw new CodingTaskError(400, 'Attachments are not supported for coding tasks yet');
 	}
+	await sendCodingTurn(userId, coding, { id: message.id, text }, db);
+	return createStreamReplayResponse(coding.conversation_id) ?? new Response(null, { status: 204 });
+}
+
+/** Launches the thread on the first message, otherwise sends a follow-up. */
+async function sendCodingTurn(
+	userId: string,
+	coding: CodingConversationRow,
+	message: { id: string; text: string },
+	db: Db
+): Promise<void> {
+	if (!coding.environment_id) {
+		throw new CodingTaskError(409, 'The coding environment for this task was removed');
+	}
+	const env = requireEnvironment(db, userId, coding.environment_id);
+	const { text } = message;
 
 	const threadId = coding.thread_id ?? randomUUID();
 	const follower = ensureFollower({
@@ -436,7 +485,6 @@ export async function startCodingTurn(
 		throw error;
 	}
 	void follower.follow();
-	return createStreamReplayResponse(coding.conversation_id) ?? new Response(null, { status: 204 });
 }
 
 export async function respondToCodingRequest(

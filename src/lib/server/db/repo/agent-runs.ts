@@ -59,6 +59,10 @@ export function finishAgentRun(
 	);
 }
 
+export function setAgentRunConversation(db: Db, id: string, conversationId: string): void {
+	db.prepare('UPDATE agent_runs SET conversation_id = ? WHERE id = ?').run(conversationId, id);
+}
+
 export function getAgentRun(db: Db, id: string): AgentRunRow | undefined {
 	return db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id) as AgentRunRow | undefined;
 }
@@ -95,11 +99,43 @@ export function listRunningAgentIds(db: Db, agentIds: string[]): string[] {
 	).map((r) => r.agent_id);
 }
 
+/** The run still waiting on its coding task in `conversationId`, if any. */
+export function getRunningAgentRunByConversation(
+	db: Db,
+	conversationId: string
+): AgentRunRow | undefined {
+	return db
+		.prepare(
+			`SELECT * FROM agent_runs WHERE conversation_id = ? AND status = 'running'
+			 ORDER BY started_at DESC LIMIT 1`
+		)
+		.get(conversationId) as AgentRunRow | undefined;
+}
+
+/** Whether `conversationId` was created by an agent run (of any agent). */
+export function isAgentRunConversation(db: Db, conversationId: string): boolean {
+	return !!db
+		.prepare('SELECT 1 FROM agent_runs WHERE conversation_id = ? LIMIT 1')
+		.get(conversationId);
+}
+
+/**
+ * Fails runs left `running` by a restart. Coding agent runs whose T3 task is
+ * still live are kept: the remote agent kept working, and the follower that
+ * resumes on startup settles the run when the task ends.
+ */
 export function failRunningAgentRuns(db: Db): number {
 	return db
 		.prepare(
 			`UPDATE agent_runs SET status = 'failed', error = 'Interrupted by server restart', ended_at = ?
-			 WHERE status = 'running'`
+			 WHERE status = 'running'
+			   AND NOT EXISTS (
+			       SELECT 1 FROM coding_conversations cc
+			       JOIN conversations c ON c.id = cc.conversation_id
+			       WHERE cc.conversation_id = agent_runs.conversation_id
+			         AND c.deleted_at IS NULL AND cc.thread_id IS NOT NULL
+			         AND cc.status IN ('starting', 'running', 'awaiting_input')
+			   )`
 		)
 		.run(Date.now()).changes;
 }

@@ -1,8 +1,10 @@
 import type { Db } from '../index.js';
 import {
 	DEFAULT_USER_SETTINGS,
+	NOTIFICATION_TRIGGER_KEYS,
 	THEMES,
 	TIME_FORMATS,
+	type NotificationTriggers,
 	type Theme,
 	type TimeFormat,
 	type UserSettings
@@ -37,10 +39,22 @@ export function getTheme(db: Db, userId: string): Theme {
 	return THEMES.includes(theme as Theme) ? (theme as Theme) : DEFAULT_USER_SETTINGS.theme;
 }
 
-export function getSuggestions(db: Db, userId: string): string[] {
-	const suggestions = getUserSetting<string[]>(db, userId, 'suggestions');
-	if (!Array.isArray(suggestions)) return DEFAULT_USER_SETTINGS.suggestions;
+function getSuggestionList(
+	db: Db,
+	userId: string,
+	key: 'suggestions' | 'codingSuggestions'
+): string[] {
+	const suggestions = getUserSetting<string[]>(db, userId, key);
+	if (!Array.isArray(suggestions)) return DEFAULT_USER_SETTINGS[key];
 	return suggestions.filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+}
+
+export function getSuggestions(db: Db, userId: string): string[] {
+	return getSuggestionList(db, userId, 'suggestions');
+}
+
+export function getCodingSuggestions(db: Db, userId: string): string[] {
+	return getSuggestionList(db, userId, 'codingSuggestions');
 }
 
 export function getGlobalInstructions(db: Db, userId: string): string {
@@ -61,12 +75,34 @@ export function getSidebarOpen(db: Db, userId: string): boolean {
 	return typeof value === 'boolean' ? value : DEFAULT_USER_SETTINGS.sidebarOpen;
 }
 
+export function getFavoriteModels(db: Db, userId: string): string[] {
+	const value = getUserSetting<unknown>(db, userId, 'favoriteModels');
+	if (!Array.isArray(value)) return DEFAULT_USER_SETTINGS.favoriteModels;
+	return [...new Set(value.filter((v): v is string => typeof v === 'string' && v.includes('/')))];
+}
+
+/** Stored triggers merged over the defaults, so new trigger keys default sensibly. */
+export function getNotificationTriggers(db: Db, userId: string): NotificationTriggers {
+	const value = getUserSetting<unknown>(db, userId, 'notificationTriggers');
+	const triggers = { ...DEFAULT_USER_SETTINGS.notificationTriggers };
+	if (value && typeof value === 'object') {
+		for (const key of NOTIFICATION_TRIGGER_KEYS) {
+			const v = (value as Record<string, unknown>)[key];
+			if (typeof v === 'boolean') triggers[key] = v;
+		}
+	}
+	return triggers;
+}
+
 export function getUserSettings(db: Db, userId: string): UserSettings {
 	return {
 		theme: getTheme(db, userId),
 		suggestions: getSuggestions(db, userId),
+		codingSuggestions: getCodingSuggestions(db, userId),
 		globalInstructions: getGlobalInstructions(db, userId),
 		timeFormat: getTimeFormat(db, userId),
-		sidebarOpen: getSidebarOpen(db, userId)
+		sidebarOpen: getSidebarOpen(db, userId),
+		favoriteModels: getFavoriteModels(db, userId),
+		notificationTriggers: getNotificationTriggers(db, userId)
 	};
 }

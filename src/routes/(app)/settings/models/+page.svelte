@@ -12,6 +12,8 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
+	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
+	import { resolveModelBrand, resolveProviderBrand } from '$lib/provider-brand.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -214,6 +216,8 @@
 		<Card.Root class={provider.enabled ? '' : 'opacity-60'}>
 			<Card.Header>
 				<Card.Title class="flex items-center gap-2">
+					{@const providerBrand = resolveProviderBrand(provider)}
+					{#if providerBrand}<ProviderIcon brand={providerBrand} class="size-4 shrink-0" />{/if}
 					{provider.name}
 					{#if !provider.enabled}<Badge variant="outline">disabled</Badge>{/if}
 				</Card.Title>
@@ -233,8 +237,12 @@
 					<Table.Body>
 						{#each models as model (model.id)}
 							<Table.Row>
-								<Table.Cell class="max-w-40 truncate font-medium" title={model.displayName}>
-									{model.displayName}
+								<Table.Cell class="max-w-40 font-medium" title={model.displayName}>
+									{@const brand = resolveModelBrand(model, provider)}
+									<span class="flex min-w-0 items-center gap-2">
+										{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
+										<span class="truncate">{model.displayName}</span>
+									</span>
 								</Table.Cell>
 								<Table.Cell class="max-w-48 truncate text-muted-foreground" title={model.modelId}>
 									{model.modelId}
@@ -322,7 +330,11 @@
 					</Select.Trigger>
 					<Select.Content>
 						{#each data.providers as provider (provider.id)}
-							<Select.Item value={provider.id}>{provider.name}</Select.Item>
+							{@const brand = resolveProviderBrand(provider)}
+							<Select.Item value={provider.id} label={provider.name}>
+								{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
+								{provider.name}
+							</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>

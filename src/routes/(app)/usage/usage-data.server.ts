@@ -9,14 +9,19 @@ import {
 	toPublic
 } from '$lib/server/db/repo/coding-environments.js';
 import {
+	proxyRequestFirstStartedAt,
 	proxyRequestProviderUsage,
 	proxyRequestStats
 } from '$lib/server/db/repo/proxy-requests.js';
 import { listProviders } from '$lib/server/db/repo/providers.js';
 import { dayInZone } from '$lib/server/t3/usage.js';
 import {
+	formatDayShort,
+	isUsagePeriod,
 	parseUsagePeriod,
 	periodDays,
+	selectedRange,
+	type UsageRange,
 	type PaygProvider,
 	type PaygUsage,
 	type SubscriptionProvider,
@@ -44,12 +49,26 @@ export function utcOffsetMinutes(at: number, timeZone = config.TZ): number {
 }
 
 export interface UsageWindow {
+	range: UsageRange;
+	/** The shared 7d/30d/90d preset (what tab links fall back to). */
 	period: UsagePeriod;
+	/** "last 30 days", "last 24 hours", "all time", "Oct 1 – Oct 12". */
+	label: string;
+	/** Request bounds (inclusive); undefined is open-ended. */
+	fromMs?: number;
+	toMs?: number;
+	/** Local (config.TZ) days the daily charts show. */
 	days: string[];
-	/** Local midnight (config.TZ) that starts the first day. */
-	startMs: number;
+	/** The range is longer than the chart, which shows its most recent days. */
+	chartCapped: boolean;
+	/** Custom range inputs as given (YYYY-MM-DD), for the date fields. */
+	customFrom: string;
+	customTo: string;
 	now: number;
 }
+
+/** Longest span a daily chart draws. */
+const MAX_CHART_DAYS = 365;
 
 /** Local midnight (config.TZ) of the day containing `at`. */
 export function startOfLocalDay(at: number): number {
@@ -67,15 +86,90 @@ export function localDays(fromMs: number, toMs: number): string[] {
 	return days;
 }
 
-/** `period` as whole local days, today included. */
-export function windowForPeriod(period: UsagePeriod, now = Date.now()): UsageWindow {
-	const startMs = startOfLocalDay(now - (periodDays(period) - 1) * DAY_MS);
-	return { period, days: localDays(startMs, now), startMs, now };
+/** Local midnight that starts a YYYY-MM-DD day, or undefined for a malformed value. */
+function startOfDayKey(day: string): number | undefined {
+	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+	if (!m) return undefined;
+	// Noon UTC always falls inside that local day, whatever the offset.
+	return startOfLocalDay(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12));
 }
 
-/** The period from `?period=` as whole local days, today included. */
-export function usageWindow(url: URL, now = Date.now()): UsageWindow {
-	return windowForPeriod(parseUsagePeriod(url.searchParams.get('period')), now);
+function chartDays(fromMs: number, toMs: number): { days: string[]; capped: boolean } {
+	const start = Math.max(fromMs, startOfLocalDay(toMs - (MAX_CHART_DAYS - 1) * DAY_MS));
+	return { days: localDays(startOfLocalDay(start), toMs), capped: start > fromMs };
+}
+
+/** `period` as whole local days, today included. */
+export function windowForPeriod(period: UsagePeriod, now = Date.now()): UsageWindow {
+	const fromMs = startOfLocalDay(now - (periodDays(period) - 1) * DAY_MS);
+	return {
+		range: period,
+		period,
+		label: `last ${periodDays(period)} days`,
+		fromMs,
+		days: localDays(fromMs, now),
+		chartCapped: false,
+		customFrom: '',
+		customTo: '',
+		now
+	};
+}
+
+/**
+ * The selected time range (`period`, or `range` = 24h / all / custom with `from`/`to`).
+ * `firstMs` gives the earliest data point, used to start "all time" and open custom ranges.
+ */
+export function usageWindow(
+	url: URL,
+	now = Date.now(),
+	firstMs: () => number | null = () => null
+): UsageWindow {
+	const params = url.searchParams;
+	const range = selectedRange(params);
+	const period = parseUsagePeriod(params.get('period'));
+	if (isUsagePeriod(range)) return { ...windowForPeriod(range, now), period };
+
+	const base = { range, period, customFrom: '', customTo: '', now };
+	if (range === '24h') {
+		const fromMs = now - DAY_MS;
+		return {
+			...base,
+			label: 'last 24 hours',
+			fromMs,
+			days: localDays(startOfLocalDay(fromMs), now),
+			chartCapped: false
+		};
+	}
+	if (range === 'all') {
+		const first = firstMs() ?? now;
+		const { days, capped } = chartDays(startOfLocalDay(first), now);
+		return { ...base, label: 'all time', days, chartCapped: capped };
+	}
+	// Custom dates (local days, both included); a missing end means today.
+	const customFrom = params.get('from') ?? '';
+	const customTo = params.get('to') ?? '';
+	const fromMs = startOfDayKey(customFrom);
+	const toStart = startOfDayKey(customTo);
+	const toMs = toStart === undefined ? undefined : Math.min(now, toStart + DAY_MS - 1);
+	const axisFrom = fromMs ?? startOfLocalDay(firstMs() ?? now);
+	const { days, capped } = chartDays(axisFrom, Math.max(axisFrom, toMs ?? now));
+	const fromLabel = customFrom && fromMs !== undefined ? formatDayShort(customFrom) : 'start';
+	const toLabel = customTo && toStart !== undefined ? formatDayShort(customTo) : 'today';
+	return {
+		...base,
+		label: `${fromLabel} – ${toLabel}`,
+		fromMs,
+		toMs,
+		days,
+		chartCapped: capped,
+		customFrom,
+		customTo
+	};
+}
+
+/** The earliest pay-as-you-go request of `userId`, for "all time" axes. */
+export function firstPaygRequest(db: Db, userId: string): () => number | null {
+	return () => proxyRequestFirstStartedAt(db, { userId });
 }
 
 function totalTokens(r: {
@@ -86,6 +180,14 @@ function totalTokens(r: {
 }): number {
 	// Reasoning tokens are already included in output.
 	return r.inputTokens + r.cachedInputTokens + r.cacheCreationTokens + r.outputTokens;
+}
+
+/** Day keys from `fromDay` to `toDay`, both included. */
+function localDaysFromKey(fromDay: string, toDay: string): string[] {
+	const fromMs = startOfDayKey(fromDay);
+	const toMs = startOfDayKey(toDay);
+	if (fromMs === undefined || toMs === undefined) return [toDay];
+	return chartDays(fromMs, toMs + DAY_MS - 1).days;
 }
 
 /** Usage mirrored from the user's coding environments (fixed-cost subscriptions). */
@@ -121,9 +223,32 @@ export function loadSubscriptionUsage(
 	}
 
 	// ── daily token/cost buckets ──
+	// Subscription usage only exists as whole days: 24h shows today's bucket, "all time" starts
+	// at the first synced day, and custom ranges are clamped to the synced history.
+	const today = dayInZone(window.now, config.TZ);
+	const fetched = listUsageDaily(
+		db,
+		userId,
+		window.range === 'all' || window.range === 'custom' ? '0000-00-00' : window.days[0]
+	);
+	const firstSynced = fetched[0]?.day ?? null;
+	let days = window.days;
+	let note: string | null = null;
+	if (window.range === '24h') {
+		days = [today];
+		note = "Subscription usage is synced per day, so this shows today's total.";
+	} else if (window.range === 'all') {
+		days = firstSynced ? localDaysFromKey(firstSynced, today) : [];
+	} else if (window.range === 'custom' && firstSynced && days[0] < firstSynced) {
+		days = days.filter((d) => d >= firstSynced);
+		if (window.customFrom)
+			note = `Subscription history is only synced from ${formatDayShort(firstSynced)}.`;
+	}
+	const inRange = new Set(days);
 	const providers = new Map<string, SubscriptionProvider>();
 	const byDay = new Map<string, Map<string, { tokens: number; costUsd: number }>>();
-	for (const r of listUsageDaily(db, userId, window.days[0])) {
+	for (const r of fetched) {
+		if (!inRange.has(r.day)) continue;
 		const tokens = totalTokens(r);
 		let p = providers.get(r.provider);
 		if (!p) {
@@ -170,7 +295,7 @@ export function loadSubscriptionUsage(
 	);
 	for (const p of sorted) p.models.sort((a, b) => b.costUsd - a.costUsd || b.tokens - a.tokens);
 
-	const dailyRows = window.days.map((day) => {
+	const dailyRows = days.map((day) => {
 		const dayMap = byDay.get(day);
 		const row: SubscriptionUsage['dailyRows'][number] = { day, cost: {}, tokens: {} };
 		for (const p of sorted) {
@@ -189,7 +314,8 @@ export function loadSubscriptionUsage(
 		totalValueUsd: sorted.reduce((sum, p) => sum + p.costUsd, 0),
 		totalTokens: sorted.reduce((sum, p) => sum + p.tokens, 0),
 		totalSessions: sorted.reduce((sum, p) => sum + p.sessions, 0),
-		anyUnpriced: sorted.some((p) => !p.priced)
+		anyUnpriced: sorted.some((p) => !p.priced),
+		note
 	};
 }
 
@@ -198,13 +324,12 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 	const providerSlots = new Map(listProviders(db).map((p, i) => [p.id, i]));
 	const rows = proxyRequestProviderUsage(
 		db,
-		{ userId, from: window.startMs },
+		{ userId, from: window.fromMs, to: window.toMs },
 		utcOffsetMinutes(window.now)
 	);
 	const providers = new Map<string, PaygProvider>();
-	const byDay = new Map<string, Map<string, number>>();
+	const byDay = new Map<string, Map<string, { costUsd: number; requests: number }>>();
 	for (const r of rows) {
-		if (r.day < window.days[0]) continue;
 		const key = r.providerId ?? 'unknown';
 		let p = providers.get(key);
 		if (!p) {
@@ -217,6 +342,7 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 				inputTokens: 0,
 				outputTokens: 0,
 				requests: 0,
+				pricedRequests: 0,
 				models: []
 			};
 			providers.set(key, p);
@@ -225,6 +351,7 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 		p.inputTokens += r.inputTokens;
 		p.outputTokens += r.outputTokens;
 		p.requests += r.requests;
+		p.pricedRequests += r.pricedRequests;
 		let m = p.models.find((x) => x.model === r.model);
 		if (!m) {
 			m = { model: r.model, costUsd: 0, tokens: 0, requests: 0 };
@@ -236,7 +363,10 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 
 		let dayMap = byDay.get(r.day);
 		if (!dayMap) byDay.set(r.day, (dayMap = new Map()));
-		dayMap.set(key, (dayMap.get(key) ?? 0) + r.costUsd);
+		const cell = dayMap.get(key) ?? { costUsd: 0, requests: 0 };
+		cell.costUsd += r.costUsd;
+		cell.requests += r.requests;
+		dayMap.set(key, cell);
 	}
 	const sorted = [...providers.values()].sort(
 		(a, b) => b.costUsd - a.costUsd || b.requests - a.requests
@@ -245,16 +375,29 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 	const dailyRows = window.days.map((day) => {
 		const dayMap = byDay.get(day);
 		const cost: Record<string, number> = {};
-		for (const p of sorted) cost[p.key] = dayMap?.get(p.key) ?? 0;
-		return { day, cost };
+		const requests: Record<string, number> = {};
+		for (const p of sorted) {
+			cost[p.key] = dayMap?.get(p.key)?.costUsd ?? 0;
+			requests[p.key] = dayMap?.get(p.key)?.requests ?? 0;
+		}
+		return { day, cost, requests };
 	});
 
-	const periodMs = window.days.length * DAY_MS;
-	const previous = proxyRequestStats(db, {
-		userId,
-		from: window.startMs - periodMs,
-		to: window.startMs - 1
-	});
+	// The equally long range just before this one (none for open-ended ranges).
+	let previous: PaygUsage['previous'] = null;
+	if (window.fromMs !== undefined) {
+		const span = (window.toMs ?? window.now) - window.fromMs;
+		const stats = proxyRequestStats(db, {
+			userId,
+			from: window.fromMs - span - 1,
+			to: window.fromMs - 1
+		});
+		previous = {
+			costUsd: stats.costUsd,
+			requests: stats.total,
+			pricedRequests: stats.pricedRequests
+		};
+	}
 
 	return {
 		providers: sorted,
@@ -262,7 +405,8 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 		totalCostUsd: sorted.reduce((sum, p) => sum + p.costUsd, 0),
 		totalTokens: sorted.reduce((sum, p) => sum + p.inputTokens + p.outputTokens, 0),
 		totalRequests: sorted.reduce((sum, p) => sum + p.requests, 0),
-		previousCostUsd: previous.costUsd,
-		previousRequests: previous.total
+		pricedRequests: sorted.reduce((sum, p) => sum + p.pricedRequests, 0),
+		previous,
+		chartCapped: window.chartCapped
 	};
 }

@@ -64,6 +64,40 @@ describe('agentCreateSchema', () => {
 	});
 });
 
+describe('coding agents', () => {
+	const codingTarget = {
+		environmentId: 'e',
+		projectId: 'p',
+		providerInstanceId: 'codex',
+		model: 'm',
+		autonomy: 'supervised' as const,
+		workspaceMode: 'local' as const
+	};
+
+	it('keeps coding agents out of chat personas', () => {
+		expect(prepareAgentCreate(db, { ...base, triggerType: 'persona', codingTarget })).toEqual({
+			ok: false,
+			error: 'Coding agents cannot be chat personas'
+		});
+		const ok = prepareAgentCreate(db, { ...base, triggerType: 'manual', codingTarget });
+		expect(ok.ok).toBe(true);
+		// The route resolves the target against the environment; it is never passed through.
+		expect(ok.ok && 'codingTarget' in ok.value).toBe(false);
+	});
+
+	it('rejects switching a coding agent to a persona', () => {
+		const agent = createAgent(db, 'u1', {
+			...base,
+			triggerType: 'manual',
+			codingTarget: { ...codingTarget, projectTitle: 'P', baseBranch: null }
+		});
+		expect(prepareAgentUpdate(db, agent, { triggerType: 'persona' }).ok).toBe(false);
+		expect(prepareAgentUpdate(db, agent, { triggerType: 'persona', codingTarget: null }).ok).toBe(
+			true
+		);
+	});
+});
+
 describe('prepareAgentCreate', () => {
 	it('validates schedule triggers and computes nextRunAt', () => {
 		expect(prepareAgentCreate(db, { ...base, triggerType: 'schedule' })).toEqual({

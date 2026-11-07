@@ -52,6 +52,16 @@ export function listCodingEnvironments(db: Db, userId: string): CodingEnvironmen
 		.all(userId) as CodingEnvironmentRow[];
 }
 
+/** Coding environments one user may connect (each one is polled and watched). */
+export const MAX_CODING_ENVIRONMENTS_PER_USER = 20;
+
+export function countCodingEnvironments(db: Db, userId: string): number {
+	const row = db
+		.prepare('SELECT COUNT(*) AS n FROM coding_environments WHERE user_id = ?')
+		.get(userId) as { n: number };
+	return row.n;
+}
+
 export function listEnabledCodingEnvironments(db: Db): CodingEnvironmentRow[] {
 	return db
 		.prepare('SELECT * FROM coding_environments WHERE enabled = 1 ORDER BY created_at')
@@ -135,11 +145,63 @@ export function updateCodingEnvironment(
 	return getCodingEnvironment(db, userId, id);
 }
 
-export function deleteCodingEnvironment(db: Db, userId: string, id: string): boolean {
-	return (
-		db.prepare('DELETE FROM coding_environments WHERE id = ? AND user_id = ?').run(id, userId)
-			.changes > 0
-	);
+export interface DeletedCodingEnvironment {
+	/** Tasks of the environment that were settled by the removal. */
+	settledIds: string[];
+	/** Tasks that were still live (starting, running, awaiting input) and got ended. */
+	endedIds: string[];
+	/** Every task that was linked to the environment. */
+	taskIds: string[];
+}
+
+/**
+ * Deletes an environment. Its tasks can no longer be reached, so they are all
+ * marked as done first: live ones are ended (status `idle`, no pending request
+ * or run timer) and every task is settled. Returns undefined when not found.
+ */
+export function deleteCodingEnvironment(
+	db: Db,
+	userId: string,
+	id: string
+): DeletedCodingEnvironment | undefined {
+	return db.transaction(() => {
+		if (!getCodingEnvironment(db, userId, id)) return undefined;
+		const tasks = db
+			.prepare(
+				`SELECT cc.conversation_id AS id, cc.status, c.settled_at
+				 FROM coding_conversations cc
+				 JOIN conversations c ON c.id = cc.conversation_id
+				 WHERE cc.environment_id = ? AND c.user_id = ? AND c.deleted_at IS NULL`
+			)
+			.all(id, userId) as { id: string; status: string; settled_at: number | null }[];
+		const now = Date.now();
+		const endTask = db.prepare(
+			`UPDATE coding_conversations SET status = 'idle', pending_request = NULL,
+			   run_started_at = NULL, updated_at = ?
+			 WHERE conversation_id = ?`
+		);
+		const settle = db.prepare(
+			`UPDATE conversations SET settled_at = ?, settled_reason = 'manual', pinned = 0
+			 WHERE id = ? AND settled_at IS NULL`
+		);
+		const endedIds: string[] = [];
+		const settledIds: string[] = [];
+		for (const task of tasks) {
+			if (
+				task.status === 'starting' ||
+				task.status === 'running' ||
+				task.status === 'awaiting_input'
+			) {
+				endTask.run(now, task.id);
+				endedIds.push(task.id);
+			}
+			if (task.settled_at === null && settle.run(now, task.id).changes > 0) {
+				settledIds.push(task.id);
+			}
+		}
+		db.prepare('DELETE FROM coding_environments WHERE id = ? AND user_id = ?').run(id, userId);
+		return { settledIds, endedIds, taskIds: tasks.map((t) => t.id) };
+	})();
 }
 
 export interface EnvironmentCheckResult {

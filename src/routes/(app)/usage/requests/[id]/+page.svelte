@@ -6,7 +6,8 @@
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
-	import { formatCount, formatCost } from '$lib/formats.js';
+	import { formatCount } from '$lib/formats.js';
+	import { billedParts } from '$lib/components/app/usage/usage.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
 	import type { ProxyRequestStatus } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -14,6 +15,8 @@
 	let { data }: { data: PageData } = $props();
 
 	const request = $derived(data.request);
+	const billed = $derived(billedParts(request.costUsd, { precise: true }));
+	const sourceLabel = $derived(request.source.charAt(0).toUpperCase() + request.source.slice(1));
 
 	onMount(() => {
 		return onServerEvent((event) => {
@@ -55,7 +58,7 @@
 		</Breadcrumb.Root>
 		<div class="flex flex-wrap items-center gap-2">
 			<h2 class="text-xl font-semibold">
-				{request.source === 'proxy' ? 'Proxy request' : `${request.source} request`}
+				{sourceLabel} request
 			</h2>
 			<Badge variant="outline">{request.source}</Badge>
 			{#if request.purpose === 'title'}
@@ -80,7 +83,8 @@
 		</div>
 	{/if}
 
-	<div class="grid gap-4 lg:grid-cols-2">
+	<!-- Cards size to their content rather than stretching to the tallest. -->
+	<div class="grid items-start gap-4 lg:grid-cols-2">
 		<Card.Root>
 			<Card.Header>
 				<Card.Title>Summary</Card.Title>
@@ -88,7 +92,9 @@
 			<Card.Content>
 				<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
 					<dt class="text-muted-foreground">ID</dt>
-					<dd class="font-mono text-xs">{request.id}</dd>
+					<dd class="font-mono text-xs break-all select-all" title="Select to copy">
+						{request.id}
+					</dd>
 					<dt class="text-muted-foreground">Endpoint</dt>
 					<dd>
 						<span
@@ -97,12 +103,19 @@
 							{request.endpoint}
 						</span>
 					</dd>
+					<dt class="text-muted-foreground">Started</dt>
+					<dd>{formatDateTime(request.startedAt, data.timeFormat)}</dd>
+					<dt class="text-muted-foreground">Latency</dt>
+					<dd>{request.latencyMs !== null ? `${request.latencyMs} ms` : '—'}</dd>
 					<dt class="text-muted-foreground">Requested model</dt>
 					<dd>{request.requestedModel}</dd>
 					<dt class="text-muted-foreground">Served provider / model</dt>
 					<dd>
 						{#if request.providerId || request.modelId}
-							{request.providerId ?? '—'} / {request.modelId ?? '—'}
+							<span title={request.providerId ?? undefined}
+								>{data.providerName ?? request.providerId ?? '—'}</span
+							>
+							/ {request.modelId ?? '—'}
 						{:else}
 							—
 						{/if}
@@ -121,13 +134,21 @@
 					{/if}
 					{#if request.conversationId}
 						<dt class="text-muted-foreground">Conversation</dt>
-						<dd>
-							<a
-								class="font-mono text-xs text-primary underline-offset-4 hover:underline"
-								href={resolve(`/chat/${request.conversationId}`)}
-							>
+						<dd class="flex flex-wrap items-center gap-x-3 gap-y-1">
+							<span class="font-mono text-xs select-all" title={request.conversationId}>
 								{request.conversationId.slice(0, 8)}…
-							</a>
+							</span>
+							<!-- Only link to conversations the viewer can actually open. -->
+							{#if data.conversationOpenable}
+								<a
+									class="text-sm text-primary underline-offset-4 hover:underline"
+									href={resolve(`/chat/${request.conversationId}`)}
+								>
+									Open conversation
+								</a>
+							{:else}
+								<span class="text-xs text-muted-foreground"> (another user's conversation) </span>
+							{/if}
 						</dd>
 					{/if}
 					{#if request.runId}
@@ -152,20 +173,6 @@
 
 		<Card.Root>
 			<Card.Header>
-				<Card.Title>Timing</Card.Title>
-			</Card.Header>
-			<Card.Content>
-				<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-					<dt class="text-muted-foreground">Started</dt>
-					<dd>{formatDateTime(request.startedAt, data.timeFormat)}</dd>
-					<dt class="text-muted-foreground">Latency</dt>
-					<dd>{request.latencyMs !== null ? `${request.latencyMs} ms` : '—'}</dd>
-				</dl>
-			</Card.Content>
-		</Card.Root>
-
-		<Card.Root>
-			<Card.Header>
 				<Card.Title>Usage</Card.Title>
 			</Card.Header>
 			<Card.Content>
@@ -174,13 +181,11 @@
 					<dd>{request.inputTokens === null ? '—' : formatCount(request.inputTokens)}</dd>
 					<dt class="text-muted-foreground">Output tokens</dt>
 					<dd>{request.outputTokens === null ? '—' : formatCount(request.outputTokens)}</dd>
-					<dt class="text-muted-foreground">Cost</dt>
+					<dt class="text-muted-foreground">Billed</dt>
 					<dd>
-						{#if request.costUsd !== null}
-							{formatCost(request.costUsd)}
-						{:else}
-							—
-							<span class="text-muted-foreground">(model prices unknown)</span>
+						{billed.value}
+						{#if billed.note}
+							<span class="ml-1 text-muted-foreground">{billed.note}</span>
 						{/if}
 					</dd>
 				</dl>
@@ -188,7 +193,7 @@
 		</Card.Root>
 
 		{#if request.compression}
-			<Card.Root>
+			<Card.Root class="lg:col-span-2">
 				<Card.Header>
 					<Card.Title>Compression</Card.Title>
 				</Card.Header>

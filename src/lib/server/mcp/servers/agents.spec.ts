@@ -243,6 +243,38 @@ describe('update_agent', () => {
 		expect(resultText(res)).toContain('built-in agents cannot be modified');
 	});
 
+	it('rejects changing coding agents', async () => {
+		const codingId = createAgent(getDb(), 'u1', {
+			name: 'coder',
+			systemPrompt: 'update deps',
+			triggerType: 'manual',
+			codingTarget: {
+				environmentId: 'e',
+				projectId: 'p',
+				projectTitle: 'P',
+				providerInstanceId: 'codex',
+				model: 'm',
+				autonomy: 'supervised',
+				workspaceMode: 'local',
+				baseBranch: null
+			}
+		}).id;
+		const res = await callTool('update_agent', { agentId: codingId, systemPrompt: 'other work' });
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('coding agents can only be changed by the user');
+	});
+
+	it('cannot turn an agent into a coding agent', async () => {
+		await callTool('update_agent', {
+			agentId: ownId,
+			codingTarget: { environmentId: 'e', projectId: 'p' }
+		});
+		const row = getDb().prepare('SELECT coding_target FROM agents WHERE id = ?').get(ownId) as {
+			coding_target: string | null;
+		};
+		expect(row.coding_target).toBeNull();
+	});
+
 	it("rejects another user's agent", async () => {
 		const res = await callTool('update_agent', { agentId: otherId, name: 'hacked' });
 		expect(isErr(res)).toBe(true);

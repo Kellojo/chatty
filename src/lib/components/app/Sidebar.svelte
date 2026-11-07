@@ -10,10 +10,14 @@
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import CodeIcon from '@lucide/svelte/icons/code';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
+	import MailIcon from '@lucide/svelte/icons/mail';
+	import MailOpenIcon from '@lucide/svelte/icons/mail-open';
+	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
@@ -34,6 +38,8 @@
 	import { formatCount } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
+	import type { CodingTaskStatus } from '$lib/coding-environments.js';
+	import CodingRunTimer from './CodingRunTimer.svelte';
 
 	let {
 		user,
@@ -237,6 +243,7 @@
 					break;
 				case 'chat.created':
 				case 'conversation.updated':
+				case 'coding.task.updated':
 					scheduleInvalidate();
 					break;
 				case 'conversation.settle_changed':
@@ -346,17 +353,79 @@
 		});
 	}
 
+	function displayTitle(c: Conversation): string {
+		return c.title || (c.coding ? 'New task' : 'New chat');
+	}
+
 	function settledTitle(c: Conversation): string {
-		const title = c.title || 'New chat';
+		const title = displayTitle(c);
 		if (c.settledReason !== 'auto') return title;
 		const after = autoSettleDays > 0 ? ` after ${autoSettleDays} days` : '';
 		return `${title}\nAuto-settled${after} of inactivity`;
+	}
+
+	/** Status words shown under a coding task's title; working/idle stay quiet there. */
+	const CODING_STATUS: Partial<Record<CodingTaskStatus, { label: string; tone: string }>> = {
+		awaiting_input: { label: 'Needs you', tone: 'text-amber-700 dark:text-amber-400' },
+		failed: { label: 'Failed', tone: 'text-destructive' },
+		interrupted: { label: 'Stopped', tone: 'text-muted-foreground' }
+	};
+
+	/**
+	 * One inbox-style state for every row, chat or coding task. Anything but
+	 * `working` and `idle` asks the user to look at the conversation.
+	 */
+	type RowState = 'working' | 'needs-you' | 'failed' | 'unread' | 'idle';
+
+	const ROW_STATE_LABEL: Record<RowState, string | null> = {
+		working: 'Working',
+		'needs-you': 'Needs you',
+		failed: 'Failed',
+		unread: 'New reply',
+		idle: null
+	};
+
+	function rowState(c: Conversation): RowState {
+		const status = c.coding?.status;
+		if (
+			activeChats.has(c.id) ||
+			serverActiveChatIds.has(c.id) ||
+			status === 'running' ||
+			status === 'starting'
+		)
+			return 'working';
+		if (status === 'awaiting_input') return 'needs-you';
+		// Failures, like replies, stop asking for attention once they've been seen.
+		const unread = unreadIds.includes(c.id) && page.url.pathname !== `/chat/${c.id}`;
+		if (!unread) return 'idle';
+		return status === 'failed' ? 'failed' : 'unread';
+	}
+
+	function rowTitle(c: Conversation, state: RowState): string {
+		const title = c.settledAt !== null ? settledTitle(c) : displayTitle(c);
+		const details = [
+			c.coding ? 'Coding task' : null,
+			c.coding?.projectTitle,
+			ROW_STATE_LABEL[state] ?? (c.coding ? CODING_STATUS[c.coding.status]?.label : null)
+		].filter(Boolean);
+		return details.length ? `${title}\n${details.join(' · ')}` : title;
 	}
 
 	let menuOpenId = $state<string | null>(null);
 
 	async function togglePin(id: string) {
 		await fetch(`/api/conversations/${id}/pin`, { method: 'POST' });
+		await invalidateAll();
+	}
+
+	async function setRead(c: Conversation, read: boolean) {
+		const res = await fetch(`/api/conversations/${c.id}/read`, {
+			method: read ? 'POST' : 'DELETE'
+		}).catch(() => null);
+		if (!res?.ok) {
+			toast.error(read ? 'Failed to mark as read' : 'Failed to mark as unread');
+			return;
+		}
 		await invalidateAll();
 	}
 
@@ -399,32 +468,91 @@
 
 {#snippet row(c: Conversation)}
 	{@const settled = c.settledAt !== null}
+	{@const state = rowState(c)}
+	{@const attention =
+		!settled && (state === 'needs-you' || state === 'failed' || state === 'unread')}
+	{@const codingStatus = c.coding ? CODING_STATUS[c.coding.status] : undefined}
+	{@const stateLabel = ROW_STATE_LABEL[state]}
 	<div
-		class="group flex w-full items-center rounded-md text-sm {c.id === currentId
+		class="group mb-0.5 flex w-full items-start rounded-md text-sm {c.id === currentId
 			? 'bg-accent text-accent-foreground'
 			: 'hover:bg-accent/50'} {settled && c.id !== currentId ? 'text-muted-foreground' : ''}"
 	>
 		<a
 			href={resolve(`/chat/${c.id}`)}
-			class="min-w-0 flex-1 truncate px-2 py-1.5"
-			title={settled ? settledTitle(c) : c.title || 'New chat'}
+			class="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+			title={rowTitle(c, state)}
 			onclick={handleNavigate}
 		>
-			{c.title || 'New chat'}
+			{#if c.coding}
+				<CodeIcon class="mt-[3px] size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+				<span class="sr-only">Coding task:</span>
+			{:else}
+				<MessageCircleIcon
+					class="mt-[3px] size-3.5 shrink-0 text-muted-foreground"
+					aria-hidden="true"
+				/>
+				<span class="sr-only">Chat:</span>
+			{/if}
+			<span class="flex min-w-0 flex-1 flex-col">
+				<span
+					class="truncate {attention
+						? 'font-semibold'
+						: (state === 'idle' || state === 'working') && !settled && c.id !== currentId
+							? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground'
+							: ''}">{displayTitle(c)}</span
+				>
+				{#if c.coding}
+					<span class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+						<span class="sr-only">,</span>
+						<span class="truncate">{c.coding.projectTitle}</span>
+						{#if state === 'working' && c.coding.runStartedAt}
+							<span class="shrink-0" aria-hidden="true">·</span>
+							<span class="shrink-0" aria-hidden="true">
+								<CodingRunTimer startedAt={c.coding.runStartedAt} dot={false} />
+							</span>
+						{/if}
+						{#if codingStatus}
+							<span class="shrink-0" aria-hidden="true">·</span>
+							<span class="shrink-0 {codingStatus.tone}">{codingStatus.label}</span>
+						{/if}
+					</span>
+				{/if}
+			</span>
+			{#if stateLabel && stateLabel !== codingStatus?.label}
+				<span class="sr-only">, {stateLabel}</span>
+			{/if}
 		</a>
 		{#if searchResults && settled}
 			<span
-				class="mr-1 shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground group-hover:hidden"
+				class="mt-2.5 mr-1 shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground group-hover:hidden"
 				>Settled</span
 			>
 		{/if}
-		{#if activeChats.has(c.id) || serverActiveChatIds.has(c.id)}
-			<LoaderCircleIcon class="mr-1 size-3.5 shrink-0 animate-spin text-info-foreground" />
-		{:else if unreadIds.includes(c.id) && page.url.pathname !== '/chat/' + c.id}
-			<span class="size-2 shrink-0 rounded-full bg-info" title="New messages"></span>
+		{#if state === 'working' || attention}
+			<span
+				class="mt-2 mr-1.5 h-5 shrink-0 items-center gap-1 text-muted-foreground group-focus-within:hidden group-hover:hidden {menuOpenId ===
+				c.id
+					? 'hidden'
+					: 'flex'}"
+				aria-hidden="true"
+			>
+				{#if state === 'working'}
+					<LoaderCircleIcon class="size-3 animate-spin text-info motion-reduce:animate-none" />
+				{:else}
+					<span
+						class="size-2 rounded-full {state === 'needs-you'
+							? 'bg-amber-700 dark:bg-amber-400'
+							: state === 'failed'
+								? 'bg-destructive'
+								: 'bg-success'}"
+					></span>
+				{/if}
+			</span>
 		{/if}
 		<span
-			class="shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex {menuOpenId === c.id
+			class="mt-1.5 shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex {menuOpenId ===
+			c.id
 				? 'flex'
 				: 'hidden'}"
 		>
@@ -459,10 +587,20 @@
 						</button>
 					{/snippet}
 				</DropdownMenu.Trigger>
-				<DropdownMenu.Content align="start" class="w-40">
+				<DropdownMenu.Content align="start" class="w-44">
 					{#if !settled}
 						<DropdownMenu.Item onSelect={() => void togglePin(c.id)}>
 							{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
+						</DropdownMenu.Item>
+					{/if}
+					{#if state !== 'working' && state !== 'needs-you' && c.id !== currentId}
+						{@const read = state === 'idle'}
+						<DropdownMenu.Item onSelect={() => void setRead(c, !read)}>
+							{#if read}
+								<MailIcon class="size-4" /> Mark as unread
+							{:else}
+								<MailOpenIcon class="size-4" /> Mark as read
+							{/if}
 						</DropdownMenu.Item>
 					{/if}
 					<DropdownMenu.Item onSelect={() => openRename(c)}>
@@ -606,7 +744,7 @@
 		<p class="px-2 pt-1 pb-1 text-xs font-medium text-muted-foreground">Workspace</p>
 		<a
 			href={resolve('/agents')}
-			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
 				'/agents'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -629,7 +767,7 @@
 		</a>
 		<a
 			href={resolve('/memory')}
-			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
 				'/memory'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -647,7 +785,7 @@
 		</a>
 		<a
 			href={resolve('/skills')}
-			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
 				'/skills'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -665,7 +803,7 @@
 		</a>
 		<a
 			href={resolve('/usage')}
-			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
 				'/usage'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -738,7 +876,8 @@
 		<Dialog.Header>
 			<Dialog.Title>Delete conversation?</Dialog.Title>
 			<Dialog.Description>
-				"{deleteTarget?.title || 'New chat'}" will be moved to trash and purged after 30 days.
+				"{deleteTarget ? displayTitle(deleteTarget) : ''}" will be moved to trash and purged after
+				30 days.
 			</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>

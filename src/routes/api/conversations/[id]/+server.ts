@@ -14,6 +14,7 @@ import {
 	listMessages,
 	toPublic as messageToPublic
 } from '$lib/server/db/repo/messages.js';
+import { queueThreadStatePush } from '$lib/server/t3/thread-state.js';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = ({ locals, params }) => {
@@ -69,6 +70,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	}
 	const conversation = updateConversation(db, user.id, params.id, data);
 	if (!conversation) error(404, { message: 'Conversation not found' });
+	if (data.title !== undefined) queueThreadStatePush(db, user.id, [conversation.id]);
 	return json({ conversation: conversationToPublic(conversation) });
 };
 

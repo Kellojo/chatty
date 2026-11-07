@@ -7,7 +7,7 @@ vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
 
-const { createFsServer } = await import('./fs.js');
+const { createFsServer, globMatcher, grepInWorker } = await import('./fs.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
 
@@ -102,6 +102,87 @@ describe('fs server', () => {
 
 	it('fs_grep rejects invalid regex', async () => {
 		expect(isErr(await callTool('fs_grep', { scope: 'workspace', pattern: '(' }))).toBe(true);
+	});
+
+	it('fs_grep rejects overly long patterns', async () => {
+		const res = await callTool('fs_grep', { scope: 'workspace', pattern: 'a'.repeat(1001) });
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('pattern too long');
+	});
+
+	it('grepInWorker times out a catastrophic pattern without blocking the event loop', async () => {
+		const file = path.join(workspaceDir, 'redos.txt');
+		fs.writeFileSync(file, `${'a'.repeat(5000)}!\n`);
+		let ticks = 0;
+		const interval = setInterval(() => ticks++, 10);
+		const started = Date.now();
+		try {
+			const res = await grepInWorker(
+				{
+					pattern: '(a+)+$',
+					flags: '',
+					files: [{ abs: file, rel: 'redos.txt' }],
+					maxMatches: 10,
+					maxLine: 10_000
+				},
+				300
+			);
+			expect(res).toEqual({ ok: false, error: 'pattern timed out after 0.3s' });
+			expect(Date.now() - started).toBeLessThan(5000);
+			// The main loop kept running while the worker was stuck.
+			expect(ticks).toBeGreaterThan(5);
+		} finally {
+			clearInterval(interval);
+			fs.rmSync(file);
+		}
+	});
+
+	it('grepInWorker caps the line length it tests', async () => {
+		const file = path.join(workspaceDir, 'longline.txt');
+		fs.writeFileSync(file, `${'x'.repeat(50)}needle\nneedle\n`);
+		try {
+			const res = await grepInWorker({
+				pattern: 'needle',
+				flags: '',
+				files: [{ abs: file, rel: 'longline.txt' }],
+				maxMatches: 10,
+				maxLine: 20
+			});
+			expect(res).toEqual({ ok: true, lines: ['longline.txt:2:needle'] });
+		} finally {
+			fs.rmSync(file);
+		}
+	});
+
+	describe('globMatcher', () => {
+		it.each([
+			['*.md', 'a.md', true],
+			['*.md', 'src/a.md', false],
+			['src/?.md', 'src/a.md', true],
+			['src/?.md', 'src/ab.md', false],
+			['**/*.md', 'top.md', true],
+			['**/*.md', 'src/deep/a.md', true],
+			['src/**', 'src/a/b', true],
+			['src/**', 'src', false],
+			['src**', 'src/a/b', true],
+			['a/**/b', 'a/b', true],
+			['a/**/b', 'a/x/y/b', true],
+			['a/**/b', 'a/xb', false],
+			['a.b', 'axb', false],
+			['{a,b}', '{a,b}', true],
+			['(x)+', '(x)+', true]
+		])('%s against %s -> %s', (glob, p, expected) => {
+			expect(globMatcher(glob)(p)).toBe(expected);
+		});
+
+		it('stays fast on patterns that backtrack badly as a regex', () => {
+			const started = Date.now();
+			const match = globMatcher(`${'*a'.repeat(30)}*b`);
+			expect(match(`${'a'.repeat(4000)}c`)).toBe(false);
+			const deep = globMatcher(`${'**/a'.repeat(30)}/b`);
+			expect(deep(`${'a/'.repeat(2000)}c`)).toBe(false);
+			expect(Date.now() - started).toBeLessThan(2000);
+		});
 	});
 
 	it('fs_glob matches relative paths', async () => {
@@ -352,6 +433,31 @@ describe('fs server', () => {
 			expect(
 				isErr(await callTool('fs_curl', { scope: 'workspace', url: 'ftp://example.com/x' }))
 			).toBe(true);
+		});
+
+		it('aborts a body that streams past the limit without a content-length', async () => {
+			let pulled = 0;
+			let cancelled = false;
+			const chunk = new Uint8Array(1024 * 1024);
+			const stream = new ReadableStream<Uint8Array>({
+				pull(controller) {
+					pulled++;
+					controller.enqueue(chunk);
+				},
+				cancel() {
+					cancelled = true;
+				}
+			});
+			mockFetch(stream);
+			const res = await callTool('fs_curl', {
+				scope: 'workspace',
+				url: 'https://example.com/endless.bin'
+			});
+			expect(isErr(res)).toBe(true);
+			expect(resultText(res)).toContain('file too large');
+			expect(cancelled).toBe(true);
+			expect(pulled).toBeLessThan(110);
+			expect(fs.existsSync(path.join(workspaceDir, 'endless.bin'))).toBe(false);
 		});
 
 		it('rejects paths escaping the scope root', async () => {

@@ -81,7 +81,7 @@
 		{:else if recording && !hover}
 			<!-- Scrolling spectrogram -->
 			<svg viewBox="0 0 24 28" class="size-5" aria-hidden="true">
-				{#each history as h, i}
+				{#each history as h, i (i)}
 					{@const barW = 6.5}
 					{@const gap = 1.5}
 					<rect

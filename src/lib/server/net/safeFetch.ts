@@ -49,14 +49,8 @@ export function isBlockedAddress(ip: string): boolean {
 	// IPv4-mapped addresses (::ffff:a.b.c.d or ::ffff:XXXX:XXXX) are judged by
 	// the v4 rules. (A ::ffff:0:0/96 subnet can't be used: BlockList applies
 	// it to plain IPv4 addresses too, which would block everything.)
-	const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-	if (dotted) return blocked.check(dotted[1], 'ipv4');
-	const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
-	if (hex) {
-		const hi = parseInt(hex[1], 16);
-		const lo = parseInt(hex[2], 16);
-		return blocked.check(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`, 'ipv4');
-	}
+	const v4 = mappedV4(ip);
+	if (v4) return blocked.check(v4, 'ipv4');
 	return blocked.check(ip, 'ipv6');
 }
 
@@ -67,25 +61,76 @@ export class BlockedAddressError extends Error {
 	}
 }
 
+// Addresses that are never a legitimate target even for services the admin
+// expects on the LAN/tailnet (e.g. T3 coding environments): link-local (incl.
+// cloud metadata at 169.254.169.254), unspecified and multicast.
+const alwaysBlocked = new net.BlockList();
+for (const [addr, prefix] of [
+	['0.0.0.0', 8],
+	['169.254.0.0', 16],
+	['224.0.0.0', 4],
+	['240.0.0.0', 4]
+] as const) {
+	alwaysBlocked.addSubnet(addr, prefix, 'ipv4');
+}
+for (const [addr, prefix] of [
+	['::', 128],
+	['fe80::', 10],
+	['ff00::', 8]
+] as const) {
+	alwaysBlocked.addSubnet(addr, prefix, 'ipv6');
+}
+
+/** Link-local / metadata / unspecified / multicast, incl. IPv4-mapped forms. */
+export function isLinkLocalOrReserved(ip: string): boolean {
+	const family = net.isIP(ip);
+	if (family === 4) return alwaysBlocked.check(ip, 'ipv4');
+	if (family !== 6) return true;
+	const v4 = mappedV4(ip);
+	if (v4) return alwaysBlocked.check(v4, 'ipv4');
+	return alwaysBlocked.check(ip, 'ipv6');
+}
+
+function mappedV4(ip: string): string | null {
+	const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+	if (dotted) return dotted[1];
+	const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
+	if (!hex) return null;
+	const hi = parseInt(hex[1], 16);
+	const lo = parseInt(hex[2], 16);
+	return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+}
+
 // Validating inside the socket's DNS lookup (rather than resolving up front)
 // checks the exact address being connected to, so DNS rebinding can't swap in
 // a private address between the check and the connection.
-const guardedLookup = (
-	hostname: string,
-	options: dns.LookupOptions,
-	callback: (err: Error | null, address: string | dns.LookupAddress[], family?: number) => void
-): void => {
-	dns.lookup(hostname, { ...options, all: true }, (error, addresses) => {
-		if (error) return callback(error, '');
-		const bad = addresses.find((a) => isBlockedAddress(a.address));
-		if (bad) return callback(new BlockedAddressError(hostname, bad.address), '');
-		if (addresses.length === 0) return callback(new Error(`no addresses for ${hostname}`), '');
-		if (options.all) return callback(null, addresses);
-		callback(null, addresses[0].address, addresses[0].family);
-	});
-};
+const lookupGuardedBy =
+	(isBad: (ip: string) => boolean) =>
+	(
+		hostname: string,
+		options: dns.LookupOptions,
+		callback: (err: Error | null, address: string | dns.LookupAddress[], family?: number) => void
+	): void => {
+		dns.lookup(hostname, { ...options, all: true }, (error, addresses) => {
+			if (error) return callback(error, '');
+			const bad = addresses.find((a) => isBad(a.address));
+			if (bad) return callback(new BlockedAddressError(hostname, bad.address), '');
+			if (addresses.length === 0) return callback(new Error(`no addresses for ${hostname}`), '');
+			if (options.all) return callback(null, addresses);
+			callback(null, addresses[0].address, addresses[0].family);
+		});
+	};
 
-const guardedAgent = new Agent({ connect: { lookup: guardedLookup } });
+const guardedAgent = new Agent({ connect: { lookup: lookupGuardedBy(isBlockedAddress) } });
+
+/**
+ * Dispatcher for user-configured services that may legitimately live on
+ * loopback/LAN/tailnet addresses: only link-local (cloud metadata) and other
+ * never-valid ranges are refused, checked at connect time.
+ */
+export const linkLocalGuardedAgent = new Agent({
+	connect: { lookup: lookupGuardedBy(isLinkLocalOrReserved) }
+});
 
 const MAX_REDIRECTS = 5;
 const CREDENTIAL_HEADERS = ['authorization', 'cookie', 'proxy-authorization'];

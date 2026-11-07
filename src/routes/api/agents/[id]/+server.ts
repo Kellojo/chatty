@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
-import { agentPatchSchema, prepareAgentUpdate } from '$lib/server/agentInput.js';
+import { agentRestPatchSchema, prepareAgentUpdate } from '$lib/server/agentInput.js';
+import { resolveAgentCodingTarget } from '$lib/server/agents/coding-runs.js';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb, type Db } from '$lib/server/db/index.js';
 import {
@@ -12,6 +13,7 @@ import {
 	updateAgent,
 	type AgentRow
 } from '$lib/server/db/repo/agents.js';
+import { codingRoute } from '$lib/server/t3/http.js';
 import type { RequestHandler } from './$types';
 
 function visibleAgent(db: Db, userId: string, id: string): AgentRow {
@@ -39,7 +41,7 @@ export const GET: RequestHandler = ({ locals, params }) => {
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireUser(locals);
-	const parsed = agentPatchSchema.safeParse(await request.json().catch(() => null));
+	const parsed = agentRestPatchSchema.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });
 	const db = getDb();
 	const agent = visibleAgent(db, user.id, params.id);
@@ -55,7 +57,13 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	const prepared = prepareAgentUpdate(db, agent, data);
 	if (!prepared.ok) error(400, { message: prepared.error });
-	const updated = updateAgent(db, agent.id, prepared.value);
+	const codingTarget =
+		data.codingTarget === undefined
+			? undefined
+			: data.codingTarget === null
+				? null
+				: await codingRoute(() => resolveAgentCodingTarget(user.id, data.codingTarget!, db));
+	const updated = updateAgent(db, agent.id, { ...prepared.value, codingTarget });
 	return json({ agent: toPublic(updated!) });
 };
 

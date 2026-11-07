@@ -132,6 +132,17 @@
 			<p class="text-sm text-muted-foreground">
 				Started {formatDateTime(run.startedAt, data.timeFormat)} · Duration {duration}
 			</p>
+			{#if data.isCodingTask && run.conversationId}
+				<div class="flex flex-wrap items-center gap-3 rounded-md border p-3 text-sm">
+					<span class="text-muted-foreground">
+						This run is a coding task. It finishes when the coding agent's turn ends; approvals and
+						follow-ups happen in the task.
+					</span>
+					<Button size="sm" variant="outline" href={resolve(`/chat/${run.conversationId}`)}>
+						Open coding task
+					</Button>
+				</div>
+			{/if}
 			{#if run.error}
 				<div
 					class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"

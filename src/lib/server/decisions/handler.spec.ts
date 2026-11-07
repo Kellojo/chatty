@@ -37,12 +37,10 @@ vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
 
 const { getDb, closeDb } = await import('../db/index.js');
 const { createApiKey } = await import('../db/repo/api-keys.js');
-const { createModelMapping } = await import('../db/repo/model-mappings.js');
 const { listProxyRequests } = await import('../db/repo/proxy-requests.js');
 const { createProvider } = await import('../db/repo/providers.js');
 const { createModel } = await import('../db/repo/models.js');
-const { decisionsRequestSchema, DecisionsError } =
-	await import('./handler.js');
+const { decisionsRequestSchema, DecisionsError } = await import('./handler.js');
 
 // Save real forwardDecisions for handler unit tests via importActual, then
 // mock the module so endpoint tests don't need a real upstream.
@@ -116,9 +114,7 @@ function auth(): Record<string, string> {
 const decisionsBody = (model: string, extra: Partial<DecisionsRequest> = {}): DecisionsRequest => ({
 	model,
 	input: 'Check this',
-	questions: [
-		{ type: 'predicate', name: 'is_ok', instructions: 'Is it ok?' }
-	],
+	questions: [{ type: 'predicate', name: 'is_ok', instructions: 'Is it ok?' }],
 	...extra
 });
 
@@ -160,10 +156,7 @@ describe('decisionsRequestSchema', () => {
 					type: 'choice',
 					name: 'dept',
 					instructions: 'Which department?',
-					choices: [
-						{ value: 'billing', description: 'Payments' },
-						{ value: 'support' }
-					]
+					choices: [{ value: 'billing', description: 'Payments' }, { value: 'support' }]
 				}
 			]
 		});
@@ -179,11 +172,7 @@ describe('decisionsRequestSchema', () => {
 					type: 'score',
 					name: 'severity',
 					instructions: 'How severe?',
-					levels: [
-						{ label: 'Low' },
-						{ label: 'Medium' },
-						{ label: 'High' }
-					]
+					levels: [{ label: 'Low' }, { label: 'Medium' }, { label: 'High' }]
 				}
 			]
 		});
@@ -260,9 +249,7 @@ describe('decisionsRequestSchema', () => {
 		const parsed = decisionsRequestSchema.safeParse({
 			model: 'j1',
 			input: 'hi',
-			questions: [
-				{ type: 'choice', name: 'q1', instructions: 'Pick one' }
-			]
+			questions: [{ type: 'choice', name: 'q1', instructions: 'Pick one' }]
 		});
 		expect(parsed.success).toBe(false);
 	});
@@ -357,8 +344,7 @@ describe('POST /api/v1/decisions', () => {
 	});
 
 	it('rejects keys missing the llm:invoke scope', async () => {
-		const noScope = (await createApiKey(getDb(), { userId: 'u1', label: 'k2', scopes: [] }))
-			.rawKey;
+		const noScope = (await createApiKey(getDb(), { userId: 'u1', label: 'k2', scopes: [] })).rawKey;
 		const res = await call<ErrorEnvelope>({
 			headers: { authorization: `Bearer ${noScope}` },
 			body: decisionsBody('j1')
@@ -389,9 +375,7 @@ describe('POST /api/v1/decisions', () => {
 		vi.mocked(mockedForward).mockResolvedValueOnce(
 			new Response(
 				JSON.stringify({
-					answers: [
-						{ type: 'choice', name: 'dept', choice: 'billing', confidence: 0.93 }
-					]
+					answers: [{ type: 'choice', name: 'dept', choice: 'billing', confidence: 0.93 }]
 				}),
 				{ status: 200, headers: { 'content-type': 'application/json' } }
 			)

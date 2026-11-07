@@ -34,6 +34,9 @@
 		return COMMAND_START.test(detail);
 	});
 
+	/** Questions whose options carry explanations render as a stacked list so they're readable. */
+	const hasDescriptions = $derived(request.options.some((o) => o.description));
+
 	function variantFor(option: CodingPendingOption, index: number): ButtonVariant {
 		if (/decline|deny|reject|cancel|abort/i.test(option.id)) return 'destructive';
 		return index === 0 ? 'default' : 'outline';
@@ -93,7 +96,28 @@
 		</div>
 	</div>
 
-	{#if request.options.length > 0}
+	{#if hasDescriptions}
+		<div class="mt-3 flex flex-col gap-1.5">
+			{#each request.options as option, i (option.id)}
+				<button
+					type="button"
+					class={[
+						'flex flex-col items-start gap-0.5 rounded-xl border px-3 py-2 text-left transition-colors',
+						'hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+						'disabled:pointer-events-none disabled:opacity-50',
+						i === 0 ? 'border-primary/40 bg-primary/5' : 'border-border'
+					]}
+					disabled={busy}
+					onclick={() => respond({ optionId: option.id })}
+				>
+					<span class="text-sm font-medium">{option.label}</span>
+					{#if option.description}
+						<span class="text-xs text-muted-foreground">{option.description}</span>
+					{/if}
+				</button>
+			{/each}
+		</div>
+	{:else if request.options.length > 0}
 		<div class="mt-3 flex flex-wrap gap-2">
 			{#each request.options as option, i (option.id)}
 				<Button

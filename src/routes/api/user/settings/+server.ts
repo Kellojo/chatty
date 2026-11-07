@@ -3,11 +3,13 @@ import { z } from 'zod';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import {
+	getNotificationTriggers,
 	getUserSettings,
 	setUserSetting,
 	deleteUserSetting
 } from '$lib/server/db/repo/user-settings.js';
 import {
+	MAX_FAVORITE_MODELS,
 	MAX_GLOBAL_INSTRUCTIONS_LENGTH,
 	MAX_SUGGESTIONS,
 	THEMES,
@@ -20,21 +22,41 @@ export const GET: RequestHandler = ({ locals }) => {
 	return json({ settings: getUserSettings(getDb(), user.id) });
 };
 
+const suggestionList = z.array(z.string().trim().min(1).max(200)).max(MAX_SUGGESTIONS);
+
 const putSchema = z
 	.object({
 		theme: z.enum(THEMES).optional(),
-		suggestions: z.array(z.string().trim().min(1).max(200)).max(MAX_SUGGESTIONS).optional(),
+		suggestions: suggestionList.optional(),
+		codingSuggestions: suggestionList.optional(),
 		globalInstructions: z.string().trim().max(MAX_GLOBAL_INSTRUCTIONS_LENGTH).optional(),
 		timeFormat: z.enum(TIME_FORMATS).optional(),
-		sidebarOpen: z.boolean().optional()
+		sidebarOpen: z.boolean().optional(),
+		favoriteModels: z
+			.array(z.string().min(3).max(500).includes('/'))
+			.max(MAX_FAVORITE_MODELS)
+			.optional(),
+		notificationTriggers: z
+			.object({
+				replies: z.boolean(),
+				needsYou: z.boolean(),
+				codingFinished: z.boolean(),
+				failures: z.boolean(),
+				agentRuns: z.boolean()
+			})
+			.partial()
+			.optional()
 	})
 	.refine(
 		(data) =>
 			data.theme !== undefined ||
 			data.suggestions !== undefined ||
+			data.codingSuggestions !== undefined ||
 			data.globalInstructions !== undefined ||
 			data.timeFormat !== undefined ||
-			data.sidebarOpen !== undefined,
+			data.sidebarOpen !== undefined ||
+			data.favoriteModels !== undefined ||
+			data.notificationTriggers !== undefined,
 		{ message: 'Nothing to update' }
 	);
 
@@ -50,8 +72,20 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 	if (parsed.data.sidebarOpen !== undefined) {
 		setUserSetting(db, user.id, 'sidebarOpen', parsed.data.sidebarOpen);
 	}
+	if (parsed.data.favoriteModels !== undefined) {
+		setUserSetting(db, user.id, 'favoriteModels', [...new Set(parsed.data.favoriteModels)]);
+	}
+	if (parsed.data.notificationTriggers !== undefined) {
+		setUserSetting(db, user.id, 'notificationTriggers', {
+			...getNotificationTriggers(db, user.id),
+			...parsed.data.notificationTriggers
+		});
+	}
 	if (parsed.data.suggestions !== undefined) {
 		setUserSetting(db, user.id, 'suggestions', parsed.data.suggestions);
+	}
+	if (parsed.data.codingSuggestions !== undefined) {
+		setUserSetting(db, user.id, 'codingSuggestions', parsed.data.codingSuggestions);
 	}
 	if (parsed.data.globalInstructions !== undefined) {
 		if (parsed.data.globalInstructions === '') {

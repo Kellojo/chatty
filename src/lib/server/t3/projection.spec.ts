@@ -3,9 +3,15 @@ import {
 	activeRun,
 	applyStreamItem,
 	emptyThreadState,
+	MAX_PART_CHARS,
+	MAX_RUN_PARTS,
+	MAX_THREAD_RECORDS,
+	OMITTED_PARTS_NOTICE,
 	renderRun,
 	replyMessageId,
-	summarizeTask
+	streamItemRun,
+	summarizeTask,
+	TRUNCATED_MARKER
 } from './projection.js';
 
 const run = (overrides: Record<string, unknown> = {}) => ({
@@ -28,6 +34,16 @@ function event(sequence: number, type: string, payload: unknown) {
 		event: { id: `e${sequence}`, threadId: 't1', type, occurredAt: '', payload }
 	};
 }
+
+describe('streamItemRun', () => {
+	it('names the run an event can change', () => {
+		expect(streamItemRun(event(1, 'run.updated', { id: 'r1' }))).toBe('r1');
+		expect(streamItemRun(event(1, 'turn-item.updated', { id: 'i1', runId: 'r2' }))).toBe('r2');
+		expect(streamItemRun(event(1, 'thread.updated', { title: 'x' }))).toBeNull();
+		expect(streamItemRun(event(1, 'runtime-request.updated', { id: 'q1' }))).toBe('all');
+		expect(streamItemRun(snapshot({ runs: [] }))).toBe('all');
+	});
+});
 
 describe('applyStreamItem', () => {
 	it('loads a snapshot and upserts full records from events', () => {
@@ -152,6 +168,77 @@ describe('renderRun', () => {
 		});
 	});
 
+	it('keeps the name, arguments and result of agent tools, subagents and checkpoints', () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run({ status: 'completed' })],
+				turnItems: [
+					{
+						id: 'd1',
+						runId: 'run-1',
+						ordinal: 1,
+						type: 'dynamic_tool',
+						status: 'completed',
+						title: 'Read C:/repo/a.ts',
+						toolName: 'Read',
+						input: { file_path: 'C:/repo/a.ts' },
+						output: 'contents'
+					},
+					{
+						id: 'd2',
+						runId: 'run-1',
+						ordinal: 2,
+						type: 'dynamic_tool',
+						status: 'completed',
+						toolName: 'Grep',
+						input: { pattern: 'todo' },
+						outputOmitted: true
+					},
+					{
+						id: 's1',
+						runId: 'run-1',
+						ordinal: 3,
+						type: 'subagent',
+						status: 'completed',
+						title: 'Review',
+						prompt: 'Review the diff',
+						result: 'Looks good'
+					},
+					{
+						id: 'c1',
+						runId: 'run-1',
+						ordinal: 4,
+						type: 'checkpoint',
+						status: 'completed',
+						files: [
+							{ path: 'a.ts', kind: 'modified', additions: 3, deletions: 1 },
+							{ path: 'b.ts', kind: 'added', additions: 5, deletions: 0 }
+						]
+					}
+				]
+			})
+		);
+		const parts = renderRun(state, run(), new Map([['d2', 'a.ts:1: todo']])).map((e) => e.part);
+		expect(parts[0]).toMatchObject({
+			toolName: 'Read',
+			input: { file_path: 'C:/repo/a.ts' },
+			output: 'contents'
+		});
+		expect(parts[1]).toMatchObject({ toolName: 'Grep', output: 'a.ts:1: todo' });
+		expect(parts[2]).toMatchObject({
+			toolName: 'subagent',
+			input: { description: 'Review', prompt: 'Review the diff' },
+			output: 'Looks good'
+		});
+		expect(parts[3]).toMatchObject({
+			toolName: 'checkpoint',
+			input: { files: ['a.ts', 'b.ts'] },
+			output: { additions: 8, deletions: 1 }
+		});
+	});
+
 	it('marks failed commands as errors', () => {
 		const state = emptyThreadState();
 		applyStreamItem(
@@ -236,7 +323,10 @@ describe('summarizeTask', () => {
 								id: 'q',
 								header: 'Database',
 								question: 'Which DB?',
-								options: [{ label: 'Postgres' }, { label: 'SQLite', value: 'sqlite' }]
+								options: [
+									{ label: 'Postgres', description: 'Managed, scales out' },
+									{ label: 'SQLite', value: 'sqlite' }
+								]
 							}
 						]
 					}
@@ -248,7 +338,7 @@ describe('summarizeTask', () => {
 			questionId: 'q',
 			title: 'Which DB?',
 			options: [
-				{ id: 'Postgres', label: 'Postgres' },
+				{ id: 'Postgres', label: 'Postgres', description: 'Managed, scales out' },
 				{ id: 'sqlite', label: 'SQLite' }
 			]
 		});
@@ -268,5 +358,104 @@ describe('replyMessageId', () => {
 	it('derives the reply id from the user message that started the run', () => {
 		expect(replyMessageId(run())).toBe('msg-1:reply');
 		expect(replyMessageId(run({ userMessageId: undefined }))).toBe('t3run:run-1');
+	});
+});
+
+describe('summarizeTask run timing', () => {
+	it('reports when the active run started, falling back to when it was requested', () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ startedAt: '2026-11-07T10:00:05.000Z' })], thread: { id: 't1' } })
+		);
+		expect(summarizeTask(state).runStartedAt).toBe(Date.parse('2026-11-07T10:00:05.000Z'));
+
+		const queued = emptyThreadState();
+		applyStreamItem(queued, snapshot({ runs: [run()] }));
+		expect(summarizeTask(queued).runStartedAt).toBe(Date.parse('2026-11-07T10:00:00.000Z'));
+	});
+
+	it('has no start time once the run is over', () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'completed' })], thread: { worktreePath: '/w/a' } })
+		);
+		expect(summarizeTask(state)).toMatchObject({ runStartedAt: null, worktreePath: '/w/a' });
+	});
+});
+
+describe('size limits', () => {
+	const item = (n: number, overrides: Record<string, unknown> = {}) => ({
+		id: `i${n}`,
+		runId: 'run-1',
+		ordinal: n,
+		type: 'assistant_message',
+		status: 'completed',
+		text: `step ${n}`,
+		...overrides
+	});
+
+	it('truncates huge text and tool output per part', () => {
+		const state = emptyThreadState();
+		const huge = 'x'.repeat(MAX_PART_CHARS + 10);
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run()],
+				turnItems: [
+					item(1, { text: huge }),
+					item(2, { type: 'command_execution', input: 'ls', output: huge }),
+					item(3, { type: 'dynamic_tool', toolName: 'Read', output: { data: [huge + huge] } })
+				]
+			})
+		);
+		const [text, command, tool] = renderRun(state, run()).map((e) => e.part);
+		expect(text).toMatchObject({ text: 'x'.repeat(MAX_PART_CHARS) + TRUNCATED_MARKER });
+		expect(command).toMatchObject({
+			output: { output: 'x'.repeat(MAX_PART_CHARS) + TRUNCATED_MARKER }
+		});
+		expect(tool).toMatchObject({ output: { truncated: true } });
+		expect(JSON.stringify(tool).length).toBeLessThan(MAX_PART_CHARS + 1000);
+	});
+
+	it('keeps only the latest parts of a run, behind a notice', () => {
+		const state = emptyThreadState();
+		const count = MAX_RUN_PARTS + 50;
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run()], turnItems: Array.from({ length: count }, (_, i) => item(i)) })
+		);
+		const entries = renderRun(state, run());
+		expect(entries).toHaveLength(MAX_RUN_PARTS + 1);
+		expect(entries[0].part).toMatchObject({ type: 'text', text: OMITTED_PARTS_NOTICE });
+		expect(entries.at(-1)?.key).toBe(`i${count - 1}`);
+	});
+
+	it('caps the total size of a run', () => {
+		const state = emptyThreadState();
+		const big = 'y'.repeat(MAX_PART_CHARS);
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run()],
+				turnItems: Array.from({ length: 20 }, (_, i) => item(i, { text: big }))
+			})
+		);
+		const entries = renderRun(state, run());
+		expect(entries.length).toBeLessThan(20);
+		expect(entries[0].part).toMatchObject({ text: OMITTED_PARTS_NOTICE });
+		expect(JSON.stringify(entries.map((e) => e.part)).length).toBeLessThan(2.1 * 1024 * 1024);
+	});
+
+	it('drops the oldest records beyond the per-thread cap', () => {
+		const state = emptyThreadState();
+		applyStreamItem(state, snapshot({ runs: [run()], turnItems: [] }));
+		for (let i = 0; i < MAX_THREAD_RECORDS + 10; i++) {
+			applyStreamItem(state, event(100 + i, 'turn-item.updated', item(i)));
+		}
+		expect(state.turnItems.size).toBe(MAX_THREAD_RECORDS);
+		expect(state.turnItems.has('i0')).toBe(false);
+		expect(state.turnItems.has(`i${MAX_THREAD_RECORDS + 9}`)).toBe(true);
 	});
 });
