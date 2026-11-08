@@ -8,7 +8,7 @@ import {
 	MAX_SEARCH_PAGE_SIZE,
 	searchConversations
 } from '../../db/repo/conversations.js';
-import { listMessages } from '../../db/repo/messages.js';
+import { listLatestMessages } from '../../db/repo/messages.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
 
@@ -100,7 +100,7 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 			const conversation = getConversation(db, ctx.userId, conversationId);
 			if (!conversation) return err('conversation not found');
 			const n = Math.min(500, Math.max(1, Math.floor(limit ?? 100)));
-			const messages = listMessages(db, conversationId).slice(-n);
+			const messages = listLatestMessages(db, conversationId, n);
 			return text(
 				JSON.stringify(
 					messages.map((m) => ({

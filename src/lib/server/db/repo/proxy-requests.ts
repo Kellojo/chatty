@@ -249,8 +249,13 @@ export interface ProxyRequestStats {
 	completed: number;
 	failed: number;
 	avgLatencyMs: number | null;
+	/** Includes cache reads and writes. */
 	inputTokens: number;
 	outputTokens: number;
+	/** The part of `inputTokens` read from the provider's prompt cache. */
+	cacheReadTokens: number;
+	/** The part of `inputTokens` written to the provider's prompt cache. */
+	cacheWriteTokens: number;
 	costUsd: number;
 	/** Requests that reported a cost (possibly 0). */
 	pricedRequests: number;
@@ -268,6 +273,8 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 				AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms END) AS avg_latency,
 				COALESCE(SUM(input_tokens), 0) AS input_tokens,
 				COALESCE(SUM(output_tokens), 0) AS output_tokens,
+				COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+				COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
 				COALESCE(SUM(cost_usd), 0) AS cost_usd,
 				COUNT(cost_usd) AS priced_requests,
 				COUNT(DISTINCT requested_model) AS distinct_models,
@@ -281,6 +288,8 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 		avg_latency: number | null;
 		input_tokens: number;
 		output_tokens: number;
+		cache_read_tokens: number;
+		cache_write_tokens: number;
 		cost_usd: number;
 		priced_requests: number;
 		distinct_models: number;
@@ -293,6 +302,8 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 		avgLatencyMs: row.avg_latency,
 		inputTokens: row.input_tokens,
 		outputTokens: row.output_tokens,
+		cacheReadTokens: row.cache_read_tokens,
+		cacheWriteTokens: row.cache_write_tokens,
 		costUsd: row.cost_usd,
 		pricedRequests: row.priced_requests,
 		distinctModels: row.distinct_models,
@@ -332,6 +343,9 @@ export interface ModelUsage {
 	model: string;
 	count: number;
 	totalTokens: number;
+	/** Cached parts of the input in `totalTokens`. */
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
 	costUsd: number;
 	/** Requests that reported a cost (possibly 0). */
 	pricedRequests: number;
@@ -349,6 +363,8 @@ export function proxyRequestTopModels(
 			`SELECT requested_model AS model,
 				COUNT(*) AS count,
 				COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS total_tokens,
+				COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+				COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
 				COALESCE(SUM(cost_usd), 0) AS cost_usd,
 				COUNT(cost_usd) AS priced_requests,
 				AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms END) AS avg_latency
@@ -361,6 +377,8 @@ export function proxyRequestTopModels(
 		model: string;
 		count: number;
 		total_tokens: number;
+		cache_read_tokens: number;
+		cache_write_tokens: number;
 		cost_usd: number;
 		priced_requests: number;
 		avg_latency: number | null;
@@ -369,6 +387,8 @@ export function proxyRequestTopModels(
 		model: r.model,
 		count: r.count,
 		totalTokens: r.total_tokens,
+		cacheReadTokens: r.cache_read_tokens,
+		cacheWriteTokens: r.cache_write_tokens,
 		costUsd: r.cost_usd,
 		pricedRequests: r.priced_requests,
 		avgLatencyMs: r.avg_latency
@@ -411,8 +431,11 @@ export interface ProviderModelDailyUsage {
 	requests: number;
 	/** Requests that reported a cost (possibly 0); the rest had no known price. */
 	pricedRequests: number;
+	/** Includes cache reads and writes. */
 	inputTokens: number;
 	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
 	costUsd: number;
 }
 
@@ -436,6 +459,8 @@ export function proxyRequestProviderUsage(
 				COUNT(pr.cost_usd) AS priced_requests,
 				COALESCE(SUM(pr.input_tokens), 0) AS input_tokens,
 				COALESCE(SUM(pr.output_tokens), 0) AS output_tokens,
+				COALESCE(SUM(pr.cache_read_tokens), 0) AS cache_read_tokens,
+				COALESCE(SUM(pr.cache_write_tokens), 0) AS cache_write_tokens,
 				COALESCE(SUM(pr.cost_usd), 0) AS cost_usd
 			 FROM proxy_requests pr
 			 LEFT JOIN providers p ON p.id = pr.provider_id
@@ -452,6 +477,8 @@ export function proxyRequestProviderUsage(
 		priced_requests: number;
 		input_tokens: number;
 		output_tokens: number;
+		cache_read_tokens: number;
+		cache_write_tokens: number;
 		cost_usd: number;
 	}[];
 	return rows.map((r) => ({
@@ -463,6 +490,8 @@ export function proxyRequestProviderUsage(
 		pricedRequests: r.priced_requests,
 		inputTokens: r.input_tokens,
 		outputTokens: r.output_tokens,
+		cacheReadTokens: r.cache_read_tokens,
+		cacheWriteTokens: r.cache_write_tokens,
 		costUsd: r.cost_usd
 	}));
 }

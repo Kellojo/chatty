@@ -6,6 +6,7 @@ import {
 	activeLeafId,
 	branchesFor,
 	createMessage,
+	deleteBranch,
 	deleteMessage,
 	extractText,
 	finalizeInterruptedMessages,
@@ -13,6 +14,7 @@ import {
 	listMessagesFrom,
 	listMessagesAfter,
 	listMessagesPage,
+	listLatestMessages,
 	toPublic,
 	toPublicWithBranches,
 	updateMessage
@@ -331,5 +333,40 @@ describe('message tree', () => {
 			db.prepare('SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?').all(term).length;
 		expect(hits('a2')).toBe(1);
 		expect(hits('a2c')).toBe(1);
+	});
+
+	it('listLatestMessages returns the tail of the active path oldest-first', () => {
+		const m = branched();
+		expect(ids(listLatestMessages(db, conversationId, 3))).toEqual([m.a1.id, m.u2b.id, m.a2c.id]);
+		expect(ids(listLatestMessages(db, conversationId, 500))).toEqual(
+			ids(listMessages(db, conversationId))
+		);
+		expect(ids(listLatestMessages(db, conversationId, 0))).toEqual([m.a2c.id]);
+		activateBranch(db, conversationId, m.u2.id);
+		expect(ids(listLatestMessages(db, conversationId, 2))).toEqual([m.u2.id, m.a2.id]);
+		expect(listLatestMessages(db, createConversation(db, 'u1').id, 5)).toEqual([]);
+	});
+
+	it('deleteBranch removes a version with its subtree, without reattaching', () => {
+		const m = branched();
+		const result = deleteBranch(db, conversationId, m.u2b.id);
+		expect(result).toMatchObject({ ok: true });
+		expect(result.ok && [...result.deletedIds].sort()).toEqual(
+			[m.u2b.id, m.a2b.id, m.a2c.id].sort()
+		);
+		// the active path moved to the remaining version's newest leaf
+		expect(ids(listMessages(db, conversationId))).toEqual([m.u1.id, m.a1.id, m.u2.id, m.a2.id]);
+		expect(deleteBranch(db, conversationId, m.u2.id)).toEqual({
+			ok: false,
+			reason: 'only_version'
+		});
+		expect(deleteBranch(db, conversationId, 'nope')).toEqual({ ok: false, reason: 'not_found' });
+	});
+
+	it('deleteBranch keeps the shown path when deleting another version', () => {
+		const m = branched();
+		deleteBranch(db, conversationId, m.a2b.id);
+		expect(ids(listMessages(db, conversationId))).toEqual([m.u1.id, m.a1.id, m.u2b.id, m.a2c.id]);
+		expect(activeLeafId(db, conversationId)).toBe(m.a2c.id);
 	});
 });

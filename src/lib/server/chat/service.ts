@@ -569,6 +569,13 @@ export async function handleChatRequest(
 		replyBranch = branchesFor(db, conversation.id, [{ id: assistantMessageId }]).get(
 			assistantMessageId
 		);
+		// The edit or regenerate is now the shown version; other tabs redraw.
+		if (body.branchFrom !== undefined) {
+			publishServerEvent(userId, {
+				type: 'conversation.branch_changed',
+				conversationId: conversation.id
+			});
+		}
 
 		const agentSkillNames = agent ? (JSON.parse(agent.skill_names) as string[]) : [];
 		const boundSkillNames = [...agentSkillNames];

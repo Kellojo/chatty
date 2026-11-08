@@ -23,12 +23,11 @@ import {
 	periodDays,
 	selectedRange,
 	type UsageRange,
-	type PaygProvider,
-	type PaygUsage,
 	type SubscriptionProvider,
 	type SubscriptionUsage,
 	type UsagePeriod
 } from '$lib/components/app/usage/usage.js';
+import type { PaygProviderWithCache, PaygUsageWithCache } from '$lib/usage-cache-types.js';
 
 const DAY_MS = 86_400_000;
 
@@ -300,14 +299,14 @@ export function loadSubscriptionUsage(
 }
 
 /** Actual spend through Chatty's configured providers (billed per token). */
-export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): PaygUsage {
+export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): PaygUsageWithCache {
 	const providerSlots = new Map(listProviders(db).map((p, i) => [p.id, i]));
 	const rows = proxyRequestProviderUsage(
 		db,
 		{ userId, from: window.fromMs, to: window.toMs },
 		utcOffsetMinutes(window.now)
 	);
-	const providers = new Map<string, PaygProvider>();
+	const providers = new Map<string, PaygProviderWithCache>();
 	const byDay = new Map<string, Map<string, { costUsd: number; requests: number }>>();
 	for (const r of rows) {
 		const key = r.providerId ?? 'unknown';
@@ -321,6 +320,8 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 				costUsd: 0,
 				inputTokens: 0,
 				outputTokens: 0,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0,
 				requests: 0,
 				pricedRequests: 0,
 				models: []
@@ -330,15 +331,26 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 		p.costUsd += r.costUsd;
 		p.inputTokens += r.inputTokens;
 		p.outputTokens += r.outputTokens;
+		p.cacheReadTokens += r.cacheReadTokens;
+		p.cacheWriteTokens += r.cacheWriteTokens;
 		p.requests += r.requests;
 		p.pricedRequests += r.pricedRequests;
 		let m = p.models.find((x) => x.model === r.model);
 		if (!m) {
-			m = { model: r.model, costUsd: 0, tokens: 0, requests: 0 };
+			m = {
+				model: r.model,
+				costUsd: 0,
+				tokens: 0,
+				requests: 0,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0
+			};
 			p.models.push(m);
 		}
 		m.costUsd += r.costUsd;
 		m.tokens += r.inputTokens + r.outputTokens;
+		m.cacheReadTokens += r.cacheReadTokens;
+		m.cacheWriteTokens += r.cacheWriteTokens;
 		m.requests += r.requests;
 
 		let dayMap = byDay.get(r.day);
@@ -364,7 +376,7 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 	});
 
 	// The equally long range just before this one (none for open-ended ranges).
-	let previous: PaygUsage['previous'] = null;
+	let previous: PaygUsageWithCache['previous'] = null;
 	if (window.fromMs !== undefined) {
 		const span = (window.toMs ?? window.now) - window.fromMs;
 		const stats = proxyRequestStats(db, {
@@ -384,6 +396,8 @@ export function loadPaygUsage(db: Db, userId: string, window: UsageWindow): Payg
 		dailyRows,
 		totalCostUsd: sorted.reduce((sum, p) => sum + p.costUsd, 0),
 		totalTokens: sorted.reduce((sum, p) => sum + p.inputTokens + p.outputTokens, 0),
+		totalCacheReadTokens: sorted.reduce((sum, p) => sum + p.cacheReadTokens, 0),
+		totalCacheWriteTokens: sorted.reduce((sum, p) => sum + p.cacheWriteTokens, 0),
 		totalRequests: sorted.reduce((sum, p) => sum + p.requests, 0),
 		pricedRequests: sorted.reduce((sum, p) => sum + p.pricedRequests, 0),
 		previous,

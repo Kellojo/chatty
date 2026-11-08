@@ -293,6 +293,29 @@ export function listMessagesPage(
 	return { rows: rowsFor(db, refs.slice(start, end)), hasOlder: start > 0 };
 }
 
+/**
+ * The newest `limit` messages of the active path, oldest to newest (the tail of
+ * `listMessages`). The walk up from the leaf stops after `limit` steps, so a
+ * long history is never read beyond what is returned.
+ */
+export function listLatestMessages(db: Db, conversationId: string, limit: number): MessageRow[] {
+	const n = Math.max(1, Math.floor(limit));
+	const leaf = activeLeafId(db, conversationId);
+	if (!leaf) return [];
+	return db
+		.prepare(
+			`WITH RECURSIVE path(id, depth) AS (
+				SELECT ?, 1
+				UNION ALL
+				SELECT m.parent_id, p.depth + 1 FROM path p CROSS JOIN messages m ON m.id = p.id
+				WHERE m.parent_id IS NOT NULL AND +m.conversation_id = ? AND p.depth < ?
+			)
+			SELECT m.rowid, m.* FROM path CROSS JOIN messages m ON m.id = path.id
+			WHERE +m.conversation_id = ? ORDER BY m.created_at, m.rowid`
+		)
+		.all(leaf, conversationId, n, conversationId) as MessageRow[];
+}
+
 /** The versions of each given message that has siblings, keyed by message id. */
 export function branchesFor(
 	db: Db,
@@ -485,4 +508,83 @@ export function finalizeInterruptedMessages(db: Db): number {
  */
 export function deleteMessage(db: Db, id: string): boolean {
 	return db.prepare('DELETE FROM messages WHERE id = ?').run(id).changes > 0;
+}
+
+export type DeleteBranchResult =
+	| { ok: true; deletedIds: string[]; attachmentPaths: string[] }
+	| { ok: false; reason: 'not_found' | 'only_version' };
+
+/**
+ * Deletes one version: `messageId` and every message after it in its subtree
+ * (unlike `deleteMessage`, nothing is reattached). The only version of a
+ * message can't be deleted. When the active path ran through it, the newest
+ * remaining sibling's newest leaf becomes active. Summaries anchored on a
+ * deleted message go with it; attachment rows cascade, and the stored paths no
+ * other row uses are returned so the caller can remove their files.
+ */
+export function deleteBranch(
+	db: Db,
+	conversationId: string,
+	messageId: string
+): DeleteBranchResult {
+	return db.transaction((): DeleteBranchResult => {
+		const target = db
+			.prepare('SELECT parent_id FROM messages WHERE id = ? AND conversation_id = ?')
+			.get(messageId, conversationId) as { parent_id: string | null } | undefined;
+		if (!target) return { ok: false, reason: 'not_found' };
+		const siblings = (
+			target.parent_id === null
+				? db
+						.prepare(
+							`SELECT id FROM messages WHERE conversation_id = ? AND parent_id IS NULL
+							 ORDER BY created_at DESC, rowid DESC`
+						)
+						.all(conversationId)
+				: db
+						.prepare(
+							`SELECT id FROM messages WHERE parent_id = ? AND +conversation_id = ?
+							 ORDER BY created_at DESC, rowid DESC`
+						)
+						.all(target.parent_id, conversationId)
+		) as { id: string }[];
+		const remaining = siblings.filter((s) => s.id !== messageId);
+		if (remaining.length === 0) return { ok: false, reason: 'only_version' };
+
+		// Deepest first: a message is only deleted once its replies are gone, so
+		// the messages_branch_delete trigger has nothing to reattach.
+		const subtree = (
+			db
+				.prepare(
+					`WITH RECURSIVE sub(id, depth) AS (
+						SELECT ?, 0
+						UNION ALL
+						SELECT m.id, s.depth + 1 FROM sub s CROSS JOIN messages m ON m.parent_id = s.id
+						WHERE +m.conversation_id = ?
+					)
+					SELECT id FROM sub ORDER BY depth DESC`
+				)
+				.all(messageId, conversationId) as { id: string }[]
+		).map((r) => r.id);
+		const leaf = activeLeafId(db, conversationId);
+		const wasActive = leaf !== undefined && subtree.includes(leaf);
+
+		const attachmentPaths = new Set<string>();
+		const dropSummaries = db.prepare(
+			'DELETE FROM conversation_summaries WHERE conversation_id = ? AND through_message_id = ?'
+		);
+		const pathsOf = db.prepare('SELECT path FROM attachments WHERE message_id = ?');
+		const remove = db.prepare('DELETE FROM messages WHERE id = ?');
+		for (const id of subtree) {
+			for (const row of pathsOf.all(id) as { path: string }[]) attachmentPaths.add(row.path);
+			dropSummaries.run(conversationId, id);
+			remove.run(id);
+		}
+		const stillUsed = db.prepare('SELECT 1 FROM attachments WHERE path = ? LIMIT 1');
+		if (wasActive) activateBranch(db, conversationId, remaining[0].id);
+		return {
+			ok: true,
+			deletedIds: subtree,
+			attachmentPaths: [...attachmentPaths].filter((p) => !stillUsed.get(p))
+		};
+	})();
 }

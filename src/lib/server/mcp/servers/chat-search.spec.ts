@@ -201,4 +201,23 @@ describe('read_chat tool', () => {
 		const msgs = JSON.parse(resultText(res)) as Array<{ text: string }>;
 		expect(msgs.map((m) => m.text)).toEqual(['second', 'third']);
 	});
+
+	it('reads only the shown version of an edited conversation', async () => {
+		const db = getDb();
+		const id = createConversation(db, 'u1', { title: 'versions' }).id;
+		const say = (role: 'user' | 'assistant', t: string, extra: { parentId?: string | null } = {}) =>
+			createMessage(db, { conversationId: id, role, parts: [{ type: 'text', text: t }], ...extra })
+				.id;
+		const q = say('user', 'q');
+		say('assistant', 'old answer');
+		say('assistant', 'new answer', { parentId: q });
+		say('user', 'follow-up');
+		const res = await callTool('read_chat', { conversationId: id, limit: 3 });
+		const msgs = JSON.parse(resultText(res)) as Array<{ text: string }>;
+		expect(msgs.map((m) => m.text)).toEqual(['q', 'new answer', 'follow-up']);
+		const last = await callTool('read_chat', { conversationId: id, limit: 1 });
+		expect((JSON.parse(resultText(last)) as Array<{ text: string }>).map((m) => m.text)).toEqual([
+			'follow-up'
+		]);
+	});
 });
