@@ -22,10 +22,16 @@
 		open = $bindable(false),
 		conversationId,
 		codingEnvironments,
-		codingAgents
+		codingAgents,
+		messageCount
 	}: {
 		open?: boolean;
 		conversationId: string;
+		/**
+		 * Messages in the chat. While it's unchanged, reopening keeps the drafted
+		 * (or edited) task instead of drafting again; without it every opening redrafts.
+		 */
+		messageCount?: number;
 		codingEnvironments: CodingEnvironment[];
 		/** The user's own coding agents. */
 		codingAgents: Agent[];
@@ -49,6 +55,22 @@
 	let draftError = $state<string | null>(null);
 	let submitting = $state(false);
 	let draftController: AbortController | null = null;
+	/** The chat state (`id:count`) the current prompt was drafted from. */
+	let draftedFor: string | null = null;
+	/** The last LLM draft, to tell whether the user has edited it. */
+	let draftedPrompt = $state('');
+	/** Redraft was clicked once for this exact prompt; a second click overwrites it. */
+	let redraftArmedFor = $state<string | null>(null);
+	const edited = $derived(prompt.trim() !== '' && prompt !== draftedPrompt);
+	const redraftArmed = $derived(redraftArmedFor === prompt);
+
+	function redraft() {
+		if (edited && !redraftArmed) {
+			redraftArmedFor = prompt;
+			return;
+		}
+		void loadDraft();
+	}
 
 	const autonomy = $derived(target === 'task' ? task.autonomy : agent?.codingTarget?.autonomy);
 	const autonomyLabel = $derived(AUTONOMY_OPTIONS.find((a) => a.value === autonomy)?.label);
@@ -72,6 +94,7 @@
 		draftController = controller;
 		drafting = true;
 		draftError = null;
+		redraftArmedFor = null;
 		try {
 			const res = await fetch(`/api/conversations/${conversationId}/handoff-draft`, {
 				method: 'POST',
@@ -79,7 +102,7 @@
 			});
 			if (!res.ok) throw new Error(await errorMessage(res, 'Could not draft the task'));
 			const body = (await res.json()) as { prompt: string };
-			if (draftController === controller) prompt = body.prompt;
+			if (draftController === controller) prompt = draftedPrompt = body.prompt;
 		} catch (e) {
 			if (controller.signal.aborted) return;
 			draftError = e instanceof Error ? e.message : 'Could not draft the task';
@@ -91,8 +114,9 @@
 		}
 	}
 
-	// Each opening drafts afresh from the chat as it is now; closing cancels a
-	// draft still in flight.
+	// Opening drafts from the chat as it is now, unless the prompt was already
+	// drafted from this same chat state (then the draft and any edits are kept).
+	// Closing cancels a draft still in flight.
 	$effect(() => {
 		if (!open) {
 			untrack(() => draftController?.abort());
@@ -103,7 +127,11 @@
 				taskInitialized = true;
 				task.init();
 			}
-			prompt = '';
+			redraftArmedFor = null;
+			const key = messageCount === undefined ? null : `${conversationId}:${messageCount}`;
+			if (key !== null && key === draftedFor && prompt.trim()) return;
+			draftedFor = key;
+			prompt = draftedPrompt = '';
 			void loadDraft();
 		});
 	});
@@ -131,6 +159,8 @@
 				conversation = ((await res.json()) as { run: AgentRun }).run.conversationId;
 			}
 			open = false;
+			// Started: the next handoff begins from a fresh draft.
+			draftedFor = null;
 			toast.success('Coding agent started');
 			if (conversation) await goto(resolve(`/chat/${conversation}`));
 		} catch (e) {
@@ -162,11 +192,12 @@
 					<Button
 						variant="ghost"
 						size="xs"
+						class={redraftArmed ? 'text-destructive hover:text-destructive' : undefined}
 						disabled={drafting || submitting}
-						onclick={() => void loadDraft()}
+						onclick={redraft}
 					>
 						<RefreshCwIcon />
-						Redraft
+						{redraftArmed ? 'Discard edits and redraft?' : 'Redraft'}
 					</Button>
 				</div>
 				{#if drafting}

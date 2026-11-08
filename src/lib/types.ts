@@ -22,6 +22,8 @@ export interface ChatModel {
 	enabled: boolean;
 	priceInput: number | null;
 	priceOutput: number | null;
+	priceCacheRead?: number | null;
+	priceCacheWrite?: number | null;
 }
 
 export type ModelRole =
@@ -113,6 +115,8 @@ export type ServerEvent =
 			path: string;
 			action: 'create' | 'update' | 'delete';
 			author: string;
+			/** Set when an agent run made the change (lets that agent ignore its own writes). */
+			agentRunId?: string;
 	  }
 	| { type: 'agent.run.started'; agentId: string; runId: string }
 	| { type: 'agent.run.progress'; agentId: string; runId: string }
@@ -224,6 +228,8 @@ export interface ProxyRequest {
 	latencyMs: number | null;
 	inputTokens: number | null;
 	outputTokens: number | null;
+	cacheReadTokens: number | null;
+	cacheWriteTokens: number | null;
 	costUsd: number | null;
 	stream: boolean;
 	error: string | null;
@@ -273,6 +279,15 @@ export interface ChatMessage {
 	error: string | null;
 	usage: MessageUsage | null;
 	createdAt: number;
+	/** Set when the message has alternative versions (edits or regenerated replies). */
+	branch?: MessageBranch;
+}
+
+/** A message's place among its alternative versions, oldest first. */
+export interface MessageBranch {
+	index: number;
+	count: number;
+	ids: string[];
 }
 
 /** Client-side message metadata: usage for the info dialog, status for failed or stopped replies. */
@@ -280,11 +295,13 @@ export interface UIMessageMetadata {
 	usage?: MessageUsage;
 	status?: 'partial' | 'failed';
 	error?: string | null;
+	branch?: MessageBranch;
 }
 
 export function chatMessageToUIMessage(message: ChatMessage): UIMessage {
 	const metadata: UIMessageMetadata = {};
 	if (message.usage) metadata.usage = message.usage;
+	if (message.branch) metadata.branch = message.branch;
 	if (message.status !== 'complete') {
 		metadata.status = message.status;
 		metadata.error = message.error;

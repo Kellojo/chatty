@@ -92,16 +92,30 @@ export default defineConfig(({ mode }) => {
 							}
 						},
 						{
-							// Individual conversation transcripts for offline reading.
+							// Conversation transcripts for offline reading: the chat page's
+							// load data, which client navigations fetch as __data.json.
 							urlPattern: ({ url, request }) =>
 								request.method === 'GET' &&
 								url.origin === self.location.origin &&
-								/^\/api\/conversations\/[^/]+$/.test(url.pathname),
+								/^\/chat\/[^/]+\/__data\.json$/.test(url.pathname),
 							handler: 'NetworkFirst',
 							options: {
-								cacheName: 'api-conversation-detail',
+								cacheName: 'chat-page-data',
 								networkTimeoutSeconds: 5,
 								expiration: { maxEntries: 100, maxAgeSeconds: 7 * 24 * 60 * 60 }
+							}
+						},
+						{
+							// Earlier pages of a transcript (keyed by their `before` cursor).
+							urlPattern: ({ url, request }) =>
+								request.method === 'GET' &&
+								url.origin === self.location.origin &&
+								/^\/api\/conversations\/[^/]+\/messages$/.test(url.pathname),
+							handler: 'NetworkFirst',
+							options: {
+								cacheName: 'chat-older-messages',
+								networkTimeoutSeconds: 5,
+								expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 }
 							}
 						}
 					]

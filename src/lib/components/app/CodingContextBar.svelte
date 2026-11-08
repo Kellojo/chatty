@@ -322,7 +322,10 @@
 							onValueChange={(v) => task.setBranch(v)}
 							onOpenChange={(open) => {
 								branchQuery = '';
-								if (open) requestAnimationFrame(() => searchEl?.focus());
+								if (!open) return;
+								requestAnimationFrame(() => searchEl?.focus());
+								// Picks up branches created since the list was loaded.
+								if (!task.branchesError) void task.refreshBranches();
 							}}
 						>
 							<Select.Trigger
@@ -398,6 +401,23 @@
 						>
 							<FolderXIcon class="size-4" />
 							<span class="truncate">No git · edits in place</span>
+						</span>
+					{/if}
+					{#if task.branchesError && !task.branchesLoading}
+						<span role="alert" class="contents">
+							<Button
+								variant="ghost"
+								size="sm"
+								class="h-8 shrink-0 rounded-full px-3 text-destructive hover:text-destructive"
+								{disabled}
+								title={task.branchesError}
+								aria-label="Couldn't load branches: {task.branchesError}. Retry"
+								onclick={() => void task.refreshBranches()}
+							>
+								<TriangleAlertIcon class="size-4" />
+								<span class="max-sm:hidden">Couldn't load branches ·</span>
+								Retry
+							</Button>
 						</span>
 					{/if}
 				{/if}

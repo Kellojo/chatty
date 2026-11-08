@@ -2,7 +2,6 @@ import { getContext, setContext } from 'svelte';
 
 export interface SidebarState {
 	readonly open: boolean;
-	readonly isMobile: boolean;
 	readonly mobileOpen: boolean;
 }
 

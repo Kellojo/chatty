@@ -115,6 +115,8 @@ function writeStored(next: Stored) {
 	}
 }
 
+const branchesKey = (environmentId: string, projectId: string) => `${environmentId}\n${projectId}`;
+
 async function errorMessage(res: Response, fallback: string): Promise<string> {
 	const data = (await res.json().catch(() => null)) as { message?: string } | null;
 	return data?.message ?? fallback;
@@ -146,6 +148,8 @@ export class CodingTaskState {
 	// Successful responses only; failures are retried on the next selection.
 	private readonly optionsCache = new SvelteMap<string, CodingOptions>();
 	private readonly branchesCache = new SvelteMap<string, BranchesResult>();
+	/** Lets only the latest background branch refresh apply. */
+	private branchesRefreshSeq = 0;
 
 	/**
 	 * `initial` starts from a saved target (a coding agent's) instead of the
@@ -334,22 +338,18 @@ export class CodingTaskState {
 	async selectProject(id: string) {
 		const envId = this.environmentId;
 		this.projectId = id;
+		this.branchesRefreshSeq++;
 		this.branches = null;
 		this.branchesLoading = false;
 		this.branchesError = null;
 		this.branchValue = '';
 		if (!id || !envId) return;
 		this.applyDefaults();
-		const key = `${envId}\n${id}`;
-		let result = this.branchesCache.get(key);
+		let result = this.branchesCache.get(branchesKey(envId, id));
 		if (!result) {
 			this.branchesLoading = true;
 			try {
-				const query = `environmentId=${encodeURIComponent(envId)}&projectId=${encodeURIComponent(id)}`;
-				const res = await fetch(`/api/coding/branches?${query}`);
-				if (!res.ok) throw new Error(await errorMessage(res, 'Could not load branches'));
-				result = (await res.json()) as BranchesResult;
-				this.branchesCache.set(key, result);
+				result = await this.fetchBranches(envId, id);
 			} catch (e) {
 				if (this.projectId === id && this.environmentId === envId) {
 					this.branchesError = e instanceof Error ? e.message : 'Could not load branches';
@@ -367,6 +367,46 @@ export class CodingTaskState {
 		this.applyDefaults();
 		this.branchValue = this.pickBranch(id);
 		this.persist();
+	}
+
+	/**
+	 * Fetches the current project's branches again (e.g. when the branch picker
+	 * opens, so new branches show up). After a failure this retries visibly;
+	 * otherwise the list stays usable and updates in place, keeping the
+	 * selected branch while it still exists.
+	 */
+	async refreshBranches(): Promise<void> {
+		const envId = this.environmentId;
+		const id = this.projectId;
+		if (!envId || !id || this.branchesLoading) return;
+		this.branchesCache.delete(branchesKey(envId, id));
+		if (this.branchesError || !this.branches) return this.selectProject(id);
+		const seq = ++this.branchesRefreshSeq;
+		let result: BranchesResult;
+		try {
+			result = await this.fetchBranches(envId, id);
+		} catch {
+			return; // the list already shown is still the best we have
+		}
+		if (seq !== this.branchesRefreshSeq || this.projectId !== id || this.environmentId !== envId) {
+			return;
+		}
+		this.branches = result;
+		const value = this.branchValue;
+		if (value !== LOCAL_CHECKOUT && !this.branchList.some((b) => b.name === value)) {
+			this.branchValue = this.pickBranch(id);
+			this.persist();
+		}
+	}
+
+	/** Loads (and caches) a project's branches; throws with a user-facing message. */
+	private async fetchBranches(envId: string, projectId: string): Promise<BranchesResult> {
+		const query = `environmentId=${encodeURIComponent(envId)}&projectId=${encodeURIComponent(projectId)}`;
+		const res = await fetch(`/api/coding/branches?${query}`);
+		if (!res.ok) throw new Error(await errorMessage(res, 'Could not load branches'));
+		const result = (await res.json()) as BranchesResult;
+		this.branchesCache.set(branchesKey(envId, projectId), result);
+		return result;
 	}
 
 	/** Reloads the environment's projects and selects `projectId` (e.g. one just created). */

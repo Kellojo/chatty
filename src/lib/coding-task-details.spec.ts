@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { CodingConversation } from './coding-environments.js';
 import {
 	agentIsFree,
+	autonomyFromRuntimeMode,
+	canCreatePullRequest,
+	CODING_RUNTIME_MODES,
 	createPullRequestPrompt,
 	hasPullRequestWork,
 	pullRequestNumber,
+	recoveryAction,
 	runtimeModeLabel
 } from './coding-task-details.js';
 
@@ -61,5 +65,42 @@ describe('coding task details', () => {
 		expect(runtimeModeLabel('approval-required')).toBe('Ask first');
 		expect(runtimeModeLabel('auto')).toBe('Auto');
 		expect(runtimeModeLabel('custom')).toBe('custom');
+	});
+
+	it('offers a pull request only for unpublished work while the agent is free', () => {
+		expect(canCreatePullRequest(task())).toBe(true);
+		expect(canCreatePullRequest(task({ status: 'failed' }))).toBe(true);
+		expect(canCreatePullRequest(task({ status: 'running' }))).toBe(false);
+		expect(canCreatePullRequest(task({ status: 'awaiting_input' }))).toBe(false);
+		expect(canCreatePullRequest(task({ prUrl: 'https://github.com/o/r/pull/1' }))).toBe(false);
+	});
+
+	it('offers a retry for failed tasks and a continue for interrupted ones', () => {
+		expect(recoveryAction(task())).toBeNull();
+		expect(recoveryAction(task({ status: 'running' }))).toBeNull();
+
+		const retry = recoveryAction(task({ status: 'failed', lastError: 'Rate limited' }));
+		expect(retry).toMatchObject({ kind: 'retry', label: 'Retry' });
+		expect(retry?.prompt).toContain('Rate limited');
+
+		const unstarted = recoveryAction(task({ status: 'failed', threadId: null }));
+		expect(unstarted).toMatchObject({ kind: 'retry', prompt: null });
+
+		const resume = recoveryAction(task({ status: 'interrupted' }));
+		expect(resume).toMatchObject({ kind: 'continue', label: 'Continue' });
+		expect(resume?.prompt).toContain('continue where you left off');
+		expect(recoveryAction(task({ status: 'interrupted', threadId: null }))).toBeNull();
+	});
+
+	it('caps the error quoted in a retry', () => {
+		const prompt = recoveryAction(task({ status: 'failed', lastError: 'x'.repeat(5000) }))!.prompt!;
+		expect(prompt.length).toBeLessThan(1000);
+	});
+
+	it('maps autonomy to T3 runtime modes and back', () => {
+		expect(CODING_RUNTIME_MODES.supervised).toBe('approval-required');
+		expect(autonomyFromRuntimeMode('auto-accept-edits')).toBe('auto-edits');
+		expect(autonomyFromRuntimeMode('full-access')).toBe('full-access');
+		expect(autonomyFromRuntimeMode('custom')).toBeNull();
 	});
 });

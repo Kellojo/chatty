@@ -130,6 +130,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	checkpoint: { label: 'Checkpoint', server: 'coding', kind: 'checkpoint' },
 	dynamic_tool: { label: 'Used a tool', server: 'coding', kind: 'tool' },
 	error: { label: 'Error', server: 'coding', kind: 'error' },
+	notice: { label: 'Notice', server: 'coding', kind: 'tool', detail: 'text' },
 	subagent: { label: 'Subagent', server: 'coding', kind: 'subagent', detail: 'description' },
 
 	// The coding agent's own tools, reported by name (Claude Code naming).
@@ -269,7 +270,7 @@ export function describeTool(name: string, input: unknown): ToolDisplay {
 		if (meta.kind === 'command' && isTitle(detail)) {
 			return { label: detail!, detail: null, kind: meta.kind, server: null, prose: true };
 		}
-		const prose = PROSE_KINDS.has(meta.kind);
+		const prose = PROSE_KINDS.has(meta.kind) || name === 'notice';
 		// Prompts quote commands in markdown backticks; plain text reads better in a row.
 		if (detail && prose) detail = detail.replace(/`/g, '');
 		return { label: meta.label, detail, kind: meta.kind, server: builtin, prose };

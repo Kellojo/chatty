@@ -9,6 +9,7 @@
 	<ChatView
 		conversation={data.conversation}
 		initialMessages={data.messages}
+		hasOlderMessages={data.hasOlderMessages}
 		groups={data.groups}
 		mappings={data.mappings}
 		defaultModel={data.defaultModel}

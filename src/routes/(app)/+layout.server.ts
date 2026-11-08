@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit';
+import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
 import { config } from '$lib/server/config.js';
 import { getDb } from '$lib/server/db/index.js';
 import {
@@ -11,8 +12,10 @@ import {
 import { getSidebarOpen, getUserSettings } from '$lib/server/db/repo/user-settings.js';
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = async ({ locals }) => {
+export const load: LayoutServerLoad = async ({ locals, depends }) => {
 	if (!locals.user) redirect(302, '/login');
+	// Read markers and stream events refresh just this (see invalidateWhenIdle).
+	depends(CONVERSATIONS_KEY);
 	const db = getDb();
 	const rows = listConversations(db, locals.user.id, { limit: CONVERSATIONS_PAGE_SIZE + 1 });
 	return {

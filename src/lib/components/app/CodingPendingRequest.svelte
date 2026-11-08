@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button, type ButtonVariant } from '$lib/components/ui/button/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
@@ -64,16 +65,30 @@
 		}
 	}
 
+	let root = $state<HTMLDivElement | null>(null);
+	const titleId = $props.id();
+
+	// Mounted once per request: move focus to its first answer, unless the user is
+	// typing somewhere (an Enter meant for the composer mustn't approve a command).
+	onMount(() => {
+		const active = document.activeElement as HTMLElement | null;
+		if (active?.isContentEditable || active?.matches('input, textarea, select')) return;
+		root?.querySelector<HTMLElement>('button:not([disabled]), textarea:not([disabled])')?.focus();
+	});
+
 	function sendText() {
 		const trimmed = text.trim();
 		if (trimmed) void respond({ text: trimmed });
 	}
 </script>
 
+<!-- Approvals block the agent, so they're announced right away; questions politely. -->
 <div
+	bind:this={root}
 	class="mb-2 rounded-2xl border border-primary/30 bg-card p-3 shadow-sm"
-	role="region"
-	aria-label="Coding agent needs your input"
+	role={request.kind === 'approval' ? 'alert' : 'status'}
+	aria-live={request.kind === 'approval' ? 'assertive' : 'polite'}
+	aria-labelledby={titleId}
 >
 	<div class="flex items-start gap-2">
 		{#if request.kind === 'approval'}
@@ -82,7 +97,14 @@
 			<MessageCircleQuestionMarkIcon class="mt-0.5 size-4 shrink-0 text-primary" />
 		{/if}
 		<div class="min-w-0 flex-1">
-			<p class="text-sm font-medium">{request.title}</p>
+			<p id={titleId} class="text-sm font-medium">
+				<span class="sr-only"
+					>{request.kind === 'approval'
+						? 'The coding agent needs your approval:'
+						: 'The coding agent has a question:'}</span
+				>
+				{request.title}
+			</p>
 			{#if request.detail}
 				{#if detailIsCode}
 					<pre

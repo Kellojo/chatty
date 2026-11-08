@@ -4,11 +4,13 @@
 	import {
 		setChatContainerContext,
 		type ChatContainerAnimation,
+		type ChatContainerContext,
 		type ChatContainerInitialAnimation
 	} from './context.svelte.js';
 
 	let {
 		ref = $bindable<HTMLDivElement | null>(null),
+		context = $bindable<ChatContainerContext | undefined>(),
 		children,
 		class: className,
 		resize = 'smooth',
@@ -16,6 +18,8 @@
 		...restProps
 	}: {
 		ref?: HTMLDivElement | null;
+		/** Scroll state and controls, for UI rendered outside the container. */
+		context?: ChatContainerContext;
 		children?: import('svelte').Snippet;
 		class?: string;
 		resize?: ChatContainerAnimation;
@@ -23,29 +27,30 @@
 		[key: string]: any;
 	} = $props();
 
-	const context = setChatContainerContext();
+	const chatContext = setChatContainerContext();
+	context = chatContext;
 
 	function bindScrollElement(node: HTMLDivElement) {
 		ref = node;
-		context.setScrollElement(node);
+		chatContext.setScrollElement(node);
 
 		return () => {
 			ref = null;
-			context.setScrollElement(null);
+			chatContext.setScrollElement(null);
 		};
 	}
 
 	watch(
 		() => resize,
 		() => {
-			context.updateResize(resize);
+			chatContext.updateResize(resize);
 		}
 	);
 
 	watch(
 		() => initial,
 		() => {
-			context.updateInitial(initial);
+			chatContext.updateInitial(initial);
 		}
 	);
 </script>

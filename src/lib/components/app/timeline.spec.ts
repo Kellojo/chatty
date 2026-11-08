@@ -83,6 +83,14 @@ describe('describeTool', () => {
 		expect(describeTool('run_command', { command: 'Get-ChildItem src' }).prose).toBe(false);
 	});
 
+	it('shows a coding-agent notice as prose', () => {
+		expect(describeTool('notice', { text: 'Command "pnpm dev" was stopped' })).toMatchObject({
+			label: 'Notice',
+			detail: 'Command "pnpm dev" was stopped',
+			prose: true
+		});
+	});
+
 	it('strips a leading cd from commands', () => {
 		expect(describeTool('run_command', { command: 'cd /c/repo && pnpm check' }).detail).toBe(
 			'pnpm check'

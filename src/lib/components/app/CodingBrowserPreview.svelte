@@ -46,33 +46,64 @@
 
 	const driving = $derived(control?.controller === 'you');
 
-	async function loadTabs(): Promise<void> {
+	/** Bumped per tab-list request, so only the latest response applies. */
+	let tabsSeq = 0;
+	/** A popup to switch to once the tab list includes it. */
+	let wantedTabId: string | null = null;
+	/** Bumped by the Reconnect button to restart a stream that gave up. */
+	let reconnectNonce = $state(0);
+	let streamDead = $state(false);
+
+	/** `signal` is aborted when the dialog closes, so late responses are dropped. */
+	async function loadTabs(signal: AbortSignal): Promise<void> {
+		const seq = ++tabsSeq;
 		try {
-			const res = await fetch(base);
+			const res = await fetch(base, { signal });
 			const body = (await res.json().catch(() => null)) as {
 				tabs?: CodingPreviewTab[];
 				message?: string;
 			} | null;
+			if (signal.aborted || seq !== tabsSeq) return;
 			if (!res.ok) throw new Error(body?.message ?? 'Could not load the browser tabs');
-			tabs = body?.tabs ?? [];
+			const next = body?.tabs ?? [];
+			tabs = next;
 			tabsError = null;
-			if (!tabs.some((t) => t.tabId === selectedTabId)) selectedTabId = tabs[0]?.tabId ?? null;
+			if (wantedTabId && next.some((t) => t.tabId === wantedTabId)) {
+				selectedTabId = wantedTabId;
+				wantedTabId = null;
+			} else if (!next.some((t) => t.tabId === selectedTabId)) {
+				selectedTabId = next[0]?.tabId ?? null;
+			}
 		} catch (e) {
+			if (signal.aborted || seq !== tabsSeq) return;
 			tabsError = e instanceof Error ? e.message : 'Could not load the browser tabs';
 		}
 	}
 
-	// Tab list: loaded on open and refreshed while open, so titles, URLs and new tabs show up.
+	// Tab list: loaded on open and refreshed while open (and visible), so titles,
+	// URLs and new tabs show up.
 	$effect(() => {
 		if (!open) return;
 		void base;
+		const controller = new AbortController();
 		untrack(() => {
 			tabs = null;
 			tabsError = null;
-			void loadTabs();
+			wantedTabId = null;
+			void loadTabs(controller.signal);
 		});
-		const timer = setInterval(() => void loadTabs(), TAB_REFRESH_MS);
-		return () => clearInterval(timer);
+		const timer = setInterval(() => {
+			if (!document.hidden) void loadTabs(controller.signal);
+		}, TAB_REFRESH_MS);
+		const onVisible = () => {
+			if (!document.hidden) void loadTabs(controller.signal);
+		};
+		document.addEventListener('visibilitychange', onVisible);
+		return () => {
+			controller.abort();
+			clearInterval(timer);
+			document.removeEventListener('visibilitychange', onVisible);
+		};
 	});
 
 	$effect(() => {
@@ -83,7 +114,9 @@
 	$effect(() => {
 		const tabId = selectedTabId;
 		const streamBase = base;
+		void reconnectNonce;
 		if (!open || !tabId) return;
+		const controller = new AbortController();
 		let source: EventSource | null = null;
 		let retryTimer: ReturnType<typeof setTimeout> | null = null;
 		let reconnects = 0;
@@ -95,6 +128,7 @@
 			control = null;
 			viewerId = null;
 			streamMessage = null;
+			streamDead = false;
 			const rect = surfaceEl?.getBoundingClientRect();
 			const dpr = window.devicePixelRatio || 1;
 			const params = new URLSearchParams({
@@ -132,6 +166,7 @@
 			viewerId = null;
 			if (reconnects >= MAX_RECONNECTS) {
 				streamMessage = message;
+				streamDead = true;
 				return;
 			}
 			reconnects++;
@@ -151,9 +186,8 @@
 					control = { canOperate: event.canOperate, controller: event.controller };
 					return;
 				case 'popup':
-					void loadTabs().then(() => {
-						if (tabs?.some((t) => t.tabId === event.tabId)) selectedTabId = event.tabId;
-					});
+					wantedTabId = event.tabId;
+					void loadTabs(controller.signal);
 					return;
 				case 'end':
 					es.close();
@@ -161,11 +195,12 @@
 					viewerId = null;
 					if (event.reason === 'gone') {
 						streamMessage = event.message;
-						void loadTabs();
+						void loadTabs(controller.signal);
 					} else if (event.reason === 'restart') {
 						retry(event.message);
 					} else {
 						streamMessage = event.message;
+						streamDead = true;
 					}
 					return;
 			}
@@ -174,6 +209,7 @@
 		untrack(connect);
 		return () => {
 			stopped = true;
+			controller.abort();
 			if (retryTimer) clearTimeout(retryTimer);
 			source?.close();
 			source = null;
@@ -353,16 +389,18 @@
 		</Dialog.Header>
 
 		{#if tabs && tabs.length > 1}
-			<div class="flex gap-1 overflow-x-auto" role="tablist" aria-label="Browser tabs">
+			<div class="flex gap-1 overflow-x-auto" role="group" aria-label="Browser tabs">
 				{#each tabs as tab (tab.tabId)}
 					<Button
 						variant={tab.tabId === selectedTabId ? 'secondary' : 'ghost'}
 						size="sm"
-						role="tab"
-						aria-selected={tab.tabId === selectedTabId}
+						aria-pressed={tab.tabId === selectedTabId}
 						class="max-w-48 shrink-0"
 						title={tab.url ?? undefined}
-						onclick={() => (selectedTabId = tab.tabId)}
+						onclick={() => {
+							wantedTabId = null;
+							selectedTabId = tab.tabId;
+						}}
 					>
 						<span class="truncate">{tabLabel(tab)}</span>
 					</Button>
@@ -467,11 +505,25 @@
 				<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
 			{/if}
 			{#if streamMessage}
-				<p
-					class="absolute inset-x-0 bottom-3 mx-auto w-fit max-w-[90%] rounded-md bg-background/90 px-3 py-1.5 text-center text-xs text-muted-foreground shadow"
+				<div
+					class="absolute inset-x-0 bottom-3 mx-auto flex w-fit max-w-[90%] items-center gap-2 rounded-md bg-background/90 px-3 py-1.5 text-center text-xs text-muted-foreground shadow"
+					role="status"
 				>
-					{streamMessage}
-				</p>
+					<span>{streamMessage}</span>
+					{#if streamDead}
+						<Button
+							variant="outline"
+							size="xs"
+							onclick={() => {
+								streamDead = false;
+								reconnectNonce++;
+							}}
+						>
+							<RotateCwIcon />
+							Reconnect
+						</Button>
+					{/if}
+				</div>
 			{/if}
 		</div>
 

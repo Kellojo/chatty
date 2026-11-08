@@ -24,6 +24,9 @@ const piePayload = JSON.stringify({
 	datasets: [{ data: [275, 200, 187] }]
 });
 
+// The chart itself is imported lazily, so give it time to load.
+const LAZY = { timeout: 5000 };
+
 describe('ChartWidget', () => {
 	it('shows a loading skeleton while the fence is incomplete', async () => {
 		const screen = render(ChartWidget, { code: '', isIncomplete: true });
@@ -45,27 +48,18 @@ describe('ChartWidget', () => {
 
 	it('renders a bar chart with title', async () => {
 		const { container } = render(ChartWidget, { code: barPayload, isIncomplete: false });
-		const svg = container.querySelector('svg');
-		await expect.element(svg).toBeInTheDocument();
 		expect(container.textContent).toContain('Monthly revenue');
-		const bars = container.querySelectorAll('.lc-bars');
-		expect(bars.length).toBe(1);
+		await expect.poll(() => container.querySelectorAll('.lc-bars').length, LAZY).toBe(1);
 	});
 
 	it('renders one bar group per dataset for multi-series bar charts', async () => {
 		const { container } = render(ChartWidget, { code: multiBarPayload, isIncomplete: false });
-		const svg = container.querySelector('svg');
-		await expect.element(svg).toBeInTheDocument();
-		const bars = container.querySelectorAll('.lc-bars');
-		expect(bars.length).toBe(2);
+		await expect.poll(() => container.querySelectorAll('.lc-bars').length, LAZY).toBe(2);
 	});
 
 	it('renders a pie chart with one arc per label', async () => {
 		const { container } = render(ChartWidget, { code: piePayload, isIncomplete: false });
-		const svg = container.querySelector('svg');
-		await expect.element(svg).toBeInTheDocument();
-		const arcs = container.querySelectorAll('.lc-arc-line');
-		expect(arcs.length).toBe(3);
+		await expect.poll(() => container.querySelectorAll('.lc-arc-line').length, LAZY).toBe(3);
 	});
 
 	it('renders a line chart', async () => {
