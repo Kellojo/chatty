@@ -9,17 +9,21 @@ const follower = {
 	beginTurn: vi.fn(),
 	failTurn: vi.fn(),
 	follow: vi.fn(async () => {}),
-	launch: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
+	launch: vi.fn<(input: { threadId: string }) => Promise<void>>(
+		() => new Promise<void>((resolve) => (release = resolve))
+	),
 	sendMessage: vi.fn(async () => {}),
-	respond: vi.fn(() => new Promise<void>((resolve) => (release = resolve)))
+	respond: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
+	stop: vi.fn()
 };
+const t3HttpGet = vi.fn();
 vi.doMock('./follower.js', () => ({
 	ensureFollower: () => follower,
 	getFollower: () => undefined
 }));
 vi.doMock('./client.js', () => ({
 	connectT3: vi.fn(),
-	t3HttpGet: vi.fn(),
+	t3HttpGet,
 	T3ClientError: class extends Error {}
 }));
 vi.doMock('../events/bus.js', () => ({ publishServerEvent: vi.fn() }));
@@ -36,6 +40,7 @@ let conversationId: string;
 
 beforeEach(() => {
 	for (const fn of Object.values(follower)) fn.mockClear();
+	t3HttpGet.mockReset();
 	db = openDatabase(':memory:');
 	const now = Date.now();
 	db.prepare(
@@ -80,6 +85,57 @@ describe('startCodingTurn', () => {
 		await Promise.all([first, second]);
 		expect(follower.launch).toHaveBeenCalledTimes(1);
 		expect(follower.sendMessage).toHaveBeenCalledWith({ id: 'm2', text: 'hello m2' });
+	});
+
+	it('forgets the thread of a failed launch, so the next message launches again', async () => {
+		follower.launch.mockRejectedValueOnce(new Error('timeout'));
+		t3HttpGet.mockResolvedValueOnce({ threads: [], archivedThreads: [] });
+		const row = coding.getCodingConversation(db, conversationId)!;
+		await expect(startCodingTurn('u1', row, message('m1'), db)).rejects.toMatchObject({
+			status: 500
+		});
+		const failed = coding.getCodingConversation(db, conversationId)!;
+		expect(failed.thread_id).toBeNull();
+		expect(failed.status).toBe('failed');
+		expect(follower.failTurn).toHaveBeenCalledOnce();
+		expect(follower.stop).toHaveBeenCalledOnce();
+		expect(follower.follow).not.toHaveBeenCalled();
+
+		const next = startCodingTurn('u1', failed, message('m2'), db);
+		await vi.waitFor(() => expect(follower.launch).toHaveBeenCalledTimes(2));
+		release();
+		await next;
+		expect(follower.sendMessage).not.toHaveBeenCalled();
+	});
+
+	it('treats a failed launch whose thread exists on T3 as launched', async () => {
+		follower.launch.mockRejectedValueOnce(new Error('timeout'));
+		t3HttpGet.mockImplementationOnce(async () => ({
+			threads: [{ id: follower.launch.mock.calls[0][0].threadId }],
+			archivedThreads: []
+		}));
+		const row = coding.getCodingConversation(db, conversationId)!;
+		await startCodingTurn('u1', row, message('m1'), db);
+		expect(coding.getCodingConversation(db, conversationId)!.thread_id).toBe(
+			follower.launch.mock.calls[0][0].threadId
+		);
+		expect(follower.failTurn).not.toHaveBeenCalled();
+		expect(follower.stop).not.toHaveBeenCalled();
+		expect(follower.follow).toHaveBeenCalledOnce();
+	});
+
+	it('keeps following the thread when a follow-up fails to send', async () => {
+		coding.updateCodingConversation(db, conversationId, { threadId: 't1', status: 'idle' });
+		follower.sendMessage.mockRejectedValueOnce(new Error('boom'));
+		const row = coding.getCodingConversation(db, conversationId)!;
+		await expect(startCodingTurn('u1', row, message('m1'), db)).rejects.toMatchObject({
+			status: 500
+		});
+		const after = coding.getCodingConversation(db, conversationId)!;
+		expect(after.thread_id).toBe('t1');
+		expect(after.status).toBe('idle');
+		expect(follower.stop).not.toHaveBeenCalled();
+		expect(follower.follow).toHaveBeenCalledOnce();
 	});
 });
 

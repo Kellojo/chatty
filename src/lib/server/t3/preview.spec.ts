@@ -1,10 +1,43 @@
-import { describe, expect, it } from 'vitest';
-import {
+import { describe, expect, it, vi } from 'vitest';
+import type { PreviewStreamEvent } from '$lib/coding-preview.js';
+
+class FakeSocket extends EventTarget {
+	readyState: number = WebSocket.OPEN;
+	send = vi.fn();
+	close = vi.fn((code = 1000) => {
+		this.readyState = WebSocket.CLOSED;
+		this.dispatchEvent(Object.assign(new Event('close'), { code, reason: '' }));
+	});
+}
+const sockets: FakeSocket[] = [];
+
+vi.mock('./client.js', () => ({
+	connectT3: vi.fn(),
+	openT3MediaSocket: vi.fn(async () => {
+		const socket = new FakeSocket();
+		sockets.push(socket);
+		return socket;
+	}),
+	T3ClientError: class extends Error {}
+}));
+vi.mock('../crypto.js', () => ({ decryptSecret: () => 'token' }));
+vi.mock('../db/repo/coding-conversations.js', () => ({
+	getCodingConversationForUser: () => ({ environment_id: 'env1', thread_id: 't1' })
+}));
+vi.mock('../db/repo/coding-environments.js', () => ({
+	getCodingEnvironment: () => ({ base_url: 'http://t3.test', token_enc: 'x', enabled: 1 })
+}));
+vi.mock('./tasks.js', () => ({ CodingTaskError: class extends Error {} }));
+
+const {
+	closeAllPreviewViewers,
 	describeStreamClose,
+	openPreviewViewer,
 	parsePreviewTabs,
 	parseStreamMessage,
-	sanitizePreviewInput
-} from './preview.js';
+	sanitizePreviewInput,
+	sendPreviewInput
+} = await import('./preview.js');
 
 describe('parsePreviewTabs', () => {
 	it('maps T3 preview sessions to tabs', () => {
@@ -170,5 +203,30 @@ describe('describeStreamClose', () => {
 		expect(setup.reason).toBe('unavailable');
 		expect(setup.message).toContain('`t3 setup-browser`');
 		expect(describeStreamClose(4503, 'garbled').message).not.toContain('`');
+	});
+});
+
+describe('closeAllPreviewViewers', () => {
+	it('ends every open viewer once and closes its socket', async () => {
+		const events: PreviewStreamEvent[][] = [[], []];
+		const size = { maxWidth: 800, maxHeight: 600 };
+		const viewers = await Promise.all(
+			events.map((list, i) =>
+				openPreviewViewer({} as never, 'u1', 'c1', `tab-${i}`, size, {
+					onFrame: () => {},
+					onEvent: (event) => list.push(event)
+				})
+			)
+		);
+
+		closeAllPreviewViewers();
+
+		for (const list of events) {
+			expect(list).toEqual([
+				{ type: 'end', reason: 'restart', message: 'The server is restarting' }
+			]);
+		}
+		for (const socket of sockets) expect(socket.close).toHaveBeenCalledWith(1000);
+		expect(sendPreviewInput('u1', 'c1', viewers[0].id, [{ type: 'reload' }])).toBe(false);
 	});
 });

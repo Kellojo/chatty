@@ -296,6 +296,8 @@ interface ViewerEntry {
 	userId: string;
 	conversationId: string;
 	send: (message: Record<string, unknown>) => void;
+	/** Ends the viewer with `event` and closes its socket. */
+	close: (event: Extract<PreviewStreamEvent, { type: 'end' }>) => void;
 }
 
 const viewers = new Map<string, ViewerEntry>();
@@ -365,19 +367,30 @@ export async function openPreviewViewer(
 		end({ type: 'end', reason: 'error', message: 'Lost the connection to the coding machine' })
 	);
 
-	viewers.set(id, { userId, conversationId, send });
+	const close = (event: Extract<PreviewStreamEvent, { type: 'end' }>) => {
+		end(event);
+		try {
+			ws.close(1000);
+		} catch {
+			// already closed
+		}
+	};
+	viewers.set(id, { userId, conversationId, send, close });
 	return {
 		id,
 		ack: () => send({ type: 'ack' }),
-		close: () => {
-			end({ type: 'end', reason: 'error', message: 'Closed' });
-			try {
-				ws.close(1000);
-			} catch {
-				// already closed
-			}
-		}
+		close: () => close({ type: 'end', reason: 'error', message: 'Closed' })
 	};
+}
+
+/**
+ * Ends every open viewer (for shutdown): each one's SSE response gets its
+ * `end` event and finishes, so it doesn't hold the HTTP server open.
+ */
+export function closeAllPreviewViewers(): void {
+	for (const entry of [...viewers.values()]) {
+		entry.close({ type: 'end', reason: 'restart', message: 'The server is restarting' });
+	}
 }
 
 /**

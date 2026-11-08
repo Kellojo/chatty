@@ -103,6 +103,9 @@ interface LiveTurn {
 	bindTimer: ReturnType<typeof setTimeout> | null;
 }
 
+const isUnauthorized = (e: unknown): e is T3ClientError =>
+	e instanceof T3ClientError && e.kind === 'unauthorized';
+
 const notFollowedError = () =>
 	new T3ClientError('This coding task is no longer connected', 'protocol');
 
@@ -235,7 +238,9 @@ export class CodingFollower {
 						if (this.stream === stream) this.stream = null;
 						this.clearSnapshotTimer();
 						if (error) this.recordError(error);
-						this.scheduleReconnect();
+						// A rejected token won't start working on its own: don't retry.
+						if (isUnauthorized(error)) this.stop(error.message);
+						else this.scheduleReconnect();
 					}
 				}
 			);
@@ -258,7 +263,8 @@ export class CodingFollower {
 			// Stopped while connecting: deliberate, not a connection problem.
 			if (this.stopped) return;
 			this.recordError(e);
-			this.scheduleReconnect();
+			if (isUnauthorized(e)) this.stop(e.message);
+			else this.scheduleReconnect();
 		}
 	}
 

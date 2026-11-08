@@ -201,6 +201,26 @@ describe('CodingFollower reconnects', () => {
 		await following;
 		expect(lastError()).toBeNull();
 	});
+
+	it('gives up at once when the token is rejected on connect', async () => {
+		connectT3.mockRejectedValueOnce(new T3ClientError('Token rejected', 'unauthorized'));
+		await follower.follow();
+		const calls = connectT3.mock.calls.length;
+		expect(getFollower(conversationId)).toBeUndefined();
+		expect(lastError()).toBe('Token rejected');
+		await seconds(600);
+		expect(connectT3.mock.calls.length).toBe(calls);
+	});
+
+	it('gives up at once when the subscription is rejected as unauthorized', async () => {
+		failConnect = false;
+		await follower.follow();
+		const calls = connectT3.mock.calls.length;
+		lastConnection!.streams[0].onEnd(new T3ClientError('Token rejected', 'unauthorized'));
+		expect(getFollower(conversationId)).toBeUndefined();
+		await seconds(600);
+		expect(connectT3.mock.calls.length).toBe(calls);
+	});
 });
 
 const runSnapshot = (status: string, sequence = 1, runs = true) => ({

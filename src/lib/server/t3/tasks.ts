@@ -514,19 +514,54 @@ async function sendCodingTurnNow(
 			await follower.sendMessage({ id: message.id, text });
 		}
 	} catch (e) {
+		const firstLaunch = !coding.thread_id;
+		// The launch may have reached T3 with only the response lost (e.g. a
+		// timeout). Relaunching can't count on T3 deduping (each launch sends a new
+		// commandId), so check: if the thread exists, treat it as launched.
+		if (firstLaunch && (await threadExistsRemotely(env, threadId))) {
+			log.warn('Coding thread launch reported an error but the thread exists', {
+				conversationId: coding.conversation_id,
+				error: e instanceof Error ? e.message : String(e)
+			});
+			void follower.follow();
+			return;
+		}
 		follower.failTurn();
 		const error = asTaskError(e, 'Could not start the coding agent');
 		updateCodingConversation(db, coding.conversation_id, {
 			lastError: error.message,
-			...(coding.thread_id ? {} : { status: 'failed' as const })
+			// No thread on T3: forget its id so the next message launches again.
+			...(firstLaunch ? { threadId: null, status: 'failed' as const } : {})
 		});
 		publishServerEvent(userId, {
 			type: 'coding.task.updated',
 			conversationId: coding.conversation_id
 		});
+		// Without a thread there is nothing to follow; an existing thread is
+		// followed so the follower syncs and later stops on idle or gives up.
+		if (firstLaunch) follower.stop();
+		else void follower.follow();
 		throw error;
 	}
 	void follower.follow();
+}
+
+/** Whether `threadId` exists on `env`; false when that can't be determined. */
+async function threadExistsRemotely(env: CodingEnvironmentRow, threadId: string): Promise<boolean> {
+	try {
+		const shell = rec(
+			await t3HttpGet(
+				env.base_url,
+				decryptSecret(env.token_enc),
+				'/api/orchestration/shell?omitIdleSubagents=1'
+			)
+		);
+		return [shell?.threads, shell?.archivedThreads]
+			.flatMap((list) => (Array.isArray(list) ? list : []))
+			.some((t) => rec(t)?.id === threadId);
+	} catch {
+		return false;
+	}
 }
 
 /**

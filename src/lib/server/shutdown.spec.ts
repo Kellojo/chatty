@@ -9,12 +9,14 @@ const stopDailyJobs = vi.fn();
 const stopHourlyJobs = vi.fn();
 const stopCodingEnvironmentSync = vi.fn();
 const closeDb = vi.fn();
+const closeAllPreviewViewers = vi.fn();
 
 vi.mock('./agents/runner.js', () => ({ stopAllAgentRuns }));
 vi.mock('./agents/scheduler.js', () => ({ stopAgentScheduler }));
 vi.mock('./jobs.js', () => ({ stopDailyJobs, stopHourlyJobs }));
 vi.mock('./db/index.js', () => ({ closeDb }));
 vi.mock('./t3/sync.js', () => ({ stopCodingEnvironmentSync }));
+vi.mock('./t3/preview.js', () => ({ closeAllPreviewViewers }));
 vi.mock('./t3/follower.js', () => ({
 	prepareCodingShutdown: vi.fn(),
 	stopAllCodingFollowers: vi.fn()
@@ -49,5 +51,6 @@ describe('shutdown', () => {
 		expect(stopDailyJobs).toHaveBeenCalledOnce();
 		expect(stopHourlyJobs).toHaveBeenCalledOnce();
 		expect(stopCodingEnvironmentSync).toHaveBeenCalledOnce();
+		expect(closeAllPreviewViewers).toHaveBeenCalledOnce();
 	});
 });

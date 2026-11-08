@@ -5,6 +5,7 @@ import { closeDb } from './db/index.js';
 import { stopDailyJobs, stopHourlyJobs } from './jobs.js';
 import { createLogger } from './logger.js';
 import { prepareCodingShutdown, stopAllCodingFollowers } from './t3/follower.js';
+import { closeAllPreviewViewers } from './t3/preview.js';
 import { stopCodingEnvironmentSync } from './t3/sync.js';
 
 const log = createLogger('server');
@@ -23,6 +24,8 @@ export function drainForShutdown(): Promise<void> {
 		stopCodingEnvironmentSync();
 		// Coding agents run remotely and must keep going; only detach from them.
 		prepareCodingShutdown();
+		// Preview streams never end on their own (heartbeats keep them open).
+		closeAllPreviewViewers();
 		await Promise.all([
 			...listActiveStreamIds().map((id) => abortStreamAndWait(id, DRAIN_TIMEOUT_MS)),
 			stopAllAgentRuns(DRAIN_TIMEOUT_MS)

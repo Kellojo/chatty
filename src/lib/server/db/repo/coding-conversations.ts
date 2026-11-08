@@ -139,7 +139,7 @@ export function createCodingConversation(
 }
 
 export interface CodingConversationPatch {
-	threadId?: string;
+	threadId?: string | null;
 	status?: CodingTaskStatus;
 	branch?: string | null;
 	prUrl?: string | null;
