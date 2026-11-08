@@ -314,13 +314,22 @@
 		</div>
 		<div class="flex flex-col gap-2">
 			<Label for="agent-description">Description</Label>
-			<Input
-				id="agent-description"
-				bind:value={form.description}
-				maxlength={500}
-				{readonly}
-				placeholder="What this agent does, shown in the agent list"
-			/>
+			{#if readonly}
+				<!-- Built-ins can't be edited; show the whole text instead of a clipped one-line field. -->
+				<p
+					id="agent-description"
+					class="rounded-3xl border border-dashed border-border px-3 py-2 text-sm text-pretty"
+				>
+					{form.description || 'No description'}
+				</p>
+			{:else}
+				<Input
+					id="agent-description"
+					bind:value={form.description}
+					maxlength={500}
+					placeholder="What this agent does"
+				/>
+			{/if}
 		</div>
 		<div class="flex flex-col gap-2">
 			<Label for="agent-system-prompt">
@@ -385,7 +394,7 @@
 			{#if readonly}
 				<!-- Read-only values stack like the Basics fields. -->
 				<div class="flex flex-col gap-2">
-					<Label for="agent-model">Model</Label>
+					<Label for="agent-model">Runs on</Label>
 					<Input
 						id="agent-model"
 						readonly
@@ -395,7 +404,7 @@
 					/>
 				</div>
 			{:else}
-				<SettingsRow label="Model" description="Which model the agent runs on." stack>
+				<SettingsRow label="Runs on" description="Which model the agent uses." stack>
 					<ModelSelect
 						{groups}
 						{mappings}
@@ -413,16 +422,25 @@
 				description="Tool calls per run before the agent stops. Leave empty for 25."
 				stack
 			>
-				<Input
-					id="agent-max-steps"
-					type="number"
-					min={1}
-					max={100}
-					bind:value={form.maxSteps}
-					placeholder="25"
-					{readonly}
-					class="w-full sm:w-28"
-				/>
+				{#if readonly}
+					<!-- Read-only: the effective value, not a placeholder that looks empty. -->
+					<p
+						id="agent-max-steps"
+						class="rounded-3xl border border-dashed border-border px-3 py-2 text-sm sm:w-28"
+					>
+						{form.maxSteps === '' ? '25' : form.maxSteps}
+					</p>
+				{:else}
+					<Input
+						id="agent-max-steps"
+						type="number"
+						min={1}
+						max={100}
+						bind:value={form.maxSteps}
+						placeholder="25"
+						class="w-full sm:w-28"
+					/>
+				{/if}
 			</SettingsRow>
 		</SettingsSection>
 	{/if}
@@ -430,7 +448,12 @@
 	<SettingsSection title="Trigger" description="How this agent gets started.">
 		<SettingsRow label="Starts" description={triggerHelp} stack>
 			<Select.Root type="single" bind:value={form.triggerType} disabled={readonly}>
-				<Select.Trigger class="w-full sm:w-56" aria-label="Trigger type">
+				<Select.Trigger
+					class="w-full sm:w-56 {readonly
+						? 'disabled:border-dashed disabled:border-border disabled:bg-transparent disabled:opacity-100 [&>svg:last-child]:hidden'
+						: ''}"
+					aria-label="Trigger type"
+				>
 					{TRIGGER_LABELS[form.triggerType]}
 				</Select.Trigger>
 				<Select.Content>
@@ -445,7 +468,12 @@
 		{:else if form.triggerType === 'event'}
 			<SettingsRow label="Event" stack>
 				<Select.Root type="single" bind:value={form.event} disabled={readonly}>
-					<Select.Trigger class="w-full sm:w-72" aria-label="Event">
+					<Select.Trigger
+						class="w-full sm:w-72 {readonly
+							? 'disabled:border-dashed disabled:border-border disabled:bg-transparent disabled:opacity-100 [&>svg:last-child]:hidden'
+							: ''}"
+						aria-label="Event"
+					>
 						{EVENT_LABELS[form.event]}
 					</Select.Trigger>
 					<Select.Content>
@@ -577,10 +605,10 @@
 
 	{#if !readonly}
 		<div
-			class="sticky bottom-0 z-10 flex justify-end gap-2 border-t bg-background/95 py-3 backdrop-blur"
+			class="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 border-t bg-background/95 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur max-sm:-mx-4 max-sm:px-4 max-sm:[&>*:not(span)]:flex-1"
 		>
 			{#if missing || (agent && dirty)}
-				<span class="mr-auto self-center text-xs text-muted-foreground"
+				<span class="self-center text-xs text-muted-foreground max-sm:w-full sm:mr-auto"
 					>{missing ?? 'Unsaved changes'}</span
 				>
 			{/if}

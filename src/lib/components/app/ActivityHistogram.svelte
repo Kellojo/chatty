@@ -17,6 +17,10 @@
 	}
 
 	let containerWidth = $state(0);
+	// Tapped day; `title` tooltips never show on touch, so its count shows under the grid.
+	let selected = $state<Cell | null>(null);
+	const describe = (cell: Cell) =>
+		`${MONTHS[cell.month]} ${cell.dateNum}: ${cell.count} request${cell.count !== 1 ? 's' : ''}${cell.failed > 0 ? ` (${cell.failed} failed)` : ''}`;
 
 	// 14px cell + 3px gap per week column, ~32px for day-of-week labels
 	const CELL_STEP = 17;
@@ -136,13 +140,16 @@
 						<div class="flex shrink-0 flex-col gap-[3px]">
 							{#each week as cell, di (di)}
 								{#if cell}
-									<div
-										class="size-[14px] rounded-md {levelClass(cell.level)}"
-										title="{MONTHS[cell.month]} {cell.dateNum}: {cell.count} request{cell.count !==
-										1
-											? 's'
-											: ''}{cell.failed > 0 ? ` (${cell.failed} failed)` : ''}"
-									></div>
+									<button
+										type="button"
+										class="size-[14px] rounded-md {levelClass(cell.level)} {selected?.day ===
+										cell.day
+											? 'ring-2 ring-foreground/60'
+											: ''}"
+										title={describe(cell)}
+										aria-label={describe(cell)}
+										onclick={() => (selected = selected?.day === cell.day ? null : cell)}
+									></button>
 								{:else}
 									<div class="size-[14px]"></div>
 								{/if}
@@ -155,6 +162,11 @@
 	{/if}
 
 	<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+		{#if selected}
+			<span class="mr-auto text-xs text-foreground tabular-nums" aria-live="polite"
+				>{describe(selected)}</span
+			>
+		{/if}
 		<span>Less</span>
 		<div class="size-[10px] rounded-[2px] bg-muted"></div>
 		<div class="size-[10px] rounded-[2px] bg-emerald-200 dark:bg-emerald-800"></div>

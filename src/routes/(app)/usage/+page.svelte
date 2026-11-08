@@ -155,7 +155,9 @@
 		<UsageTile
 			billing="payg"
 			label="Billed"
-			value={formatBilled(payg.totalCostUsd, { pricedRequests: payg.pricedRequests })}
+			value={payg.totalRequests === 0
+				? formatBilled(0)
+				: formatBilled(payg.totalCostUsd, { pricedRequests: payg.pricedRequests })}
 			caption={payg.totalRequests > 0 && payg.pricedRequests === 0 ? 'No cost reported' : undefined}
 			subtitle="Billed per token by the providers configured in Chatty."
 		>
@@ -311,7 +313,7 @@
 				{/if}
 				<a
 					href={requestsHref()}
-					class="mt-auto inline-flex items-center gap-1 self-start text-sm font-medium underline-offset-4 hover:underline"
+					class="mt-auto inline-flex items-center gap-1 self-start text-sm font-medium underline-offset-4 hover:underline pointer-coarse:min-h-10"
 				>
 					View your requests <ArrowRightIcon class="size-3.5" aria-hidden="true" />
 				</a>
@@ -363,7 +365,7 @@
 					{/if}
 					<a
 						href={subscriptionsHref}
-						class="mt-auto inline-flex items-center gap-1 self-start text-sm font-medium underline-offset-4 hover:underline"
+						class="mt-auto inline-flex items-center gap-1 self-start text-sm font-medium underline-offset-4 hover:underline pointer-coarse:min-h-10"
 					>
 						View details <ArrowRightIcon class="size-3.5" aria-hidden="true" />
 					</a>
@@ -372,137 +374,143 @@
 		{/if}
 	</div>
 
-	<!-- One table for both sources; billed and API value stay in separate columns. -->
-	<section class="flex flex-col gap-3" aria-labelledby="by-provider-heading">
-		<div class="flex flex-col gap-0.5">
-			<h2 id="by-provider-heading" class="text-base font-semibold">By provider</h2>
-			<p class="text-sm text-muted-foreground">
-				"Billed" is what you paid; "API value" is what your subscriptions covered. Select a provider
-				for details.
-			</p>
-		</div>
-		<Card.Root class="rounded-2xl border-border/40">
-			<Card.Content>
-				{#if providerRows.length === 0}
-					<p class="py-6 text-center text-sm text-muted-foreground">
-						No usage, {rangeLabel}.
-					</p>
-				{:else}
-					<!-- Phones: one stacked item per provider instead of a sideways-scrolling table. -->
-					<ul class="flex flex-col divide-y divide-border/60 md:hidden">
-						{#each providerRows as row (row.key)}
-							<li>
-								<a href={row.href} class="flex flex-col gap-1 py-3">
-									<span class="flex items-center gap-2">
-										<span class="size-2 shrink-0 rounded-full" style:background-color={row.color}
-										></span>
-										<span class="min-w-0 flex-1 truncate font-medium">{row.name}</span>
-										<ProviderBillingBadge billing={row.billing} />
-									</span>
-									<span class="flex items-baseline gap-2 pl-4 text-xs text-muted-foreground">
-										<span class="min-w-0 flex-1 truncate tabular-nums">
-											{formatCount(row.tokens)} tokens · {formatCount(row.count)}
-											{row.countLabel}{row.billing === 'payg' && row.pricedRequests === 0
-												? ' · no cost reported'
-												: ''}
+	<!-- One table for both sources; billed and API value stay in separate columns.
+	     Nothing to break down without usage; the cards above already say so. -->
+	{#if providerRows.length > 0}
+		<section class="flex flex-col gap-3" aria-labelledby="by-provider-heading">
+			<div class="flex flex-col gap-0.5">
+				<h2 id="by-provider-heading" class="text-base font-semibold">By provider</h2>
+				<p class="text-sm text-muted-foreground">
+					"Billed" is what you paid; "API value" is what your subscriptions covered. Select a
+					provider for details.
+				</p>
+			</div>
+			<Card.Root class="rounded-2xl border-border/40">
+				<Card.Content>
+					{#if providerRows.length === 0}
+						<p class="py-6 text-center text-sm text-muted-foreground">
+							No usage, {rangeLabel}.
+						</p>
+					{:else}
+						<!-- Phones: one stacked item per provider instead of a sideways-scrolling table. -->
+						<ul class="flex flex-col divide-y divide-border/60 md:hidden">
+							{#each providerRows as row (row.key)}
+								<li>
+									<a href={row.href} class="flex flex-col gap-1 py-3">
+										<span class="flex items-center gap-2">
+											<span class="size-2 shrink-0 rounded-full" style:background-color={row.color}
+											></span>
+											<span class="min-w-0 flex-1 truncate font-medium">{row.name}</span>
+											<ProviderBillingBadge billing={row.billing} />
 										</span>
-										{#if row.billing === 'payg'}
-											{#if row.pricedRequests > 0}
-												<span class="text-sm font-medium text-foreground tabular-nums">
-													{formatBilled(row.costUsd, { pricedRequests: row.pricedRequests })}
-												</span>
-											{/if}
-										{:else}
-											<span class="text-sm tabular-nums">
-												{formatApiValue(row.costUsd, !row.priced)}
+										<span class="flex items-baseline gap-2 pl-4 text-xs text-muted-foreground">
+											<span class="min-w-0 flex-1 truncate tabular-nums">
+												{formatCount(row.tokens)} tokens · {formatCount(row.count)}
+												{row.countLabel}{row.billing === 'payg' && row.pricedRequests === 0
+													? ' · no cost reported'
+													: ''}
 											</span>
-										{/if}
-									</span>
-								</a>
-							</li>
-						{/each}
-					</ul>
-					<div class="hidden md:block">
-						<Table.Root>
-							<Table.Header>
-								<Table.Row>
-									<Table.Head>Provider</Table.Head>
-									<Table.Head>Billing</Table.Head>
-									<Table.Head class="text-right">Tokens</Table.Head>
-									<Table.Head class="text-right">Volume</Table.Head>
-									<Table.Head class="text-right">Billed</Table.Head>
-									<Table.Head class="text-right">API value</Table.Head>
-								</Table.Row>
-							</Table.Header>
-							<Table.Body>
-								{#each providerRows as row (row.key)}
-									<Table.Row>
-										<Table.Cell>
-											<a
-												href={row.href}
-												class="group inline-flex max-w-56 items-center gap-2 font-medium underline-offset-4 hover:underline"
-											>
-												<span
-													class="size-2 shrink-0 rounded-full"
-													style:background-color={row.color}
-												></span>
-												<span class="truncate" title={row.name}>{row.name}</span>
-												<ChevronRightIcon
-													class="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground"
-													aria-hidden="true"
-												/>
-											</a>
-										</Table.Cell>
-										<Table.Cell><ProviderBillingBadge billing={row.billing} /></Table.Cell>
-										<Table.Cell class="text-right tabular-nums" title={row.tokens.toLocaleString()}>
-											{formatCount(row.tokens)}
-										</Table.Cell>
-										<Table.Cell class="text-right whitespace-nowrap tabular-nums">
-											{formatCount(row.count)}
-											<span class="text-muted-foreground">{row.countLabel}</span>
-										</Table.Cell>
-										<Table.Cell class="text-right whitespace-nowrap tabular-nums">
 											{#if row.billing === 'payg'}
-												<span
-													class="font-medium"
-													title={row.pricedRequests === 0 ? NO_COST_REPORTED : undefined}
-												>
-													{formatBilled(row.costUsd, { pricedRequests: row.pricedRequests })}
-												</span>
+												{#if row.pricedRequests > 0}
+													<span class="text-sm font-medium text-foreground tabular-nums">
+														{formatBilled(row.costUsd, { pricedRequests: row.pricedRequests })}
+													</span>
+												{/if}
 											{:else}
-												<!-- "—" is reserved for "no cost reported"; subscriptions are prepaid. -->
-												<span
-													class="text-muted-foreground"
-													title="Included in your plan — not billed per token"
-												>
-													Included
-												</span>
-											{/if}
-										</Table.Cell>
-										<Table.Cell class="text-right whitespace-nowrap tabular-nums">
-											{#if row.billing === 'subscription'}
-												<span
-													class="text-muted-foreground"
-													title="API-equivalent value — covered by your plan, not billed"
-												>
+												<span class="text-sm tabular-nums">
 													{formatApiValue(row.costUsd, !row.priced)}
 												</span>
-											{:else}
-												<span class="sr-only">Not applicable</span>
 											{/if}
-										</Table.Cell>
+										</span>
+									</a>
+								</li>
+							{/each}
+						</ul>
+						<div class="hidden md:block">
+							<Table.Root>
+								<Table.Header>
+									<Table.Row>
+										<Table.Head>Provider</Table.Head>
+										<Table.Head>Billing</Table.Head>
+										<Table.Head class="text-right">Tokens</Table.Head>
+										<Table.Head class="text-right">Volume</Table.Head>
+										<Table.Head class="text-right">Billed</Table.Head>
+										<Table.Head class="text-right">API value</Table.Head>
 									</Table.Row>
-								{/each}
-							</Table.Body>
-						</Table.Root>
-					</div>
-					{#if subs.anyUnpriced}
-						<p class="mt-3 text-xs text-muted-foreground">
-							+ Some subscription records had no known price, so the value is a lower bound.
-						</p>
+								</Table.Header>
+								<Table.Body>
+									{#each providerRows as row (row.key)}
+										<Table.Row>
+											<Table.Cell>
+												<a
+													href={row.href}
+													class="group inline-flex max-w-56 items-center gap-2 font-medium underline-offset-4 hover:underline"
+												>
+													<span
+														class="size-2 shrink-0 rounded-full"
+														style:background-color={row.color}
+													></span>
+													<span class="truncate" title={row.name}>{row.name}</span>
+													<ChevronRightIcon
+														class="size-3.5 shrink-0 text-muted-foreground group-hover:text-foreground"
+														aria-hidden="true"
+													/>
+												</a>
+											</Table.Cell>
+											<Table.Cell><ProviderBillingBadge billing={row.billing} /></Table.Cell>
+											<Table.Cell
+												class="text-right tabular-nums"
+												title={row.tokens.toLocaleString()}
+											>
+												{formatCount(row.tokens)}
+											</Table.Cell>
+											<Table.Cell class="text-right whitespace-nowrap tabular-nums">
+												{formatCount(row.count)}
+												<span class="text-muted-foreground">{row.countLabel}</span>
+											</Table.Cell>
+											<Table.Cell class="text-right whitespace-nowrap tabular-nums">
+												{#if row.billing === 'payg'}
+													<span
+														class="font-medium"
+														title={row.pricedRequests === 0 ? NO_COST_REPORTED : undefined}
+													>
+														{formatBilled(row.costUsd, { pricedRequests: row.pricedRequests })}
+													</span>
+												{:else}
+													<!-- "—" is reserved for "no cost reported"; subscriptions are prepaid. -->
+													<span
+														class="text-muted-foreground"
+														title="Included in your plan — not billed per token"
+													>
+														Included
+													</span>
+												{/if}
+											</Table.Cell>
+											<Table.Cell class="text-right whitespace-nowrap tabular-nums">
+												{#if row.billing === 'subscription'}
+													<span
+														class="text-muted-foreground"
+														title="API-equivalent value — covered by your plan, not billed"
+													>
+														{formatApiValue(row.costUsd, !row.priced)}
+													</span>
+												{:else}
+													<span class="sr-only">Not applicable</span>
+												{/if}
+											</Table.Cell>
+										</Table.Row>
+									{/each}
+								</Table.Body>
+							</Table.Root>
+						</div>
+						{#if subs.anyUnpriced}
+							<p class="mt-3 text-xs text-muted-foreground">
+								+ Some subscription records had no known price, so the value is a lower bound.
+							</p>
+						{/if}
 					{/if}
-				{/if}
-			</Card.Content>
-		</Card.Root>
-	</section>
+				</Card.Content>
+			</Card.Root>
+		</section>
+	{/if}
 </div>

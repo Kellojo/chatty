@@ -325,10 +325,10 @@
 
 				{#if data.canEdit}
 					<div
-						class="sticky bottom-0 z-10 flex justify-end gap-2 border-t bg-background/95 py-3 backdrop-blur"
+						class="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 border-t bg-background/95 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur max-sm:-mx-4 max-sm:px-4 max-sm:[&>*:not(span)]:flex-1"
 					>
 						{#if missing ?? dirty}
-							<span class="mr-auto self-center text-xs text-muted-foreground"
+							<span class="self-center text-xs text-muted-foreground max-sm:w-full sm:mr-auto"
 								>{missing ?? 'Unsaved changes'}</span
 							>
 						{/if}

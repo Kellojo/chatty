@@ -9,8 +9,13 @@
 	import AgentRunStatus from '$lib/components/app/AgentRunStatus.svelte';
 	import EmptyState from '$lib/components/app/EmptyState.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
-	import { formatRunDuration, formatRunError, RUN_TRIGGER_LABELS } from '$lib/agent-labels.js';
-	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
+	import {
+		formatRunDuration,
+		formatRunError,
+		isStoppedRun,
+		RUN_TRIGGER_LABELS
+	} from '$lib/agent-labels.js';
+	import { formatDateTime, formatTime, formatTimeAgo } from '$lib/datetime.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
 	import type { AgentRun } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -53,6 +58,22 @@
 			stopBusy = null;
 		}
 	}
+
+	// Runs are grouped under day headings, so each row only needs its time.
+	function dayLabel(timestamp: number): string {
+		const day = new Date(timestamp);
+		const today = new Date();
+		const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+		const diff = Math.round((startOf(today) - startOf(day)) / 86_400_000);
+		if (diff === 0) return 'Today';
+		if (diff === 1) return 'Yesterday';
+		return day.toLocaleDateString(undefined, {
+			weekday: 'short',
+			month: 'short',
+			day: 'numeric',
+			...(day.getFullYear() === today.getFullYear() ? {} : { year: 'numeric' })
+		});
+	}
 </script>
 
 <svelte:head><title>Runs · {data.agent.name} · Chatty</title></svelte:head>
@@ -75,20 +96,31 @@
 					/>
 				{:else}
 					<ul class="divide-y divide-border/60" aria-label="Runs">
-						{#each data.runs as run (run.id)}
+						{#each data.runs as run, i (run.id)}
 							{@const took = formatRunDuration(run)}
+							{@const day = dayLabel(run.startedAt)}
+							{#if i === 0 || day !== dayLabel(data.runs[i - 1].startedAt)}
+								<li
+									class="bg-muted/40 px-(--card-spacing) py-1.5 text-xs font-medium text-muted-foreground"
+									aria-hidden="true"
+								>
+									{day}
+								</li>
+							{/if}
 							{@const error = formatRunError(run.error)}
 							<li
-								class="relative flex items-center gap-3 px-6 py-3 hover:bg-accent/40 has-[a:focus-visible]:bg-accent/40 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-inset"
+								class="relative flex items-center gap-3 px-(--card-spacing) py-3 hover:bg-accent/40 has-[a:focus-visible]:bg-accent/40 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-inset"
 							>
-								<AgentRunStatus status={run.status} />
+								<AgentRunStatus status={run.status} stopped={isStoppedRun(run)} />
 								<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 									<a
 										href={resolve(`/agents/${data.agent.id}/runs/${run.id}`)}
 										class="text-sm font-medium outline-none after:absolute after:inset-0 after:content-['']"
-										title={formatTimeAgo(run.startedAt)}
+										title="{formatDateTime(run.startedAt, data.timeFormat)} · {formatTimeAgo(
+											run.startedAt
+										)}"
 									>
-										{formatDateTime(run.startedAt, data.timeFormat)}
+										<span class="sr-only">{day}, </span>{formatTime(run.startedAt, data.timeFormat)}
 									</a>
 									<p class="truncate text-xs text-muted-foreground">
 										{RUN_TRIGGER_LABELS[run.trigger] ?? run.trigger}
@@ -96,7 +128,14 @@
 										{#if data.showUser}· by {data.users[run.userId] ?? run.userId}{/if}
 									</p>
 									{#if error}
-										<p class="line-clamp-1 text-xs text-muted-foreground" title={error}>{error}</p>
+										<p
+											class="line-clamp-2 text-xs sm:line-clamp-1 {isStoppedRun(run)
+												? 'text-muted-foreground'
+												: 'text-destructive/90'}"
+											title={error}
+										>
+											{error}
+										</p>
 									{/if}
 								</div>
 								{#if run.status === 'running'}

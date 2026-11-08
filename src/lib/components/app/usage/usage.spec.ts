@@ -51,6 +51,15 @@ describe('modelColors', () => {
 		expect(modelColors(['z', 'x'], all)).toEqual(modelColors(['x', 'z'], [...all].reverse()));
 	});
 
+	it('never draws two visible series in one color, even with more models than colors', () => {
+		const all = Array.from({ length: 30 }, (_, i) => `vendor/model-${i}`);
+		for (let start = 0; start < all.length - 5; start++) {
+			const visible = all.slice(start, start + 5);
+			const colors = modelColors([...visible, 'Other'], all);
+			expect(new Set(visible.map((m) => colors[m])).size).toBe(5);
+		}
+	});
+
 	it('keeps colors when the visible set is narrowed by a filter', () => {
 		const all = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7'];
 		const everything = modelColors(all, all);

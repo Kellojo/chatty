@@ -263,7 +263,10 @@
 		>.
 	{/snippet}
 	{#snippet actions()}
-		<Button onclick={() => openForm(null)}><PlusIcon class="size-4" />Connect environment</Button>
+		<!-- The empty state below has its own button; one is enough. -->
+		{#if data.environments.length > 0}
+			<Button onclick={() => openForm(null)}><PlusIcon class="size-4" />Connect environment</Button>
+		{/if}
 	{/snippet}
 </SettingsHeader>
 

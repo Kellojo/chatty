@@ -351,7 +351,10 @@
 				/>
 				<Input
 					aria-label="Search requests"
-					placeholder="Search model, endpoint, provider, error…"
+					type="search"
+					enterkeyhint="search"
+					placeholder="Search model, provider…"
+					title="Search model, endpoint, provider, error…"
 					class="pl-9"
 					bind:value={searchValue}
 					onkeydown={(e) => {
@@ -617,16 +620,14 @@
 		<Card.Header class="flex flex-row items-center justify-between pb-3">
 			<div class="flex flex-col gap-1">
 				<Card.Title class="text-sm font-medium">Request log</Card.Title>
-				<Card.Description>
-					{#if data.totalResults > 0}
+				{#if data.totalResults > 0}
+					<Card.Description>
 						Showing {(data.page - 1) * data.pageSize + 1}&ndash;{Math.min(
 							data.page * data.pageSize,
 							data.totalResults
 						)} of {data.totalResults.toLocaleString()} request{data.totalResults !== 1 ? 's' : ''}
-					{:else}
-						No requests found
-					{/if}
-				</Card.Description>
+					</Card.Description>
+				{/if}
 			</div>
 		</Card.Header>
 		<Card.Content>
@@ -642,13 +643,18 @@
 								>
 									{request.requestedModel}
 								</span>
+								<!-- Phones: a completed request is just a dot, so failures stand out. -->
 								<span
 									class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {statusTone(
 										request.status
-									)}"
+									)} {request.status === 'complete'
+										? 'max-sm:border-transparent max-sm:bg-transparent max-sm:px-0'
+										: ''}"
 								>
 									<span class="size-1.5 rounded-full {statusDot(request.status)}"></span>
-									{request.status}
+									<span class={request.status === 'complete' ? 'max-sm:sr-only' : ''}
+										>{request.status}</span
+									>
 								</span>
 								<span
 									class="shrink-0 text-xs text-muted-foreground"
@@ -657,23 +663,30 @@
 									{formatTimeAgo(request.startedAt)}
 								</span>
 							</span>
-							<span class="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
-								<!-- Stats never truncate; the user name gives way first. -->
+							<span
+								class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground tabular-nums"
+							>
+								<!-- Stats never truncate; the user name wraps onto its own line when it doesn't fit. -->
 								<span class="shrink-0">
-									{formatTokens(request.inputTokens, request.outputTokens)} tokens ·
+									{#if request.inputTokens === null && request.outputTokens === null}No tokens{:else}{request.inputTokens ===
+										null
+											? '—'
+											: formatCount(request.inputTokens)} in · {request.outputTokens === null
+											? '—'
+											: formatCount(request.outputTokens)} out{/if} ·
 									{formatLatency(request.latencyMs)} ·
 									<span class="capitalize">{request.source}</span>
 								</span>
-								{#if data.isAdmin}
-									<span class="min-w-0 truncate"
-										>· {data.users[request.userId] ?? request.userId}</span
-									>
-								{/if}
 								<!-- No cost reported: left to the detail page rather than a bare "—". -->
 								{#if request.costUsd !== null}
 									<span class="ml-auto shrink-0 text-sm text-foreground">
 										{formatBilled(request.costUsd, { precise: true })}
 									</span>
+								{/if}
+								{#if data.isAdmin}
+									<span class="max-w-full min-w-0 basis-full truncate"
+										>by {data.users[request.userId] ?? request.userId}</span
+									>
 								{/if}
 							</span>
 						</a>

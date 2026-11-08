@@ -32,28 +32,39 @@ import { getConversation, touchConversation } from '../db/repo/conversations.js'
 import { createMessage, getMessage, updateMessage } from '../db/repo/messages.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
-import { connectT3, t3HttpGet, T3ClientError, type T3Connection, type T3Stream } from './client.js';
+import { t3HttpGet, T3ClientError, type T3Connection, type T3Stream } from './client.js';
 import { parseDiffStat } from './diff.js';
 import {
 	activeRun,
 	applyStreamItem,
+	changedRuns,
+	copyThreadRecords,
 	emptyThreadState,
 	hasRunningSubagent,
 	isAgentNotification,
 	isRunActive,
 	isRunFinished,
+	itemsOfType,
+	runItems,
 	runItemsEvicted,
 	MAX_THREAD_RECORDS,
 	messageText,
 	renderRun,
 	replyMessageId,
 	runFailureText,
+	runForUserMessage,
 	sortedRuns,
 	streamItemRun,
 	summarizeTask,
 	type RenderedEntry,
 	type ThreadState
 } from './projection.js';
+import {
+	acquireT3Connection,
+	closeAllT3Connections,
+	closeT3Connections,
+	type T3Lease
+} from './pool.js';
 import { queueThreadStatePush, reconcileThreadState, remoteThreadState } from './thread-state.js';
 
 const log = createLogger('t3-follower');
@@ -74,6 +85,8 @@ export const RUN_GONE_ERROR = 'The coding task’s run is no longer available.';
 /** Spacing and number of retries for omitted command output that failed to load. */
 const OUTPUT_RETRY_MS = 30_000;
 const MAX_OUTPUT_ATTEMPTS = 3;
+/** Omitted outputs fetched at once; the rest wait their turn. */
+const MAX_OUTPUT_FETCHES = 4;
 /** How long a subscription may stay silent before the attempt counts as failed. */
 export const SNAPSHOT_TIMEOUT_MS = 30_000;
 export const GAVE_UP_ERROR =
@@ -114,9 +127,17 @@ const followers = new Map<string, CodingFollower>();
 
 export class CodingFollower {
 	private state: ThreadState = emptyThreadState();
-	private conn: T3Connection | null = null;
-	private connecting: Promise<T3Connection> | null = null;
+	/** Share of the environment's socket (see ./pool.ts); taken on first use. */
+	private lease: T3Lease | null = null;
+	/** The socket whose close this follower listens for. */
+	private watchedConn: T3Connection | null = null;
+	private unwatchConn: (() => void) | null = null;
 	private stream: T3Stream | null = null;
+	/**
+	 * A resumed subscription (`afterSequence`) that never answered: subscribe
+	 * for a full snapshot from then on.
+	 */
+	private resumeUnsupported = false;
 	private stopped = false;
 	private reconnectDelay = MIN_RECONNECT_MS;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -130,7 +151,10 @@ export class CodingFollower {
 	private live: LiveTurn | null = null;
 	private readonly persisted = new Map<string, { json: string; at: number; status: string }>();
 	private readonly commandOutputs = new Map<string, string>();
+	/** Omitted outputs queued or being fetched. */
 	private readonly fetchingOutputs = new Set<string>();
+	private readonly outputQueue: { id: string; runId: string }[] = [];
+	private activeOutputFetches = 0;
 	/** Omitted outputs whose fetch failed: when last tried, and how often. */
 	private readonly failedOutputs = new Map<string, { at: number; attempts: number }>();
 	/**
@@ -146,6 +170,8 @@ export class CodingFollower {
 	private diffKey: string | null = null;
 	private diffTimer: ReturnType<typeof setTimeout> | null = null;
 	private diffInFlight = false;
+	/** A refresh was asked for while one was in flight: run once more after it. */
+	private diffRerun = false;
 	private diffWarned = false;
 	/** Project checkout path, for tasks without a worktree; undefined = not looked up yet. */
 	private projectRoot: string | null | undefined = undefined;
@@ -168,30 +194,38 @@ export class CodingFollower {
 
 	// ── connection ──────────────────────────────────────────────────────
 
-	/** Opens (or reuses) the socket. Commands and the subscription share it. */
-	private connection(): Promise<T3Connection> {
+	/**
+	 * The environment's shared socket (opened if needed). Commands and the
+	 * subscription use it, as do the environment's other followers.
+	 */
+	private async connection(): Promise<T3Connection> {
 		// A stopped follower must not reopen a socket with credentials that may
 		// have just been removed or replaced.
-		if (this.stopped) return Promise.reject(notFollowedError());
-		if (this.conn && !this.conn.closed) return Promise.resolve(this.conn);
-		this.connecting ??= connectT3(this.env.base_url, decryptSecret(this.env.token_enc))
-			.then((conn) => {
-				if (this.stopped) {
-					conn.close();
-					throw notFollowedError();
-				}
-				this.conn = conn;
-				conn.onClose(() => {
-					if (this.conn === conn) this.conn = null;
-					this.stream = null;
-					this.scheduleReconnect();
-				});
-				return conn;
-			})
-			.finally(() => {
-				this.connecting = null;
+		if (this.stopped) throw notFollowedError();
+		this.lease ??= acquireT3Connection(this.env);
+		const conn = await this.lease.connection();
+		if (this.stopped) throw notFollowedError();
+		if (this.watchedConn !== conn) {
+			this.unwatchConn?.();
+			this.watchedConn = conn;
+			this.unwatchConn = conn.onClose(() => {
+				if (this.watchedConn !== conn) return;
+				this.watchedConn = null;
+				this.unwatchConn = null;
+				this.stream = null;
+				this.scheduleReconnect();
 			});
-		return this.connecting;
+		}
+		return conn;
+	}
+
+	/** The thread arrived (snapshot), or a resumed subscription answered. */
+	private onThreadConfirmed(): void {
+		this.hasSnapshot = true;
+		this.attemptGotSnapshot = true;
+		this.failedAttempts = 0;
+		this.reconnectDelay = MIN_RECONNECT_MS;
+		this.clearSnapshotTimer();
 	}
 
 	/** Starts following the thread (idempotent). */
@@ -216,20 +250,35 @@ export class CodingFollower {
 		try {
 			const conn = await this.connection();
 			if (this.stream || this.stopped) return;
+			// Reconnecting with the thread already in memory: ask only for what
+			// happened since. T3 replays the events after `afterSequence` (or sends
+			// a snapshot when it can't), then a `synchronized` marker.
+			const resumeFrom =
+				this.hasSnapshot && !this.resumeUnsupported ? this.state.lastSequence : null;
+			const resumed = resumeFrom !== null;
 			const stream = conn.stream(
 				'orchestration.subscribeThread',
-				{ threadId: this.threadId },
+				resumed
+					? { threadId: this.threadId, afterSequence: resumeFrom, requestCompletionMarker: true }
+					: { threadId: this.threadId },
 				{
 					onValue: (value) => {
+						const kind = (value as Rec | null)?.kind;
+						// Anything arriving on a resumed subscription shows it works.
+						if (resumed && !this.attemptGotSnapshot) this.onThreadConfirmed();
+						if (kind === 'synchronized') {
+							if (this.hasSnapshot) this.scheduleRender();
+							return;
+						}
+						// A snapshot replaces everything: only runs whose records differ
+						// from the ones already rendered need rendering again.
+						const before =
+							kind === 'snapshot' && this.hasSnapshot ? copyThreadRecords(this.state) : null;
 						if (applyStreamItem(this.state, value)) {
-							this.markDirty(streamItemRun(value));
-							if ((value as Rec)?.kind === 'snapshot') {
-								this.hasSnapshot = true;
-								this.attemptGotSnapshot = true;
-								this.failedAttempts = 0;
-								this.reconnectDelay = MIN_RECONNECT_MS;
-								this.clearSnapshotTimer();
-							}
+							this.markDirty(
+								before ? changedRuns(before, this.state) : streamItemRun(value, this.state)
+							);
+							if (kind === 'snapshot') this.onThreadConfirmed();
 							this.scheduleRender();
 						}
 					},
@@ -253,6 +302,7 @@ export class CodingFollower {
 				if (this.attemptGotSnapshot || this.stream !== stream) return;
 				stream.cancel();
 				this.stream = null;
+				if (resumed) this.resumeUnsupported = true;
 				this.recordError(
 					new T3ClientError('The coding environment did not send the task', 'remote')
 				);
@@ -338,8 +388,11 @@ export class CodingFollower {
 		if (this.diffTimer) clearTimeout(this.diffTimer);
 		this.stream?.cancel();
 		this.stream = null;
-		this.conn?.close();
-		this.conn = null;
+		this.unwatchConn?.();
+		this.unwatchConn = null;
+		this.watchedConn = null;
+		this.lease?.release();
+		this.lease = null;
 		if (followers.get(this.conversationId) === this) followers.delete(this.conversationId);
 	}
 
@@ -348,7 +401,13 @@ export class CodingFollower {
 	}
 
 	updateEnvironment(env: CodingEnvironmentRow): void {
+		const moved = env.base_url !== this.env.base_url || env.token_enc !== this.env.token_enc;
 		this.env = env;
+		// The next call takes a share of the socket with the current credentials.
+		if (moved) {
+			this.lease?.release();
+			this.lease = null;
+		}
 	}
 
 	// ── commands ────────────────────────────────────────────────────────
@@ -365,7 +424,7 @@ export class CodingFollower {
 		modelSelection: { instanceId: string; model: string };
 		runtimeMode: string;
 		workspaceStrategy: Rec;
-		message: { id: string; text: string };
+		message: { id: string; text: string; attachments?: readonly unknown[] };
 	}): Promise<void> {
 		this.threadId = input.threadId;
 		await this.rpc('orchestration.launchThread', {
@@ -379,13 +438,25 @@ export class CodingFollower {
 			runtimeMode: input.runtimeMode,
 			interactionMode: 'default',
 			workspaceStrategy: input.workspaceStrategy,
-			initialMessage: { messageId: input.message.id, text: input.message.text, attachments: [] }
+			initialMessage: {
+				messageId: input.message.id,
+				text: input.message.text,
+				attachments: input.message.attachments ?? []
+			}
 		});
 	}
 
-	async sendMessage(message: { id: string; text: string }): Promise<void> {
+	async sendMessage(message: {
+		id: string;
+		text: string;
+		/** References from ./attachments.ts. */
+		attachments?: readonly unknown[];
+	}): Promise<void> {
 		if (!this.threadId) throw new T3ClientError('Task has no thread yet', 'protocol');
-		const busy = activeRun(this.state) !== null;
+		// What T3's own client sends by default: the server starts the message now,
+		// or delivers it once the active run ends. `queue_after_active` is T3's
+		// explicit "queue" choice, which parks the message in the thread's queue,
+		// and deciding it here from local (possibly stale) state misfires.
 		await this.rpc('orchestration.dispatchCommand', {
 			type: 'message.dispatch',
 			commandId: randomUUID(),
@@ -394,10 +465,9 @@ export class CodingFollower {
 			threadId: this.threadId,
 			messageId: message.id,
 			text: message.text,
-			attachments: [],
-			...(busy
-				? { dispatchMode: { type: 'queue_after_active' } }
-				: { deliveryIntent: 'auto', dispatchMode: { type: 'start_immediately' } })
+			attachments: message.attachments ?? [],
+			deliveryIntent: 'auto',
+			dispatchMode: { type: 'start_immediately' }
 		});
 	}
 
@@ -458,6 +528,11 @@ export class CodingFollower {
 
 	/** Ends a turn that never started remotely (e.g. launch failed). */
 	failTurn(): void {
+		this.dropUnboundTurn();
+	}
+
+	/** Ends the live turn if it has no run yet, removing its still-empty reply. */
+	private dropUnboundTurn(): void {
 		const live = this.live;
 		if (!live || live.runId) return;
 		this.endLive({ interrupted: false });
@@ -702,9 +777,10 @@ export class CodingFollower {
 
 	// ── rendering ───────────────────────────────────────────────────────
 
-	private markDirty(runId: string | 'all' | null): void {
-		if (runId === 'all') this.allRunsDirty = true;
-		else if (runId) this.dirtyRuns.add(runId);
+	private markDirty(runs: string | 'all' | null | ReadonlySet<string>): void {
+		if (runs === 'all') this.allRunsDirty = true;
+		else if (typeof runs === 'string') this.dirtyRuns.add(runs);
+		else if (runs) for (const runId of runs) this.dirtyRuns.add(runId);
 	}
 
 	private scheduleRender(): void {
@@ -744,8 +820,13 @@ export class CodingFollower {
 		// Bind a pre-opened turn to its run, or open one for a run started elsewhere.
 		const active = activeRun(this.state);
 		if (this.live && !this.live.runId && this.live.userMessageId) {
-			const run = runs.find((r) => r.userMessageId === this.live!.userMessageId);
-			if (run) this.live.runId = String(run.id);
+			const userMessageId = this.live.userMessageId;
+			const run = runForUserMessage(this.state, userMessageId);
+			if (run?.userMessageId === userMessageId) this.live.runId = String(run.id);
+			// Sent while another run was active, T3 added the message to that run
+			// rather than starting one for it: that run's reply answers it, and is
+			// followed below like any run this turn didn't start.
+			else if (run) this.dropUnboundTurn();
 		}
 		// Its run is gone (thread deleted remotely, dropped from a snapshot, evicted):
 		// nothing would ever finish this turn.
@@ -893,8 +974,8 @@ export class CodingFollower {
 	/** Re-reads the change size on the first render and whenever edits or runs finish. */
 	private scheduleDiffRefresh(runs: Rec[]): void {
 		let edits = 0;
-		for (const item of this.state.turnItems.values()) {
-			if (item.type === 'file_change' && item.status !== 'running') edits++;
+		for (const item of itemsOfType(this.state, 'file_change')) {
+			if (item.status !== 'running') edits++;
 		}
 		const finished = runs.filter(isRunFinished).length;
 		const key = `${finished}:${edits}:${String(this.state.thread?.worktreePath ?? '')}`;
@@ -909,7 +990,11 @@ export class CodingFollower {
 	}
 
 	private async refreshDiff(): Promise<void> {
-		if (this.diffInFlight || this.stopped) return;
+		if (this.stopped) return;
+		if (this.diffInFlight) {
+			this.diffRerun = true;
+			return;
+		}
 		this.diffInFlight = true;
 		try {
 			const worktree = this.state.thread?.worktreePath;
@@ -940,6 +1025,10 @@ export class CodingFollower {
 			}
 		} finally {
 			this.diffInFlight = false;
+			if (this.diffRerun) {
+				this.diffRerun = false;
+				void this.refreshDiff();
+			}
 		}
 	}
 
@@ -1044,13 +1133,14 @@ export class CodingFollower {
 			if (!this.state.turnItems.has(id)) this.failedOutputs.delete(id);
 		}
 		const now = Date.now();
-		const recent = new Set(runs.slice(-OUTPUT_FETCH_RUNS).map((r) => String(r.id)));
-		for (const item of this.state.turnItems.values()) {
+		const recent = runs
+			.slice(-OUTPUT_FETCH_RUNS)
+			.flatMap((run) => runItems(this.state, String(run.id)));
+		for (const item of recent) {
 			const id = String(item.id);
 			if (
 				(item.type !== 'command_execution' && item.type !== 'dynamic_tool') ||
 				item.outputOmitted !== true ||
-				!recent.has(String(item.runId)) ||
 				(item.status !== 'completed' && item.status !== 'failed') ||
 				this.commandOutputs.has(id) ||
 				this.fetchingOutputs.has(id)
@@ -1063,6 +1153,21 @@ export class CodingFollower {
 				continue;
 			}
 			this.fetchingOutputs.add(id);
+			this.outputQueue.push({ id, runId: String(item.runId) });
+		}
+		this.pumpOutputFetches();
+	}
+
+	/** Starts queued output fetches, at most {@link MAX_OUTPUT_FETCHES} at a time. */
+	private pumpOutputFetches(): void {
+		while (this.activeOutputFetches < MAX_OUTPUT_FETCHES && this.outputQueue.length > 0) {
+			const { id, runId } = this.outputQueue.shift()!;
+			// Evicted, or the follower stopped, while it waited.
+			if (this.stopped || !this.threadId || !this.state.turnItems.has(id)) {
+				this.fetchingOutputs.delete(id);
+				continue;
+			}
+			this.activeOutputFetches++;
 			this.rpc('orchestration.getTurnItem', { threadId: this.threadId, itemId: id })
 				.then((result) => {
 					const output = (result as { item?: { output?: unknown } } | null)?.item?.output;
@@ -1079,7 +1184,7 @@ export class CodingFollower {
 							: text
 					);
 					this.failedOutputs.delete(id);
-					this.markDirty(String(item.runId));
+					this.markDirty(runId);
 					this.scheduleRender();
 				})
 				.catch(() => {
@@ -1088,7 +1193,11 @@ export class CodingFollower {
 						attempts: (this.failedOutputs.get(id)?.attempts ?? 0) + 1
 					});
 				})
-				.finally(() => this.fetchingOutputs.delete(id));
+				.finally(() => {
+					this.fetchingOutputs.delete(id);
+					this.activeOutputFetches--;
+					this.pumpOutputFetches();
+				});
 		}
 	}
 
@@ -1149,8 +1258,13 @@ export function stopFollowersForEnvironment(environmentId: string, reason?: stri
 	for (const follower of [...followers.values()]) {
 		if (follower.environmentId === environmentId) follower.stop(reason);
 	}
+	// Whatever else still holds the old socket (shell watch, one-off calls)
+	// fails now rather than keep using the old URL or token.
+	closeT3Connections(environmentId);
 }
 
+/** Stops every follower and closes every T3 socket (shutdown). */
 export function stopAllCodingFollowers(): void {
 	for (const follower of [...followers.values()]) follower.stop();
+	closeAllT3Connections();
 }

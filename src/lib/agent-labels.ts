@@ -59,6 +59,11 @@ export function formatRunDuration(run: {
  * A run's stored error, or null when it carries no information (runs recorded
  * before errors were serialised properly stored "[object Object]").
  */
+/** A run the user stopped on purpose (stored as failed with this message by coding-runs.ts). */
+export function isStoppedRun(run: { status: string; error: string | null }): boolean {
+	return run.status === 'failed' && run.error === 'Stopped by user';
+}
+
 export function formatRunError(error: string | null): string | null {
 	if (!error || error === '[object Object]') return null;
 	return error;

@@ -73,7 +73,7 @@
 		<div class="w-full min-w-0 text-sm">
 			<button
 				type="button"
-				class="group/tool flex w-full items-center gap-2.5 rounded-md px-2 py-1 text-left text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+				class="group/tool flex w-full items-center gap-2.5 rounded-md px-2 py-1 text-left text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:py-2"
 				aria-expanded={open}
 				onclick={() => (openReasoning[item.index] = !open)}
 			>
@@ -126,7 +126,7 @@
 	<div class="-mx-2 w-[calc(100%+1rem)]">
 		<button
 			type="button"
-			class="group/head flex w-full min-w-0 items-start gap-2.5 rounded-md px-2 py-1 text-left text-sm text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+			class="group/head flex w-full min-w-0 items-start gap-2.5 rounded-md px-2 py-1 text-left text-sm text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:py-2"
 			aria-expanded={expanded}
 			aria-label={`${summary.title}, ${summary.steps} ${summary.steps === 1 ? 'step' : 'steps'}${summary.failed > 0 ? `, ${summary.failed} failed` : ''}`}
 			onclick={() => (userOpen = !expanded)}

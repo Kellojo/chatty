@@ -36,7 +36,7 @@
 	trailing controls sit above it. -->
 <li
 	class={cn(
-		'flex items-center gap-3 px-6',
+		'flex items-center gap-3 px-(--card-spacing)',
 		meta || children ? 'py-3' : 'py-2',
 		href &&
 			'relative hover:bg-accent/40 has-[a:focus-visible]:bg-accent/40 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-inset'
@@ -71,12 +71,16 @@
 			{@render badges?.()}
 		</div>
 		{#if meta}
-			<div class="min-w-0 truncate text-xs text-muted-foreground">{@render meta()}</div>
+			<div
+				class="min-w-0 text-xs wrap-break-word text-muted-foreground max-sm:line-clamp-2 sm:truncate"
+			>
+				{@render meta()}
+			</div>
 		{/if}
 		{@render children?.()}
 	</div>
 	{#if trailing}
-		<div class="relative z-10 flex shrink-0 items-center gap-1 sm:gap-2">
+		<div class="relative z-10 flex shrink-0 items-center gap-3 sm:gap-2">
 			{@render trailing()}
 		</div>
 	{/if}

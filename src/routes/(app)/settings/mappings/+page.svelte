@@ -223,15 +223,16 @@
 					>
 						{#each mapping.targets as target, i (i)}
 							{@const t = describeTarget(target)}
-							<li class="flex items-center gap-1.5">
+							<li class="flex max-w-full min-w-0 items-center gap-1.5">
 								{#if i > 0}<span class="text-muted-foreground" aria-hidden="true">→</span>{/if}
 								<span
-									class="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 whitespace-nowrap"
+									class="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 whitespace-nowrap"
 									title="{t.provider} / {target.modelId}"
 								>
 									{#if t.brand}<ProviderIcon brand={t.brand} class="size-3 shrink-0" />{/if}
-									{t.name}
-									<span class="text-muted-foreground">{t.provider}</span>
+									<span class="truncate">{t.name}</span>
+									<!-- Phones: the brand icon names the provider; the model id gets the room. -->
+									<span class="shrink-0 text-muted-foreground max-sm:hidden">{t.provider}</span>
 								</span>
 							</li>
 						{/each}

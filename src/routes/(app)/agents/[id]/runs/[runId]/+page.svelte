@@ -12,7 +12,12 @@
 	import MessageTimeline from '$lib/components/app/MessageTimeline.svelte';
 	import PageHeader from '$lib/components/app/PageHeader.svelte';
 	import ThinkingIndicator from '$lib/components/app/ThinkingIndicator.svelte';
-	import { formatRunDuration, formatRunError, RUN_TRIGGER_LABELS } from '$lib/agent-labels.js';
+	import {
+		formatRunDuration,
+		formatRunError,
+		isStoppedRun,
+		RUN_TRIGGER_LABELS
+	} from '$lib/agent-labels.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
@@ -115,7 +120,7 @@
 				back={{ href: resolve(`/agents/${data.agent.id}/runs`), label: data.agent.name }}
 			>
 				{#snippet badges()}
-					<AgentRunStatus status={run.status} label />
+					<AgentRunStatus status={run.status} stopped={isStoppedRun(run)} label />
 				{/snippet}
 				{#snippet description()}
 					<span title={formatDateTime(run.startedAt, data.timeFormat)}
@@ -144,7 +149,9 @@
 					follow-ups happen in the task.
 				</p>
 			{/if}
-			{#if run.error}
+			{#if run.error && isStoppedRun(run)}
+				<p class="text-sm text-muted-foreground">You stopped this run.</p>
+			{:else if run.error}
 				<div
 					class="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
 				>

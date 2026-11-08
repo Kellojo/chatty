@@ -10,7 +10,7 @@
 	import { decodeModelRef, encodeModelRef } from '$lib/model-ref.js';
 	import type { Agent, Conversation, ModelMapping, ModelsByProvider } from '$lib/types.js';
 	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
-	import { agentIsFree, hasPullRequestWork } from '$lib/coding-task-details.js';
+	import { canCreatePullRequest, type CodingRecoveryAction } from '$lib/coding-task-details.js';
 
 	let {
 		conversation,
@@ -21,9 +21,11 @@
 		coding = null,
 		codingEnvironmentName = null,
 		oncreatepr,
+		onrecover,
 		codingEnvironments = [],
 		codingAgents = [],
 		handoffDisabled = false,
+		messageCount,
 		onupdated
 	}: {
 		conversation: Conversation;
@@ -35,11 +37,15 @@
 		coding?: CodingConversation | null;
 		codingEnvironmentName?: string | null;
 		oncreatepr?: () => void;
+		/** Retry or continue a failed or interrupted coding task. */
+		onrecover?: (action: CodingRecoveryAction) => void;
 		/** Where a chat can be handed off to (empty inside coding tasks). */
 		codingEnvironments?: CodingEnvironment[];
 		codingAgents?: Agent[];
 		/** No messages yet, or a reply is still coming. */
 		handoffDisabled?: boolean;
+		/** Messages in the chat, so the handoff dialog keeps its draft while it's unchanged. */
+		messageCount?: number;
 		onupdated: (c: Conversation) => void;
 	} = $props();
 
@@ -51,8 +57,10 @@
 	let saving = $state(false);
 
 	const sidebar = getSidebarState();
-	const offsetForSidebar = $derived(
-		sidebar !== undefined && (sidebar.isMobile ? !sidebar.mobileOpen : !sidebar.open)
+	// Room for the floating sidebar button. Breakpoint classes rather than a JS
+	// media query, which renders as mobile on the server and jumps on desktop.
+	const sidebarOffset = $derived(
+		sidebar === undefined ? '' : sidebar.open ? 'max-md:pl-14' : 'max-lg:pl-14'
 	);
 
 	const defaultModelValue = $derived(defaultModel ? encodeModelRef(defaultModel) : '');
@@ -98,14 +106,10 @@
 </script>
 
 <!-- Same centred column as the messages, so the header reads as part of the chat. -->
-<header class="shrink-0">
-	<div
-		class="mx-auto flex h-12 w-full max-w-3xl items-center gap-2 px-4 {offsetForSidebar
-			? 'pl-14 lg:pl-4'
-			: ''}"
-	>
+<header class="shrink-0 pt-[env(safe-area-inset-top)]">
+	<div class="mx-auto flex h-12 w-full max-w-3xl items-center gap-2 px-4 {sidebarOffset}">
 		{#if coding}
-			<CodingTaskBar {coding} title={displayTitle} {oncreatepr} />
+			<CodingTaskBar {coding} title={displayTitle} {oncreatepr} {onrecover} />
 		{:else}
 			<!-- Main info first: what this chat is, then the controls. -->
 			<h1 class="min-w-0 truncate text-sm font-medium" title={displayTitle}>{displayTitle}</h1>
@@ -115,14 +119,14 @@
 				</span>
 			{/if}
 			<div class="flex-1"></div>
-			<!-- Quiet controls so the title leads; on phones the picker is just its provider icon. -->
+			<!-- Quiet controls so the title leads; on phones the picker shows just the model name. -->
 			<ModelPicker
 				{groups}
 				{mappings}
 				value={currentModelValue}
 				onselect={selectModel}
 				disabled={saving}
-				class="w-auto shrink-0 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground data-[size=default]:h-8 sm:max-w-56 max-sm:[&_.truncate]:sr-only"
+				class="w-auto shrink-0 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground data-[size=default]:h-8 max-w-32 sm:max-w-56 max-sm:[&_[data-model-icon]]:hidden max-sm:[&_[data-model-source]]:hidden"
 			/>
 			{#if canHandoff}
 				<Button
@@ -145,9 +149,7 @@
 			environmentName={codingEnvironmentName}
 			{onupdated}
 			onhandoff={canHandoff && !handoffDisabled ? () => (handoffOpen = true) : undefined}
-			oncreatepr={coding && oncreatepr && hasPullRequestWork(coding) && agentIsFree(coding)
-				? oncreatepr
-				: undefined}
+			oncreatepr={coding && oncreatepr && canCreatePullRequest(coding) ? oncreatepr : undefined}
 		/>
 	</div>
 </header>
@@ -158,5 +160,6 @@
 		conversationId={conversation.id}
 		{codingEnvironments}
 		{codingAgents}
+		{messageCount}
 	/>
 {/if}

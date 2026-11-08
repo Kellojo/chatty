@@ -115,7 +115,7 @@
 	};
 
 	const cavemanDescriptions: Record<CavemanLevel, string> = {
-		off: 'Disabled',
+		off: 'Responses come back exactly as the model writes them.',
 		lite: 'Tight professional prose, no filler (small savings)',
 		full: 'Classic caveman: drops articles, fragments (~65% fewer output tokens, estimated)',
 		ultra: 'Maximum English terseness (largest English savings, estimated)',
@@ -320,7 +320,9 @@
 		>
 	{/snippet}
 	<Tabs.Root value="curl" class="gap-3">
-		<Tabs.List class="flex-wrap">
+		<Tabs.List
+			class="max-w-full [scrollbar-width:none] justify-start overflow-x-auto max-sm:[&_svg]:hidden"
+		>
 			<Tabs.Trigger value="curl">
 				<SquareTerminalIcon class="size-4" aria-hidden="true" />curl
 			</Tabs.Trigger>
@@ -374,10 +376,14 @@
 		Needs an <code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key and a model
 		with the
 		<code class="rounded bg-muted px-1 py-0.5 text-xs">decisions</code> capability set in
-		<a
-			class="underline underline-offset-4 hover:text-foreground"
-			href={resolve('/settings/defaults')}>Defaults</a
-		>; until then the endpoint returns an error.
+		{#if data.user.role === 'admin'}
+			<a
+				class="underline underline-offset-4 hover:text-foreground"
+				href={resolve('/settings/defaults')}>Defaults</a
+			>; until then the endpoint returns an error.
+		{:else}
+			Defaults by an admin; until then the endpoint returns an error.
+		{/if}
 	{/snippet}
 	<CodeBlock code={decisionsCurlSnippet} label="curl" />
 </SettingsSection>

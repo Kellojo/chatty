@@ -125,7 +125,11 @@
 			class="relative -mx-4 flex [scrollbar-width:none] gap-1 overflow-x-auto overflow-y-hidden border-b [mask-image:linear-gradient(to_right,transparent,black_1rem,black_calc(100%-2.5rem),transparent)] pr-10 pl-4 md:hidden"
 			aria-label="Settings sections"
 		>
-			{#each visibleSections as section (section.href)}
+			{#each visibleSections as section, i (section.href)}
+				{#if i > 0 && section.group !== visibleSections[i - 1].group}
+					<!-- Group break (You / Models / Integrations), as in the desktop sidebar. -->
+					<span class="my-2.5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+				{/if}
 				<a
 					href={resolve(section.href)}
 					aria-current={isActive(section.href) ? 'page' : undefined}

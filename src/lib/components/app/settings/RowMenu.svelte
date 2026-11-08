@@ -27,7 +27,14 @@
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger>
 		{#snippet child({ props })}
-			<Button {...props} variant="ghost" size="icon-sm" title="More actions" aria-label={label}>
+			<Button
+				{...props}
+				variant="ghost"
+				size="icon-sm"
+				class="relative"
+				title="More actions"
+				aria-label={label}
+			>
 				<EllipsisIcon class="size-4" />
 			</Button>
 		{/snippet}

@@ -233,7 +233,9 @@
 		{/snippet}
 		{#snippet badges()}
 			{#if skill.version}
-				<span class="text-xs text-muted-foreground tabular-nums">v{skill.version}</span>
+				<span class="text-xs text-muted-foreground tabular-nums max-sm:hidden"
+					>v{skill.version}</span
+				>
 			{/if}
 			{#if shadowed}
 				<Badge variant="outline" title="Used instead of the shared skill “{shadowed.title}”">
@@ -242,11 +244,17 @@
 			{/if}
 		{/snippet}
 		{#snippet meta()}
-			<span class="font-mono">{skill.name}</span> ·
-			<span title={skill.source}>{skillSourceLabel(skill)}</span>
+			<!-- Phones: title and a one-line description; slug and source are on the skill page. -->
+			<span class="max-sm:hidden">
+				<span class="font-mono">{skill.name}</span> ·
+				<span title={skill.source}>{skillSourceLabel(skill)}</span>
+			</span>
 		{/snippet}
 		{#if skill.description}
-			<p class="line-clamp-2 text-xs text-pretty text-muted-foreground" title={skill.description}>
+			<p
+				class="line-clamp-2 text-xs text-pretty text-muted-foreground max-sm:line-clamp-1"
+				title={skill.description}
+			>
 				{skill.description}
 			</p>
 		{/if}

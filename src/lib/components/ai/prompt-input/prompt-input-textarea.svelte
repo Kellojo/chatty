@@ -31,9 +31,14 @@
 				: `min(${context.textareaRef.scrollHeight}px, ${context.maxHeight})`;
 	});
 
+	// Touch keyboards have no Shift+Enter, so there Enter inserts a newline and the
+	// send button submits (as in mobile messaging apps).
+	const touchOnly =
+		typeof matchMedia === 'function' && matchMedia('(hover: none) and (pointer: coarse)').matches;
+
 	function handleKeyDown(e: KeyboardEvent & { currentTarget: HTMLTextAreaElement }) {
 		// Enter while an IME is composing confirms the candidate; don't submit.
-		if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+		if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !touchOnly) {
 			e.preventDefault();
 			context.onSubmit?.();
 		}
@@ -56,5 +61,6 @@
 	)}
 	rows={1}
 	disabled={context.disabled}
+	data-composer=""
 	{...restProps}
 ></Textarea>

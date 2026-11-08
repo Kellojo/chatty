@@ -4,7 +4,11 @@
 	import { onMount, tick, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
-	import { ChatContainer, ChatContainerContent } from '$lib/components/ai/chat-container/index.js';
+	import {
+		ChatContainer,
+		ChatContainerContent,
+		type ChatContainerContext
+	} from '$lib/components/ai/chat-container/index.js';
 	import {
 		PromptInput,
 		PromptInputTextarea,
@@ -12,20 +16,37 @@
 	} from '$lib/components/ai/prompt-input/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import ListEndIcon from '@lucide/svelte/icons/list-end';
 	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import XIcon from '@lucide/svelte/icons/x';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import ChatTopbar from './ChatTopbar.svelte';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
-	import { createPullRequestPrompt } from '$lib/coding-task-details.js';
+	import {
+		canCreatePullRequest,
+		createPullRequestPrompt,
+		type CodingRecoveryAction
+	} from '$lib/coding-task-details.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
 	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
+	import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
+	import { drafts } from '$lib/state/drafts.js';
+	import { registerChatShortcuts, shortcutLabel } from '$lib/state/shortcuts.js';
+	import {
+		messageFiles,
+		messageText,
+		prependOlder,
+		reuseUnchanged,
+		withLatestPage
+	} from '$lib/chat-history.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
 	import { messageQueue, type QueuedMessage } from '$lib/state/message-queue.svelte.js';
 	import QueuedMessages from './QueuedMessages.svelte';
@@ -41,7 +62,8 @@
 		type Conversation,
 		type ModelMapping,
 		type ModelsByProvider,
-		type UIMessage
+		type UIMessage,
+		type UIMessageMetadata
 	} from '$lib/types.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
@@ -49,6 +71,7 @@
 	let {
 		conversation: initialConversation,
 		initialMessages,
+		hasOlderMessages = false,
 		groups,
 		mappings = [],
 		defaultModel,
@@ -61,7 +84,10 @@
 		codingAgents = []
 	}: {
 		conversation: Conversation;
+		/** The newest page of messages; earlier ones load on scroll. */
 		initialMessages: ChatMessage[];
+		/** Messages exist before `initialMessages`. */
+		hasOlderMessages?: boolean;
 		groups: ModelsByProvider[];
 		mappings?: ModelMapping[];
 		defaultModel?: { providerId: string; modelId: string } | null;
@@ -79,7 +105,8 @@
 	// Local edits apply immediately; reloaded page data (e.g. a task settled or
 	// renamed on T3) replaces them.
 	let conversation = $derived(initialConversation);
-	let input = $state('');
+	// The unsent text survives switching chats (this view remounts per chat).
+	let input = $state(drafts.get(untrack(() => initialConversation.id)));
 	const speech = sttModel ? createServerSpeechRecognition(sttModel) : createSpeechRecognition();
 	let selectedFiles = $state<File[]>([]);
 	let fileInput: HTMLInputElement | undefined = $state();
@@ -104,20 +131,21 @@
 				prepareSendMessagesRequest: ({ messages, trigger, messageId }) => {
 					if (trigger === 'regenerate-message' && messageId) {
 						// the SDK has already sliced the assistant message off; the last
-						// remaining message is the user message to regenerate from
+						// remaining message is the user message to regenerate from. The
+						// server keeps the old reply as another version of the new one.
 						const message = messages[messages.length - 1];
 						return {
-							body: { conversationId: conversation.id, message, truncateFrom: messageId }
+							body: { conversationId: conversation.id, message, branchFrom: messageId }
 						};
 					}
 					const message = messages[messages.length - 1];
-					const truncateFrom = pendingTruncateFrom;
-					pendingTruncateFrom = undefined;
+					const branchFrom = pendingBranchFrom;
+					pendingBranchFrom = undefined;
 					return {
 						body: {
 							conversationId: conversation.id,
 							message,
-							...(truncateFrom ? { truncateFrom } : {})
+							...(branchFrom ? { branchFrom } : {})
 						}
 					};
 				},
@@ -126,9 +154,33 @@
 				})
 			}),
 			onError: (error) => {
-				toast.error(error.message || 'Something went wrong');
+				// Another tab's newer message took over; this tab follows that reply.
+				if (isSuperseded(error)) return;
+				toast.error(errorText(error) || 'Something went wrong');
 			}
 		});
+	}
+
+	const SUPERSEDED_MESSAGE = 'Superseded by a newer message';
+
+	/**
+	 * The readable text of a chat request error. The transport throws the raw
+	 * response body, which for server errors is JSON: `{"message": "..."}`.
+	 */
+	function errorText(error: Error | undefined): string {
+		if (!error?.message) return '';
+		try {
+			const message = (JSON.parse(error.message) as { message?: unknown }).message;
+			if (typeof message === 'string') return message;
+		} catch {
+			// Not JSON: already readable text.
+		}
+		return error.message;
+	}
+
+	/** The server's 409 for a request a newer one for this conversation replaced. */
+	function isSuperseded(error: Error | undefined): boolean {
+		return errorText(error) === SUPERSEDED_MESSAGE;
 	}
 
 	function initChat(): Chat<UIMessage> {
@@ -213,18 +265,35 @@
 	});
 
 	let chat = $state(initChat());
-	let pendingTruncateFrom = $state<string | undefined>(undefined);
+	/** The message the next send is a new version of (an edit). */
+	let pendingBranchFrom = $state<string | undefined>(undefined);
+	// svelte-ignore state_referenced_locally
+	let hasOlder = $state(hasOlderMessages);
 
 	const reusedLocal = activeChats.has(untrack(() => conversation.id));
 	// svelte-ignore state_referenced_locally
 	let remoteGenerating = $state(initiallyGenerating && !reusedLocal);
 
-	let prevStatus = $state<string>(chat.status);
+	let prevStatus: string = chat.status;
 
 	// svelte-ignore state_referenced_locally
 	const messageTimes = new SvelteMap<string, number>(
 		initialMessages.map((m) => [m.id, m.createdAt])
 	);
+
+	function recordTimes(list: ChatMessage[]) {
+		for (const m of list) messageTimes.set(m.id, m.createdAt);
+	}
+
+	/** Shows the reloaded newest page of messages, keeping earlier pages already loaded. */
+	function showLatest() {
+		recordTimes(initialMessages);
+		const latest = withLatestPage(chat.messages, initialMessages.map(chatMessageToUIMessage));
+		if (!latest.keptOlder) hasOlder = hasOlderMessages;
+		// Unchanged messages keep their objects, so the timeline only re-renders
+		// what actually changed (background updates arrive often on long tasks).
+		chat.messages = reuseUnchanged(chat.messages, latest.messages);
+	}
 
 	const streaming = $derived(
 		chat.status === 'streaming' || chat.status === 'submitted' || remoteGenerating
@@ -250,13 +319,28 @@
 	});
 	const waitingSince = $derived(waiting ? (coding?.runStartedAt ?? waitStartedLocally) : null);
 	const hasContent = $derived(displayInput.trim().length > 0 || selectedFiles.length > 0);
+
+	let scroll = $state<ChatContainerContext>();
+	const showJumpToLatest = $derived(scroll !== undefined && !scroll.isAtBottom);
+
+	// The log is aria-busy while a reply streams, so screen readers don't read
+	// every token; announce once when it's done instead.
+	let replyAnnouncement = $state('');
+	let wasStreaming = false;
+	$effect(() => {
+		const now = streaming;
+		if (now) replyAnnouncement = '';
+		else if (wasStreaming && chat.status !== 'error') replyAnnouncement = 'Response complete';
+		wasStreaming = now;
+	});
 	let sending = $state(false);
 
 	async function markRead() {
 		await fetch(`/api/conversations/${conversation.id}/read`, { method: 'POST' }).catch(
 			() => undefined
 		);
-		await invalidateWhenIdle();
+		// Only the sidebar's unread markers change; the page itself is current.
+		await invalidateWhenIdle(CONVERSATIONS_KEY);
 	}
 
 	const localBusy = () => chat.status === 'streaming' || chat.status === 'submitted' || sending;
@@ -289,17 +373,20 @@
 		return onServerEvent((event) => {
 			if (event.type !== 'chat.stream.started' || event.conversationId !== id) return;
 			if (remoteGenerating || localBusy()) return;
-			void (async () => {
-				remoteGenerating = true;
-				// Pick up the user message that started the turn before attaching.
-				await invalidateWhenIdle();
-				await tick();
-				if (!remoteGenerating || localBusy() || conversation.id !== id) return;
-				chat.messages = initialMessages.map(chatMessageToUIMessage);
-				resumeRemoteStream();
-			})();
+			void followRemoteStream(id);
 		});
 	});
+
+	/** Attaches to a reply running server-side that this view didn't start. */
+	async function followRemoteStream(id: string) {
+		remoteGenerating = true;
+		// Pick up the user message that started the turn before attaching.
+		await invalidateWhenIdle();
+		await tick();
+		if (!remoteGenerating || localBusy() || conversation.id !== id) return;
+		showLatest();
+		resumeRemoteStream();
+	}
 
 	$effect(() => {
 		const pending = pendingMessage.consume(conversation.id);
@@ -328,7 +415,7 @@
 			await tick();
 			// A queued message may already be on its way; don't wipe it.
 			if (chat.status === 'streaming' || chat.status === 'submitted') return;
-			chat.messages = initialMessages.map(chatMessageToUIMessage);
+			showLatest();
 			await markRead();
 		};
 		const offEvent = onServerEvent((event) => {
@@ -362,7 +449,7 @@
 			await invalidateWhenIdle();
 			await tick();
 			if (streaming || conversation.id !== id) return;
-			chat.messages = initialMessages.map(chatMessageToUIMessage);
+			showLatest();
 		};
 		const off = onServerEvent((event) => {
 			if (event.type !== 'chat.messages.updated' || event.conversationId !== id) return;
@@ -401,14 +488,24 @@
 		await invalidateWhenIdle();
 		await tick();
 		if (conversation.id !== id || chat.status !== 'error') return;
-		chat.messages = initialMessages.map(chatMessageToUIMessage);
+		showLatest();
 	}
 
 	$effect(() => {
 		const current = chat.status;
 		if (prevStatus !== 'error' && current === 'error') {
-			messageQueue.pause(conversation.id);
-			void reloadAfterError(conversation.id);
+			const id = conversation.id;
+			const superseded = isSuperseded(chat.error);
+			untrack(() => {
+				// A newer message (likely from another tab) took over: follow its
+				// reply, which may have started before this request failed.
+				if (superseded) {
+					if (!remoteGenerating) void followRemoteStream(id);
+					return;
+				}
+				messageQueue.pause(id);
+				void reloadAfterError(id);
+			});
 		}
 		if (prevStatus !== 'ready' && current === 'ready') {
 			markRead();
@@ -432,6 +529,17 @@
 		speech.stop();
 		speech.reset();
 		const trimmed = text.trim();
+		if (editing) {
+			if (!trimmed && selectedFiles.length === 0 && editing.keptFiles.length === 0) return;
+			// An edit starts a new branch from the edited message, so it never waits in the queue.
+			const edit = { messageId: editing.messageId, keptFiles: editing.keptFiles };
+			if (await deliver(trimmed, selectedFiles, edit)) {
+				editing = null;
+				input = '';
+				clearFiles();
+			}
+			return;
+		}
 		if (!trimmed && selectedFiles.length === 0) return;
 		// Behind earlier queued messages unless the queue waits for the user.
 		if (streaming || sending || (queue.length > 0 && !queuePaused)) {
@@ -447,17 +555,50 @@
 		}
 	}
 
-	/** Interrupts any running reply and sends the message. Returns false on failure. */
-	async function deliver(text: string, files: File[]): Promise<boolean> {
+	/**
+	 * Interrupts any running reply and sends the message. With `edit`, the
+	 * message is a new version of that one: it and everything after it make way
+	 * for the new branch (the server keeps them as the older version), and the
+	 * edited message's attachments that were kept are sent along as they are.
+	 * Returns false on failure.
+	 */
+	async function deliver(
+		text: string,
+		files: File[],
+		edit?: { messageId: string; keptFiles: FilePart[] }
+	): Promise<boolean> {
 		if (sending) return false;
 		sending = true;
 		const { text: trimmed, skill } = parseSkillCommand(text);
 		try {
 			const body = skill ? { body: { skill } } : undefined;
-			if (files.length > 0) {
-				// Upload first: if this fails the running response is left untouched.
-				const fileParts = await uploadAttachments(conversation.id, files);
-				await interruptResponse();
+			// Upload first: if this fails the running response is left untouched.
+			const fileParts = files.length > 0 ? await uploadAttachments(conversation.id, files) : [];
+			await interruptResponse();
+			if (edit) {
+				const index = chat.messages.findIndex((m) => m.id === edit.messageId);
+				if (index === -1) throw new Error('The edited message is no longer in this chat');
+				const original = chat.messages[index];
+				chat.messages = chat.messages.slice(0, index);
+				pendingBranchFrom = edit.messageId;
+				const id = crypto.randomUUID();
+				const versions = (original.metadata as UIMessageMetadata | undefined)?.branch?.ids ?? [
+					original.id
+				];
+				const ids = [...versions, id];
+				chat.sendMessage(
+					{
+						id,
+						parts: [
+							...(trimmed ? [{ type: 'text' as const, text: trimmed }] : []),
+							...edit.keptFiles,
+							...fileParts
+						],
+						metadata: { branch: { ids, index: ids.length - 1, count: ids.length } }
+					},
+					body
+				);
+			} else if (fileParts.length > 0) {
 				chat.sendMessage(
 					{
 						parts: [...(trimmed ? [{ type: 'text' as const, text: trimmed }] : []), ...fileParts]
@@ -465,7 +606,6 @@
 					body
 				);
 			} else {
-				await interruptResponse();
 				chat.sendMessage({ text: trimmed }, body);
 			}
 			activeChats.set(conversation.id, chat);
@@ -530,13 +670,15 @@
 		await chat.stop();
 	}
 
-	/** Sends a predefined instruction to the coding agent without touching the draft. */
-	async function createPullRequest() {
-		if (!coding || sending) return;
+	/** Sends a predefined message to the coding agent without touching the draft. */
+	async function sendCodingFollowUp(message: { text: string } | { parts: UIMessage['parts'] }) {
+		// The task's status only changes once the agent picks the message up, so
+		// its button stays clickable meanwhile: a second click must not send again.
+		if (!coding || localBusy()) return;
 		sending = true;
 		try {
 			await interruptResponse();
-			chat.sendMessage({ text: createPullRequestPrompt(coding) });
+			chat.sendMessage(message);
 			activeChats.set(conversation.id, chat);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to send message');
@@ -545,18 +687,201 @@
 		}
 	}
 
+	function createPullRequest() {
+		if (coding && canCreatePullRequest(coding)) {
+			void sendCodingFollowUp({ text: createPullRequestPrompt(coding) });
+		}
+	}
+
+	function recoverCodingTask(action: CodingRecoveryAction) {
+		if (action.prompt) return void sendCodingFollowUp({ text: action.prompt });
+		// The thread never started: send the last request again, attachments included.
+		const last = chat.messages.findLast((m) => m.role === 'user');
+		if (last) void sendCodingFollowUp({ parts: last.parts });
+	}
+
 	function regenerate(messageId: string) {
 		chat.regenerate({ messageId });
 		activeChats.set(conversation.id, chat);
 	}
 
+	// ── editing ──────────────────────────────────────────────────────────────
+	// The edited message and its replies stay visible until the edit is sent;
+	// cancelling restores whatever was in the composer before.
+	type FilePart = ReturnType<typeof messageFiles>[number];
+	type Editing = {
+		messageId: string;
+		/** The edited message's attachments, sent again as they are unless removed. */
+		keptFiles: FilePart[];
+		before: { text: string; files: File[] };
+	};
+	let editing = $state.raw<Editing | null>(null);
+	// An edit can be sent with just the attachments it kept.
+	const canSend = $derived(hasContent || (editing?.keptFiles.length ?? 0) > 0);
+
 	function startEdit(messageId: string, text: string) {
-		const index = chat.messages.findIndex((m) => m.id === messageId);
-		if (index === -1) return;
-		chat.messages = chat.messages.slice(0, index);
-		pendingTruncateFrom = messageId;
+		const message = chat.messages.find((m) => m.id === messageId);
+		if (!message) return;
+		// The original message is kept as the older version, attachments and all,
+		// so the edit can reference the same uploads instead of re-uploading them.
+		editing = {
+			messageId,
+			keptFiles: messageFiles(message).map((part) => ({ ...part })),
+			before: editing?.before ?? { text: input, files: selectedFiles }
+		};
+		clearFiles();
 		input = text;
+		void tick().then(() => composerTextarea()?.focus());
 	}
+
+	function removeKeptFile(part: FilePart) {
+		if (!editing) return;
+		editing = { ...editing, keptFiles: editing.keptFiles.filter((p) => p !== part) };
+	}
+
+	// ── versions ─────────────────────────────────────────────────────────────
+	let switchingBranch = $state(false);
+
+	/** Shows another version of a message: the server's path through it replaces the list. */
+	async function switchBranch(messageId: string) {
+		if (streaming || sending || switchingBranch) return;
+		const id = conversation.id;
+		switchingBranch = true;
+		try {
+			const res = await fetch(`/api/conversations/${encodeURIComponent(id)}/branch`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ messageId })
+			});
+			if (!res.ok) throw new Error(errorText(new Error(await res.text())) || String(res.status));
+			const page = (await res.json()) as { messages: ChatMessage[]; hasOlder: boolean };
+			if (conversation.id !== id || streaming || sending) return;
+			if (editing) cancelEdit();
+			recordTimes(page.messages);
+			chat.messages = reuseUnchanged(chat.messages, page.messages.map(chatMessageToUIMessage));
+			hasOlder = page.hasOlder;
+			olderFailed = false;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : "Couldn't switch versions");
+		} finally {
+			switchingBranch = false;
+		}
+	}
+
+	function cancelEdit() {
+		const edit = editing;
+		if (!edit) return;
+		editing = null;
+		clearFiles();
+		input = edit.before.text;
+		if (edit.before.files.length > 0) addFiles(edit.before.files);
+	}
+
+	let region = $state<HTMLElement>();
+	function composerTextarea(): HTMLTextAreaElement | null {
+		return region?.querySelector<HTMLTextAreaElement>('textarea[data-composer]') ?? null;
+	}
+
+	// Keep the unsent text per chat; an edit in progress isn't a draft.
+	$effect(() => {
+		const text = input;
+		if (editing) return;
+		drafts.set(conversation.id, text);
+	});
+
+	onMount(() =>
+		registerChatShortcuts({
+			escape: () => {
+				if (streaming) {
+					void stop();
+					return true;
+				}
+				if (editing) {
+					cancelEdit();
+					return true;
+				}
+				return false;
+			},
+			lastReply: () => {
+				const last = chat.messages.findLast((m) => m.role === 'assistant');
+				return (last && messageText(last)) || null;
+			}
+		})
+	);
+
+	// ── earlier messages ─────────────────────────────────────────────────────
+	// The page loads only the newest messages; earlier pages are fetched when
+	// the user scrolls near the top (or clicks the button there).
+	const OLDER_PAGE_SIZE = 60;
+	let scrollEl = $state<HTMLDivElement | null>(null);
+	let olderSentinel = $state<HTMLElement | null>(null);
+	let loadingOlder = $state(false);
+	let olderFailed = $state(false);
+	let nearTop = $state(false);
+	// Not until the user scrolls up: the timeline starts at the top for a frame
+	// before it sticks to the bottom.
+	let autoLoad = $state(false);
+
+	async function loadOlder() {
+		const oldest = chat.messages[0];
+		if (!hasOlder || loadingOlder || !oldest) return;
+		const id = conversation.id;
+		loadingOlder = true;
+		olderFailed = false;
+		try {
+			const params = new URLSearchParams({ before: oldest.id, limit: String(OLDER_PAGE_SIZE) });
+			const res = await fetch(`/api/conversations/${encodeURIComponent(id)}/messages?${params}`);
+			if (!res.ok) throw new Error(String(res.status));
+			const page = (await res.json()) as { messages: ChatMessage[]; hasOlder: boolean };
+			// The list was reloaded meanwhile; the next scroll asks again.
+			if (conversation.id !== id || chat.messages[0]?.id !== oldest.id) return;
+			recordTimes(page.messages);
+			// Keep the visible messages in place while content grows above them.
+			const el = scrollEl;
+			const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+			chat.messages = prependOlder(chat.messages, page.messages.map(chatMessageToUIMessage));
+			hasOlder = page.hasOlder;
+			await tick();
+			if (el) el.scrollTop = el.scrollHeight - fromBottom;
+		} catch {
+			olderFailed = true;
+		} finally {
+			loadingOlder = false;
+		}
+	}
+
+	$effect(() => {
+		const root = scrollEl;
+		const target = olderSentinel;
+		if (!root || !target) {
+			nearTop = false;
+			return;
+		}
+		const observer = new IntersectionObserver(([entry]) => (nearTop = entry.isIntersecting), {
+			root,
+			rootMargin: '600px 0px 0px 0px'
+		});
+		observer.observe(target);
+		return () => observer.disconnect();
+	});
+
+	$effect(() => {
+		const el = scrollEl;
+		if (!el || autoLoad) return;
+		let last = el.scrollTop;
+		const onScroll = () => {
+			if (el.scrollTop < last - 4) autoLoad = true;
+			last = el.scrollTop;
+		};
+		el.addEventListener('scroll', onScroll, { passive: true });
+		return () => el.removeEventListener('scroll', onScroll);
+	});
+
+	$effect(() => {
+		if (nearTop && autoLoad && hasOlder && !loadingOlder && !olderFailed) {
+			untrack(() => void loadOlder());
+		}
+	});
 
 	const fileDrop = createFileDrop((files) => {
 		addFiles(files);
@@ -564,17 +889,23 @@
 
 	// Navigating away destroys this view (the page uses {#key}); make sure the
 	// sidebar indicator doesn't keep spinning for a chat we're no longer showing.
+	// Also drop this view's stream connection: the reply keeps running server-side
+	// (and is replayed on return), but an orphaned fetch would hold one of the
+	// browser's ~6 HTTP/1.1 connections per host until the reply ends, so
+	// switching between a few long-running chats would leave every other request
+	// pending.
 	onMount(() => {
 		const id = conversation.id;
 		return () => {
 			if (activeChats.get(id) === chat) {
 				activeChats.delete(id);
 			}
+			void chat.stop();
 		};
 	});
 
-	// Object URLs for pending image previews, kept in a plain map (not reactive —
-	// entries are added/removed alongside every selectedFiles mutation below).
+	// Object URLs for pending image previews, keyed by File; entries are
+	// added/removed alongside every selectedFiles mutation below.
 	const previewUrls = new SvelteMap<File, string>();
 	function previewUrl(file: File): string | undefined {
 		return previewUrls.get(file);
@@ -587,15 +918,15 @@
 		return file.type.startsWith('text/') || TEXT_TYPES.has(file.type) || TEXT_EXT.test(file.name);
 	}
 
-	// Snippets for pending text files, read async on add; plain map keyed by File.
+	// Snippets for pending text files, read async on add; keyed by File.
 	const textPreviews = new SvelteMap<File, string>();
-	let textPreviewVersion = $state(0);
 	function textPreview(file: File): string | undefined {
-		void textPreviewVersion;
 		return textPreviews.get(file);
 	}
 
-	function addFiles(files: File[]) {
+	function addFiles(incoming: File[]) {
+		// Each File is its own entry (and list key); adding one twice is a no-op.
+		const files = incoming.filter((f) => !selectedFiles.includes(f));
 		for (const f of files) {
 			if (f.type.startsWith('image/') && !previewUrls.has(f)) {
 				previewUrls.set(f, URL.createObjectURL(f));
@@ -608,11 +939,9 @@
 						if (snippet.length > TEXT_PREVIEW_LEN)
 							snippet = snippet.slice(0, TEXT_PREVIEW_LEN) + '…';
 						textPreviews.set(f, snippet);
-						textPreviewVersion++;
 					})
 					.catch(() => {
 						textPreviews.delete(f);
-						textPreviewVersion++;
 					});
 			}
 		}
@@ -662,15 +991,16 @@
 </script>
 
 <div
+	bind:this={region}
 	class="relative flex h-full min-h-0 flex-1 flex-col"
 	role="region"
 	aria-label="Chat"
-	ondragenter={isCoding ? undefined : fileDrop.ondragenter}
-	ondragover={isCoding ? undefined : fileDrop.ondragover}
-	ondragleave={isCoding ? undefined : fileDrop.ondragleave}
-	ondrop={isCoding ? undefined : fileDrop.ondrop}
+	ondragenter={fileDrop.ondragenter}
+	ondragover={fileDrop.ondragover}
+	ondragleave={fileDrop.ondragleave}
+	ondrop={fileDrop.ondrop}
 >
-	{#if fileDrop.dragActive && !isCoding}
+	{#if fileDrop.dragActive}
 		<div
 			class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-info bg-background/70"
 		>
@@ -687,15 +1017,32 @@
 		{coding}
 		{codingEnvironmentName}
 		oncreatepr={isCoding ? createPullRequest : undefined}
+		onrecover={isCoding ? recoverCodingTask : undefined}
 		{codingEnvironments}
 		{codingAgents}
 		handoffDisabled={streaming || chat.messages.length === 0}
+		messageCount={chat.messages.length}
 		onupdated={(updated) => (conversation = updated)}
 	/>
 
 	<!-- Reserve the scrollbar on both sides so messages stay centred over the composer. -->
-	<ChatContainer class="min-h-0 flex-1 [scrollbar-gutter:stable_both-edges]">
+	<ChatContainer
+		bind:context={scroll}
+		bind:ref={scrollEl}
+		aria-busy={streaming}
+		class="min-h-0 flex-1 [scrollbar-gutter:stable_both-edges]"
+	>
 		<ChatContainerContent>
+			{#if hasOlder}
+				<div bind:this={olderSentinel} class="flex justify-center px-4 pt-4">
+					<Button variant="outline" size="sm" disabled={loadingOlder} onclick={() => loadOlder()}>
+						{#if loadingOlder}
+							<LoaderIcon class="size-4 animate-spin" />
+						{/if}
+						{olderFailed ? "Couldn't load earlier messages — retry" : 'Load earlier messages'}
+					</Button>
+				</div>
+			{/if}
 			<MessageTimeline
 				messages={chat.messages}
 				{streaming}
@@ -704,14 +1051,38 @@
 				conversationId={conversation.id}
 				onregenerate={isCoding ? undefined : regenerate}
 				onedit={isCoding ? undefined : startEdit}
+				onswitchbranch={isCoding ? undefined : switchBranch}
+				branchDisabled={streaming || sending || switchingBranch}
+				editingId={editing?.messageId ?? null}
 			/>
 			{#if waiting}
 				<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
 			{/if}
 		</ChatContainerContent>
 	</ChatContainer>
+	<div role="status" class="sr-only">{replyAnnouncement}</div>
 
-	<div class="mx-auto w-full max-w-3xl px-4 pb-4">
+	<div class="relative mx-auto w-full max-w-3xl px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+		{#if showJumpToLatest}
+			<Button
+				variant="outline"
+				size="icon"
+				class="absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 rounded-full bg-background shadow-md dark:bg-background"
+				title="Jump to latest"
+				onclick={() => scroll?.scrollToBottom()}
+			>
+				<ArrowDownIcon class="size-4" />
+				{#if streaming}
+					<span
+						class="absolute top-0 right-0 size-2.5 rounded-full border-2 border-background bg-info"
+						aria-hidden="true"
+					></span>
+				{/if}
+				<span class="sr-only">
+					{streaming ? 'Jump to latest, new content is arriving' : 'Jump to latest'}
+				</span>
+			</Button>
+		{/if}
 		{#if coding?.pendingRequest}
 			{#key coding.pendingRequest.requestId}
 				<CodingPendingRequest
@@ -725,7 +1096,7 @@
 		{/if}
 		{#if selectedFiles.length > 0}
 			<div class="mb-2 flex flex-wrap gap-2">
-				{#each selectedFiles as file, i (file.name + i)}
+				{#each selectedFiles as file (file)}
 					{@const snippet = textPreview(file)}
 					<div class="relative w-40">
 						{#if file.type.startsWith('image/')}
@@ -767,7 +1138,7 @@
 						</div>
 						<button
 							aria-label="Remove {file.name}"
-							class="absolute -top-1.5 -right-1.5 rounded-full bg-muted p-0.5 hover:bg-accent"
+							class="absolute -top-1.5 -right-1.5 rounded-full bg-muted p-0.5 hover:bg-accent pointer-coarse:-top-2.5 pointer-coarse:-right-2.5 pointer-coarse:p-1.5"
 							onclick={() => removeFile(file)}
 						>
 							<XIcon class="size-3" />
@@ -788,36 +1159,79 @@
 				onresume={() => messageQueue.resume(conversation.id)}
 			/>
 		{/if}
+		{#if editing}
+			<div
+				class="mb-2 flex items-center gap-2 rounded-md border bg-muted/50 py-1 pr-1 pl-3 text-sm text-muted-foreground"
+			>
+				<PencilIcon class="size-3.5 shrink-0" />
+				<span class="min-w-0 flex-1 truncate">Editing message</span>
+				{#each editing.keptFiles as part (part)}
+					<span
+						class="flex max-w-40 items-center gap-1 rounded border bg-background py-0.5 pr-0.5 pl-1.5 text-xs"
+						title={part.filename ?? 'Attachment'}
+					>
+						<FileIcon class="size-3 shrink-0" />
+						<span class="truncate">{part.filename ?? 'Attachment'}</span>
+						<button
+							type="button"
+							aria-label="Remove {part.filename ?? 'attachment'}"
+							class="rounded p-0.5 hover:bg-accent"
+							onclick={() => removeKeptFile(part)}
+						>
+							<XIcon class="size-3" />
+						</button>
+					</span>
+				{/each}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="h-7"
+					title="Cancel editing ({shortcutLabel('escape')})"
+					onclick={cancelEdit}
+				>
+					Cancel
+				</Button>
+			</div>
+		{/if}
 		<PromptInput
 			value={displayInput}
 			onValueChange={(v) => (input = v)}
 			onSubmit={() => send(displayInput)}
 		>
 			<PromptInputTextarea
-				placeholder={streaming ? 'Queue a follow-up message…' : 'Ask anything…'}
+				placeholder={editing
+					? 'Edit your message…'
+					: streaming
+						? 'Queue a follow-up message…'
+						: 'Ask anything…'}
 			/>
 			<PromptInputActions class="justify-between">
 				<div class="flex items-center gap-1">
-					{#if !isCoding}
-						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
-							<PaperclipIcon class="size-4" />
-						</Button>
-					{/if}
+					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
+						<PaperclipIcon class="size-4" />
+					</Button>
 					<MicButton {speech} />
 				</div>
-				{#if streaming && !hasContent}
-					<Button size="sm" variant="destructive" aria-label="Stop" onclick={stop}>
+				{#if streaming && !canSend}
+					<Button
+						size="sm"
+						variant="destructive"
+						aria-label="Stop"
+						title="Stop ({shortcutLabel('escape')})"
+						onclick={stop}
+					>
 						<SquareIcon class="size-4" />
 					</Button>
 				{:else}
+					{@const queues = (streaming || sending) && !editing}
 					<Button
 						size="sm"
-						disabled={!hasContent}
-						aria-label={streaming || sending ? 'Queue message' : 'Send'}
-						title={streaming || sending ? 'Queue — sends when the reply finishes' : undefined}
+						disabled={!canSend}
+						aria-label={queues ? 'Queue message' : 'Send'}
+						title={queues ? 'Queue — sends when the reply finishes' : undefined}
 						onclick={() => send(displayInput)}
 					>
-						{#if streaming || sending}
+						{#if queues}
 							<ListEndIcon class="size-4" />
 						{:else}
 							<ArrowUpIcon class="size-4" />

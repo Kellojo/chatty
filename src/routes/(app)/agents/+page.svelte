@@ -250,7 +250,11 @@
 									{/snippet}
 									{@const blurb = agent.description.replace(/\s*\(built-in\)(?=\.?$)/i, '')}
 									{#if blurb}
-										<p class="line-clamp-2 text-xs text-pretty text-muted-foreground" title={blurb}>
+										<!-- Phones: name and schedule are enough here; the detail page has the description. -->
+										<p
+											class="line-clamp-2 text-xs text-pretty text-muted-foreground max-sm:hidden"
+											title={blurb}
+										>
 											{blurb}
 										</p>
 									{/if}

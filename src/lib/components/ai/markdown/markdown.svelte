@@ -20,7 +20,7 @@
 	import githubDarkDefault from '@shikijs/themes/github-dark-default';
 	import { math } from '@streamdown-svelte/math';
 	import { mermaid } from '@streamdown-svelte/mermaid';
-	import 'katex/dist/katex.min.css';
+	import { loadKatexCss, mayContainMath } from './katex-css.js';
 
 	type Props = {
 		content: string;
@@ -49,6 +49,10 @@
 		if (key === 'href') return t3ThreadLinkToPath(url) ?? url;
 		return url;
 	}
+
+	$effect(() => {
+		if (mayContainMath(markdown)) loadKatexCss();
+	});
 
 	let currentTheme = $derived(
 		mode.current === 'dark' ? 'github-dark-default' : 'github-light-default'
@@ -102,16 +106,28 @@
 			},
 			ol: { base: 'my-3 in-[li]:my-1 ml-0 list-outside pl-6 whitespace-normal text-foreground' },
 			th: {
-				base: 'min-w-0 max-w-[400px] px-3 py-2 text-left text-sm font-semibold break-words text-foreground'
+				base: 'min-w-0 max-w-[400px] px-3 py-2 text-sm font-semibold text-foreground max-sm:px-2'
 			},
-			td: { base: 'min-w-0 max-w-[400px] px-3 py-2 text-sm break-words text-foreground' },
+			// Short cells ("830 ms") stay on one line; long prose still wraps. The table scrolls sideways.
+			td: {
+				base: 'min-w-16 max-w-[400px] px-3 py-2 text-sm break-words text-foreground max-sm:px-2'
+			},
 			codespan: { base: 'rounded bg-muted px-1 py-0.5 font-mono text-[0.9em] text-foreground' },
 			li: { base: 'py-0.5 leading-7 marker:text-muted-foreground', checkbox: 'mr-2' },
+			// The default 500px minimum leaves small diagrams floating in a screen-tall box; phones fit the diagram.
+			mermaid: {
+				base: 'group relative my-4 h-auto items-center overflow-hidden rounded-lg border border-border bg-card md:min-h-[500px]'
+			},
+			table: {
+				wrapper: 'my-4 flex flex-col gap-1 rounded-xl border border-border bg-sidebar p-1.5',
+				toolbar:
+					'ml-auto flex w-fit items-center justify-end gap-1 rounded-md bg-sidebar/80 px-1 supports-[backdrop-filter]:bg-sidebar/70 supports-[backdrop-filter]:backdrop-blur'
+			},
 			code: {
 				base: 'relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-white p-2 [--sdm-bg:theme(colors.white)] dark:bg-sidebar dark:[--sdm-bg:transparent]',
 				header: 'flex h-8 items-center justify-between pr-1 text-muted-foreground text-xs',
 				actions:
-					'pointer-events-none sticky top-2 right-1 z-10 -mt-10 flex h-8 items-center justify-end',
+					'pointer-events-none sticky top-2 right-1 z-10 -mt-10 flex h-8 items-center justify-end pointer-coarse:static',
 				buttons:
 					'pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-border bg-white/80 px-1.5 py-1 supports-[backdrop-filter]:bg-white/70 supports-[backdrop-filter]:backdrop-blur dark:border-sidebar dark:bg-sidebar/80 dark:supports-[backdrop-filter]:bg-sidebar/70'
 			}

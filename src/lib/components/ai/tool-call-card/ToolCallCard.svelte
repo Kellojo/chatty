@@ -20,6 +20,7 @@
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import { TOOL_BODY_LIMIT, truncateHead, truncateTail } from './truncate.js';
 
 	type ToolPart = {
 		type: string;
@@ -39,6 +40,8 @@
 	}: { part: ToolPart; active?: boolean; class?: string } = $props();
 
 	let open = $state(false);
+	/** Shows the untruncated result instead of its first/last TOOL_BODY_LIMIT chars. */
+	let showFull = $state(false);
 
 	const name = $derived(getToolOrDynamicToolName(part as never));
 	const display = $derived(describeTool(name, part.input));
@@ -93,10 +96,6 @@
 		} catch {
 			return String(value);
 		}
-	}
-
-	function truncate(text: string): string {
-		return text.length > 4000 ? text.slice(0, 4000) + '\n… truncated' : text;
 	}
 
 	/** Unwraps a JSON string so structured results read as indented JSON. */
@@ -209,18 +208,29 @@
 	const hasResult = $derived(
 		part.state === 'output-error' ? !!part.errorText : hasOutputText(part.output)
 	);
-	const inputBody = $derived(open ? truncate(inputText(part.input)) : '');
-	const resultBody = $derived(
+	const inputBody = $derived(open ? truncateHead(inputText(part.input)) : '');
+	const resultText = $derived(
 		open || failed
-			? truncate(part.state === 'output-error' ? (part.errorText ?? '') : outputText(part.output))
+			? part.state === 'output-error'
+				? (part.errorText ?? '')
+				: outputText(part.output)
 			: ''
+	);
+	const resultTruncated = $derived(resultText.length > TOOL_BODY_LIMIT);
+	// Terminal output keeps its end, where the summary or error is.
+	const resultBody = $derived(
+		showFull || !resultTruncated
+			? resultText
+			: display.kind === 'command'
+				? truncateTail(resultText)
+				: truncateHead(resultText)
 	);
 	// Don't repeat an input the row already shows in full (a short command, a query).
 	const showInput = $derived(
 		!isTrivial(part.input) && !detailCoversInput(part.input, display.detail)
 	);
 	/** Failed calls without a detail show the first line of their error instead. */
-	const detail = $derived(display.detail ?? (failed ? errorSummary(resultBody) : null));
+	const detail = $derived(display.detail ?? (failed ? errorSummary(resultText) : null));
 
 	/** First line of an error, without the coding agent's generic lead-in. */
 	function errorSummary(text: string): string | null {
@@ -312,7 +322,7 @@
 		<button
 			type="button"
 			class={cn(
-				'group/tool flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-left transition-colors',
+				'group/tool flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-left transition-colors pointer-coarse:py-2',
 				hasBody
 					? 'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
 					: 'cursor-default'
@@ -397,11 +407,26 @@
 						</p>
 					{/if}
 					<pre
-						{@attach scrollToEnd}
+						{@attach (node) => {
+							void showFull;
+							scrollToEnd(node);
+						}}
 						class={cn(
 							'max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
 							failed && 'border-destructive/30 text-destructive'
 						)}>{resultBody}</pre>
+					{#if resultTruncated}
+						<button
+							type="button"
+							class="mt-1 rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+							aria-pressed={showFull}
+							onclick={() => (showFull = !showFull)}
+						>
+							{showFull
+								? 'Show less'
+								: `Show full output (${resultText.length.toLocaleString()} chars)`}
+						</button>
+					{/if}
 				</div>
 			{/if}
 		</div>

@@ -113,7 +113,7 @@
 
 <SuggestionsEditor
 	title="Chat suggestions"
-	description="Quick-start chips on the home page in Chat mode; clicking one sends it."
+	description="Quick-start chips on the home page in Chat mode; choosing one sends it."
 	initial={data.settings.suggestions}
 	defaults={DEFAULT_SUGGESTIONS}
 	save={(suggestions) => putSettings({ suggestions })}
@@ -121,7 +121,7 @@
 
 <SuggestionsEditor
 	title="Coding suggestions"
-	description="Quick-start chips on the home page in Code mode; clicking one fills in the task so you can add details."
+	description="Quick-start chips on the home page in Code mode; choosing one fills in the task so you can add details."
 	initial={data.settings.codingSuggestions}
 	defaults={DEFAULT_CODING_SUGGESTIONS}
 	save={(codingSuggestions) => putSettings({ codingSuggestions })}

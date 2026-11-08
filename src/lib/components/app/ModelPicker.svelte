@@ -9,7 +9,7 @@
 		onselect,
 		disabled = false,
 		placeholder = 'Select model',
-		class: className = 'w-40 sm:w-64'
+		class: className = 'w-40 min-w-0 shrink sm:w-64'
 	}: {
 		groups: ModelsByProvider[];
 		mappings?: ModelMapping[];

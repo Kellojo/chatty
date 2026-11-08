@@ -52,6 +52,8 @@
 	let pricingModel = $state<Model | null>(null);
 	let pricingInput = $state('');
 	let pricingOutput = $state('');
+	let pricingCacheRead = $state('');
+	let pricingCacheWrite = $state('');
 	let pricingContext = $state('');
 	let pricingBusy = $state(false);
 
@@ -166,6 +168,8 @@
 		pricingModel = model;
 		pricingInput = model.priceInput !== null ? String(model.priceInput) : '';
 		pricingOutput = model.priceOutput !== null ? String(model.priceOutput) : '';
+		pricingCacheRead = model.priceCacheRead !== null ? String(model.priceCacheRead) : '';
+		pricingCacheWrite = model.priceCacheWrite !== null ? String(model.priceCacheWrite) : '';
 		pricingContext = model.contextLength !== null ? String(model.contextLength) : '';
 	}
 
@@ -195,6 +199,8 @@
 			await api(`/api/models/${pricingModel.id}`, 'PATCH', {
 				priceInput: parsePrice(pricingInput),
 				priceOutput: parsePrice(pricingOutput),
+				priceCacheRead: parsePrice(pricingCacheRead),
+				priceCacheWrite: parsePrice(pricingCacheWrite),
 				contextLength: parseContext(pricingContext)
 			});
 			toast.success('Pricing updated');
@@ -331,6 +337,8 @@
 				{#each shown as model (model.id)}
 					{@const brand = resolveModelBrand(model, provider)}
 					{@const details = modelDetails(model)}
+					<!-- "vendor/model" ids may wrap after the slash, never mid-name. -->
+					{@const title = model.displayName.replace('/', '/' + String.fromCharCode(0x200b))}
 					{#snippet modelIcon()}
 						{#if brand !== providerBrand}
 							{#if brand}<ProviderIcon {brand} class="size-4" />{:else}<BoxesIcon
@@ -340,14 +348,14 @@
 					{/snippet}
 					{#snippet modelMeta()}
 						{#each details as part, i (i)}
-							{#if i > 0}<span aria-hidden="true"> · </span>{/if}<span
-								class={part.mono ? 'font-mono' : 'tabular-nums'}
+							{#if i > 0}<span class="mx-1" aria-hidden="true">·</span>{/if}<span
+								class="whitespace-nowrap {part.mono ? 'font-mono' : 'tabular-nums'}"
 								title={part.title}>{part.text}</span
 							>
 						{/each}
 					{/snippet}
 					<SettingsListItem
-						title={model.displayName}
+						{title}
 						titleAttr={model.modelId}
 						muted={!model.enabled}
 						leading={showBrandIcons ? modelIcon : undefined}
@@ -497,7 +505,8 @@
 			<Dialog.Title>Pricing &amp; context — {pricingModel?.displayName}</Dialog.Title>
 			<Dialog.Description>
 				USD per 1M tokens. Leave empty when unknown; cost is only reported when both prices are set.
-				Context length drives automatic chat compaction; providers like OpenRouter fill it on fetch.
+				Cached prompt tokens use the input price unless a cache price is set. Context length drives
+				automatic chat compaction; providers like OpenRouter fill it on fetch.
 			</Dialog.Description>
 		</Dialog.Header>
 		<form onsubmit={submitPricing} class="flex flex-col gap-4">
@@ -522,6 +531,30 @@
 					step="any"
 					placeholder="e.g. 0.60"
 				/>
+			</div>
+			<div class="grid grid-cols-2 gap-4">
+				<div class="flex flex-col gap-2">
+					<Label for="price-cache-read">Cache read price</Label>
+					<Input
+						id="price-cache-read"
+						bind:value={pricingCacheRead}
+						type="number"
+						min="0"
+						step="any"
+						placeholder="= input price"
+					/>
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="price-cache-write">Cache write price</Label>
+					<Input
+						id="price-cache-write"
+						bind:value={pricingCacheWrite}
+						type="number"
+						min="0"
+						step="any"
+						placeholder="= input price"
+					/>
+				</div>
 			</div>
 			<div class="flex flex-col gap-2">
 				<Label for="price-context">Context length (tokens)</Label>

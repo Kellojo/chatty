@@ -125,8 +125,17 @@ function hashString(value: string): number {
  * slots are used they are reused (the palette only has five colors). `Other` is always the
  * neutral color.
  */
+// Models get a wider palette than providers: an instance often has more than five, and
+// stable-but-colliding hues made neighbouring series indistinguishable.
+const MODEL_PALETTE = [
+	...PAYG_PALETTE,
+	'oklch(0.72 0.17 340)',
+	'oklch(0.8 0.15 110)',
+	'oklch(0.62 0.13 230)'
+];
+
 export function modelColors(models: string[], allModels: string[]): Record<string, string> {
-	const size = PAYG_PALETTE.length;
+	const size = MODEL_PALETTE.length;
 	const universe = [...new Set([...allModels, ...models])].filter((m) => m !== 'Other');
 	const ordered = universe
 		.map((name) => ({ name, hash: hashString(name) }))
@@ -140,9 +149,21 @@ export function modelColors(models: string[], allModels: string[]): Record<strin
 		taken.add(slot);
 		slotOf.set(name, slot);
 	}
+	// With more models than colors, slots repeat across the universe. Two series drawn side
+	// by side must still differ, so a visible clash moves the later model (by hash) on.
+	const used = new Set<number>();
+	const visible = [...new Set(models)]
+		.filter((m) => m !== 'Other')
+		.sort((a, b) => hashString(a) - hashString(b) || a.localeCompare(b));
+	for (const m of visible) {
+		let slot = slotOf.get(m)!;
+		if (used.size < size) while (used.has(slot)) slot = (slot + 1) % size;
+		used.add(slot);
+		slotOf.set(m, slot);
+	}
 	const out: Record<string, string> = {};
 	for (const m of models) {
-		out[m] = m === 'Other' ? SUBSCRIPTION_OTHER_COLOR : PAYG_PALETTE[slotOf.get(m)!];
+		out[m] = m === 'Other' ? SUBSCRIPTION_OTHER_COLOR : MODEL_PALETTE[slotOf.get(m)!];
 	}
 	return out;
 }

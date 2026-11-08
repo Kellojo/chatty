@@ -25,6 +25,14 @@ export interface ThreadState {
 	/** Runs some of whose turn items were dropped by {@link MAX_THREAD_RECORDS}. */
 	evictedItemRuns: Set<string>;
 	lastSequence: number | null;
+	// Indexes over `turnItems`, kept in step by applyStreamItem (rendering a run
+	// or finding a request's item must not scan a long thread's every item).
+	/** Turn items by run id, then item id. */
+	itemsByRun: Map<string, Map<string, Rec>>;
+	/** Turn items by type, then item id. */
+	itemsByType: Map<string, Map<string, Rec>>;
+	/** The turn item showing each runtime request, by request id. */
+	itemByRequest: Map<string, Rec>;
 }
 
 export function emptyThreadState(): ThreadState {
@@ -35,7 +43,10 @@ export function emptyThreadState(): ThreadState {
 		turnItems: new Map(),
 		runtimeRequests: new Map(),
 		evictedItemRuns: new Set(),
-		lastSequence: null
+		lastSequence: null,
+		itemsByRun: new Map(),
+		itemsByType: new Map(),
+		itemByRequest: new Map()
 	};
 }
 
@@ -97,12 +108,66 @@ function upsert(map: Map<string, Rec>, payload: unknown, onEvict?: OnEvict): voi
 	if (record && id) put(map, id, record, onEvict);
 }
 
-/** Remembers whose turn items were dropped, so their history isn't re-rendered from a partial set. */
-function itemEvicter(state: ThreadState): OnEvict {
-	return (item) => {
-		const runId = str(item.runId);
+function indexAdd(index: Map<string, Map<string, Rec>>, key: string | null, id: string, item: Rec) {
+	if (!key) return;
+	let bucket = index.get(key);
+	if (!bucket) index.set(key, (bucket = new Map()));
+	bucket.set(id, item);
+}
+
+function indexRemove(index: Map<string, Map<string, Rec>>, key: string | null, id: string) {
+	const bucket = key ? index.get(key) : undefined;
+	if (!bucket) return;
+	bucket.delete(id);
+	if (bucket.size === 0) index.delete(key!);
+}
+
+function unindexItem(state: ThreadState, item: Rec): void {
+	const id = String(item.id);
+	indexRemove(state.itemsByRun, str(item.runId), id);
+	indexRemove(state.itemsByType, str(item.type), id);
+	const requestId = str(item.requestId);
+	if (requestId && state.itemByRequest.get(requestId) === item) {
+		state.itemByRequest.delete(requestId);
+	}
+}
+
+/** Upserts a turn item and keeps the indexes in step. */
+function putItem(state: ThreadState, payload: unknown): void {
+	const item = obj(payload);
+	const id = str(item?.id);
+	if (!item || !id) return;
+	const previous = state.turnItems.get(id);
+	if (previous) unindexItem(state, previous);
+	put(state.turnItems, id, item, (evicted) => {
+		unindexItem(state, evicted);
+		// Remembers whose items were dropped, so their history isn't re-rendered from a partial set.
+		const runId = str(evicted.runId);
 		if (runId) state.evictedItemRuns.add(runId);
-	};
+	});
+	indexAdd(state.itemsByRun, str(item.runId), id, item);
+	indexAdd(state.itemsByType, str(item.type), id, item);
+	const requestId = str(item.requestId);
+	if (requestId) state.itemByRequest.set(requestId, item);
+}
+
+function fillItems(state: ThreadState, list: unknown): void {
+	state.turnItems.clear();
+	state.itemsByRun.clear();
+	state.itemsByType.clear();
+	state.itemByRequest.clear();
+	if (!Array.isArray(list)) return;
+	for (const entry of list) putItem(state, entry);
+}
+
+/** A run's turn items, unordered. */
+export function runItems(state: ThreadState, runId: string): Rec[] {
+	return [...(state.itemsByRun.get(runId)?.values() ?? [])];
+}
+
+/** The thread's turn items of one type, unordered. */
+export function itemsOfType(state: ThreadState, type: string): Rec[] {
+	return [...(state.itemsByType.get(type)?.values() ?? [])];
 }
 
 /**
@@ -153,7 +218,7 @@ export function applyStreamItem(state: ThreadState, item: unknown): boolean {
 		fill(state.runs, projection.runs);
 		fill(state.messages, projection.messages);
 		state.evictedItemRuns.clear();
-		fill(state.turnItems, projection.turnItems, itemEvicter(state));
+		fillItems(state, projection.turnItems);
 		fill(state.runtimeRequests, projection.runtimeRequests);
 		state.lastSequence = num(it.snapshotSequence) ?? state.lastSequence;
 		return true;
@@ -171,7 +236,7 @@ export function applyStreamItem(state: ThreadState, item: unknown): boolean {
 	const payload = event.payload;
 	if (type.startsWith('run.')) upsert(state.runs, payload);
 	else if (type.startsWith('message.')) upsert(state.messages, payload);
-	else if (type.startsWith('turn-item.')) upsert(state.turnItems, payload, itemEvicter(state));
+	else if (type.startsWith('turn-item.')) putItem(state, payload);
 	else if (type.startsWith('runtime-request.')) upsert(state.runtimeRequests, payload);
 	else if (type.startsWith('thread.')) {
 		const record = obj(payload);
@@ -184,10 +249,14 @@ export function applyStreamItem(state: ThreadState, item: unknown): boolean {
 
 /**
  * Which run's rendering a stream item can change: its id, `'all'` when that
- * isn't known (snapshots, messages, runtime requests), or null when no run's
- * parts depend on it (thread metadata). Lets callers re-render only that run.
+ * isn't known (snapshots), or null when no run's parts depend on it (thread
+ * metadata). Lets callers re-render only that run.
+ *
+ * Pass `state` (with the item already applied) to route messages and runtime
+ * requests that don't name their run: a message shows in the run it started,
+ * a request in the run of the turn item showing it.
  */
-export function streamItemRun(item: unknown): string | 'all' | null {
+export function streamItemRun(item: unknown, state?: ThreadState): string | 'all' | null {
 	const it = obj(item);
 	if (it?.kind !== 'event') return 'all';
 	const event = obj(it.event);
@@ -196,7 +265,82 @@ export function streamItemRun(item: unknown): string | 'all' | null {
 	if (type.startsWith('thread.')) return null;
 	if (type.startsWith('run.')) return str(payload?.id) ?? 'all';
 	if (type.startsWith('turn-item.')) return str(payload?.runId) ?? 'all';
+	const id = str(payload?.id);
+	if (type.startsWith('message.')) {
+		const runId = str(payload?.runId);
+		if (!state || !id) return runId ?? 'all';
+		// Runs read their user message by `userMessageId`.
+		for (const run of state.runs.values()) if (run.userMessageId === id) return String(run.id);
+		// Otherwise no run shows it (yet); that run's own event will render it.
+		return runId;
+	}
+	if (type.startsWith('runtime-request.')) {
+		const item = id ? state?.itemByRequest.get(id) : undefined;
+		const runId = str(item?.runId) ?? str(payload?.runId);
+		if (runId) return runId;
+		// Only turn items show a request; none does yet.
+		return state && id ? null : 'all';
+	}
 	return 'all';
+}
+
+/** The record maps of a thread, copied before a snapshot replaces them (see {@link changedRuns}). */
+export interface ThreadRecords {
+	runs: ReadonlyMap<string, Rec>;
+	messages: ReadonlyMap<string, Rec>;
+	turnItems: ReadonlyMap<string, Rec>;
+	runtimeRequests: ReadonlyMap<string, Rec>;
+}
+
+export function copyThreadRecords(state: ThreadState): ThreadRecords {
+	return {
+		runs: new Map(state.runs),
+		messages: new Map(state.messages),
+		turnItems: new Map(state.turnItems),
+		runtimeRequests: new Map(state.runtimeRequests)
+	};
+}
+
+/** Ids of records added, removed or changed between two maps. */
+function changedIds(before: ReadonlyMap<string, Rec>, after: ReadonlyMap<string, Rec>): string[] {
+	const ids: string[] = [];
+	for (const [id, record] of after) {
+		const old = before.get(id);
+		if (old !== record && (!old || JSON.stringify(old) !== JSON.stringify(record))) ids.push(id);
+	}
+	for (const id of before.keys()) if (!after.has(id)) ids.push(id);
+	return ids;
+}
+
+/**
+ * Runs whose rendering may differ after a snapshot replaced `before` (a
+ * resubscription mostly brings back the same thread), or `'all'` when a
+ * change can't be pinned to a run.
+ */
+export function changedRuns(before: ThreadRecords, after: ThreadState): Set<string> | 'all' {
+	const runs = new Set<string>();
+	for (const id of changedIds(before.runs, after.runs)) runs.add(id);
+	for (const id of changedIds(before.turnItems, after.turnItems)) {
+		for (const item of [before.turnItems.get(id), after.turnItems.get(id)]) {
+			const runId = str(item?.runId);
+			if (item && !runId) return 'all';
+			if (runId) runs.add(runId);
+		}
+	}
+	const messageIds = new Set(changedIds(before.messages, after.messages));
+	if (messageIds.size > 0) {
+		for (const run of after.runs.values()) {
+			if (messageIds.has(String(run.userMessageId))) runs.add(String(run.id));
+		}
+	}
+	for (const id of changedIds(before.runtimeRequests, after.runtimeRequests)) {
+		const item = after.itemByRequest.get(id);
+		const request = after.runtimeRequests.get(id) ?? before.runtimeRequests.get(id);
+		const runId = str(item?.runId) ?? str(request?.runId);
+		if (runId) runs.add(runId);
+		else if (item) return 'all';
+	}
+	return runs;
 }
 
 // ── runs ─────────────────────────────────────────────────────────────────
@@ -214,6 +358,22 @@ export function isRunFinished(run: Rec): boolean {
 
 export function sortedRuns(state: ThreadState): Rec[] {
 	return [...state.runs.values()].sort((a, b) => (num(a.ordinal) ?? 0) - (num(b.ordinal) ?? 0));
+}
+
+/**
+ * The run that took up user message `messageId`: the run started for it, or,
+ * when it was sent while another run was active, the run T3 added it to.
+ */
+export function runForUserMessage(state: ThreadState, messageId: string): Rec | null {
+	for (const run of state.runs.values()) {
+		if (run.userMessageId === messageId) return run;
+	}
+	for (const item of itemsOfType(state, 'user_message')) {
+		if (str(item.messageId) !== messageId) continue;
+		const run = state.runs.get(str(item.runId) ?? '');
+		if (run) return run;
+	}
+	return null;
 }
 
 export function activeRun(state: ThreadState): Rec | null {
@@ -274,9 +434,7 @@ export interface RenderedEntry {
 
 const DONE_ITEM = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 function runningSubagents(state: ThreadState): Rec[] {
-	return [...state.turnItems.values()].filter(
-		(item) => item.type === 'subagent' && !DONE_ITEM.has(String(item.status))
-	);
+	return itemsOfType(state, 'subagent').filter((item) => !DONE_ITEM.has(String(item.status)));
 }
 
 /** Whether a subagent in the thread is still at work (it can outlive its turn). */
@@ -295,9 +453,7 @@ const BASE_ITEM_FIELDS = new Set([
 ]);
 
 function itemsForRun(state: ThreadState, runId: string): Rec[] {
-	return [...state.turnItems.values()]
-		.filter((item) => item.runId === runId)
-		.sort((a, b) => (num(a.ordinal) ?? 0) - (num(b.ordinal) ?? 0));
+	return runItems(state, runId).sort((a, b) => (num(a.ordinal) ?? 0) - (num(b.ordinal) ?? 0));
 }
 
 /** Final item statuses that aren't a success, with the text shown for them. */
@@ -541,7 +697,18 @@ export function renderRun(
 					toolEntry(
 						item,
 						'checkpoint',
-						{ files: files.map((f) => str(f?.path)).filter((p): p is string => p !== null) },
+						{
+							files: files.map((f) => str(f?.path)).filter((p): p is string => p !== null),
+							// Per file, for the changed-files list when T3 can't serve line diffs.
+							changes: files
+								.filter((f) => str(f?.path) !== null)
+								.map((f) => ({
+									path: str(f?.path),
+									kind: str(f?.kind),
+									additions: num(f?.additions) ?? 0,
+									deletions: num(f?.deletions) ?? 0
+								}))
+						},
 						{
 							additions: files.reduce((n, f) => n + (num(f?.additions) ?? 0), 0),
 							deletions: files.reduce((n, f) => n + (num(f?.deletions) ?? 0), 0)
@@ -551,10 +718,27 @@ export function renderRun(
 				);
 				break;
 			}
+			case 'notification': {
+				// "Command … and subagent … were stopped": a one-off message, never in progress.
+				const text = str(item.text) ?? str(item.title);
+				if (!text) break;
+				entries.push(
+					toolEntry(item, 'notice', { text }, { ok: true }, final ? status : 'completed')
+				);
+				break;
+			}
 			default:
 				if (type) {
+					// Unknown item types still show what they say.
+					const text = str(item.text);
 					entries.push(
-						toolEntry(item, str(item.title) ?? type, { kind: type }, { status }, status)
+						toolEntry(
+							item,
+							str(item.title) ?? type,
+							{ kind: type, ...(text ? { text } : {}) },
+							{ status },
+							status
+						)
 					);
 				}
 		}
@@ -606,8 +790,7 @@ const DEFAULT_DECISIONS: CodingPendingOption[] = [
 ];
 
 function pendingRequest(state: ThreadState): CodingPendingRequest | null {
-	const items = [...state.turnItems.values()];
-	const itemFor = (request: Rec) => items.find((i) => i.requestId === String(request.id));
+	const itemFor = (request: Rec) => state.itemByRequest.get(String(request.id));
 	const current = str(activeRun(state)?.id);
 	// A request left pending by a run that has since ended can't be answered, so
 	// only requests of a still-active run count, the latest run's first.

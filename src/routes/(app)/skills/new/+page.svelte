@@ -128,9 +128,12 @@
 					</div>
 					<div class="flex flex-col gap-2">
 						<Label for="description">Description</Label>
-						<Input
+						<!-- Same two-row field as the skill edit page, so the example isn't clipped. -->
+						<Textarea
 							id="description"
 							required
+							rows={2}
+							class="min-h-0"
 							placeholder="Turns a meeting transcript into notes with decisions and action items"
 							bind:value={description}
 						/>
@@ -154,10 +157,12 @@
 				</SettingsSection>
 
 				<div
-					class="sticky bottom-0 z-10 flex justify-end gap-2 border-t bg-background/95 py-3 backdrop-blur"
+					class="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 border-t bg-background/95 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur max-sm:-mx-4 max-sm:px-4 max-sm:[&>*:not(span)]:flex-1"
 				>
 					{#if missing}
-						<span class="mr-auto self-center text-xs text-muted-foreground">{missing}</span>
+						<span class="self-center text-xs text-muted-foreground max-sm:w-full sm:mr-auto"
+							>{missing}</span
+						>
 					{/if}
 					<Button variant="outline" href={resolve('/skills')}>Cancel</Button>
 					<Button type="submit" disabled={busy || !!missing}>

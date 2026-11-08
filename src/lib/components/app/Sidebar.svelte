@@ -38,6 +38,8 @@
 	import { serverActiveChats } from '$lib/state/chat-status.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
 	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
+	import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
+	import { shortcutLabel } from '$lib/state/shortcuts.js';
 	import { formatCount } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
@@ -209,7 +211,7 @@
 		}
 		serverActiveChats.clear();
 		for (const [id, startedAt] of next) serverActiveChats.set(id, startedAt);
-		if (completed) await invalidateWhenIdle();
+		if (completed) await invalidateWhenIdle(CONVERSATIONS_KEY);
 	}
 
 	function onGlobalKeydown(event: KeyboardEvent) {
@@ -232,12 +234,18 @@
 		refreshSkillCount();
 		if (user.role === 'admin') refreshRequestCount();
 		refreshActiveChats().catch(() => {});
+		// Stream and new-chat events only change the sidebar's list, so they
+		// refresh just that; conversation changes may also show on the open page.
 		let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
-		const scheduleInvalidate = () => {
+		let invalidatePage = false;
+		const scheduleInvalidate = (page = true) => {
+			invalidatePage ||= page;
 			if (invalidateTimer) return;
 			invalidateTimer = setTimeout(() => {
 				invalidateTimer = null;
-				void invalidateWhenIdle();
+				const all = invalidatePage;
+				invalidatePage = false;
+				void invalidateWhenIdle(all ? undefined : CONVERSATIONS_KEY);
 			}, 200);
 		};
 		const offEvents = onServerEvent((event) => {
@@ -247,9 +255,11 @@
 					break;
 				case 'chat.stream.finished':
 					serverActiveChats.delete(event.conversationId);
-					scheduleInvalidate();
+					scheduleInvalidate(false);
 					break;
 				case 'chat.created':
+					scheduleInvalidate(false);
+					break;
 				case 'conversation.updated':
 				case 'coding.task.updated':
 					scheduleInvalidate();
@@ -604,13 +614,13 @@
 			>
 		{/if}
 		<span
-			class="mt-1.5 shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex {menuOpenId ===
+			class="mt-1.5 shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex pointer-coarse:mt-0.5 pointer-coarse:flex {menuOpenId ===
 			c.id
 				? 'flex'
 				: 'hidden'}"
 		>
 			<button
-				class="rounded p-1 text-muted-foreground hover:text-foreground"
+				class="rounded p-1 text-muted-foreground hover:text-foreground pointer-coarse:hidden"
 				title={settled ? 'Un-settle' : 'Settle (hide from sidebar)'}
 				aria-label={settled ? 'Un-settle' : 'Settle'}
 				onclick={(e) => {
@@ -632,7 +642,7 @@
 					{#snippet child({ props })}
 						<button
 							{...props}
-							class="rounded p-1 text-muted-foreground hover:text-foreground"
+							class="rounded p-1 text-muted-foreground hover:text-foreground pointer-coarse:p-2"
 							title="More actions"
 							aria-label="More actions"
 						>
@@ -641,6 +651,15 @@
 					{/snippet}
 				</DropdownMenu.Trigger>
 				<DropdownMenu.Content align="start" class="w-44">
+					<!-- Touch has no hover, so the row's Settle button is hidden there; offer it here. -->
+					<DropdownMenu.Item
+						class="pointer-fine:hidden"
+						onSelect={() => void setSettled(c, !settled)}
+					>
+						{#if settled}<ArchiveRestoreIcon class="size-4" /> Un-settle{:else}<ArchiveIcon
+								class="size-4"
+							/> Settle{/if}
+					</DropdownMenu.Item>
 					{#if !settled}
 						<DropdownMenu.Item onSelect={() => void togglePin(c.id)}>
 							{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
@@ -674,7 +693,9 @@
 <svelte:window onkeydown={onGlobalKeydown} />
 
 <aside class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30">
-	<div class="flex items-center justify-between gap-2 p-3">
+	<div
+		class="flex items-center justify-between gap-2 p-3 pt-[calc(0.75rem+env(safe-area-inset-top))]"
+	>
 		<div class="flex min-w-0 items-center gap-2">
 			<svg
 				viewBox="0 0 24 24"
@@ -704,7 +725,13 @@
 			</a>
 			<span class="text-xs text-muted-foreground">v{version}</span>
 		</div>
-		<Button variant="ghost" size="sm" onclick={() => onclose()} aria-label="Close sidebar">
+		<Button
+			variant="ghost"
+			size="sm"
+			class="pointer-coarse:size-10"
+			onclick={() => onclose()}
+			aria-label="Close sidebar"
+		>
 			<XIcon class="size-4" />
 		</Button>
 	</div>
@@ -714,18 +741,19 @@
 			<Input
 				bind:ref={searchInput}
 				placeholder="Search conversations…"
+				title="Search conversations ({shortcutLabel('search')})"
 				bind:value={query}
 				oninput={search}
-				class="h-8 pr-8 text-sm"
+				class="h-8 pr-8 text-sm pointer-coarse:h-10 pointer-coarse:pr-11"
 			/>
 			<button
 				type="button"
-				class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground pointer-coarse:right-1 pointer-coarse:rounded-full pointer-coarse:bg-primary pointer-coarse:p-2 pointer-coarse:text-primary-foreground"
 				onclick={() => {
 					newChat();
 					handleNavigate();
 				}}
-				title="New chat"
+				title="New chat ({shortcutLabel('new-chat')})"
 				aria-label="New chat"
 			>
 				<PlusIcon class="size-4" />
@@ -804,11 +832,12 @@
 		{/if}
 	</nav>
 
-	<div class="px-2 pt-2 pb-2">
-		<p class="px-2 pt-1 pb-1 text-xs font-medium text-muted-foreground">Workspace</p>
+	<!-- Phones: a compact 4-up row, so the drawer's room goes to conversations. -->
+	<div class="px-2 pt-2 pb-2 max-md:grid max-md:grid-cols-4 max-md:gap-1 max-md:border-t">
+		<p class="px-2 pt-1 pb-1 text-xs font-medium text-muted-foreground max-md:hidden">Workspace</p>
 		<a
 			href={resolve('/agents')}
-			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm max-md:relative max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 {page.url.pathname.startsWith(
 				'/agents'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -819,19 +848,25 @@
 			Agents
 			{#if agentStats}
 				<span
-					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
+					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-1.5 max-md:text-[10px]"
 					title="{agentStats.running} running of {agentStats.total} agents"
 				>
 					{#if agentStats.running > 0}
 						<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
 					{/if}
-					{agentStats.running}/{agentStats.total}
+					<!-- Touch has no hover title to explain "1/3"; say it in words, only when it matters. -->
+					<span class="pointer-coarse:hidden">{agentStats.running}/{agentStats.total}</span>
+					{#if agentStats.running > 0}
+						<span class="hidden max-md:hidden pointer-coarse:inline"
+							>{agentStats.running} running</span
+						>
+					{/if}
 				</span>
 			{/if}
 		</a>
 		<a
 			href={resolve('/memory')}
-			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm max-md:relative max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 {page.url.pathname.startsWith(
 				'/memory'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -842,14 +877,14 @@
 			Memory
 			{#if memoryCount !== null}
 				<span
-					class="ml-auto text-xs text-muted-foreground tabular-nums"
+					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-1.5 max-md:text-[10px]"
 					title="{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}">{memoryCount}</span
 				>
 			{/if}
 		</a>
 		<a
 			href={resolve('/skills')}
-			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm max-md:relative max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 {page.url.pathname.startsWith(
 				'/skills'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -860,14 +895,14 @@
 			Skills
 			{#if skillCount !== null}
 				<span
-					class="ml-auto text-xs text-muted-foreground tabular-nums"
+					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-1.5 max-md:text-[10px]"
 					title="{skillCount} {skillCount === 1 ? 'skill' : 'skills'}">{skillCount}</span
 				>
 			{/if}
 		</a>
 		<a
 			href={resolve('/usage')}
-			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm {page.url.pathname.startsWith(
+			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm max-md:relative max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 {page.url.pathname.startsWith(
 				'/usage'
 			)
 				? 'bg-accent text-accent-foreground'
@@ -876,7 +911,9 @@
 		>
 			<GaugeIcon class="size-4" />
 			Usage
-			<span class="ml-auto inline-flex items-center gap-3">
+			<span
+				class="ml-auto inline-flex items-center gap-3 max-md:absolute max-md:top-1 max-md:right-1.5 max-md:text-[10px]"
+			>
 				<!-- The subscription limit closest to its cap. -->
 				<SidebarPlanLimits />
 				{#if user.role === 'admin' && requestStats}
@@ -887,14 +924,16 @@
 						{#if requestStats.running > 0}
 							<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
 						{/if}
-						{formatCount(requestStats.total)}
+						<span class="pointer-coarse:hidden">{formatCount(requestStats.total)}</span>
 					</span>
 				{/if}
 			</span>
 		</a>
 	</div>
 
-	<div class="flex items-center justify-between gap-2 border-t p-3">
+	<div
+		class="flex items-center justify-between gap-2 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+	>
 		<div class="flex min-w-0 items-center gap-2">
 			{#if user.image}
 				<img src={user.image} alt="" class="size-7 shrink-0 rounded-full object-cover" />
@@ -907,7 +946,7 @@
 			{/if}
 			<span class="min-w-0 truncate text-sm" title={user.email}>{user.name}</span>
 		</div>
-		<div class="flex shrink-0 gap-1">
+		<div class="flex shrink-0 gap-1 pointer-coarse:gap-4">
 			<Button
 				variant="ghost"
 				size="icon"

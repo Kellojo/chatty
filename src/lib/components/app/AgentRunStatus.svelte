@@ -1,5 +1,6 @@
 <script lang="ts">
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
 	import CircleXIcon from '@lucide/svelte/icons/circle-x';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { cn } from '$lib/utils.js';
@@ -8,23 +9,34 @@
 	let {
 		status,
 		label = false,
+		stopped = false,
 		class: className
 	}: {
 		status: AgentRunStatus;
+		/** A failed run the user stopped on purpose: shown neutral, not as an error. */
+		stopped?: boolean;
 		/** Show the status word next to the icon (a pill), instead of an icon tile. */
 		label?: boolean;
 		class?: string;
 	} = $props();
 
 	const text = $derived(
-		status === 'running' ? 'Running' : status === 'success' ? 'Succeeded' : 'Failed'
+		status === 'running'
+			? 'Running'
+			: status === 'success'
+				? 'Succeeded'
+				: stopped
+					? 'Stopped'
+					: 'Failed'
 	);
 	const tone = $derived(
-		status === 'running'
-			? 'bg-info/15 text-info-foreground'
-			: status === 'success'
-				? 'bg-success/15 text-success-foreground'
-				: 'bg-destructive/10 text-destructive'
+		stopped && status === 'failed'
+			? 'bg-muted text-muted-foreground'
+			: status === 'running'
+				? 'bg-info/15 text-info-foreground'
+				: status === 'success'
+					? 'bg-success/15 text-success-foreground'
+					: 'bg-destructive/10 text-destructive'
 	);
 </script>
 
@@ -33,6 +45,8 @@
 		<LoaderCircleIcon class="{size} animate-spin" aria-hidden="true" />
 	{:else if status === 'success'}
 		<CircleCheckIcon class={size} aria-hidden="true" />
+	{:else if stopped}
+		<CircleStopIcon class={size} aria-hidden="true" />
 	{:else}
 		<CircleXIcon class={size} aria-hidden="true" />
 	{/if}

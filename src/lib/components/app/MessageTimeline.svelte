@@ -13,6 +13,8 @@
 	import HtmlRenderFrame from './HtmlRenderFrame.svelte';
 	import { readHtmlRender } from '$lib/html-render.js';
 	import { groupParts } from './timeline.js';
+	import { messageText } from '$lib/chat-history.js';
+	import { shortcutLabel } from '$lib/state/shortcuts.js';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
@@ -23,6 +25,8 @@
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
+	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import type {
 		MessageUsage,
 		PromptCharBreakdown,
@@ -37,7 +41,10 @@
 		messageTimes,
 		onregenerate,
 		onedit,
+		onswitchbranch,
+		branchDisabled = false,
 		conversationId = null as string | null,
+		editingId = null,
 		class: className
 	}: {
 		messages: UIMessage[];
@@ -46,7 +53,13 @@
 		messageTimes?: ReadonlyMap<string, number>;
 		onregenerate?: (messageId: string) => void;
 		onedit?: (messageId: string, text: string) => void;
+		/** Shows another version (`messageId`) of an edited message or regenerated reply. */
+		onswitchbranch?: (messageId: string) => void;
+		/** Versions can't be switched right now (a reply is streaming). */
+		branchDisabled?: boolean;
 		conversationId?: string | null;
+		/** The user message being edited: it and everything after make way for the new version. */
+		editingId?: string | null;
 		class?: string;
 	} = $props();
 
@@ -54,8 +67,6 @@
 	onMount(() => {
 		mounted = true;
 	});
-
-	type Part = UIMessage['parts'][number];
 
 	let usageMessageId = $state<string | null>(null);
 	const rotations = new SvelteMap<string, number>();
@@ -135,19 +146,14 @@
 		return (message.metadata as UIMessageMetadata | undefined) ?? {};
 	}
 
-	function messageText(message: UIMessage): string {
-		return message.parts
-			.filter((p): p is Part & { type: 'text' } => p.type === 'text')
-			.map((p) => p.text)
-			.join('');
-	}
-
-	function isLastAssistant(index: number): boolean {
+	const lastAssistantIndex = $derived.by(() => {
 		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].role === 'assistant') return i === index;
+			if (messages[i].role === 'assistant') return i;
 		}
-		return false;
-	}
+		return -1;
+	});
+
+	const editingIndex = $derived(editingId ? messages.findIndex((m) => m.id === editingId) : -1);
 
 	async function copyMessage(message: UIMessage) {
 		try {
@@ -161,9 +167,14 @@
 
 <div class={cn('mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6', className)}>
 	{#each messages as message, index (message.id)}
-		<Message class={message.role === 'user' ? 'flex-col items-end' : 'flex-col items-start'}>
+		<Message
+			class={cn(
+				message.role === 'user' ? 'flex-col items-end' : 'flex-col items-start',
+				editingIndex !== -1 && index >= editingIndex && 'opacity-50 transition-opacity'
+			)}
+		>
 			{@const blocks = groupParts(message.parts)}
-			{@const messageActive = streaming && isLastAssistant(index)}
+			{@const messageActive = streaming && index === lastAssistantIndex}
 			{#each blocks as block, blockIndex (block.key)}
 				{@const part = block.type === 'content' ? block.item.part : null}
 				{@const partIndex = block.type === 'content' ? block.item.index : -1}
@@ -200,7 +211,7 @@
 								/>
 							</a>
 							<div
-								class="absolute right-2 bottom-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
+								class="absolute right-2 bottom-2 flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
 							>
 								<button
 									type="button"
@@ -275,10 +286,42 @@
 						</span>
 					{/if}
 				{/if}
+				{@const branch = status.branch}
+				{#if branch && branch.count > 1 && onswitchbranch}
+					{@const prev = branch.ids[branch.index - 1]}
+					{@const next = branch.ids[branch.index + 1]}
+					<div
+						class="flex items-center text-xs text-muted-foreground tabular-nums"
+						role="group"
+						aria-label="Message versions"
+					>
+						<button
+							title="Previous version"
+							aria-label="Previous version"
+							disabled={!prev || branchDisabled}
+							class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
+							onclick={() => prev && onswitchbranch(prev)}
+						>
+							<ChevronLeftIcon class="size-3.5" />
+						</button>
+						<span>{branch.index + 1} / {branch.count}</span>
+						<button
+							title="Next version"
+							aria-label="Next version"
+							disabled={!next || branchDisabled}
+							class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
+							onclick={() => next && onswitchbranch(next)}
+						>
+							<ChevronRightIcon class="size-3.5" />
+						</button>
+					</div>
+				{/if}
 				<button
-					title="Copy"
+					title={index === lastAssistantIndex
+						? `Copy (${shortcutLabel('copy-last-reply')})`
+						: 'Copy'}
 					aria-label="Copy message"
-					class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+					class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
 					onclick={() => copyMessage(message)}
 				>
 					<CopyIcon class="size-3.5" />
@@ -287,17 +330,17 @@
 					<button
 						title="Edit"
 						aria-label="Edit message"
-						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
 						onclick={() => onedit(message.id, messageText(message))}
 					>
 						<PencilIcon class="size-3.5" />
 					</button>
 				{/if}
-				{#if message.role === 'assistant' && isLastAssistant(index) && onregenerate && !streaming}
+				{#if message.role === 'assistant' && index === lastAssistantIndex && onregenerate && !streaming}
 					<button
 						title="Regenerate"
 						aria-label="Regenerate response"
-						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
 						onclick={() => onregenerate(message.id)}
 					>
 						<RefreshCwIcon class="size-3.5" />
@@ -307,7 +350,7 @@
 					<button
 						title="Generation info"
 						aria-label="Generation info"
-						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
 						onclick={() => (usageMessageId = message.id)}
 					>
 						<InfoIcon class="size-3.5" />

@@ -2,14 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
 	activeRun,
 	applyStreamItem,
+	changedRuns,
+	copyThreadRecords,
 	emptyThreadState,
 	hasRunningSubagent,
+	itemsOfType,
 	MAX_PART_CHARS,
 	MAX_RUN_PARTS,
 	MAX_THREAD_RECORDS,
 	OMITTED_PARTS_NOTICE,
 	renderRun,
 	replyMessageId,
+	runItems,
 	runItemsEvicted,
 	streamItemRun,
 	summarizeTask,
@@ -44,6 +48,97 @@ describe('streamItemRun', () => {
 		expect(streamItemRun(event(1, 'thread.updated', { title: 'x' }))).toBeNull();
 		expect(streamItemRun(event(1, 'runtime-request.updated', { id: 'q1' }))).toBe('all');
 		expect(streamItemRun(snapshot({ runs: [] }))).toBe('all');
+	});
+
+	it('routes messages and requests to the run showing them', () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run(), run({ id: 'run-2', ordinal: 2, userMessageId: 'msg-2' })],
+				turnItems: [
+					{ id: 'a1', runId: 'run-2', ordinal: 1, type: 'approval_request', requestId: 'q1' }
+				]
+			})
+		);
+		const routed = (type: string, payload: unknown) =>
+			streamItemRun(event(20, type, payload), state);
+		expect(routed('message.updated', { id: 'msg-2' })).toBe('run-2');
+		expect(routed('message.updated', { id: 'msg-9' })).toBeNull();
+		expect(routed('message.updated', { id: 'msg-9', runId: 'run-1' })).toBe('run-1');
+		expect(routed('runtime-request.updated', { id: 'q1' })).toBe('run-2');
+		expect(routed('runtime-request.updated', { id: 'q9' })).toBeNull();
+		expect(routed('runtime-request.updated', { id: 'q9', runId: 'run-1' })).toBe('run-1');
+	});
+});
+
+describe('turn item indexes', () => {
+	it('follow items that move between runs, change type or are evicted', () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run()],
+				turnItems: [{ id: 'i1', runId: 'run-1', ordinal: 1, type: 'reasoning', requestId: 'q1' }]
+			})
+		);
+		expect(runItems(state, 'run-1').map((i) => i.id)).toEqual(['i1']);
+		expect(state.itemByRequest.get('q1')?.id).toBe('i1');
+
+		applyStreamItem(
+			state,
+			event(11, 'turn-item.updated', { id: 'i1', runId: 'run-2', type: 'subagent' })
+		);
+		expect(runItems(state, 'run-1')).toEqual([]);
+		expect(runItems(state, 'run-2').map((i) => i.id)).toEqual(['i1']);
+		expect(itemsOfType(state, 'reasoning')).toEqual([]);
+		expect(itemsOfType(state, 'subagent').map((i) => i.id)).toEqual(['i1']);
+		expect(state.itemByRequest.has('q1')).toBe(false);
+
+		for (let i = 0; i < MAX_THREAD_RECORDS; i++) {
+			applyStreamItem(state, event(12 + i, 'turn-item.updated', { id: `x${i}`, runId: 'run-3' }));
+		}
+		expect(runItems(state, 'run-2')).toEqual([]);
+		expect(state.itemsByRun.has('run-2')).toBe(false);
+		expect(runItems(state, 'run-3')).toHaveLength(MAX_THREAD_RECORDS);
+	});
+});
+
+describe('changedRuns', () => {
+	const base = () => ({
+		runs: [run(), run({ id: 'run-2', ordinal: 2, userMessageId: 'msg-2' })],
+		messages: [{ id: 'msg-2', text: 'Hi' }],
+		turnItems: [
+			{ id: 'i1', runId: 'run-1', ordinal: 1, type: 'assistant_message', text: 'a' },
+			{ id: 'i2', runId: 'run-2', ordinal: 1, type: 'approval_request', requestId: 'q1' }
+		],
+		runtimeRequests: [{ id: 'q1', status: 'pending' }]
+	});
+	const diff = (next: Record<string, unknown>) => {
+		const state = emptyThreadState();
+		applyStreamItem(state, snapshot(base()));
+		const before = copyThreadRecords(state);
+		applyStreamItem(state, snapshot(next, 20));
+		return changedRuns(before, state);
+	};
+
+	it('is empty for the same thread again', () => {
+		expect(diff(base())).toEqual(new Set());
+	});
+
+	it('names runs whose run, items, user message or requests changed', () => {
+		const b = base();
+		expect(diff({ ...b, runs: [run({ status: 'completed' }), b.runs[1]] })).toEqual(
+			new Set(['run-1'])
+		);
+		expect(diff({ ...b, turnItems: [{ ...b.turnItems[0], text: 'ab' }, b.turnItems[1]] })).toEqual(
+			new Set(['run-1'])
+		);
+		expect(diff({ ...b, messages: [{ id: 'msg-2', text: 'Hello' }] })).toEqual(new Set(['run-2']));
+		expect(diff({ ...b, runtimeRequests: [{ id: 'q1', status: 'resolved' }] })).toEqual(
+			new Set(['run-2'])
+		);
+		expect(diff({ ...b, turnItems: [b.turnItems[1]] })).toEqual(new Set(['run-1']));
 	});
 });
 
@@ -298,7 +393,13 @@ describe('renderRun', () => {
 		});
 		expect(parts[3]).toMatchObject({
 			toolName: 'checkpoint',
-			input: { files: ['a.ts', 'b.ts'] },
+			input: {
+				files: ['a.ts', 'b.ts'],
+				changes: [
+					{ path: 'a.ts', kind: 'modified', additions: 3, deletions: 1 },
+					{ path: 'b.ts', kind: 'added', additions: 5, deletions: 0 }
+				]
+			},
 			output: { additions: 8, deletions: 1 }
 		});
 	});
@@ -346,6 +447,37 @@ describe('renderRun', () => {
 		expect(renderRun(state, run()).map((e) => e.part)).toMatchObject([
 			{ state: 'output-error', errorText: 'Cancelled' },
 			{ state: 'output-error', errorText: 'Interrupted' }
+		]);
+	});
+
+	it('shows the text of notifications and unknown item types', () => {
+		const state = emptyThreadState();
+		const text = 'Command "pnpm dev" and subagent "Reviewer" were stopped';
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run()],
+				turnItems: [
+					{ id: 'n', runId: 'run-1', ordinal: 1, type: 'notification', text },
+					{
+						id: 'u',
+						runId: 'run-1',
+						ordinal: 2,
+						type: 'future_thing',
+						status: 'completed',
+						title: 'Something new',
+						text: 'It happened'
+					}
+				]
+			})
+		);
+		expect(renderRun(state, run()).map((e) => e.part)).toMatchObject([
+			{ toolName: 'notice', state: 'output-available', input: { text } },
+			{
+				toolName: 'Something new',
+				state: 'output-available',
+				input: { kind: 'future_thing', text: 'It happened' }
+			}
 		]);
 	});
 });

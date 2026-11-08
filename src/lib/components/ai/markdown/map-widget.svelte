@@ -125,7 +125,12 @@
 		void css;
 		leaflet = leaf;
 		// Wheel zoom only once the map is engaged, so scrolling the chat past it keeps scrolling.
-		map = leaf.map(mapEl, { attributionControl: true, scrollWheelZoom: false });
+		// On phones a one-finger swipe should scroll the chat, not pan the map; pinch still zooms.
+		map = leaf.map(mapEl, {
+			attributionControl: true,
+			scrollWheelZoom: false,
+			dragging: !leaf.Browser.mobile
+		});
 		const m = map;
 		m.on('click focus', () => m.scrollWheelZoom.enable());
 		m.on('blur mouseout', () => m.scrollWheelZoom.disable());

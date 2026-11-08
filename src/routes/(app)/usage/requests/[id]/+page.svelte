@@ -90,7 +90,9 @@
 				<Card.Title>Summary</Card.Title>
 			</Card.Header>
 			<Card.Content>
-				<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+				<dl
+					class="grid grid-cols-1 gap-x-4 gap-y-0.5 text-sm sm:grid-cols-[auto_1fr] sm:gap-y-2 max-sm:[&>dt:not(:first-child)]:mt-3"
+				>
 					<dt class="text-muted-foreground">ID</dt>
 					<dd class="font-mono text-xs break-all select-all" title="Select to copy">
 						{request.id}
@@ -176,7 +178,9 @@
 				<Card.Title>Usage</Card.Title>
 			</Card.Header>
 			<Card.Content>
-				<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+				<dl
+					class="grid grid-cols-1 gap-x-4 gap-y-0.5 text-sm sm:grid-cols-[auto_1fr] sm:gap-y-2 max-sm:[&>dt:not(:first-child)]:mt-3"
+				>
 					<dt class="text-muted-foreground">Input tokens</dt>
 					<dd>{request.inputTokens === null ? '—' : formatCount(request.inputTokens)}</dd>
 					<dt class="text-muted-foreground">Output tokens</dt>
@@ -198,7 +202,9 @@
 					<Card.Title>Compression</Card.Title>
 				</Card.Header>
 				<Card.Content>
-					<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+					<dl
+						class="grid grid-cols-1 gap-x-4 gap-y-0.5 text-sm sm:grid-cols-[auto_1fr] sm:gap-y-2 max-sm:[&>dt:not(:first-child)]:mt-3"
+					>
 						{#if request.compression.caveman}
 							<dt class="text-muted-foreground">Caveman level</dt>
 							<dd>{request.compression.caveman.level}</dd>

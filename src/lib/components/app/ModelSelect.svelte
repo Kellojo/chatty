@@ -187,12 +187,22 @@
 <Select.Root type="single" bind:value={selectedValue as never} onValueChange={onSelect}>
 	<Select.Trigger class={className} {disabled} title={label}>
 		<span class="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-			{#if selected.brand}
-				<ProviderIcon brand={selected.brand} class="size-3.5 shrink-0" />
-			{:else if selectedValue}
-				<BoxIcon class="size-3.5 shrink-0 text-muted-foreground" />
+			<!-- data-model-icon / data-model-source let compact callers (phone topbar and composer)
+			     drop the icon and the " · Provider" suffix and keep just the model name. -->
+			<span data-model-icon class="contents">
+				{#if selected.brand}
+					<ProviderIcon brand={selected.brand} class="size-3.5 shrink-0" />
+				{:else if selectedValue}
+					<BoxIcon class="size-3.5 shrink-0 text-muted-foreground" />
+				{/if}
+			</span>
+			{#if 'name' in selected}
+				<span class="truncate"
+					>{selected.name}<span data-model-source>&nbsp;· {selected.source}</span></span
+				>
+			{:else}
+				<span class="truncate">{label}</span>
 			{/if}
-			<span class="truncate">{label}</span>
 		</span>
 	</Select.Trigger>
 	<Select.Content

@@ -171,7 +171,7 @@
 </SettingsSection>
 
 <SettingsSection title="On this device" description="Saved in this browser only.">
-	<SettingsRow label="Desktop notifications" for="pref-desktop">
+	<SettingsRow label="Device notifications" for="pref-desktop">
 		{#snippet description()}
 			<span class={desktopBlocked ? 'text-amber-700 dark:text-amber-400' : undefined}
 				>{desktopHint}</span
@@ -184,7 +184,9 @@
 			onCheckedChange={setDesktop}
 		/>
 	</SettingsRow>
+	<!-- Phones have no visible tab title to flash. -->
 	<SettingsRow
+		class="pointer-coarse:hidden"
 		label="Flash the tab title"
 		for="pref-flash"
 		description="Alternate the title of a background tab until you come back."

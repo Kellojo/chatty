@@ -46,7 +46,7 @@
 			top: 4,
 			right: 4,
 			left: Math.max(24, Math.ceil(widest * 6.5) + 10),
-			bottom: 20 + (series.length >= 2 ? 32 : 0)
+			bottom: 20
 		};
 	});
 	// ~6 short labels, anchored on the last day so "today" is always labelled.
@@ -65,7 +65,7 @@
 			x="day"
 			{series}
 			seriesLayout="stack"
-			legend={series.length >= 2}
+			legend={false}
 			rule={false}
 			{padding}
 			props={{
@@ -91,4 +91,16 @@
 			{/snippet}
 		</BarChart>
 	</Chart.Container>
+	<!-- Own legend: the chart's built-in one is a single centred row that clips long
+	     model ids on narrow screens; this one wraps. -->
+	{#if series.length >= 2}
+		<ul class="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+			{#each series as s (s.key)}
+				<li class="flex max-w-full min-w-0 items-center gap-1.5">
+					<span class="size-2.5 shrink-0 rounded-[2px]" style:background-color={s.color}></span>
+					<span class="truncate" title={s.label}>{s.label}</span>
+				</li>
+			{/each}
+		</ul>
+	{/if}
 {/if}

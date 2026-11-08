@@ -9,13 +9,15 @@ type Handlers = { onValue: (value: unknown) => void; onEnd: (error: Error | null
 class FakeConnection {
 	closed = false;
 	readonly streams: Handlers[] = [];
+	readonly payloads: unknown[] = [];
 	readonly cancels = vi.fn();
 	private readonly closeListeners: ((error: Error) => void)[] = [];
 	onClose(listener: (error: Error) => void) {
 		this.closeListeners.push(listener);
 		return () => {};
 	}
-	stream(_tag: string, _payload: unknown, handlers: Handlers) {
+	stream(_tag: string, payload: unknown, handlers: Handlers) {
+		this.payloads.push(payload);
 		this.streams.push(handlers);
 		return {
 			cancel: () => {
@@ -265,6 +267,45 @@ describe('CodingFollower live turn bounds', () => {
 		});
 	});
 
+	it('follows the active run when T3 adds a follow-up message to it', async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		const { getStreamState, hasActiveStream } = await import('../chat/streams.js');
+		failConnect = false;
+		follower.beginTurn('m1');
+		await follower.follow();
+		const stream = lastConnection!.streams[0];
+		stream.onValue(runSnapshot('running'));
+		await seconds(1);
+
+		// Sent while run-1 is active: T3 adds m2 to run-1 instead of starting a run.
+		follower.beginTurn('m2');
+		const joined = runSnapshot('running', 2);
+		joined.projection.turnItems = [
+			{
+				id: 'turn-item:message:m2',
+				runId: 'run-1',
+				messageId: 'm2',
+				ordinal: 5,
+				type: 'user_message',
+				status: 'completed',
+				text: 'next'
+			}
+		] as never[];
+		stream.onValue(joined);
+		await seconds(1);
+
+		expect(getMessage(getDb(), 'm2:reply')).toBeUndefined();
+		expect(hasActiveStream(conversationId)).toBe(true);
+		expect(getStreamState(conversationId)?.chunks[0]).toEqual({
+			type: 'start',
+			messageId: 'm1:reply'
+		});
+
+		stream.onValue(runSnapshot('completed', 3));
+		await seconds(1);
+		expect(hasActiveStream(conversationId)).toBe(false);
+	});
+
 	it('does not let a pending idle stop end a new turn', async () => {
 		const { hasActiveStream } = await import('../chat/streams.js');
 		failConnect = false;
@@ -292,17 +333,107 @@ describe('CodingFollower stop', () => {
 
 		expect(hasActiveStream(conversationId)).toBe(false);
 		expect(getStreamState(conversationId)).toBeNull();
-		expect(conn.closed).toBe(true);
+		expect(conn.cancels).toHaveBeenCalled();
 		// Nothing left to abort, and no interrupt or new socket for the old credentials.
 		expect(abortStream(conversationId)).toBe(false);
 		const connects = connectT3.mock.calls.length;
 		await seconds(600);
 		expect(connectT3.mock.calls.length).toBe(connects);
+		// The shared socket closes once nobody uses it.
+		expect(conn.closed).toBe(true);
 		expect(callSpy).not.toHaveBeenCalled();
 		const { getMessage } = await import('../db/repo/messages.js');
 		expect(getMessage(getDb(), 'm1:reply')).toMatchObject({
 			status: 'failed',
 			error: 'The coding environment was removed'
+		});
+	});
+});
+
+describe('CodingFollower shared socket and resume', () => {
+	it('shares one socket between the followers of an environment', async () => {
+		const { getCodingEnvironment } = await import('../db/repo/coding-environments.js');
+		const db = getDb();
+		const row = coding.getCodingConversation(db, conversationId)!;
+		const env = getCodingEnvironment(db, 'u1', row.environment_id!)!;
+		const otherId = createConversation(db, 'u1', { kind: 'chat', mode: 'agent', title: 'B' }).id;
+		coding.createCodingConversation(db, {
+			conversationId: otherId,
+			environmentId: env.id,
+			projectId: 'p1',
+			projectTitle: 'Chatty',
+			providerInstanceId: 'codex',
+			model: 'gpt-5',
+			runtimeMode: 'full-access',
+			workspaceMode: 'worktree',
+			baseBranch: null
+		});
+		failConnect = false;
+		const calls = connectT3.mock.calls.length;
+		const other = ensureFollower({ conversationId: otherId, userId: 'u1', env, threadId: 't2' });
+		await Promise.all([follower.follow(), other.follow()]);
+		expect(connectT3.mock.calls.length).toBe(calls + 1);
+		expect(lastConnection!.streams).toHaveLength(2);
+	});
+
+	it('resubscribes from the last sequence it saw after a reconnect', async () => {
+		failConnect = false;
+		await follower.follow();
+		const first = lastConnection!;
+		expect(first.payloads[0]).toEqual({ threadId: 't1' });
+		first.streams[0].onValue(runSnapshot('running', 7));
+		await seconds(1);
+		first.close();
+		await seconds(5);
+		const second = lastConnection!;
+		expect(second).not.toBe(first);
+		expect(second.payloads[0]).toEqual({
+			threadId: 't1',
+			afterSequence: 7,
+			requestCompletionMarker: true
+		});
+		second.streams[0].onValue({ kind: 'synchronized' });
+		await seconds(60);
+		// Caught up: no snapshot timeout cancelled it.
+		expect(second.cancels).not.toHaveBeenCalled();
+		expect(getFollower(conversationId)).toBe(follower);
+	});
+
+	it('falls back to a full snapshot when a resumed subscription stays silent', async () => {
+		failConnect = false;
+		await follower.follow();
+		lastConnection!.streams[0].onValue(runSnapshot('running', 7));
+		await seconds(1);
+		lastConnection!.close();
+		await seconds(5);
+		const conn = lastConnection!;
+		expect(conn.payloads[0]).toMatchObject({ afterSequence: 7 });
+		await seconds(45);
+		expect(conn.cancels).toHaveBeenCalledTimes(1);
+		expect(conn.payloads[1]).toEqual({ threadId: 't1' });
+	});
+});
+
+describe('CodingFollower follow-up messages', () => {
+	it('lets T3 decide when to start a follow-up, even while a run is active', async () => {
+		failConnect = false;
+		await follower.follow();
+		const conn = lastConnection!;
+		conn.streams[0].onValue(runSnapshot('running'));
+		await seconds(1);
+		const call = vi.spyOn(conn, 'call');
+
+		await follower.sendMessage({ id: 'm2', text: 'next' });
+
+		const dispatch = call.mock.calls.find(
+			(c) => (c as unknown[])[0] === 'orchestration.dispatchCommand'
+		) as unknown[] | undefined;
+		// T3's own client default; `queue_after_active` would park it in T3's queue.
+		expect(dispatch?.[1]).toMatchObject({
+			type: 'message.dispatch',
+			messageId: 'm2',
+			deliveryIntent: 'auto',
+			dispatchMode: { type: 'start_immediately' }
 		});
 	});
 });
@@ -352,6 +483,98 @@ describe('CodingFollower omitted output', () => {
 		stream.onValue(outputSnapshot(4));
 		await seconds(40);
 		expect(fetches()).toHaveLength(2); // loaded now
+	});
+
+	it('fetches at most a few outputs at once and queues the rest', async () => {
+		failConnect = false;
+		await follower.follow();
+		const conn = lastConnection!;
+		let active = 0;
+		let peak = 0;
+		let fetched = 0;
+		const pending: (() => void)[] = [];
+		vi.spyOn(conn, 'call').mockImplementation((async (tag: string) => {
+			if (tag !== 'orchestration.getTurnItem') return {};
+			active++;
+			peak = Math.max(peak, active);
+			await new Promise<void>((resolve) => pending.push(resolve));
+			active--;
+			fetched++;
+			return { item: { output: 'ok' } };
+		}) as never);
+		const base = runSnapshot('completed', 1);
+		conn.streams[0].onValue({
+			...base,
+			projection: {
+				...base.projection,
+				turnItems: Array.from({ length: 10 }, (_, i) => ({
+					id: `c${i}`,
+					runId: 'run-1',
+					ordinal: i + 1,
+					type: 'command_execution',
+					status: 'completed',
+					outputOmitted: true
+				}))
+			}
+		});
+		await seconds(1);
+		expect(pending).toHaveLength(4);
+		while (fetched < 10) {
+			const batch = pending.splice(0);
+			if (batch.length === 0) break;
+			for (const resolve of batch) resolve();
+			await seconds(0);
+		}
+		expect(fetched).toBe(10);
+		expect(peak).toBe(4);
+	});
+});
+
+describe('CodingFollower change size', () => {
+	it('re-reads the change size when edits land while a read is in flight', async () => {
+		failConnect = false;
+		await follower.follow();
+		const conn = lastConnection!;
+		const reads: ((value: unknown) => void)[] = [];
+		vi.spyOn(conn, 'call').mockImplementation(((tag: string) =>
+			tag === 'vcs.refreshStatus'
+				? new Promise((resolve) => reads.push(resolve))
+				: Promise.resolve({})) as never);
+		const snap = (sequence: number, edits: number) => {
+			const base = runSnapshot('completed', sequence);
+			return {
+				...base,
+				projection: {
+					...base.projection,
+					thread: { id: 't1', worktreePath: '/wt' },
+					turnItems: Array.from({ length: edits }, (_, i) => ({
+						id: `f${i}`,
+						runId: 'run-1',
+						ordinal: i + 1,
+						type: 'file_change',
+						status: 'completed'
+					}))
+				}
+			};
+		};
+		const stat = (insertions: number, deletions: number) => ({
+			workingTree: { insertions, deletions }
+		});
+
+		conn.streams[0].onValue(snap(1, 0));
+		await seconds(3);
+		expect(reads).toHaveLength(1);
+		conn.streams[0].onValue(snap(2, 1)); // an edit while the first read is in flight
+		await seconds(3);
+		reads[0](stat(1, 0));
+		await seconds(0);
+		expect(reads).toHaveLength(2);
+		reads[1](stat(5, 2));
+		await seconds(0);
+		expect(coding.getCodingConversation(getDb(), conversationId)).toMatchObject({
+			diff_insertions: 5,
+			diff_deletions: 2
+		});
 	});
 });
 

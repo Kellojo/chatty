@@ -201,8 +201,7 @@
 		busy = true;
 		try {
 			const conversation = draft ? await createCodingTask(draft) : await createChatConversation();
-			// Attachments aren't supported for coding tasks yet.
-			pendingMessage.set(conversation.id, trimmed, draft ? [] : selectedFiles);
+			pendingMessage.set(conversation.id, trimmed, selectedFiles);
 			const target = resolve(`/chat/${conversation.id}`);
 			await goto(target);
 			// goto() also resolves when the navigation was cancelled. Unless the user
@@ -222,12 +221,12 @@
 	class="relative flex flex-1 flex-col items-center justify-start gap-8 p-6 pt-[18vh] sm:pt-[22vh]"
 	role="region"
 	aria-label="New chat"
-	ondragenter={coding ? undefined : fileDrop.ondragenter}
-	ondragover={coding ? undefined : fileDrop.ondragover}
-	ondragleave={coding ? undefined : fileDrop.ondragleave}
-	ondrop={coding ? undefined : fileDrop.ondrop}
+	ondragenter={fileDrop.ondragenter}
+	ondragover={fileDrop.ondragover}
+	ondragleave={fileDrop.ondragleave}
+	ondrop={fileDrop.ondrop}
 >
-	{#if fileDrop.dragActive && !coding}
+	{#if fileDrop.dragActive}
 		<div
 			class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-info bg-background/70"
 		>
@@ -274,13 +273,14 @@
 		{/if}
 	</div>
 	<div class="w-full max-w-2xl">
-		{#if selectedFiles.length > 0 && !coding}
+		{#if selectedFiles.length > 0}
 			<div class="mb-2 flex flex-wrap gap-2">
 				{#each selectedFiles as file, i (file.name + i)}
 					<Badge variant="secondary" class="flex items-center gap-1">
 						{file.name}
 						<button
 							aria-label="Remove {file.name}"
+							class="-my-1 -mr-1 rounded-full p-1 pointer-coarse:-my-2 pointer-coarse:-mr-2 pointer-coarse:p-2"
 							onclick={() => (selectedFiles = selectedFiles.filter((_, j) => j !== i))}
 						>
 							<XIcon class="size-3" />
@@ -300,23 +300,13 @@
 					: 'Ask anything…'}
 			/>
 			<PromptInputActions class="justify-between">
-				<div class="flex items-center gap-1">
+				<!-- min-w-0 lets the model picker give way on narrow phones instead of pushing Send out. -->
+				<div class="flex min-w-0 items-center gap-1">
 					{#if coding}
 						<CodingModelSelect state={codingTask} disabled={busy} />
-						<!-- Same toolbar as chat; coding tasks can't take attachments yet. -->
-						<span
-							class="hidden sm:inline-flex"
-							title="Attachments aren't supported for coding tasks yet"
-						>
-							<Button
-								variant="ghost"
-								size="icon"
-								aria-label="Attach files (not available for coding tasks)"
-								disabled
-							>
-								<PaperclipIcon class="size-4" />
-							</Button>
-						</span>
+						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
+							<PaperclipIcon class="size-4" />
+						</Button>
 					{:else}
 						<ModelPicker
 							groups={data.groups}
@@ -324,6 +314,7 @@
 							value={selectedValue}
 							onselect={(v) => (picked = v)}
 							disabled={busy}
+							class="w-40 min-w-0 shrink sm:w-64 max-sm:[&_[data-model-source]]:hidden"
 						/>
 						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 							<PaperclipIcon class="size-4" />
