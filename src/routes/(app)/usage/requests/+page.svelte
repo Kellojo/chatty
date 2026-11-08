@@ -577,6 +577,14 @@
 				<span class="text-2xl font-semibold tabular-nums">
 					{formatCount(data.stats.inputTokens + data.stats.outputTokens)}
 				</span>
+				{#if data.stats.cacheReadTokens > 0}
+					<span
+						class="text-xs text-muted-foreground tabular-nums"
+						title="Input tokens served from the provider's prompt cache"
+					>
+						{formatCount(data.stats.cacheReadTokens)} input from cache
+					</span>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 		<Card.Root class="rounded-2xl border-border/40">

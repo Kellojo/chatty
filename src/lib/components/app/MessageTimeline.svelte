@@ -27,6 +27,7 @@
 	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import type {
 		MessageUsage,
 		PromptCharBreakdown,
@@ -42,6 +43,7 @@
 		onregenerate,
 		onedit,
 		onswitchbranch,
+		ondeletebranch,
 		branchDisabled = false,
 		conversationId = null as string | null,
 		editingId = null,
@@ -55,6 +57,8 @@
 		onedit?: (messageId: string, text: string) => void;
 		/** Shows another version (`messageId`) of an edited message or regenerated reply. */
 		onswitchbranch?: (messageId: string) => void;
+		/** Deletes the shown version (`messageId`) and its replies; only offered with other versions. */
+		ondeletebranch?: (messageId: string) => void;
 		/** Versions can't be switched right now (a reply is streaming). */
 		branchDisabled?: boolean;
 		conversationId?: string | null;
@@ -69,6 +73,8 @@
 	});
 
 	let usageMessageId = $state<string | null>(null);
+	/** The version whose delete button was clicked once and waits for the confirming click. */
+	let confirmDeleteId = $state<string | null>(null);
 	const rotations = new SvelteMap<string, number>();
 	const imgSizes = new SvelteMap<string, { w: number; h: number }>();
 
@@ -314,6 +320,34 @@
 						>
 							<ChevronRightIcon class="size-3.5" />
 						</button>
+						{#if ondeletebranch}
+							<!-- Deleting removes this version and its replies for good: the first
+							     click only arms it. -->
+							{@const confirming = confirmDeleteId === message.id}
+							<button
+								title={confirming ? 'Click again to delete this version' : 'Delete this version'}
+								aria-label={confirming ? 'Confirm deleting this version' : 'Delete this version'}
+								disabled={branchDisabled}
+								class={cn(
+									'ml-0.5 flex items-center gap-1 rounded-md p-1 hover:bg-accent disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5',
+									confirming ? 'text-destructive' : 'hover:text-foreground'
+								)}
+								onclick={() => {
+									if (confirming) {
+										confirmDeleteId = null;
+										ondeletebranch(message.id);
+									} else {
+										confirmDeleteId = message.id;
+									}
+								}}
+								onblur={() => {
+									if (confirming) confirmDeleteId = null;
+								}}
+							>
+								<Trash2Icon class="size-3.5" />
+								{#if confirming}<span>Delete?</span>{/if}
+							</button>
+						{/if}
 					</div>
 				{/if}
 				<button

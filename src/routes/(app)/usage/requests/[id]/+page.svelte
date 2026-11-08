@@ -184,6 +184,15 @@
 				>
 					<dt class="text-muted-foreground">Input tokens</dt>
 					<dd>{request.inputTokens === null ? '—' : formatCount(request.inputTokens)}</dd>
+					<!-- Part of the input tokens, priced separately when a cache price is set. -->
+					{#if request.cacheReadTokens}
+						<dt class="text-muted-foreground">Read from cache</dt>
+						<dd>{formatCount(request.cacheReadTokens)} of the input tokens</dd>
+					{/if}
+					{#if request.cacheWriteTokens}
+						<dt class="text-muted-foreground">Written to cache</dt>
+						<dd>{formatCount(request.cacheWriteTokens)} of the input tokens</dd>
+					{/if}
 					<dt class="text-muted-foreground">Output tokens</dt>
 					<dd>{request.outputTokens === null ? '—' : formatCount(request.outputTokens)}</dd>
 					<dt class="text-muted-foreground">Billed</dt>

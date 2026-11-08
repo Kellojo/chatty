@@ -742,19 +742,21 @@
 	// ── versions ─────────────────────────────────────────────────────────────
 	let switchingBranch = $state(false);
 
-	/** Shows another version of a message: the server's path through it replaces the list. */
-	async function switchBranch(messageId: string) {
+	type BranchPage = { messages: ChatMessage[]; hasOlder: boolean };
+
+	/**
+	 * Runs a request that answers with the conversation's newest page on its active
+	 * path, and shows that page in place of the list (older pages of the previous
+	 * path no longer apply).
+	 */
+	async function loadBranchPage(url: string, init: RequestInit | undefined, failure: string) {
 		if (streaming || sending || switchingBranch) return;
 		const id = conversation.id;
 		switchingBranch = true;
 		try {
-			const res = await fetch(`/api/conversations/${encodeURIComponent(id)}/branch`, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ messageId })
-			});
+			const res = await fetch(url, init);
 			if (!res.ok) throw new Error(errorText(new Error(await res.text())) || String(res.status));
-			const page = (await res.json()) as { messages: ChatMessage[]; hasOlder: boolean };
+			const page = (await res.json()) as BranchPage;
 			if (conversation.id !== id || streaming || sending) return;
 			if (editing) cancelEdit();
 			recordTimes(page.messages);
@@ -762,11 +764,52 @@
 			hasOlder = page.hasOlder;
 			olderFailed = false;
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "Couldn't switch versions");
+			toast.error(e instanceof Error ? e.message : failure);
 		} finally {
 			switchingBranch = false;
 		}
 	}
+
+	const branchUrl = (suffix = '') =>
+		`/api/conversations/${encodeURIComponent(conversation.id)}/branch${suffix}`;
+
+	/** Shows another version of a message: the server's path through it replaces the list. */
+	function switchBranch(messageId: string) {
+		return loadBranchPage(
+			branchUrl(),
+			{
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ messageId })
+			},
+			"Couldn't switch versions"
+		);
+	}
+
+	/** Deletes a version and its replies; the newest remaining version is shown. */
+	function deleteBranch(messageId: string) {
+		return loadBranchPage(
+			branchUrl(`/${encodeURIComponent(messageId)}`),
+			{ method: 'DELETE' },
+			"Couldn't delete this version"
+		);
+	}
+
+	// Another tab switched, deleted or added a version: show the active path again.
+	// This tab's own changes arrive here too; while it streams or switches it
+	// already shows the right path, and otherwise reloading is harmless.
+	$effect(() => {
+		const id = conversation.id;
+		return onServerEvent((event) => {
+			if (event.type !== 'conversation.branch_changed' || event.conversationId !== id) return;
+			if (streaming || sending || switchingBranch || editing) return;
+			void loadBranchPage(
+				`/api/conversations/${encodeURIComponent(id)}/messages`,
+				undefined,
+				"Couldn't load the latest version"
+			);
+		});
+	});
 
 	function cancelEdit() {
 		const edit = editing;
@@ -1052,6 +1095,7 @@
 				onregenerate={isCoding ? undefined : regenerate}
 				onedit={isCoding ? undefined : startEdit}
 				onswitchbranch={isCoding ? undefined : switchBranch}
+				ondeletebranch={isCoding ? undefined : deleteBranch}
 				branchDisabled={streaming || sending || switchingBranch}
 				editingId={editing?.messageId ?? null}
 			/>
