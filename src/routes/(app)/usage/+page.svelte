@@ -2,6 +2,8 @@
 	import { resolve } from '$app/paths';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import ReceiptIcon from '@lucide/svelte/icons/receipt';
+	import EmptyState from '$lib/components/app/EmptyState.svelte';
 	import TrendingDownIcon from '@lucide/svelte/icons/trending-down';
 	import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -162,8 +164,12 @@
 			subtitle="Billed per token by the providers configured in Chatty."
 		>
 			<span class="text-sm text-foreground/80 tabular-nums">
-				Your {formatCount(payg.totalRequests)}
-				{payg.totalRequests === 1 ? 'request' : 'requests'} · {formatCount(payg.totalTokens)} tokens
+				{#if payg.totalRequests === 0}
+					No requests in this period
+				{:else}
+					Your {formatCount(payg.totalRequests)}
+					{payg.totalRequests === 1 ? 'request' : 'requests'} · {formatCount(payg.totalTokens)} tokens
+				{/if}
 			</span>
 			{#if delta}
 				<span class="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
@@ -196,8 +202,12 @@
 				subtitle="Included in your plans, shown at API prices — not billed."
 			>
 				<span class="text-sm text-foreground/80 tabular-nums">
-					Your {formatCount(subs.totalSessions)}
-					{subs.totalSessions === 1 ? 'session' : 'sessions'} · {formatCount(subs.totalTokens)} tokens
+					{#if subs.totalSessions === 0}
+						No sessions in this period
+					{:else}
+						Your {formatCount(subs.totalSessions)}
+						{subs.totalSessions === 1 ? 'session' : 'sessions'} · {formatCount(subs.totalTokens)} tokens
+					{/if}
 				</span>
 				{#if topWindow}
 					<span class="text-xs text-muted-foreground tabular-nums">
@@ -219,7 +229,12 @@
 						Connect a T3 Code coding environment to track your Claude, Codex and other plans:
 						limits, resets and the API-equivalent value of what you use. Chatty never bills for it.
 					</p>
-					<Button size="sm" class="mt-auto" href={resolve('/settings/environments')}>
+					<Button
+						variant="outline"
+						size="sm"
+						class="mt-auto"
+						href={resolve('/settings/environments')}
+					>
 						Connect environment
 					</Button>
 				</Card.Content>
@@ -262,63 +277,80 @@
 	<!-- Mirrored columns: daily chart → provider list → drill-down link. -->
 	<!-- Equal heights, with the drill-down links pinned to the bottom of both cards. -->
 	<div class="grid gap-4 {hasEnvironments ? 'lg:grid-cols-2' : ''}">
-		<Card.Root class="h-full rounded-2xl border-border/40">
-			<Card.Header class="pb-3">
-				<Card.Title class="flex flex-wrap items-center gap-2 text-sm font-medium">
-					{paygAllFree ? 'Requests per day' : 'Billed per day'}
-					<ProviderBillingBadge billing="payg" />
-				</Card.Title>
-				<Card.Description>
-					{#if paygAllFree}
-						Nothing was billed {rangeLabel}, so this shows requests per day.
-					{:else}
-						Billed cost per day, by provider{payg.chartCapped ? ' (most recent 365 days)' : ''}.
-					{/if}
-				</Card.Description>
-			</Card.Header>
-			<Card.Content class="flex flex-1 flex-col gap-4">
-				{#if payg.providers.length === 0}
-					<p class="text-sm text-muted-foreground">No requests, {rangeLabel}.</p>
-				{:else}
-					<DailyStackedChart
-						rows={paygRows}
-						series={paygSeries}
-						valueFormat={paygAllFree ? formatCount : formatSpend}
-						axisFormat={paygAllFree ? formatCount : formatSpendCompact}
-						class="max-h-[200px] min-h-[200px]"
-					/>
-					<ul class="flex flex-col gap-2" aria-label="Pay-as-you-go providers">
-						{#each payg.providers.slice(0, 5) as p (p.key)}
-							<li class="flex items-center gap-2 text-sm">
-								<span
-									class="size-2.5 shrink-0 rounded-full"
-									style:background-color={paygColor(p.colorSlot)}
-								></span>
-								<span class="min-w-0 flex-1 truncate" title={p.name}>{p.name}</span>
-								{#if noCost(p)}
-									<span class="text-xs text-muted-foreground" title={NO_COST_REPORTED}
-										>no cost reported</span
-									>
-								{:else if payg.totalCostUsd > 0}
-									<span class="text-xs text-muted-foreground tabular-nums">
-										{Math.round((p.costUsd / payg.totalCostUsd) * 100)}%
-									</span>
-								{/if}
-								<span class="w-24 text-right font-medium tabular-nums"
-									>{formatBilled(p.costUsd, { pricedRequests: p.pricedRequests })}</span
-								>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-				<a
-					href={requestsHref()}
-					class="mt-auto inline-flex items-center gap-1 self-start text-sm font-medium underline-offset-4 hover:underline pointer-coarse:min-h-10"
+		<!-- No requests of your own: one clear empty state instead of an empty chart and list. -->
+		{#if payg.totalRequests === 0}
+			<Card.Root class="h-full rounded-2xl border-border/40">
+				<EmptyState
+					icon={ReceiptIcon}
+					title="No requests from you in this period"
+					description="Chats and agent runs you start show up here with what they cost."
 				>
-					View your requests <ArrowRightIcon class="size-3.5" aria-hidden="true" />
-				</a>
-			</Card.Content>
-		</Card.Root>
+					{#if data.user.role === 'admin'}
+						<Button variant="outline" href={requestsHref()}>
+							See everyone's requests <ArrowRightIcon />
+						</Button>
+					{/if}
+				</EmptyState>
+			</Card.Root>
+		{:else}
+			<Card.Root class="h-full rounded-2xl border-border/40">
+				<Card.Header class="pb-3">
+					<Card.Title class="flex flex-wrap items-center gap-2 text-sm font-medium">
+						{paygAllFree ? 'Requests per day' : 'Billed per day'}
+						<ProviderBillingBadge billing="payg" />
+					</Card.Title>
+					<Card.Description>
+						{#if paygAllFree}
+							Nothing was billed {rangeLabel}, so this shows requests per day.
+						{:else}
+							Billed cost per day, by provider{payg.chartCapped ? ' (most recent 365 days)' : ''}.
+						{/if}
+					</Card.Description>
+				</Card.Header>
+				<Card.Content class="flex flex-1 flex-col gap-4">
+					{#if payg.providers.length === 0}
+						<p class="text-sm text-muted-foreground">No requests, {rangeLabel}.</p>
+					{:else}
+						<DailyStackedChart
+							rows={paygRows}
+							series={paygSeries}
+							valueFormat={paygAllFree ? formatCount : formatSpend}
+							axisFormat={paygAllFree ? formatCount : formatSpendCompact}
+							class="max-h-[200px] min-h-[200px]"
+						/>
+						<ul class="flex flex-col gap-2" aria-label="Pay-as-you-go providers">
+							{#each payg.providers.slice(0, 5) as p (p.key)}
+								<li class="flex items-center gap-2 text-sm">
+									<span
+										class="size-2.5 shrink-0 rounded-full"
+										style:background-color={paygColor(p.colorSlot)}
+									></span>
+									<span class="min-w-0 flex-1 truncate" title={p.name}>{p.name}</span>
+									{#if noCost(p)}
+										<span class="text-xs text-muted-foreground" title={NO_COST_REPORTED}
+											>no cost reported</span
+										>
+									{:else if payg.totalCostUsd > 0}
+										<span class="text-xs text-muted-foreground tabular-nums">
+											{Math.round((p.costUsd / payg.totalCostUsd) * 100)}%
+										</span>
+									{/if}
+									<span class="w-24 text-right font-medium tabular-nums"
+										>{formatBilled(p.costUsd, { pricedRequests: p.pricedRequests })}</span
+									>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+					<a
+						href={requestsHref()}
+						class="mt-auto inline-flex items-center gap-1 self-start text-sm font-medium underline-offset-4 hover:underline pointer-coarse:min-h-10"
+					>
+						View your requests <ArrowRightIcon class="size-3.5" aria-hidden="true" />
+					</a>
+				</Card.Content>
+			</Card.Root>
+		{/if}
 
 		{#if hasEnvironments}
 			<Card.Root class="h-full rounded-2xl border-border/40">

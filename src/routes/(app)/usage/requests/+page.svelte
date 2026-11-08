@@ -635,60 +635,66 @@
 			<ul class="flex flex-col divide-y divide-border/60 md:hidden">
 				{#each data.requests as request (request.id)}
 					<li>
-						<a href={resolve(`/usage/requests/${request.id}`)} class="flex flex-col gap-1 py-3">
-							<span class="flex items-center gap-2">
-								<span
-									class="min-w-0 flex-1 truncate text-sm font-medium"
-									title={request.requestedModel}
-								>
-									{request.requestedModel}
-								</span>
-								<!-- Phones: a completed request is just a dot, so failures stand out. -->
-								<span
-									class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {statusTone(
-										request.status
-									)} {request.status === 'complete'
-										? 'max-sm:border-transparent max-sm:bg-transparent max-sm:px-0'
-										: ''}"
-								>
-									<span class="size-1.5 rounded-full {statusDot(request.status)}"></span>
-									<span class={request.status === 'complete' ? 'max-sm:sr-only' : ''}
-										>{request.status}</span
+						<a href={resolve(`/usage/requests/${request.id}`)} class="flex items-center gap-2 py-3">
+							<span class="flex min-w-0 flex-1 flex-col gap-1">
+								<span class="flex items-center gap-2">
+									<span
+										class="min-w-0 flex-1 truncate text-sm font-medium"
+										title={request.requestedModel}
 									>
-								</span>
-								<span
-									class="shrink-0 text-xs text-muted-foreground"
-									title={formatDateTime(request.startedAt, data.timeFormat)}
-								>
-									{formatTimeAgo(request.startedAt)}
-								</span>
-							</span>
-							<span
-								class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground tabular-nums"
-							>
-								<!-- Stats never truncate; the user name wraps onto its own line when it doesn't fit. -->
-								<span class="shrink-0">
-									{#if request.inputTokens === null && request.outputTokens === null}No tokens{:else}{request.inputTokens ===
-										null
-											? '—'
-											: formatCount(request.inputTokens)} in · {request.outputTokens === null
-											? '—'
-											: formatCount(request.outputTokens)} out{/if} ·
-									{formatLatency(request.latencyMs)} ·
-									<span class="capitalize">{request.source}</span>
-								</span>
-								<!-- No cost reported: left to the detail page rather than a bare "—". -->
-								{#if request.costUsd !== null}
-									<span class="ml-auto shrink-0 text-sm text-foreground">
-										{formatBilled(request.costUsd, { precise: true })}
+										{request.requestedModel}
 									</span>
-								{/if}
-								{#if data.isAdmin}
-									<span class="max-w-full min-w-0 basis-full truncate"
-										>by {data.users[request.userId] ?? request.userId}</span
+									<!-- Phones: a completed request is just a dot, so failures stand out. -->
+									<span
+										class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {statusTone(
+											request.status
+										)} {request.status === 'complete'
+											? 'max-sm:border-transparent max-sm:bg-transparent max-sm:px-0'
+											: ''}"
 									>
-								{/if}
+										<span class="size-1.5 rounded-full {statusDot(request.status)}"></span>
+										<span class={request.status === 'complete' ? 'max-sm:sr-only' : ''}
+											>{request.status}</span
+										>
+									</span>
+									<span
+										class="shrink-0 text-xs text-muted-foreground"
+										title={formatDateTime(request.startedAt, data.timeFormat)}
+									>
+										{formatTimeAgo(request.startedAt)}
+									</span>
+								</span>
+								<span
+									class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground tabular-nums"
+								>
+									<!-- Stats never truncate; the user name wraps onto its own line when it doesn't fit. -->
+									<span class="shrink-0">
+										{#if request.inputTokens === null && request.outputTokens === null}No tokens{:else}{request.inputTokens ===
+											null
+												? '—'
+												: formatCount(request.inputTokens)} in · {request.outputTokens === null
+												? '—'
+												: formatCount(request.outputTokens)} out{/if} ·
+										{formatLatency(request.latencyMs)} ·
+										<span class="capitalize">{request.source}</span>
+									</span>
+									<!-- No cost reported: left to the detail page rather than a bare "—". -->
+									{#if request.costUsd !== null}
+										<span class="ml-auto shrink-0 text-sm text-foreground">
+											{formatBilled(request.costUsd, { precise: true })}
+										</span>
+									{/if}
+									{#if data.isAdmin}
+										<span class="max-w-full min-w-0 truncate"
+											>by {data.users[request.userId] ?? request.userId}</span
+										>
+									{/if}
+								</span>
 							</span>
+							<ChevronRightIcon
+								class="mt-0.5 size-4 shrink-0 self-start text-muted-foreground"
+								aria-hidden="true"
+							/>
 						</a>
 					</li>
 				{:else}

@@ -848,7 +848,7 @@
 			Agents
 			{#if agentStats}
 				<span
-					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-1.5 max-md:text-[10px]"
+					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px]"
 					title="{agentStats.running} running of {agentStats.total} agents"
 				>
 					{#if agentStats.running > 0}
@@ -877,7 +877,10 @@
 			Memory
 			{#if memoryCount !== null}
 				<span
-					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-1.5 max-md:text-[10px]"
+					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px] {memoryCount ===
+					0
+						? 'max-md:hidden'
+						: ''}"
 					title="{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}">{memoryCount}</span
 				>
 			{/if}
@@ -895,7 +898,10 @@
 			Skills
 			{#if skillCount !== null}
 				<span
-					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-1.5 max-md:text-[10px]"
+					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px] {skillCount ===
+					0
+						? 'max-md:hidden'
+						: ''}"
 					title="{skillCount} {skillCount === 1 ? 'skill' : 'skills'}">{skillCount}</span
 				>
 			{/if}
@@ -912,7 +918,7 @@
 			<GaugeIcon class="size-4" />
 			Usage
 			<span
-				class="ml-auto inline-flex items-center gap-3 max-md:absolute max-md:top-1 max-md:right-1.5 max-md:text-[10px]"
+				class="ml-auto inline-flex items-center gap-3 max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px]"
 			>
 				<!-- The subscription limit closest to its cap. -->
 				<SidebarPlanLimits />

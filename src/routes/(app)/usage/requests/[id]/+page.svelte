@@ -6,7 +6,7 @@
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
-	import { formatCount } from '$lib/formats.js';
+	import { formatCount, formatLatency } from '$lib/formats.js';
 	import { billedParts } from '$lib/components/app/usage/usage.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
 	import type { ProxyRequestStatus } from '$lib/types.js';
@@ -108,7 +108,7 @@
 					<dt class="text-muted-foreground">Started</dt>
 					<dd>{formatDateTime(request.startedAt, data.timeFormat)}</dd>
 					<dt class="text-muted-foreground">Latency</dt>
-					<dd>{request.latencyMs !== null ? `${request.latencyMs} ms` : '—'}</dd>
+					<dd>{formatLatency(request.latencyMs)}</dd>
 					<dt class="text-muted-foreground">Requested model</dt>
 					<dd>{request.requestedModel}</dd>
 					<dt class="text-muted-foreground">Served provider / model</dt>
@@ -132,7 +132,8 @@
 					{/if}
 					{#if request.stepIndex > 0 || request.source !== 'proxy'}
 						<dt class="text-muted-foreground">Step</dt>
-						<dd>{request.stepIndex}</dd>
+						<!-- Stored zero-based; people count steps from one. -->
+						<dd>{request.stepIndex + 1}</dd>
 					{/if}
 					{#if request.conversationId}
 						<dt class="text-muted-foreground">Conversation</dt>

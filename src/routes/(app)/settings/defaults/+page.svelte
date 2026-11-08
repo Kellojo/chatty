@@ -143,7 +143,7 @@
 				noneValue=""
 				noneLabel="Not set"
 				capability={roleCapability[role]}
-				class="w-full sm:w-72"
+				class="w-full sm:w-72 max-md:[&_[data-model-source]]:hidden"
 			/>
 		</SettingsRow>
 	{/each}

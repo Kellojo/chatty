@@ -314,7 +314,7 @@
 							value={selectedValue}
 							onselect={(v) => (picked = v)}
 							disabled={busy}
-							class="w-40 min-w-0 shrink sm:w-64 max-sm:[&_[data-model-source]]:hidden"
+							class="w-40 min-w-0 shrink max-sm:w-auto max-sm:max-w-40 sm:w-64 max-sm:[&_[data-model-source]]:hidden"
 						/>
 						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 							<PaperclipIcon class="size-4" />

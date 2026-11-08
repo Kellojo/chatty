@@ -419,14 +419,16 @@
 			<SettingsRow
 				label="Max steps"
 				for="agent-max-steps"
-				description="Tool calls per run before the agent stops. Leave empty for 25."
+				description={readonly
+					? 'Tool calls per run before the agent stops.'
+					: 'Tool calls per run before the agent stops. Leave empty for 25.'}
 				stack
 			>
 				{#if readonly}
 					<!-- Read-only: the effective value, not a placeholder that looks empty. -->
 					<p
 						id="agent-max-steps"
-						class="rounded-3xl border border-dashed border-border px-3 py-2 text-sm sm:w-28"
+						class="w-full rounded-3xl border border-dashed border-border px-3 py-2 text-sm sm:w-28"
 					>
 						{form.maxSteps === '' ? '25' : form.maxSteps}
 					</p>
@@ -486,7 +488,9 @@
 			<SettingsRow
 				label="Run on every Nth occurrence"
 				for="agent-every"
-				description="Set to 1 to run on every event, 5 to run on every fifth."
+				description={readonly
+					? 'How many matching events pass between runs.'
+					: 'Set to 1 to run on every event, 5 to run on every fifth.'}
 				stack
 			>
 				<Input

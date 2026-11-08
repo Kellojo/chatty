@@ -29,6 +29,10 @@
 		{/if}
 	</div>
 	{#if children}
-		<div class="flex flex-wrap justify-center gap-2">{@render children()}</div>
+		<div
+			class="flex flex-wrap justify-center gap-2 max-sm:w-full max-sm:max-w-xs max-sm:flex-col max-sm:items-stretch"
+		>
+			{@render children()}
+		</div>
 	{/if}
 </div>

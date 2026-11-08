@@ -150,6 +150,12 @@
 				Send test
 			</Button>
 		</span>
+		{#if !canTest}
+			<!-- Touch screens never show the tooltip above. -->
+			<p class="text-xs text-muted-foreground pointer-fine:hidden">
+				Turn on device notifications or a sound to send a test.
+			</p>
+		{/if}
 	{/snippet}
 </SettingsHeader>
 

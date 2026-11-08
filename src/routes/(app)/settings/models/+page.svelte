@@ -337,6 +337,7 @@
 				{#each shown as model (model.id)}
 					{@const brand = resolveModelBrand(model, provider)}
 					{@const details = modelDetails(model)}
+					{@const caps = model.capabilities.filter((c) => !COMMON_CAPS.has(c))}
 					<!-- "vendor/model" ids may wrap after the slash, never mid-name. -->
 					{@const title = model.displayName.replace('/', '/' + String.fromCharCode(0x200b))}
 					{#snippet modelIcon()}
@@ -347,23 +348,31 @@
 						{/if}
 					{/snippet}
 					{#snippet modelMeta()}
-						{#each details as part, i (i)}
-							{#if i > 0}<span class="mx-1" aria-hidden="true">·</span>{/if}<span
-								class="whitespace-nowrap {part.mono ? 'font-mono' : 'tabular-nums'}"
-								title={part.title}>{part.text}</span
-							>
-						{/each}
+						<!-- Each separator travels with the part after it (nowrap), so a wrapped line
+							     never ends on a dangling dot; <wbr> marks the only break points. -->
+						{#each details as part, i (i)}{#if i > 0}<wbr />{/if}<span
+								class="whitespace-nowrap {i > 0 ? 'ml-1' : ''} {part.mono
+									? 'font-mono'
+									: 'tabular-nums'}"
+								title={part.title}
+								>{#if i > 0}<span class="mr-1" aria-hidden="true">·</span>{/if}{part.text}</span
+							>{/each}{#if caps.length > 0}<wbr /><span
+								class="sm:hidden {details.length > 0 ? 'ml-1' : ''}"
+								>{#if details.length > 0}<span class="mr-1" aria-hidden="true">·</span
+									>{/if}{caps.join(', ')}</span
+							>{/if}
 					{/snippet}
 					<SettingsListItem
 						{title}
 						titleAttr={model.modelId}
 						muted={!model.enabled}
 						leading={showBrandIcons ? modelIcon : undefined}
-						meta={details.length > 0 ? modelMeta : undefined}
+						meta={details.length > 0 || caps.length > 0 ? modelMeta : undefined}
 					>
 						{#snippet badges()}
-							{#each model.capabilities.filter((c) => !COMMON_CAPS.has(c)) as cap (cap)}
-								<Badge variant="secondary" class="font-normal">{cap}</Badge>
+							{#each caps as cap (cap)}
+								<!-- Phones: chips wrapped rows to double height; the meta line lists them instead. -->
+								<Badge variant="secondary" class="font-normal max-sm:hidden">{cap}</Badge>
 							{/each}
 						{/snippet}
 						{#snippet trailing()}
