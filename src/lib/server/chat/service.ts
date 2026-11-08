@@ -23,14 +23,14 @@ import {
 	type ConversationRow
 } from '../db/repo/conversations.js';
 import {
+	branchesFor,
 	createMessage,
 	deleteMessage,
-	deleteMessagesFrom,
 	extractText,
 	getMessage,
-	listMessages,
 	toPublic,
 	updateMessage,
+	type MessageBranch,
 	type MessageUsage
 } from '../db/repo/messages.js';
 import {
@@ -42,11 +42,11 @@ import { getAgent } from '../db/repo/agents.js';
 import { getCodingConversation } from '../db/repo/coding-conversations.js';
 import { queueThreadStatePush } from '../t3/thread-state.js';
 import { CodingTaskError, startCodingTurn } from '../t3/tasks.js';
-import { unsummarizedMessages } from '../db/repo/conversation-summaries.js';
+import { loadUnsummarizedMessages } from '../db/repo/conversation-summaries.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
-import { computeCostUsd } from '../proxy/pricing.js';
+import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
 import { getGlobalInstructions } from '../db/repo/user-settings.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
@@ -90,13 +90,59 @@ function attachmentIdFromUrl(url: string, conversationId: string): string | null
 	return id || null;
 }
 
-async function inlineAttachmentParts(
+/**
+ * The client only ever sends text and its own uploads. A file part pointing
+ * anywhere else (another conversation, an arbitrary URL the provider would
+ * fetch) is rejected before anything is written.
+ */
+function assertValidUserParts(conversationId: string, message: UIMessage): void {
+	for (const part of message.parts) {
+		if (part.type === 'text') continue;
+		if (part.type === 'file') {
+			if (part.url.startsWith('data:')) continue;
+			const id = attachmentIdFromUrl(part.url, conversationId);
+			if (id && /^[\w-]+$/.test(id)) continue;
+			throw new ChatRequestError(
+				400,
+				'File parts must reference an attachment of this conversation'
+			);
+		}
+		throw new ChatRequestError(400, `Unsupported message part type "${part.type}"`);
+	}
+}
+
+/** Images are only re-sent to the model for this many of the latest user turns. */
+export const INLINE_IMAGE_USER_TURNS = 2;
+
+/**
+ * Index of the first message whose images are still sent inline: the
+ * `turns`-th user message from the end (0 when there are fewer user turns).
+ */
+function inlineImagesFrom(messages: UIMessage[], turns: number): number {
+	let seen = 0;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i].role !== 'user') continue;
+		seen++;
+		if (seen === turns) return i;
+	}
+	return 0;
+}
+
+/**
+ * Turns internal attachment URLs into what the provider can use. Images are
+ * base64-inlined only for the latest INLINE_IMAGE_USER_TURNS user turns (and
+ * the replies after them); older ones become a short note with the attachment
+ * id, so tools can still reference them without re-sending the bytes.
+ */
+export async function inlineAttachmentParts(
 	db: Db,
 	conversationId: string,
-	messages: UIMessage[]
+	messages: UIMessage[],
+	inlineImageTurns = INLINE_IMAGE_USER_TURNS
 ): Promise<UIMessage[]> {
+	const inlineFrom = inlineImagesFrom(messages, inlineImageTurns);
 	return await Promise.all(
-		messages.map(async (message) => ({
+		messages.map(async (message, index) => ({
 			...message,
 			parts: (
 				await Promise.all(
@@ -107,7 +153,17 @@ async function inlineAttachmentParts(
 						const row = getConversationAttachment(db, conversationId, attachmentId);
 						// An internal URL means nothing to the provider, so leave the part out.
 						if (!row) return [];
-						const idNote = row.mime.startsWith('image/')
+						const isImage = row.mime.startsWith('image/');
+						if (isImage && index < inlineFrom) {
+							const name = part.filename ? ` ${part.filename}` : '';
+							return [
+								{
+									type: 'text',
+									text: `[earlier image${name} not re-sent; attachment id: ${attachmentId}]`
+								} as UIMessage['parts'][number]
+							];
+						}
+						const idNote = isImage
 							? [
 									{
 										type: 'text',
@@ -159,11 +215,7 @@ function ensureModel(db: Db, userId: string, conversation: ConversationRow): Con
 }
 
 function historyFromDb(db: Db, conversationId: string): UIMessage[] {
-	const { summary, rows: visible } = unsummarizedMessages(
-		db,
-		conversationId,
-		listMessages(db, conversationId)
-	);
+	const { summary, rows: visible } = loadUnsummarizedMessages(db, conversationId);
 	// A failed response with no output only carries an error for the UI; an empty
 	// assistant turn is not valid model input.
 	const messages = visible.map(toPublic).flatMap((message) => {
@@ -191,7 +243,12 @@ function historyFromDb(db: Db, conversationId: string): UIMessage[] {
 	];
 }
 
-function upsertUserMessage(db: Db, conversationId: string, message: UIMessage): UIMessage {
+function upsertUserMessage(
+	db: Db,
+	conversationId: string,
+	message: UIMessage,
+	parentId?: string | null
+): UIMessage {
 	if (message.role !== 'user') {
 		throw new ChatRequestError(400, 'Triggering message must be a user message');
 	}
@@ -200,6 +257,10 @@ function upsertUserMessage(db: Db, conversationId: string, message: UIMessage): 
 		if (existing.conversation_id !== conversationId) {
 			throw new ChatRequestError(400, 'Message does not belong to this conversation');
 		}
+		// Only the user's own messages may be rewritten (edit and regenerate resend them).
+		if (existing.role !== 'user') {
+			throw new ChatRequestError(400, 'Message id belongs to a non-user message');
+		}
 		updateMessage(db, message.id, { parts: message.parts, error: null, status: 'complete' });
 	} else {
 		createMessage(db, {
@@ -207,7 +268,8 @@ function upsertUserMessage(db: Db, conversationId: string, message: UIMessage): 
 			conversationId,
 			role: 'user',
 			parts: message.parts,
-			status: 'complete'
+			status: 'complete',
+			parentId
 		});
 	}
 	const attachmentIds = message.parts
@@ -226,6 +288,15 @@ function attachmentIdsFromOutput(output: unknown): string[] {
 	const ids = (sc as { attachmentIds?: unknown }).attachmentIds;
 	if (!Array.isArray(ids)) return [];
 	return ids.filter((id): id is string => typeof id === 'string');
+}
+
+/**
+ * Disables tool calls on the last step the loop allows, so a reply that used
+ * its whole step budget still ends with an answer instead of a dangling call.
+ */
+export function answerOnLastStep(maxSteps: number) {
+	return ({ stepNumber }: { stepNumber: number }) =>
+		stepNumber >= maxSteps - 1 ? { toolChoice: 'none' as const } : undefined;
 }
 
 const PERSIST_INTERVAL_MS = 500;
@@ -328,23 +399,56 @@ function afterUserMessage(
 	touchConversation(db, conversation.id);
 }
 
+/**
+ * Stores the message a turn answers. Nothing is deleted: with `branchFrom` the
+ * turn becomes an alternative version of that message, beside it in the tree.
+ * - an edit (`branchFrom` is a user message): the sent message is stored as a
+ *   new sibling of the edited one, with the same parent;
+ * - a regenerate (`branchFrom` is a reply): the sent message must be the reply's
+ *   own user message, which is kept as it is; the new reply becomes a sibling of
+ *   the old one.
+ * The reply is then created as the returned message's child, which makes that
+ * branch the active one.
+ */
+function storeTurnMessage(
+	db: Db,
+	conversationId: string,
+	body: { message: UIMessage; branchFrom?: string }
+): UIMessage {
+	if (body.branchFrom === undefined) return upsertUserMessage(db, conversationId, body.message);
+	const anchor = getMessage(db, body.branchFrom);
+	if (!anchor || anchor.conversation_id !== conversationId) {
+		throw new ChatRequestError(400, 'branchFrom message not found in this conversation');
+	}
+	if (anchor.role === 'user') {
+		if (getMessage(db, body.message.id)) {
+			throw new ChatRequestError(400, 'An edited message must be sent under a new id');
+		}
+		return upsertUserMessage(db, conversationId, body.message, anchor.parent_id);
+	}
+	if (anchor.role !== 'assistant') {
+		throw new ChatRequestError(400, 'branchFrom must be a user message or a reply');
+	}
+	const parent = anchor.parent_id ? getMessage(db, anchor.parent_id) : undefined;
+	if (!parent || parent.id !== body.message.id || parent.role !== 'user') {
+		throw new ChatRequestError(400, 'A regenerated reply must follow the message it answers');
+	}
+	// A reply that failed without any output is no version worth keeping.
+	if (anchor.status !== 'partial' && anchor.parts === '[]') deleteMessage(db, anchor.id);
+	const stored = toPublic(parent);
+	return { id: stored.id, role: 'user', parts: stored.parts as UIMessage['parts'] };
+}
+
 /** Everything between claiming the conversation and building the prompt. */
 async function prepareTurn(
 	db: Db,
 	userId: string,
 	initial: ConversationRow,
-	body: { message: UIMessage; truncateFrom?: string }
+	body: { message: UIMessage; branchFrom?: string }
 ) {
 	const conversation = ensureModel(db, userId, initial);
 	const agent = conversation.agent_id ? getAgent(db, conversation.agent_id) : undefined;
-	if (body.truncateFrom !== undefined) {
-		const anchor = getMessage(db, body.truncateFrom);
-		if (!anchor || anchor.conversation_id !== conversation.id) {
-			throw new ChatRequestError(400, 'truncateFrom message not found in this conversation');
-		}
-		deleteMessagesFrom(db, conversation.id, body.truncateFrom);
-	}
-	const lastUserMessage = upsertUserMessage(db, conversation.id, body.message);
+	const lastUserMessage = storeTurnMessage(db, conversation.id, body);
 	afterUserMessage(db, userId, conversation, lastUserMessage);
 
 	const ref = { providerId: conversation.provider_id!, modelId: conversation.model_id! };
@@ -387,17 +491,21 @@ async function prepareTurn(
 
 export async function handleChatRequest(
 	userId: string,
-	body: { conversationId: string; message: UIMessage; truncateFrom?: string; skill?: string }
+	body: { conversationId: string; message: UIMessage; branchFrom?: string; skill?: string }
 ): Promise<Response> {
 	const db = getDb();
 	let conversation = getConversation(db, userId, body.conversationId);
 	if (!conversation) throw new ChatRequestError(404, 'Conversation not found');
 	if (conversation.kind !== 'chat') throw new ChatRequestError(400, 'Not a chat conversation');
+	if (body.message.role !== 'user') {
+		throw new ChatRequestError(400, 'Triggering message must be a user message');
+	}
+	assertValidUserParts(conversation.id, body.message);
 
 	// Coding tasks: the reply comes from a remote T3 Code thread, not our model loop.
 	const coding = getCodingConversation(db, conversation.id);
 	if (coding) {
-		if (body.truncateFrom !== undefined) {
+		if (body.branchFrom !== undefined) {
 			throw new ChatRequestError(400, 'Coding tasks cannot rewind their history');
 		}
 		const userMessage = upsertUserMessage(db, conversation.id, body.message);
@@ -440,6 +548,7 @@ export async function handleChatRequest(
 	// consumeStreamCopy, so a reload mid-stream never sees a gap.
 	const assistantMessageId = randomUUID();
 	let errorText: string | null = null;
+	let replyBranch: MessageBranch | undefined;
 	let promptParts: ReturnType<typeof buildSystemPromptParts>;
 	let system: string;
 	let history: UIMessage[];
@@ -453,8 +562,13 @@ export async function handleChatRequest(
 			conversationId: conversation.id,
 			role: 'assistant',
 			parts: [],
-			status: 'partial'
+			status: 'partial',
+			parentId: lastUserMessage.id
 		});
+		// A regenerated reply has older versions: the client shows its switcher.
+		replyBranch = branchesFor(db, conversation.id, [{ id: assistantMessageId }]).get(
+			assistantMessageId
+		);
 
 		const agentSkillNames = agent ? (JSON.parse(agent.skill_names) as string[]) : [];
 		const boundSkillNames = [...agentSkillNames];
@@ -505,9 +619,10 @@ export async function handleChatRequest(
 		await close().catch(() => undefined);
 		throw e;
 	}
-	const stopWhen = stepCountIs(
-		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5
-	);
+	const maxSteps =
+		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5;
+	const stopWhen = stepCountIs(maxSteps);
+	const prepareStep = answerOnLastStep(maxSteps);
 
 	let usageMeta: MessageUsage | null = null;
 
@@ -559,12 +674,8 @@ export async function handleChatRequest(
 							modelId: target.modelId,
 							inputTokens: patch.usage?.inputTokens ?? null,
 							outputTokens: patch.usage?.outputTokens ?? null,
-							costUsd: computeCostUsd(
-								priceRow?.price_input ?? null,
-								priceRow?.price_output ?? null,
-								patch.usage?.inputTokens,
-								patch.usage?.outputTokens
-							),
+							...cacheTokens(patch.usage),
+							costUsd: computeUsageCostUsd(priceRow, patch.usage),
 							error: patch.error ?? null
 						});
 						lastStepAt = now;
@@ -585,6 +696,7 @@ export async function handleChatRequest(
 						model,
 						...prompt,
 						stopWhen,
+						prepareStep,
 						abortSignal: controller.signal,
 						...(conversation.temperature != null ? { temperature: conversation.temperature } : {}),
 						...(conversation.max_tokens != null
@@ -625,7 +737,12 @@ export async function handleChatRequest(
 					});
 					const uiStream = result.toUIMessageStream({
 						originalMessages: history,
-						generateMessageId: () => assistantMessageId
+						generateMessageId: () => assistantMessageId,
+						// A regenerated reply has older versions, so the client shows its
+						// switcher. Sent on the reply's own `start` chunk: a metadata chunk
+						// ahead of `start` makes the client add a second, empty message.
+						messageMetadata: ({ part }) =>
+							part.type === 'start' && replyBranch ? { branch: replyBranch } : undefined
 					});
 					for await (const chunk of uiStream) {
 						const c = chunk as { type?: string };
@@ -653,12 +770,7 @@ export async function handleChatRequest(
 						outputTokens: totalTokensUsed?.outputTokens ?? null,
 						totalTokens: totalTokensUsed?.totalTokens ?? null,
 						latencyMs: Date.now() - startedAt,
-						costUsd: computeCostUsd(
-							priceRow?.price_input ?? null,
-							priceRow?.price_output ?? null,
-							totalTokensUsed?.inputTokens,
-							totalTokensUsed?.outputTokens
-						),
+						costUsd: computeUsageCostUsd(priceRow, totalTokensUsed),
 						promptChars: {
 							system: promptParts.base.length + promptParts.system.length,
 							skills: promptParts.skills.length,

@@ -58,3 +58,36 @@ export function listAttachmentsByConversation(db: Db, conversationId: string): A
 		)
 		.all(conversationId) as AttachmentRow[];
 }
+
+/** Stored paths of every attachment row, `/`-separated (rows written on Windows use `\`). */
+export function listAttachmentPaths(db: Db): Set<string> {
+	return new Set(
+		(db.prepare('SELECT path FROM attachments').all() as { path: string }[]).map((r) =>
+			r.path.replace(/\\/g, '/')
+		)
+	);
+}
+
+/**
+ * Attachments never linked to a message (uploads that were never sent) in chat
+ * conversations, or whose conversation is gone. Agent-run conversations are
+ * left out: images their tools generate are referenced by id but never linked.
+ */
+export function listUnlinkedChatAttachments(db: Db): AttachmentRow[] {
+	const rows = db
+		.prepare('SELECT * FROM attachments WHERE message_id IS NULL')
+		.all() as AttachmentRow[];
+	const kindOf = db.prepare('SELECT kind FROM conversations WHERE id = ?');
+	return rows.filter((row) => {
+		const conversationId = row.path.replace(/\\/g, '/').split('/')[0];
+		const conversation = kindOf.get(conversationId) as { kind: string } | undefined;
+		return !conversation || conversation.kind === 'chat';
+	});
+}
+
+/** Deletes an attachment only while it is still unlinked (it may have been sent meanwhile). */
+export function deleteUnlinkedAttachment(db: Db, id: string): boolean {
+	return (
+		db.prepare('DELETE FROM attachments WHERE id = ? AND message_id IS NULL').run(id).changes > 0
+	);
+}

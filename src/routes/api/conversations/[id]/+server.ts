@@ -11,9 +11,10 @@ import {
 } from '$lib/server/db/repo/conversations.js';
 import {
 	countMessages,
-	listMessages,
-	toPublic as messageToPublic
+	listMessagesPage,
+	toPublicWithBranches
 } from '$lib/server/db/repo/messages.js';
+import { archiveCodingThread } from '$lib/server/t3/tasks.js';
 import { queueThreadStatePush } from '$lib/server/t3/thread-state.js';
 import type { RequestHandler } from './$types';
 
@@ -22,9 +23,12 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const db = getDb();
 	const conversation = getConversation(db, user.id, params.id);
 	if (!conversation) error(404, { message: 'Conversation not found' });
+	// The newest page only; older messages come from ./messages?before=<id>.
+	const page = listMessagesPage(db, params.id)!;
 	return json({
 		conversation: conversationToPublic(conversation),
-		messages: listMessages(db, params.id).map(messageToPublic)
+		messages: toPublicWithBranches(db, params.id, page.rows),
+		hasOlderMessages: page.hasOlder
 	});
 };
 
@@ -76,8 +80,11 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 export const DELETE: RequestHandler = ({ locals, params }) => {
 	const user = requireUser(locals);
-	if (!softDeleteConversation(getDb(), user.id, params.id)) {
+	const db = getDb();
+	if (!softDeleteConversation(db, user.id, params.id)) {
 		error(404, { message: 'Conversation not found' });
 	}
+	// A coding task's thread leaves T3's list too (best-effort, in the background).
+	void archiveCodingThread(user.id, params.id, db);
 	return json({ ok: true });
 };

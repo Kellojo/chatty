@@ -3,9 +3,10 @@ import type { Tool } from 'ai';
 import type { ToolInfo } from '$lib/types.js';
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
-import { listEnabledMcpServers } from '../db/repo/mcp-servers.js';
+import { listEnabledMcpServers, type McpServerRow } from '../db/repo/mcp-servers.js';
 import { createLogger } from '../logger.js';
-import { connectServer, withTimeout } from '../mcp/clientManager.js';
+import { connectServer, MCP_LIST_TIMEOUT_MS, withTimeout } from '../mcp/clientManager.js';
+import { acquireMcpServer } from '../mcp/pool.js';
 import type { CallerContext } from '../mcp/types.js';
 import { wrapMcpTools } from './wrap.js';
 
@@ -46,35 +47,27 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 	const tools: Record<string, Tool> = {};
 	const toolToServer: Record<string, string> = {};
 	const closers: Array<() => Promise<void>> = [];
-	const results = await Promise.allSettled(rows.map((row) => connectServer(row, ctx)));
+	const results = await Promise.allSettled(
+		rows.map((row) => (row.transport === 'builtin' ? openBuiltin(row, ctx) : openPooled(row)))
+	);
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
 		const result = results[i];
-		if (result.status === 'fulfilled') {
-			try {
-				closers.push(result.value.close);
-				const listed = await withTimeout(
-					result.value.client.tools(),
-					`Listing tools of MCP server ${row.name}`
-				);
-				const set = wrapMcpTools(listed as unknown as Record<string, Tool>, row.name);
-				for (const [name, tool] of Object.entries(set)) {
-					if (tools[name]) {
-						log.warn(`MCP tool name collision: "${name}" from ${row.name} skipped`);
-						continue;
-					}
-					tools[name] = tool;
-					toolToServer[name] = row.name;
-				}
-			} catch (e) {
-				log.warn(`MCP server ${row.name} unavailable:`, {
-					error: e instanceof Error ? e.message : String(e)
-				});
-			}
-		} else {
+		if (result.status === 'rejected') {
 			log.warn(`MCP server ${row.name} unavailable:`, {
 				error: result.reason instanceof Error ? result.reason.message : String(result.reason)
 			});
+			continue;
+		}
+		closers.push(result.value.close);
+		const set = wrapMcpTools(result.value.tools, row.name, result.value.onError);
+		for (const [name, tool] of Object.entries(set)) {
+			if (tools[name]) {
+				log.warn(`MCP tool name collision: "${name}" from ${row.name} skipped`);
+				continue;
+			}
+			tools[name] = tool;
+			toolToServer[name] = row.name;
 		}
 	}
 	let filtered = tools;
@@ -91,6 +84,46 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 			for (const closer of closers.reverse()) {
 				await closer().catch(() => undefined);
 			}
+		}
+	};
+}
+
+interface OpenedServer {
+	tools: Record<string, Tool>;
+	close: () => Promise<void>;
+	onError?: (error: unknown) => void;
+}
+
+/** Builtin servers are bound to the caller (user, workspace, conversation), so each turn gets its own in-memory pair. */
+async function openBuiltin(row: McpServerRow, ctx: CallerContext): Promise<OpenedServer> {
+	const conn = await connectServer(row, ctx);
+	try {
+		const listed = await withTimeout(
+			conn.client.tools(),
+			`Listing tools of MCP server ${row.name}`,
+			undefined,
+			MCP_LIST_TIMEOUT_MS
+		);
+		return { tools: listed as unknown as Record<string, Tool>, close: conn.close };
+	} catch (e) {
+		await conn.close().catch(() => undefined);
+		throw e;
+	}
+}
+
+// Errors that mean the transport is gone rather than that the tool call failed.
+const CONNECTION_ERROR =
+	/connection closed|not connected|ECONNREFUSED|ECONNRESET|EPIPE|socket hang up|fetch failed|terminated/i;
+
+/** External servers come from the shared pool; the lease is returned when the turn ends. */
+async function openPooled(row: McpServerRow): Promise<OpenedServer> {
+	const lease = await acquireMcpServer(row);
+	return {
+		tools: lease.tools,
+		close: async () => lease.release(),
+		onError: (e) => {
+			const message = e instanceof Error ? e.message : String(e);
+			if (CONNECTION_ERROR.test(message)) lease.markBroken();
 		}
 	};
 }

@@ -55,6 +55,15 @@ describe('db migrations', () => {
 		db.close();
 	});
 
+	it('indexes coding tasks by thread id', () => {
+		const db = openDatabase(':memory:');
+		const plan = db
+			.prepare('EXPLAIN QUERY PLAN SELECT * FROM coding_conversations WHERE thread_id = ?')
+			.all('t1') as { detail: string }[];
+		expect(plan.map((r) => r.detail).join(' ')).toContain('idx_coding_conversations_thread');
+		db.close();
+	});
+
 	it('is idempotent on reopen', () => {
 		const db = openDatabase(':memory:');
 		expect(() => openDatabase(':memory:')).not.toThrow();

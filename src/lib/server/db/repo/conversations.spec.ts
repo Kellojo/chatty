@@ -76,6 +76,76 @@ describe('conversations repo', () => {
 		expect(new Set(hits.map((c) => c.id))).toEqual(new Set([byTitle.id, byContent.id]));
 	});
 
+	it('searchConversations treats LIKE wildcards literally', () => {
+		const pct = createConversation(db, 'u1', { title: 'growth 100% done' });
+		createConversation(db, 'u1', { title: 'growth 1000 done' });
+		const under = createConversation(db, 'u1', { title: 'snake_case' });
+		createConversation(db, 'u1', { title: 'snakeXcase' });
+		expect(searchConversations(db, 'u1', '100%').map((c) => c.id)).toEqual([pct.id]);
+		expect(searchConversations(db, 'u1', 'snake_case').map((c) => c.id)).toEqual([under.id]);
+		expect(searchConversations(db, 'u1', '%').map((c) => c.id)).toEqual([pct.id]);
+	});
+
+	it('searchConversations never throws on FTS syntax in user input', () => {
+		const c = createConversation(db, 'u1', { title: 'x' });
+		createMessage(db, {
+			conversationId: c.id,
+			role: 'user',
+			parts: [{ type: 'text', text: 'near the content of a column' }]
+		});
+		for (const q of [
+			'"',
+			'"unbalanced',
+			'a AND',
+			'OR',
+			'NEAR(',
+			'content:',
+			'*',
+			'-',
+			'^near',
+			'(content',
+			"it's",
+			'{x y}: z'
+		]) {
+			expect(() => searchConversations(db, 'u1', q)).not.toThrow();
+		}
+		expect(searchConversations(db, 'u1', 'NEAR(content').map((h) => h.id)).toEqual([c.id]);
+		expect(searchConversations(db, 'u1', 'content:').map((h) => h.id)).toEqual([c.id]);
+	});
+
+	it('searchConversations pages with limit and offset', () => {
+		const ids = Array.from({ length: 5 }, (_, i) => {
+			const c = createConversation(db, 'u1', { title: `topic ${i}` });
+			db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(1000 + i, c.id);
+			return c.id;
+		});
+		expect(searchConversations(db, 'u1', 'topic', { limit: 2 }).map((c) => c.id)).toEqual([
+			ids[4],
+			ids[3]
+		]);
+		expect(
+			searchConversations(db, 'u1', 'topic', { limit: 2, offset: 4 }).map((c) => c.id)
+		).toEqual([ids[0]]);
+	});
+
+	it('searchConversations runs FTS once and walks the user index', () => {
+		const plan = db
+			.prepare(
+				`EXPLAIN QUERY PLAN SELECT c.id FROM conversations c
+				 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
+				 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
+				   AND (c.title LIKE ? ESCAPE '!' OR cc.project_title LIKE ? ESCAPE '!'
+				     OR c.id IN (SELECT conversation_id FROM messages_fts WHERE messages_fts MATCH ?))
+				 ORDER BY c.pinned DESC, c.updated_at DESC LIMIT ? OFFSET ?`
+			)
+			.all('u1', '%a%', '%a%', '"a"*', 50, 0) as { detail: string }[];
+		const details = plan.map((p) => p.detail);
+		expect(details.some((d) => /SEARCH c USING INDEX/.test(d))).toBe(true);
+		expect(details.some((d) => /^SCAN c\b/.test(d))).toBe(false);
+		expect(details.some((d) => /VIRTUAL TABLE INDEX/.test(d))).toBe(true);
+		expect(details.some((d) => /CORRELATED/.test(d))).toBe(false);
+	});
+
 	it('searchConversations matches a coding task by its project name', () => {
 		const task = createConversation(db, 'u1', { title: 'fix the tests' });
 		db.prepare(

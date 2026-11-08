@@ -4,6 +4,7 @@ import { abortStreamAndWait, listActiveStreamIds } from './chat/streams.js';
 import { closeDb } from './db/index.js';
 import { stopDailyJobs, stopHourlyJobs } from './jobs.js';
 import { createLogger } from './logger.js';
+import { closeAllMcpClients } from './mcp/pool.js';
 import { prepareCodingShutdown, stopAllCodingFollowers } from './t3/follower.js';
 import { closeAllPreviewViewers } from './t3/preview.js';
 import { stopCodingEnvironmentSync } from './t3/sync.js';
@@ -31,6 +32,8 @@ export function drainForShutdown(): Promise<void> {
 			stopAllAgentRuns(DRAIN_TIMEOUT_MS)
 		]);
 		stopAllCodingFollowers();
+		// After the drain: running turns may still be calling pooled MCP tools.
+		await closeAllMcpClients();
 	})().catch((e) => {
 		log.error('Failed to drain running work on shutdown', {
 			error: e instanceof Error ? e.message : String(e)

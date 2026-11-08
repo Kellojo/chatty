@@ -23,7 +23,7 @@ import {
 	getConversation,
 	toPublic as conversationToPublic
 } from '$lib/server/db/repo/conversations.js';
-import { listMessages, toPublic as messageToPublic } from '$lib/server/db/repo/messages.js';
+import { listMessagesPage, toPublicWithBranches } from '$lib/server/db/repo/messages.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import { listModelsGrouped } from '$lib/server/llm/registry.js';
 import type { PageServerLoad } from './$types';
@@ -53,10 +53,13 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		sttModel = { providerId: sttRoleModel.provider_id, modelId: sttRoleModel.model_id };
 	}
 	const coding = getCodingConversation(db, conversation.id);
+	// Older messages are fetched on demand from /api/conversations/[id]/messages.
+	const page = listMessagesPage(db, conversation.id)!;
 	return {
 		conversation: conversationToPublic(conversation),
 		coding: coding ? codingToPublic(coding) : null,
-		messages: listMessages(db, conversation.id).map(messageToPublic),
+		messages: toPublicWithBranches(db, conversation.id, page.rows),
+		hasOlderMessages: page.hasOlder,
 		groups: listModelsGrouped(),
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		defaultModel,

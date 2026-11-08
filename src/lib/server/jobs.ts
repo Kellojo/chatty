@@ -2,6 +2,11 @@ import { listActiveStreamIds } from './chat/streams.js';
 import { config } from './config.js';
 import { getDb, type Db } from './db/index.js';
 import {
+	deleteUnlinkedAttachment,
+	listAttachmentPaths,
+	listUnlinkedChatAttachments
+} from './db/repo/attachments.js';
+import {
 	autoSettleConversations,
 	listSoftDeletedBefore,
 	purgeConversation
@@ -10,14 +15,18 @@ import { publishServerEvent } from './events/bus.js';
 import { createLogger } from './logger.js';
 import { queueThreadStatePush } from './t3/thread-state.js';
 import {
+	attachmentFileMtime,
 	gcAgentWorkspaces,
 	gcOrphanConversationWorkspaces,
+	listAttachmentFiles,
+	removeAttachmentFile,
 	removeConversationWorkspace
 } from './workspaces.js';
 
 const log = createLogger('jobs');
 
 const PURGE_SOFT_DELETED_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function purgeSoftDeletedConversations(
 	db: Db,
@@ -47,7 +56,47 @@ export function listAllConversationIds(db: Db): Set<string> {
 	);
 }
 
-export function runDailyJobs(db: Db = getDb()): void {
+const HOUR_MS = 60 * 60 * 1000;
+
+export interface AttachmentCleanupResult {
+	/** Unsent uploads older than the cutoff (rows and their files). */
+	unlinkedRows: number;
+	/** Files on disk with no attachment row. */
+	orphanFiles: number;
+}
+
+/**
+ * Removes attachments nobody can reach: uploads never sent with a message
+ * (after `unlinkedMaxAgeMs`, judged by the file's mtime since rows carry no
+ * timestamp) and files whose row is gone (deleted with its message or
+ * conversation). Files younger than `orphanGraceMs` are kept, since an upload
+ * writes its file just before inserting the row.
+ */
+export async function cleanupOrphanAttachments(
+	db: Db,
+	options: { now?: number; unlinkedMaxAgeMs?: number; orphanGraceMs?: number } = {}
+): Promise<AttachmentCleanupResult> {
+	const now = options.now ?? Date.now();
+	const unlinkedCutoff = now - (options.unlinkedMaxAgeMs ?? DAY_MS);
+	const orphanCutoff = now - (options.orphanGraceMs ?? HOUR_MS);
+	let unlinkedRows = 0;
+	for (const row of listUnlinkedChatAttachments(db)) {
+		const mtime = await attachmentFileMtime(row.path);
+		if (mtime !== null && mtime >= unlinkedCutoff) continue;
+		if (!deleteUnlinkedAttachment(db, row.id)) continue;
+		if (mtime !== null) await removeAttachmentFile(row.path);
+		unlinkedRows++;
+	}
+	const known = listAttachmentPaths(db);
+	let orphanFiles = 0;
+	for (const file of await listAttachmentFiles()) {
+		if (known.has(file.storedPath) || file.mtimeMs >= orphanCutoff) continue;
+		if (await removeAttachmentFile(file.storedPath)) orphanFiles++;
+	}
+	return { unlinkedRows, orphanFiles };
+}
+
+export async function runDailyJobs(db: Db = getDb()): Promise<void> {
 	const purged = purgeSoftDeletedConversations(db);
 	if (purged > 0) log.info(`Purged ${purged} soft-deleted conversation(s)`);
 
@@ -60,6 +109,13 @@ export function runDailyJobs(db: Db = getDb()): void {
 	for (const name of orphanRemoved) {
 		log.info(`Removed orphan conversation workspace ${name} (no matching conversation row)`);
 	}
+
+	const attachments = await cleanupOrphanAttachments(db);
+	if (attachments.unlinkedRows > 0 || attachments.orphanFiles > 0) {
+		log.info(
+			`Removed ${attachments.unlinkedRows} unsent attachment(s) and ${attachments.orphanFiles} orphaned attachment file(s)`
+		);
+	}
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -70,22 +126,15 @@ export function stopDailyJobs(): void {
 }
 
 export function startDailyJobs(db: Db = getDb()): void {
-	runDailyJobs(db);
+	const run = () =>
+		runDailyJobs(db).catch((e: unknown) => {
+			log.error('Daily jobs failed', { error: e instanceof Error ? e.message : String(e) });
+		});
+	void run();
 	if (timer) return;
-	timer = setInterval(
-		() => {
-			try {
-				runDailyJobs(db);
-			} catch (e) {
-				log.error('Daily jobs failed', { error: e instanceof Error ? e.message : String(e) });
-			}
-		},
-		24 * 60 * 60 * 1000
-	);
+	timer = setInterval(() => void run(), DAY_MS);
 	timer.unref?.();
 }
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Settles chats idle for CONVERSATION_AUTO_SETTLE_DAYS, skipping streaming ones. */
 export function runAutoSettle(

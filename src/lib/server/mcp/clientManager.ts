@@ -14,6 +14,8 @@ export interface ServerConnection {
 
 /** How long connecting to or listing the tools of one MCP server may take. */
 export const MCP_TIMEOUT_MS = 15_000;
+/** Listing tools is one round trip on a live connection, so it gets a shorter budget. */
+export const MCP_LIST_TIMEOUT_MS = 5_000;
 
 /**
  * Rejects if `promise` doesn't settle within `ms`. A value that arrives after
@@ -138,7 +140,12 @@ export async function testConnection(db: Db, serverId: string): Promise<TestConn
 	try {
 		const conn = await connectServer(row, TEST_CTX);
 		try {
-			const tools = await withTimeout(conn.client.tools(), `Listing tools of ${row.name}`);
+			const tools = await withTimeout(
+				conn.client.tools(),
+				`Listing tools of ${row.name}`,
+				undefined,
+				MCP_LIST_TIMEOUT_MS
+			);
 			return {
 				ok: true,
 				tools: Object.entries(tools).map(([name, tool]) => ({

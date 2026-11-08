@@ -412,24 +412,60 @@ export function listUnreadChatIds(db: Db, userId: string): string[] {
 	).map((row) => row.id);
 }
 
-export function searchConversations(db: Db, userId: string, query: string): ConversationRow[] {
-	const ftsQuery = query
-		.split(/\s+/)
-		.filter(Boolean)
-		.map((term) => `"${term.replace(/"/g, '""')}"*`)
-		.join(' AND ');
-	if (!ftsQuery) return [];
+export const SEARCH_PAGE_SIZE = 50;
+export const MAX_SEARCH_PAGE_SIZE = 200;
+
+/** Escapes LIKE wildcards so user input matches literally (pair with `ESCAPE '!'`). */
+export function escapeLike(value: string): string {
+	return value.replace(/[!%_]/g, (ch) => `!${ch}`);
+}
+
+/**
+ * Builds an FTS5 query that can't be a syntax error: only the word characters
+ * the unicode61 tokenizer indexes are kept, each term is quoted (so operators
+ * like AND/NEAR/column filters are plain words) and prefix-matched, and all
+ * terms must match. Null when nothing searchable is left.
+ */
+export function toFtsQuery(query: string): string | null {
+	const terms = query.match(/[\p{L}\p{N}\p{M}_]+/gu) ?? [];
+	if (terms.length === 0) return null;
+	return terms.map((term) => `"${term}"*`).join(' AND ');
+}
+
+export function searchConversations(
+	db: Db,
+	userId: string,
+	query: string,
+	options: { limit?: number; offset?: number } = {}
+): ConversationRow[] {
+	const trimmed = query.trim();
+	if (!trimmed) return [];
+	const limit = Math.min(
+		MAX_SEARCH_PAGE_SIZE,
+		Math.max(1, Math.floor(options.limit ?? SEARCH_PAGE_SIZE))
+	);
+	const offset = Math.max(0, Math.floor(options.offset ?? 0));
+	const like = `%${escapeLike(trimmed)}%`;
+	const ftsQuery = toFtsQuery(trimmed);
+	// The FTS lookup runs once as an uncorrelated subquery (one index probe per
+	// term) instead of being re-evaluated per conversation inside a join.
+	const ftsClause = ftsQuery
+		? 'OR c.id IN (SELECT conversation_id FROM messages_fts WHERE messages_fts MATCH ?)'
+		: '';
+	const params: unknown[] = [userId, like, like];
+	if (ftsQuery) params.push(ftsQuery);
+	params.push(limit, offset);
 	return db
 		.prepare(
-			`SELECT DISTINCT c.*, ${CODING_SUMMARY_COLUMNS}
+			`SELECT c.*, ${CODING_SUMMARY_COLUMNS}
 			 FROM conversations c
 			 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
-			 LEFT JOIN messages_fts f ON f.conversation_id = c.id AND messages_fts MATCH ?
 			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
-			   AND (c.title LIKE ? OR cc.project_title LIKE ? OR f.conversation_id IS NOT NULL)
-			 ORDER BY c.pinned DESC, c.updated_at DESC`
+			   AND (c.title LIKE ? ESCAPE '!' OR cc.project_title LIKE ? ESCAPE '!' ${ftsClause})
+			 ORDER BY c.pinned DESC, c.updated_at DESC
+			 LIMIT ? OFFSET ?`
 		)
-		.all(ftsQuery, userId, `%${query}%`, `%${query}%`) as ConversationRow[];
+		.all(...params) as ConversationRow[];
 }
 
 export function countConversations(db: Db): number {

@@ -88,7 +88,7 @@ export function createImageServer(ctx: CallerContext): McpServer {
 					...(Object.keys(providerOptions).length > 0 ? { providerOptions } : {})
 				});
 
-				const dir = ensureAttachmentsDir(ctx.conversationId);
+				const dir = await ensureAttachmentsDir(ctx.conversationId);
 				const db = getDb();
 				const attachmentIds: string[] = [];
 				const filenames: string[] = [];
@@ -208,7 +208,7 @@ export function createImageServer(ctx: CallerContext): McpServer {
 					maxImagesPerCall: MAX_N
 				});
 
-				const dir = ensureAttachmentsDir(ctx.conversationId);
+				const dir = await ensureAttachmentsDir(ctx.conversationId);
 				const attachmentIds: string[] = [];
 				const filenames: string[] = [];
 				for (const img of result.images) {

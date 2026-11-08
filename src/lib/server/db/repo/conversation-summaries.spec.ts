@@ -7,7 +7,7 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 const { openDatabase } = await import('../index.js');
 const repo = await import('./conversation-summaries.js');
 const { createConversation } = await import('./conversations.js');
-const { createMessage, deleteMessagesFrom, listMessages } = await import('./messages.js');
+const { activateBranch, createMessage, listMessages } = await import('./messages.js');
 
 describe('conversation-summaries repo', () => {
 	let db: ReturnType<typeof openDatabase>;
@@ -95,6 +95,21 @@ describe('conversation-summaries repo', () => {
 		expect(m1.id).toBeTruthy();
 	});
 
+	it('loadUnsummarizedMessages reads only the rows after the anchor', () => {
+		const ms = [1, 2, 3, 4].map((i) =>
+			createMessage(db, { conversationId: convId, role: 'user', parts: [], createdAt: i })
+		);
+		expect(repo.loadUnsummarizedMessages(db, convId).rows).toHaveLength(4);
+		summarize(ms[1]);
+		const loaded = repo.loadUnsummarizedMessages(db, convId);
+		expect(loaded.summary?.through_message_id).toBe(ms[1].id);
+		expect(loaded.rows.map((r) => r.id)).toEqual([ms[2].id, ms[3].id]);
+		db.prepare('DELETE FROM messages WHERE id = ?').run(ms[1].id);
+		const orphaned = repo.loadUnsummarizedMessages(db, convId);
+		expect(orphaned.summary).toBeUndefined();
+		expect(orphaned.rows.map((r) => r.id)).toEqual([ms[0].id, ms[2].id, ms[3].id]);
+	});
+
 	it('ignores a summary whose anchor message is gone, even if its rowid was reused', () => {
 		const m1 = createMessage(db, { conversationId: convId, role: 'user', parts: [] });
 		const m2 = createMessage(db, { conversationId: convId, role: 'assistant', parts: [] });
@@ -107,22 +122,30 @@ describe('conversation-summaries repo', () => {
 		expect(split.rows.map((r) => r.id)).toEqual([m1.id, reused.id]);
 	});
 
-	it('deleteMessagesFrom drops summaries folded through deleted messages only', () => {
+	it('uses only summaries anchored on the active branch', () => {
 		const ms = [1, 2, 3, 4].map((i) =>
 			createMessage(db, { conversationId: convId, role: 'user', parts: [], createdAt: i })
 		);
 		summarize(ms[0], 'old');
 		summarize(ms[2], 'new');
-		expect(deleteMessagesFrom(db, convId, ms[1].id)).toBe(3);
-		expect(repo.latestSummary(db, convId)?.summary_text).toBe('old');
-		// New messages reuse the deleted rowids but stay visible.
-		const next = createMessage(db, {
+		// An edit of ms[1] starts a branch that doesn't contain ms[2].
+		const edit = createMessage(db, {
 			conversationId: convId,
 			role: 'user',
 			parts: [],
-			createdAt: 5
+			createdAt: 5,
+			parentId: ms[0].id
 		});
 		const split = repo.unsummarizedMessages(db, convId, listMessages(db, convId));
-		expect(split.rows.map((r) => r.id)).toEqual([next.id]);
+		expect(split.summary?.summary_text).toBe('old');
+		expect(split.rows.map((r) => r.id)).toEqual([edit.id]);
+		const loaded = repo.loadUnsummarizedMessages(db, convId);
+		expect(loaded.summary?.summary_text).toBe('old');
+		expect(loaded.rows.map((r) => r.id)).toEqual([edit.id]);
+		// Back on the original branch, its newer summary applies again.
+		activateBranch(db, convId, ms[1].id);
+		const original = repo.loadUnsummarizedMessages(db, convId);
+		expect(original.summary?.summary_text).toBe('new');
+		expect(original.rows.map((r) => r.id)).toEqual([ms[3].id]);
 	});
 });

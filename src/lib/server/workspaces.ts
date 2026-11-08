@@ -21,10 +21,68 @@ export function conversationWorkspace(conversationId: string): string {
 	return safeJoin(conversationId);
 }
 
-export function ensureAttachmentsDir(conversationId: string): string {
+export async function ensureAttachmentsDir(conversationId: string): Promise<string> {
 	const dir = safeJoin(conversationId, 'attachments');
-	fs.mkdirSync(dir, { recursive: true });
+	await fsp.mkdir(dir, { recursive: true });
 	return dir;
+}
+
+export interface StoredAttachmentFile {
+	/** Relative to the workspaces root with `/` separators, like attachment rows' `path`. */
+	storedPath: string;
+	mtimeMs: number;
+}
+
+/**
+ * Every regular file in a conversation's `attachments` dir. Agents can write
+ * to conversation workspaces, so symlinked dirs and files are skipped.
+ */
+export async function listAttachmentFiles(): Promise<StoredAttachmentFile[]> {
+	const files: StoredAttachmentFile[] = [];
+	let entries: fs.Dirent[];
+	try {
+		entries = await fsp.readdir(root(), { withFileTypes: true });
+	} catch {
+		return files;
+	}
+	for (const entry of entries) {
+		if (!entry.isDirectory() || entry.name.startsWith('agent-')) continue;
+		const dir = path.join(root(), entry.name, 'attachments');
+		try {
+			if (!(await fsp.lstat(dir)).isDirectory()) continue;
+			for (const file of await fsp.readdir(dir, { withFileTypes: true })) {
+				if (!file.isFile()) continue;
+				const stat = await fsp.lstat(path.join(dir, file.name));
+				files.push({
+					storedPath: `${entry.name}/attachments/${file.name}`,
+					mtimeMs: stat.mtimeMs
+				});
+			}
+		} catch {
+			// missing or unreadable attachments dir
+		}
+	}
+	return files;
+}
+
+/** Modification time of a stored attachment file, or null if it isn't a file inside the root. */
+export async function attachmentFileMtime(storedPath: string): Promise<number | null> {
+	const resolved = await resolveInsideReal(root(), storedPath).catch(() => null);
+	if (!resolved) return null;
+	return fsp.lstat(resolved).then(
+		(s) => (s.isFile() ? s.mtimeMs : null),
+		() => null
+	);
+}
+
+/** Deletes a stored attachment file; paths resolving outside the root are left alone. */
+export async function removeAttachmentFile(storedPath: string): Promise<boolean> {
+	const resolved = await resolveInsideReal(root(), storedPath).catch(() => null);
+	if (!resolved) return false;
+	return fsp.rm(resolved, { force: true }).then(
+		() => true,
+		() => false
+	);
 }
 
 // Attachments live inside conversation workspaces, which agents can write to,

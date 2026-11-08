@@ -11,7 +11,7 @@ import { publishServerEvent } from '../events/bus.js';
 import { resolveModel } from '../llm/registry.js';
 import { resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
-import { computeCostUsd } from '../proxy/pricing.js';
+import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
 
 const log = createLogger('chat-compact');
 
@@ -212,12 +212,8 @@ export async function maybeCompactConversation(
 			modelId: target.modelId,
 			inputTokens: result.usage?.inputTokens ?? null,
 			outputTokens: result.usage?.outputTokens ?? null,
-			costUsd: computeCostUsd(
-				priceRow?.price_input ?? null,
-				priceRow?.price_output ?? null,
-				result.usage?.inputTokens,
-				result.usage?.outputTokens
-			)
+			...cacheTokens(result.usage),
+			costUsd: computeUsageCostUsd(priceRow, result.usage)
 		});
 		const summaryText = result.text.trim();
 		if (!summaryText) return;

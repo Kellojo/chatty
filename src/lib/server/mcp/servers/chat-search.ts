@@ -5,6 +5,7 @@ import { getCodingConversation, toPublic } from '../../db/repo/coding-conversati
 import {
 	getConversation,
 	listConversationsSince,
+	MAX_SEARCH_PAGE_SIZE,
 	searchConversations
 } from '../../db/repo/conversations.js';
 import { listMessages } from '../../db/repo/messages.js';
@@ -70,7 +71,10 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 			const n = Math.min(50, Math.max(1, Math.floor(limit ?? 10)));
 			const db = getDb();
 			const rows = q
-				? searchConversations(db, ctx.userId, q)
+				? searchConversations(db, ctx.userId, q, {
+						// The since filter below runs after the search, so fetch more to filter.
+						limit: sinceMs !== null ? MAX_SEARCH_PAGE_SIZE : n
+					})
 				: listConversationsSince(db, ctx.userId, sinceMs!);
 			const filtered = sinceMs !== null ? rows.filter((r) => r.updated_at >= sinceMs) : rows;
 			return text(

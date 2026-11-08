@@ -99,9 +99,9 @@ vi.mock('ai', async () => {
 });
 
 const { getDb, closeDb } = await import('../db/index.js');
-const { handleChatRequest } = await import('./service.js');
+const { answerOnLastStep, handleChatRequest, inlineAttachmentParts } = await import('./service.js');
 const { createConversation, getConversation } = await import('../db/repo/conversations.js');
-const { listMessages } = await import('../db/repo/messages.js');
+const { branchesFor, getMessage, listMessages } = await import('../db/repo/messages.js');
 const { createProvider } = await import('../db/repo/providers.js');
 const { createModel } = await import('../db/repo/models.js');
 const { listAttachmentsByConversation } = await import('../db/repo/attachments.js');
@@ -203,7 +203,7 @@ describe('handleChatRequest', () => {
 		closeDb();
 	});
 
-	it('truncateFrom deletes the anchor and later messages, then upserts the new message', async () => {
+	it('regenerate keeps the old reply as an older version of the new one', async () => {
 		const db = getDb();
 		const conversation = seed(db);
 
@@ -215,14 +215,14 @@ describe('handleChatRequest', () => {
 		await new Promise((r) => setTimeout(r, 50));
 		const assistant1 = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
 
-		// regenerate: drop the assistant answer and everything after, resubmit the user message
+		// regenerate: resubmit the user message; the old answer becomes a sibling
 		const res = await handleChatRequest('u1', {
 			conversationId: conversation.id,
 			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
-			truncateFrom: assistant1.id
+			branchFrom: assistant1.id
 		});
 		expect(res.status).toBe(200);
-		await res.text();
+		const body = await res.text();
 		await new Promise((r) => setTimeout(r, 50));
 
 		const messages = listMessages(db, conversation.id);
@@ -230,10 +230,26 @@ describe('handleChatRequest', () => {
 		expect(messages[0].id).toBe('msg-1');
 		expect(messages[1].role).toBe('assistant');
 		expect(messages[1].id).not.toBe(assistant1.id);
+		expect(messages[1].parent_id).toBe('msg-1');
+		expect(getMessage(db, assistant1.id)?.status).toBe('complete');
+		const branch = branchesFor(db, conversation.id, [messages[1]]).get(messages[1].id);
+		expect(branch).toEqual({ index: 1, count: 2, ids: [assistant1.id, messages[1].id] });
+		// The stream tells the client about the versions of the new reply, on the
+		// reply's own `start` chunk: metadata sent before `start` makes the client
+		// add a second, empty assistant message.
+		const chunks = body
+			.split('\n')
+			.filter((l) => l.startsWith('data: {'))
+			.map((l) => JSON.parse(l.slice(6)) as { type: string; messageMetadata?: unknown });
+		const startIndex = chunks.findIndex((c) => c.type === 'start');
+		expect(chunks[startIndex]?.messageMetadata).toMatchObject({
+			branch: { index: 1, count: 2 }
+		});
+		expect(chunks.slice(0, startIndex).some((c) => c.type === 'message-metadata')).toBe(false);
 		closeDb();
 	});
 
-	it('drops summaries of truncated messages and shows the regenerated ones', async () => {
+	it('ignores summaries of the branch an edit leaves', async () => {
 		const { createSummary, latestSummary } = await import('../db/repo/conversation-summaries.js');
 		const db = getDb();
 		const conversation = seed(db);
@@ -254,20 +270,21 @@ describe('handleChatRequest', () => {
 
 		const res = await handleChatRequest('u1', {
 			conversationId: conversation.id,
-			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello again' }] },
-			truncateFrom: 'msg-1'
+			message: { id: 'msg-1b', role: 'user', parts: [{ type: 'text', text: 'hello again' }] },
+			branchFrom: 'msg-1'
 		});
 		await res.text();
 		await new Promise((r) => setTimeout(r, 50));
 
-		expect(latestSummary(db, conversation.id)).toBeUndefined();
+		// kept for the old branch, but not part of the new one
+		expect(latestSummary(db, conversation.id)?.summary_text).toBe('STALE SUMMARY');
 		const prompt = JSON.stringify(registry.__getLastPrompt());
 		expect(prompt).not.toContain('STALE SUMMARY');
 		expect(prompt).toContain('hello again');
 		closeDb();
 	});
 
-	it('rejects with 400 when truncateFrom references an unknown message', async () => {
+	it('rejects with 400 when branchFrom references an unknown message', async () => {
 		const db = getDb();
 		const conversation = seed(db);
 
@@ -275,9 +292,9 @@ describe('handleChatRequest', () => {
 			handleChatRequest('u1', {
 				conversationId: conversation.id,
 				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
-				truncateFrom: 'does-not-exist'
+				branchFrom: 'does-not-exist'
 			})
-		).rejects.toMatchObject({ status: 400, message: expect.stringContaining('truncateFrom') });
+		).rejects.toMatchObject({ status: 400, message: expect.stringContaining('branchFrom') });
 		closeDb();
 	});
 
@@ -453,11 +470,11 @@ describe('handleChatRequest', () => {
 		const second = await handleChatRequest('u1', {
 			conversationId: conversation.id,
 			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
-			truncateFrom: assistant1.id
+			branchFrom: assistant1.id
 		});
 		expect(second.status).toBe(200);
 
-		// mid-stream: the truncated message is replaced by a fresh in-flight row
+		// mid-stream: the active path shows the fresh in-flight row instead of the old one
 		const duringMessages = listMessages(db, conversation.id);
 		expect(duringMessages.filter((m) => m.role === 'assistant')).toHaveLength(1);
 
@@ -620,6 +637,62 @@ describe('handleChatRequest', () => {
 		}
 	});
 
+	it('inlines images only for the latest user turns', async () => {
+		const fsp = await import('node:fs/promises');
+		let createdDir = '';
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			const { createAttachment } = await import('../db/repo/attachments.js');
+			createdDir = `workspaces/${conversation.id}`;
+			const dir = `${createdDir}/attachments`;
+			await fsp.mkdir(dir, { recursive: true });
+			const messages = [];
+			const ids: string[] = [];
+			for (let i = 0; i < 3; i++) {
+				await fsp.writeFile(`${dir}/p${i}.png`, Buffer.from([0x89, 0x50, i]));
+				const att = createAttachment(db, {
+					kind: 'image',
+					path: `${conversation.id}/attachments/p${i}.png`,
+					mime: 'image/png',
+					sha256: 'x'
+				});
+				ids.push(att.id);
+				messages.push(
+					{
+						id: `u${i}`,
+						role: 'user' as const,
+						parts: [
+							{
+								type: 'file' as const,
+								url: `/api/conversations/${conversation.id}/attachments/${att.id}`,
+								mediaType: 'image/png',
+								filename: `p${i}.png`
+							}
+						]
+					},
+					{
+						id: `a${i}`,
+						role: 'assistant' as const,
+						parts: [{ type: 'text' as const, text: 'ok' }]
+					}
+				);
+			}
+			const out = await inlineAttachmentParts(db, conversation.id, messages);
+			const oldest = out[0].parts;
+			expect(oldest).toHaveLength(1);
+			expect(oldest[0]).toMatchObject({ type: 'text' });
+			expect((oldest[0] as { text: string }).text).toContain(ids[0]);
+			for (const index of [2, 4]) {
+				const file = out[index].parts.find((p) => p.type === 'file') as { url: string };
+				expect(file.url.startsWith('data:image/png;base64,')).toBe(true);
+			}
+		} finally {
+			if (createdDir) await fsp.rm(createdDir, { recursive: true, force: true });
+			closeDb();
+		}
+	});
+
 	it('replaces an attachment whose file is missing with a text note', async () => {
 		const db = getDb();
 		const conversation = seed(db);
@@ -758,10 +831,12 @@ describe('handleChatRequest', () => {
 			await vi.waitFor(
 				() => {
 					expect(assistant().status).toBe('partial');
-					expect(assistant().content_text).toContain('Hi');
+					expect(assistant().parts).toContain('Hi');
 				},
 				{ timeout: 3000 }
 			);
+			// the searchable text is only written once the message settles
+			expect(assistant().content_text).toBe('');
 
 			await reading;
 			await new Promise((r) => setTimeout(r, 700));
@@ -876,5 +951,166 @@ describe('handleChatRequest', () => {
 			message: expect.stringContaining('unavailable')
 		});
 		closeDb();
+	});
+
+	it('rejects file parts that do not point at this conversation', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const other = createConversation(db, 'u1', { providerId: 'p1', modelId: 'm1' });
+		for (const url of [
+			'https://example.com/secret.png',
+			`/api/conversations/${other.id}/attachments/abc`,
+			`/api/conversations/${conversation.id}/attachments/../../${other.id}/attachments/abc`
+		]) {
+			await expect(
+				handleChatRequest('u1', {
+					conversationId: conversation.id,
+					message: {
+						id: 'msg-1',
+						role: 'user',
+						parts: [{ type: 'file', url, mediaType: 'image/png' }]
+					}
+				})
+			).rejects.toMatchObject({ status: 400 });
+		}
+		expect(listMessages(db, conversation.id)).toHaveLength(0);
+		closeDb();
+	});
+
+	it('accepts data: URLs and own attachment URLs in file parts', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const res = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: {
+				id: 'msg-1',
+				role: 'user',
+				parts: [
+					{ type: 'text', text: 'look' },
+					{ type: 'file', url: 'data:text/plain;base64,aGk=', mediaType: 'text/plain' },
+					{
+						type: 'file',
+						url: `/api/conversations/${conversation.id}/attachments/missing-id`,
+						mediaType: 'image/png'
+					}
+				]
+			}
+		});
+		expect(res.status).toBe(200);
+		await res.text();
+		await new Promise((r) => setTimeout(r, 50));
+		expect(listMessages(db, conversation.id)).toHaveLength(2);
+		closeDb();
+	});
+
+	it('refuses to overwrite an assistant message with a user message id', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const first = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		await first.text();
+		await new Promise((r) => setTimeout(r, 50));
+		const assistant = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+
+		await expect(
+			handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: assistant.id, role: 'user', parts: [{ type: 'text', text: 'forged' }] }
+			})
+		).rejects.toMatchObject({ status: 400 });
+		const after = listMessages(db, conversation.id).find((m) => m.id === assistant.id)!;
+		expect(after.role).toBe('assistant');
+		expect(after.parts).toBe(assistant.parts);
+		closeDb();
+	});
+
+	it('edit stores the edited message as a new version beside the original', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const first = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		await first.text();
+		await new Promise((r) => setTimeout(r, 50));
+
+		const res = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1-edit', role: 'user', parts: [{ type: 'text', text: 'edited' }] },
+			branchFrom: 'msg-1'
+		});
+		expect(res.status).toBe(200);
+		await res.text();
+		await new Promise((r) => setTimeout(r, 50));
+		const messages = listMessages(db, conversation.id);
+		expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+		expect(messages[0].id).toBe('msg-1-edit');
+		expect(messages[0].content_text).toBe('edited');
+		expect(messages[0].parent_id).toBeNull();
+		expect(messages[1].parent_id).toBe('msg-1-edit');
+		// the original and its reply are kept as the older version
+		expect(getMessage(db, 'msg-1')?.content_text).toBe('hello');
+		expect(branchesFor(db, conversation.id, messages).get('msg-1-edit')).toEqual({
+			index: 1,
+			count: 2,
+			ids: ['msg-1', 'msg-1-edit']
+		});
+		const count = db
+			.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?')
+			.get(conversation.id) as { n: number };
+		expect(count.n).toBe(4);
+		closeDb();
+	});
+
+	it('rejects an edit sent under the id of an existing message', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const first = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		await first.text();
+		await new Promise((r) => setTimeout(r, 50));
+		await expect(
+			handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'edited' }] },
+				branchFrom: 'msg-1'
+			})
+		).rejects.toMatchObject({ status: 400 });
+		expect(getMessage(db, 'msg-1')?.content_text).toBe('hello');
+		closeDb();
+	});
+
+	it('rejects a regenerate whose message is not the one the reply answers', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const first = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		await first.text();
+		await new Promise((r) => setTimeout(r, 50));
+		const assistant1 = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+		await expect(
+			handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'other', role: 'user', parts: [{ type: 'text', text: 'x' }] },
+				branchFrom: assistant1.id
+			})
+		).rejects.toMatchObject({ status: 400 });
+		expect(listMessages(db, conversation.id)).toHaveLength(2);
+		closeDb();
+	});
+});
+
+describe('answerOnLastStep', () => {
+	it('disables tools only on the last allowed step', () => {
+		const prepare = answerOnLastStep(5);
+		expect(prepare({ stepNumber: 0 })).toBeUndefined();
+		expect(prepare({ stepNumber: 3 })).toBeUndefined();
+		expect(prepare({ stepNumber: 4 })).toEqual({ toolChoice: 'none' });
 	});
 });

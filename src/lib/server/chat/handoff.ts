@@ -11,7 +11,7 @@ import { findModel, findRoleModel } from '../db/repo/models.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
 import { resolveModel } from '../llm/registry.js';
 import { resolveRefTargets } from '../llm/mapped.js';
-import { computeCostUsd } from '../proxy/pricing.js';
+import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
 
 /** How much of the chat (newest first) goes into the drafting prompt. */
 const TRANSCRIPT_BUDGET = 24_000;
@@ -94,12 +94,8 @@ export async function draftHandoffPrompt(
 			modelId: target.modelId,
 			inputTokens: result.usage?.inputTokens ?? null,
 			outputTokens: result.usage?.outputTokens ?? null,
-			costUsd: computeCostUsd(
-				priceRow?.price_input ?? null,
-				priceRow?.price_output ?? null,
-				result.usage?.inputTokens,
-				result.usage?.outputTokens
-			)
+			...cacheTokens(result.usage),
+			costUsd: computeUsageCostUsd(priceRow, result.usage)
 		});
 		const draft = result.text.trim();
 		if (!draft) throw new Error('The model returned an empty draft');

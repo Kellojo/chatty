@@ -1,6 +1,14 @@
 import type { Tool } from 'ai';
 
-export function wrapMcpTools(set: Record<string, Tool>, serverName: string): Record<string, Tool> {
+/**
+ * Prefixes errors thrown by MCP tools with their server and tool name.
+ * `onError` sees every thrown error first (e.g. to drop a dead pooled connection).
+ */
+export function wrapMcpTools(
+	set: Record<string, Tool>,
+	serverName: string,
+	onError?: (error: unknown) => void
+): Record<string, Tool> {
 	const wrapped: Record<string, Tool> = {};
 	for (const [name, tool] of Object.entries(set)) {
 		const execute = tool.execute;
@@ -14,6 +22,7 @@ export function wrapMcpTools(set: Record<string, Tool>, serverName: string): Rec
 				try {
 					return await execute(input as never, options as never);
 				} catch (e) {
+					onError?.(e);
 					const message = e instanceof Error ? e.message : String(e);
 					throw new Error(`[${serverName}/${name}] ${message}`, { cause: e });
 				}

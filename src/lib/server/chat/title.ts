@@ -6,7 +6,7 @@ import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-reque
 import { publishServerEvent } from '../events/bus.js';
 import { resolveModel } from '../llm/registry.js';
 import { resolveRefTargets } from '../llm/mapped.js';
-import { computeCostUsd } from '../proxy/pricing.js';
+import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
 
 function titleTarget(fallback: { providerId: string; modelId: string }): {
 	providerId: string;
@@ -60,12 +60,8 @@ export async function generateConversationTitle(
 			modelId: target.modelId,
 			inputTokens: result.usage?.inputTokens ?? null,
 			outputTokens: result.usage?.outputTokens ?? null,
-			costUsd: computeCostUsd(
-				priceRow?.price_input ?? null,
-				priceRow?.price_output ?? null,
-				result.usage?.inputTokens,
-				result.usage?.outputTokens
-			)
+			...cacheTokens(result.usage),
+			costUsd: computeUsageCostUsd(priceRow, result.usage)
 		});
 		const title = result.text
 			.trim()

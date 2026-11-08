@@ -10,6 +10,10 @@ export function createStreamReplayResponse(conversationId: string): Response | n
 	const state = getStreamState(conversationId);
 	if (!state) return null;
 
+	// Set while following the live stream; cleared on the stream's end or when
+	// the client disconnects, so neither the listener nor the poll outlives it.
+	let stopFollowing: (() => void) | null = null;
+
 	const chunks = new ReadableStream<UIMessageChunk>({
 		start(controller) {
 			for (const chunk of state.chunks) {
@@ -23,13 +27,12 @@ export function createStreamReplayResponse(conversationId: string): Response | n
 				try {
 					controller.enqueue(chunk);
 				} catch {
-					unsubscribe();
+					stopFollowing?.();
 				}
 			});
 			const poll = setInterval(() => {
 				if (getStreamState(conversationId)?.done !== false) {
-					clearInterval(poll);
-					unsubscribe();
+					stopFollowing?.();
 					try {
 						controller.close();
 					} catch {
@@ -38,9 +41,15 @@ export function createStreamReplayResponse(conversationId: string): Response | n
 				}
 			}, 100);
 			poll.unref?.();
+			stopFollowing = () => {
+				clearInterval(poll);
+				unsubscribe();
+				stopFollowing = null;
+			};
 		},
 		cancel() {
 			// client disconnected; the server-side stream keeps running
+			stopFollowing?.();
 		}
 	});
 
