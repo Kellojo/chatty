@@ -12,6 +12,8 @@
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
+	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
@@ -26,7 +28,9 @@
 		environmentName = null,
 		onupdated,
 		onhandoff,
-		oncreatepr
+		oncreatepr,
+		onsettings,
+		onpreview
 	}: {
 		conversation: Conversation;
 		coding?: CodingConversation | null;
@@ -36,6 +40,10 @@
 		onhandoff?: () => void;
 		/** Shown on phones, where the header keeps only the title and this menu. */
 		oncreatepr?: () => void;
+		/** Coding tasks on phones: the header's model/permissions button. */
+		onsettings?: () => void;
+		/** Coding tasks on phones: the header's browser preview button. */
+		onpreview?: () => void;
 	} = $props();
 
 	let renaming = $state(false);
@@ -124,6 +132,7 @@
 				{...props}
 				variant="ghost"
 				size="icon-sm"
+				class="aria-expanded:bg-muted/60 dark:aria-expanded:bg-muted/40"
 				aria-label={coding ? 'Task details and actions' : 'Conversation actions'}
 				title={coding ? 'Task details and actions' : 'Conversation actions'}
 			>
@@ -131,13 +140,32 @@
 			</Button>
 		{/snippet}
 	</DropdownMenu.Trigger>
-	<DropdownMenu.Content align="end" class={coding ? 'w-80' : 'w-52'}>
+	<DropdownMenu.Content
+		align="end"
+		collisionPadding={8}
+		class="max-w-[calc(100vw-1rem)] {coding ? 'w-80' : 'w-52'}"
+	>
 		<!-- Phone-only actions (the header has no room for them) lead the menu. -->
 		{#if oncreatepr}
 			<DropdownMenu.Item class="sm:hidden" onSelect={oncreatepr}>
 				<GitPullRequestCreateIcon class="size-4" />
 				Create pull request
 			</DropdownMenu.Item>
+			<DropdownMenu.Separator class="sm:hidden" />
+		{/if}
+		{#if onsettings || onpreview}
+			{#if onsettings}
+				<DropdownMenu.Item class="sm:hidden" onSelect={onsettings}>
+					<SlidersHorizontalIcon class="size-4" />
+					Model and permissions
+				</DropdownMenu.Item>
+			{/if}
+			{#if onpreview}
+				<DropdownMenu.Item class="sm:hidden" onSelect={onpreview}>
+					<GlobeIcon class="size-4" />
+					Browser preview
+				</DropdownMenu.Item>
+			{/if}
 			<DropdownMenu.Separator class="sm:hidden" />
 		{/if}
 		{#if onhandoff}

@@ -6,6 +6,7 @@
 	import HandoffDialog from './HandoffDialog.svelte';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { getSidebarState } from './sidebar-state.svelte.js';
 	import { decodeModelRef, encodeModelRef } from '$lib/model-ref.js';
 	import type { Agent, Conversation, ModelMapping, ModelsByProvider } from '$lib/types.js';
@@ -50,6 +51,9 @@
 	} = $props();
 
 	let handoffOpen = $state(false);
+	// Coding-task dialogs, opened from the task bar or (on phones) from the ⋯ menu.
+	let codingSettingsOpen = $state(false);
+	let codingPreviewOpen = $state(false);
 	const canHandoff = $derived(
 		!coding && (codingEnvironments.length > 0 || codingAgents.length > 0)
 	);
@@ -57,10 +61,17 @@
 	let saving = $state(false);
 
 	const sidebar = getSidebarState();
-	// Room for the floating sidebar button. Breakpoint classes rather than a JS
-	// media query, which renders as mobile on the server and jumps on desktop.
+	// Room for the floating sidebar button, only as much as it overlaps the centred
+	// column: 2.5rem (+ the column's 1rem padding) when the column touches the left
+	// edge, shrinking to nothing once the margin beside the column clears the button.
+	// Breakpoint classes rather than a JS media query, which renders as mobile on the
+	// server and jumps on desktop. On desktop the button only shows with the sidebar closed.
 	const sidebarOffset = $derived(
-		sidebar === undefined ? '' : sidebar.open ? 'max-md:pl-14' : 'max-lg:pl-14'
+		sidebar === undefined
+			? ''
+			: sidebar.open
+				? 'max-md:pl-[min(2.5rem,max(0px,calc(3.5rem_-_(100%_-_48rem)/2)))]'
+				: 'pl-[min(2.5rem,max(0px,calc(3.5rem_-_(100%_-_48rem)/2)))] md:pl-[min(2.5rem,max(0px,calc(4rem_-_(100%_-_48rem)/2)))]'
 	);
 
 	const defaultModelValue = $derived(defaultModel ? encodeModelRef(defaultModel) : '');
@@ -106,51 +117,74 @@
 </script>
 
 <!-- Same centred column as the messages, so the header reads as part of the chat. -->
-<header class="shrink-0 pt-[env(safe-area-inset-top)]">
-	<div class="mx-auto flex h-12 w-full max-w-3xl items-center gap-2 px-4 {sidebarOffset}">
+<header class="shrink-0 pt-[env(safe-area-inset-top)] {sidebarOffset}">
+	<div class="mx-auto flex h-12 w-full max-w-3xl items-center gap-1 px-4 md:h-14">
 		{#if coding}
-			<CodingTaskBar {coding} title={displayTitle} {oncreatepr} {onrecover} />
+			<CodingTaskBar
+				{coding}
+				title={displayTitle}
+				{oncreatepr}
+				{onrecover}
+				bind:settingsOpen={codingSettingsOpen}
+				bind:previewOpen={codingPreviewOpen}
+			/>
 		{:else}
 			<!-- Main info first: what this chat is, then the controls. -->
-			<h1 class="min-w-0 truncate text-sm font-medium" title={displayTitle}>{displayTitle}</h1>
+			<h1
+				class="min-w-0 truncate text-[15px] font-semibold sm:font-medium md:text-base"
+				title={displayTitle}
+			>
+				{displayTitle}
+			</h1>
 			{#if personaLabel}
-				<span class="shrink-0 text-xs text-muted-foreground max-sm:hidden" title="Persona">
+				<Badge variant="secondary" class="shrink-0 max-sm:hidden" title="Persona">
 					{personaLabel}
-				</span>
+				</Badge>
 			{/if}
-			<div class="flex-1"></div>
-			<!-- Quiet controls so the title leads; on phones the picker shows just the model name. -->
-			<ModelPicker
-				{groups}
-				{mappings}
-				value={currentModelValue}
-				onselect={selectModel}
-				disabled={saving}
-				class="w-auto shrink-0 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground data-[size=default]:h-8 max-w-32 sm:max-w-56 max-sm:[&_[data-model-icon]]:hidden max-sm:[&_[data-model-source]]:hidden"
-			/>
-			{#if canHandoff}
-				<Button
-					variant="ghost"
-					size="sm"
-					class="shrink-0 text-muted-foreground hover:text-foreground max-sm:hidden"
-					disabled={handoffDisabled}
-					title="Hand this chat off to a coding agent"
-					aria-label="Hand off to a coding agent"
-					onclick={() => (handoffOpen = true)}
-				>
-					<SquareTerminalIcon />
-					<span class="hidden sm:inline">Hand off</span>
-				</Button>
-			{/if}
+			<div class="ml-auto flex shrink-0 items-center gap-1">
+				<!-- Quiet controls so the title leads; on phones the picker shows just the model name,
+				     keeping the generic icon for mappings so "auto" still reads as a model. -->
+				<ModelPicker
+					{groups}
+					{mappings}
+					value={currentModelValue}
+					onselect={selectModel}
+					disabled={saving}
+					align="end"
+					class="w-auto max-w-32 shrink-0 bg-transparent pr-2 text-muted-foreground hover:bg-accent hover:text-foreground data-[size=default]:h-8 max-sm:pr-1 sm:max-w-44 lg:max-w-56 pointer-coarse:data-[size=default]:h-10 max-sm:[&_[data-model-icon=brand]]:hidden max-sm:[&_[data-model-source]]:hidden"
+				/>
+				{#if canHandoff}
+					<Button
+						variant="ghost"
+						size="sm"
+						class="shrink-0 text-muted-foreground hover:text-foreground max-sm:hidden"
+						disabled={handoffDisabled}
+						title="Hand this chat off to a coding agent"
+						aria-label="Hand off to a coding agent"
+						onclick={() => (handoffOpen = true)}
+					>
+						<SquareTerminalIcon />
+						<!-- Icon-only until there is room, so the title keeps its space. -->
+						<span class="max-lg:sr-only">Hand off</span>
+					</Button>
+				{/if}
+			</div>
 		{/if}
-		<ConversationMenu
-			{conversation}
-			{coding}
-			environmentName={codingEnvironmentName}
-			{onupdated}
-			onhandoff={canHandoff && !handoffDisabled ? () => (handoffOpen = true) : undefined}
-			oncreatepr={coding && oncreatepr && canCreatePullRequest(coding) ? oncreatepr : undefined}
-		/>
+		<!-- Pulled out by the icon's inset so the dots line up with the messages' right edge. -->
+		<div class="-mr-2 flex shrink-0">
+			<ConversationMenu
+				{conversation}
+				{coding}
+				environmentName={codingEnvironmentName}
+				{onupdated}
+				onhandoff={canHandoff && !handoffDisabled ? () => (handoffOpen = true) : undefined}
+				oncreatepr={coding && oncreatepr && canCreatePullRequest(coding) ? oncreatepr : undefined}
+				onsettings={coding?.environmentId ? () => (codingSettingsOpen = true) : undefined}
+				onpreview={coding?.threadId && coding.environmentId
+					? () => (codingPreviewOpen = true)
+					: undefined}
+			/>
+		</div>
 	</div>
 </header>
 

@@ -50,25 +50,33 @@
 		}
 	}
 
-	// Phones: the floating sidebar button hides while a page scrolls down beneath it
-	// and comes back on scroll up. Scrollers that start below it (the chat timeline,
-	// under its topbar) never pass under it, so they leave it alone.
+	// The floating sidebar button is a plain ghost button until a page scrolls beneath
+	// it; then it gets a backing so it doesn't read as part of the content (overContent).
+	// Phones also hide it while scrolling down and bring it back on scroll up. Scrollers
+	// that start below it (the chat timeline, under its topbar) never pass under it, so
+	// they leave it alone.
 	let buttonHidden = $state(false);
+	let overContent = $state(false);
 	let sidebarButton = $state<HTMLButtonElement>();
 	const lastScrollTop = new WeakMap<Element, number>();
 	function onAnyScroll(event: Event) {
 		const el = event.target;
-		if (isDesktop.current || !(el instanceof Element)) return;
+		if (!(el instanceof Element)) return;
 		const top = el.scrollTop;
 		const last = lastScrollTop.get(el) ?? 0;
 		lastScrollTop.set(el, top);
 		// offsetTop ignores the slide-away transform, so this is where the button rests.
 		const buttonBottom = sidebarButton ? sidebarButton.offsetTop + sidebarButton.offsetHeight : 48;
 		if (el.getBoundingClientRect().top >= buttonBottom - 4) return;
+		overContent = top > 4;
+		if (isDesktop.current) return;
 		if (top < 48 || top < last - 8) buttonHidden = false;
 		else if (top > last + 8) buttonHidden = true;
 	}
-	afterNavigate(() => (buttonHidden = false));
+	afterNavigate(() => {
+		buttonHidden = false;
+		overContent = false;
+	});
 
 	// ── keyboard shortcuts (Ctrl/Cmd+K lives in the sidebar's search) ────────
 	const OVERLAY = '[role=dialog], [role=alertdialog], [role=menu], [role=listbox], dialog';
@@ -181,7 +189,11 @@
 
 	<button
 		class={[
-			'fixed top-[calc(0.5rem+env(safe-area-inset-top))] left-[calc(0.5rem+env(safe-area-inset-left))] z-20 rounded-lg bg-muted p-2 text-muted-foreground transition-[color,background-color,opacity,translate] duration-200 hover:bg-accent hover:text-foreground max-md:bg-muted/90 max-md:shadow-md max-md:ring-1 max-md:ring-border max-md:backdrop-blur pointer-coarse:p-3',
+			// Sits centred in the first row of every page: the 48px chat header on phones,
+			// 56px on wider screens. Page titles (PageHeader) line up with it.
+			'fixed left-[calc(0.375rem+env(safe-area-inset-left))] z-20 flex items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,box-shadow,opacity,translate] duration-200 outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:left-[calc(1rem+env(safe-area-inset-left))] md:pointer-coarse:left-[calc(0.5rem+env(safe-area-inset-left))]',
+			'top-[calc(0.25rem+env(safe-area-inset-top))] size-10 md:top-[calc(0.75rem+env(safe-area-inset-top))] md:size-8 md:pointer-coarse:top-[calc(0.5rem+env(safe-area-inset-top))] md:pointer-coarse:size-10',
+			overContent && 'bg-background shadow-sm ring-1 ring-border',
 			buttonHidden && 'max-md:pointer-events-none max-md:-translate-y-16 max-md:opacity-0',
 			mobileOpen && 'max-md:hidden',
 			sidebarOpen && 'md:hidden'
@@ -189,7 +201,8 @@
 		bind:this={sidebarButton}
 		onclick={toggleSidebar}
 		aria-label="Open sidebar"
+		title="Open sidebar"
 	>
-		<PanelLeftIcon class="size-4" />
+		<PanelLeftIcon class="size-[18px] md:size-4" />
 	</button>
 </div>

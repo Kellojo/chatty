@@ -24,7 +24,9 @@
 		coding,
 		title = null,
 		oncreatepr,
-		onrecover
+		onrecover,
+		settingsOpen = $bindable(false),
+		previewOpen = $bindable(false)
 	}: {
 		coding: CodingConversation;
 		/** Task title, the header's main information. */
@@ -33,6 +35,10 @@
 		oncreatepr?: () => void;
 		/** Sends the follow-up of a failed or interrupted task ("Retry" / "Continue"). */
 		onrecover?: (action: CodingRecoveryAction) => void;
+		/** The model/permissions dialog; bindable so the phone ⋯ menu can open it. */
+		settingsOpen?: boolean;
+		/** The browser preview; bindable so the phone ⋯ menu can open it. */
+		previewOpen?: boolean;
 	} = $props();
 
 	const canCreatePr = $derived(!!oncreatepr && canCreatePullRequest(coding));
@@ -46,9 +52,7 @@
 	const branch = $derived(coding.branch ?? coding.baseBranch);
 	/** Browser tabs live on the T3 thread, so there is nothing to show before it exists. */
 	const hasThread = $derived(!!coding.threadId && !!coding.environmentId);
-	let previewOpen = $state(false);
 	let diffOpen = $state(false);
-	let settingsOpen = $state(false);
 	const hasChanges = $derived(
 		!!coding.diff && (coding.diff.insertions > 0 || coding.diff.deletions > 0)
 	);
@@ -60,7 +64,12 @@
 <div class="flex min-w-0 flex-1 items-center gap-2 text-sm">
 	<div class="flex min-w-0 flex-1 flex-col">
 		{#if title}
-			<h1 class="min-w-0 truncate leading-5 font-medium" {title}>{title}</h1>
+			<h1
+				class="min-w-0 truncate text-[15px] leading-5 font-semibold sm:font-medium md:text-base"
+				{title}
+			>
+				{title}
+			</h1>
 		{/if}
 		<div class="flex min-w-0 items-center gap-2 text-xs leading-4 text-muted-foreground">
 			{#if branch}
@@ -101,7 +110,8 @@
 			{/if}
 		</div>
 	</div>
-	<div class="ml-auto flex shrink-0 items-center gap-2">
+	<!-- On phones only Retry and the PR stay; settings and the preview move into the ⋯ menu. -->
+	<div class="ml-auto flex shrink-0 items-center gap-1">
 		{#if recovery}
 			<Button
 				variant="outline"
@@ -118,7 +128,7 @@
 			<Button
 				variant="ghost"
 				size="icon-sm"
-				class="text-muted-foreground hover:text-foreground"
+				class="text-muted-foreground hover:text-foreground max-sm:hidden"
 				title="Model and permissions"
 				aria-label="Change the model and permissions"
 				onclick={() => (settingsOpen = true)}
@@ -130,7 +140,7 @@
 			<Button
 				variant="ghost"
 				size="icon-sm"
-				class="text-muted-foreground hover:text-foreground"
+				class="text-muted-foreground hover:text-foreground max-sm:hidden"
 				title="Browser preview"
 				aria-label="Open the agent's browser preview"
 				onclick={() => (previewOpen = true)}

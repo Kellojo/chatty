@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import StarIcon from '@lucide/svelte/icons/star';
+	import BoxIcon from '@lucide/svelte/icons/box';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import ProviderIcon from './ProviderIcon.svelte';
 	import { getFavoriteModels } from '$lib/state/favorite-models.svelte.js';
@@ -41,7 +42,8 @@
 	{#if brand}
 		<ProviderIcon {brand} class="size-3.5 shrink-0" />
 	{:else}
-		<span class="size-3.5 shrink-0" aria-hidden="true"></span>
+		<!-- Same generic glyph as the picker trigger, e.g. for mappings like "auto". -->
+		<BoxIcon class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
 	{/if}
 	<span class="truncate">{name}</span>
 	{#if source}

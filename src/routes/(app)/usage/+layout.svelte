@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { buttonRowClasses, getSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
 	import { resolve } from '$app/paths';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -15,6 +16,8 @@
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
+
+	const buttonRow = $derived(buttonRowClasses(getSidebarState(), '2xl'));
 
 	const path = $derived(page.url.pathname.replace(/\/$/, ''));
 	const onRequests = $derived(path.startsWith('/usage/requests'));
@@ -100,10 +103,13 @@
 	<div class="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-6">
 		<!-- Phones: title + time control share the first row, tabs below.
 		     Desktop: title on its own row, time control right of the tabs on one baseline. -->
-		<div class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-3 md:gap-x-0">
-			<!-- Left padding on phones clears the floating "open sidebar" button. -->
+		<div
+			class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-3 md:gap-x-0 {buttonRow.lift}"
+		>
+			<!-- The title shares a row with the floating "open sidebar" button wherever it can
+			     overlap (same top and height), padded to clear it. -->
 			<h1
-				class="col-start-1 row-start-1 flex items-center gap-2 pl-10 text-xl font-semibold md:col-span-2 md:pl-0"
+				class="col-start-1 row-start-1 flex min-h-10 items-center gap-2 text-xl font-semibold md:col-span-2 md:min-h-9 {buttonRow.pad}"
 			>
 				<GaugeIcon class="size-5" />
 				Usage

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Component, Snippet } from 'svelte';
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
+	import { buttonRowClasses, getSidebarState } from './sidebar-state.svelte.js';
 
 	let {
 		title,
@@ -21,15 +22,25 @@
 		/** Primary page actions, right of the title (under it on phones). */
 		actions?: Snippet;
 	} = $props();
+
+	const sidebar = getSidebarState();
+	const row = $derived(buttonRowClasses(sidebar));
+	// The back link indents with a margin (its own padding is the hover area).
+	const backClear = $derived(
+		!sidebar || sidebar.open
+			? 'ml-9 md:-ml-1 md:h-auto'
+			: 'ml-9 md:max-xl:ml-8 md:max-xl:h-9 xl:-ml-1 xl:h-auto'
+	);
 </script>
 
-<header class="flex flex-col gap-1">
-	<!-- On phones only the first line is padded, to clear the floating "open sidebar" button. -->
+<!-- The first line shares a row with the floating "open sidebar" button wherever it can
+     overlap (see buttonRowClasses): pulled up to its top and height, and padded to clear it. -->
+<header class="flex flex-col gap-1 {row.lift}">
 	{#if back}
 		<!-- eslint-disable svelte/no-navigation-without-resolve -- callers pass resolve()d hrefs -->
 		<a
 			href={back.href}
-			class="ml-9 flex h-8 w-fit items-center gap-1 rounded-md px-1 text-sm text-muted-foreground transition-colors hover:text-foreground md:-ml-1 md:h-auto"
+			class="flex h-10 w-fit items-center gap-1 rounded-md px-1 text-sm text-muted-foreground transition-colors hover:text-foreground {backClear}"
 		>
 			<ArrowLeftIcon class="size-3.5" aria-hidden="true" />
 			{back.label}
@@ -39,9 +50,9 @@
 	<!-- Phones: title, description, actions. Wider: actions sit on the title's row. -->
 	<div class="grid gap-x-6 gap-y-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
 		<div
-			class="flex min-h-9 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 {back
+			class="flex min-h-10 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 md:min-h-9 {back
 				? ''
-				: 'pl-10 md:pl-0'}"
+				: row.pad}"
 		>
 			<h1 class="flex min-w-0 items-center gap-2 text-xl font-semibold">
 				{#if Icon}<Icon class="size-5 shrink-0" />{/if}

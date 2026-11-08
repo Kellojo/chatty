@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { buttonRowClasses, getSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
 	import { resolve } from '$app/paths';
 	import BellIcon from '@lucide/svelte/icons/bell';
 	import BlocksIcon from '@lucide/svelte/icons/blocks';
@@ -16,6 +17,8 @@
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
+
+	const buttonRow = $derived(buttonRowClasses(getSidebarState()));
 
 	// Keep the active phone tab in view; later sections sit past the right edge.
 	let tabStrip = $state<HTMLElement | null>(null);
@@ -113,8 +116,11 @@
 
 <div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
 	<div class="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 md:gap-6 md:p-6">
-		<!-- Left padding on phones clears the floating "open sidebar" button. -->
-		<h1 class="flex items-center gap-2 pl-10 text-xl font-semibold md:pl-0">
+		<!-- The title shares a row with the floating "open sidebar" button wherever it can
+		     overlap (same top and height), padded to clear it. -->
+		<h1
+			class="flex min-h-10 items-center gap-2 text-xl font-semibold md:min-h-9 {buttonRow.lift} {buttonRow.pad}"
+		>
 			<SettingsIcon class="size-5" />
 			Settings
 		</h1>

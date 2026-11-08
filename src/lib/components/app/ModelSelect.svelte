@@ -26,6 +26,7 @@
 		noneValue,
 		noneLabel = 'Not set',
 		capability,
+		align = 'start',
 		class: className = 'w-64'
 	}: {
 		groups: ModelsByProvider[];
@@ -37,6 +38,8 @@
 		noneValue?: string;
 		noneLabel?: string;
 		capability?: string;
+		/** Which trigger edge the list lines up with; `end` for pickers at the right of a bar. */
+		align?: 'start' | 'end';
 		class?: string;
 	} = $props();
 
@@ -78,7 +81,9 @@
 	const selected = $derived.by(() => {
 		for (const mapping of mappings) {
 			const option = mappingOption(mapping);
-			if (option.value === selectedValue) return { label: `${option.name} · Mapping`, ...option };
+			if (option.value === selectedValue) {
+				return { label: `${option.name} · Mapped model`, mapping: true, ...option };
+			}
 		}
 		for (const { provider, models } of groups) {
 			for (const model of models) {
@@ -188,8 +193,10 @@
 	<Select.Trigger class={className} {disabled} title={label}>
 		<span class="flex min-w-0 flex-1 items-center gap-1.5 text-left">
 			<!-- data-model-icon / data-model-source let compact callers (phone topbar and composer)
-			     drop the icon and the " · Provider" suffix and keep just the model name. -->
-			<span data-model-icon class="contents">
+			     drop the icon and the " · Provider" suffix and keep just the model name.
+			     data-model-icon is "brand" for a provider logo, "generic" for mappings like "auto".
+			     Mappings have no source suffix: "Mapping" says nothing the box icon doesn't. -->
+			<span data-model-icon={selected.brand ? 'brand' : 'generic'} class="contents">
 				{#if selected.brand}
 					<ProviderIcon brand={selected.brand} class="size-3.5 shrink-0" />
 				{:else if selectedValue}
@@ -198,7 +205,9 @@
 			</span>
 			{#if 'name' in selected}
 				<span class="truncate"
-					>{selected.name}<span data-model-source>&nbsp;· {selected.source}</span></span
+					>{selected.name}{#if !('mapping' in selected)}<span data-model-source
+							>&nbsp;· {selected.source}</span
+						>{/if}</span
 				>
 			{:else}
 				<span class="truncate">{label}</span>
@@ -206,7 +215,9 @@
 		</span>
 	</Select.Trigger>
 	<Select.Content
-		class="h-[min(24rem,var(--bits-select-content-available-height))] w-(--bits-select-anchor-width) min-w-72"
+		{align}
+		collisionPadding={8}
+		class="h-[min(24rem,var(--bits-select-content-available-height))] w-(--bits-select-anchor-width) max-w-[calc(100vw-1rem)] min-w-72"
 	>
 		<div class="sticky top-0 z-10 border-b bg-popover/95 p-1 backdrop-blur-sm">
 			<div class="relative">
