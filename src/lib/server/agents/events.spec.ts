@@ -317,3 +317,30 @@ describe('coding agents', () => {
 		expect(runFn).toHaveBeenCalledWith(reviewer.id, 'u1', expect.any(String));
 	});
 });
+
+describe('event self-trigger guards', () => {
+	it("ignores events caused by the same agent's own run", async () => {
+		const agent = seedEventAgent('u1', { event: 'memory.changed' });
+		const other = seedEventAgent('u1', { event: 'chat.created' });
+		const own = createAgentRun(db, { agentId: agent.id, userId: 'u1', trigger: 'event' });
+		const foreign = createAgentRun(db, { agentId: other.id, userId: 'u1', trigger: 'event' });
+		finishAgentRun(db, own.id, 'success');
+		finishAgentRun(db, foreign.id, 'success');
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', { agentRunId: own.id }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+		await emitAgentEvent('memory.changed', 'u1', { agentRunId: foreign.id }, db, runFn);
+		expect(runFn).toHaveBeenCalledTimes(1);
+	});
+
+	it('caps triggers of one agent per minute', async () => {
+		seedEventAgent('u1', { event: 'memory.changed' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		for (let i = 0; i < 15; i++) {
+			await emitAgentEvent('memory.changed', 'u1', { i }, db, runFn);
+			// Let each run settle so the next event dispatches instead of queueing.
+			await new Promise((r) => setTimeout(r, 0));
+		}
+		expect(runFn).toHaveBeenCalledTimes(10);
+	});
+});

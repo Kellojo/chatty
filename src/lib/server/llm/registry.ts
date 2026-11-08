@@ -211,7 +211,12 @@ async function fetchOpenAICompatibleModels(
 			id: string;
 			architecture?: { input_modalities?: unknown; output_modalities?: unknown };
 			modalities?: unknown;
-			pricing?: { prompt?: unknown; completion?: unknown };
+			pricing?: {
+				prompt?: unknown;
+				completion?: unknown;
+				input_cache_read?: unknown;
+				input_cache_write?: unknown;
+			};
 			context_length?: unknown;
 			top_provider?: { context_length?: unknown };
 		}[];
@@ -258,6 +263,8 @@ async function fetchOpenAICompatibleModels(
 			capabilities: [...capabilities],
 			priceInput: pricePerMillion(m.pricing?.prompt),
 			priceOutput: pricePerMillion(m.pricing?.completion),
+			priceCacheRead: pricePerMillion(m.pricing?.input_cache_read),
+			priceCacheWrite: pricePerMillion(m.pricing?.input_cache_write),
 			contextLength: contextLength(m)
 		};
 	});

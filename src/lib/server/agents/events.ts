@@ -5,7 +5,7 @@ import {
 	type ServerEvent
 } from '$lib/types.js';
 import { getDb, type Db } from '../db/index.js';
-import { isAgentRunConversation, listRunningAgentIds } from '../db/repo/agent-runs.js';
+import { getAgentRun, isAgentRunConversation, listRunningAgentIds } from '../db/repo/agent-runs.js';
 import {
 	getAgent,
 	incrementAgentEventCounter,
@@ -36,6 +36,38 @@ interface Pending {
 // follow-up run when it finishes, instead of being dropped. Bounded per
 // agent+user so a noisy event source can't grow without limit.
 const MAX_PENDING = 20;
+
+// Loop guard: an agent whose runs keep producing the events it listens to
+// (directly or via another agent) is capped at this many event triggers per
+// user per window; further occurrences are dropped.
+const MAX_TRIGGERS_PER_WINDOW = 10;
+const TRIGGER_WINDOW_MS = 60_000;
+/** `${agentId}:${userId}` → recent trigger timestamps. */
+const recentTriggers = new Map<string, number[]>();
+
+function overTriggerLimit(agentId: string, userId: string, now = Date.now()): boolean {
+	const key = `${agentId}:${userId}`;
+	const times = (recentTriggers.get(key) ?? []).filter((t) => t > now - TRIGGER_WINDOW_MS);
+	if (times.length >= MAX_TRIGGERS_PER_WINDOW) {
+		recentTriggers.set(key, times);
+		return true;
+	}
+	times.push(now);
+	recentTriggers.set(key, times);
+	// Keep the map bounded by the agents active in the last window.
+	if (recentTriggers.size > 1000) {
+		for (const [k, ts] of recentTriggers) {
+			if (!ts.some((t) => t > now - TRIGGER_WINDOW_MS)) recentTriggers.delete(k);
+		}
+	}
+	return false;
+}
+
+/** True when the event was caused by a run of this same agent (e.g. its own memory write). */
+function fromOwnRun(db: Db, agentId: string, payload: Record<string, unknown>): boolean {
+	const runId = payload.agentRunId;
+	return typeof runId === 'string' && getAgentRun(db, runId)?.agent_id === agentId;
+}
 
 /** Agents with a run being started or running from this dispatcher. */
 const dispatching = new Set<string>();
@@ -176,6 +208,7 @@ export async function emitAgentEvent(
 			try {
 				if (!enabledFor(db, agent, userId)) continue;
 				if (agent.coding_target && fromAgentRun(db, payload)) continue;
+				if (fromOwnRun(db, agent.id, payload)) continue;
 				const count = incrementAgentEventCounter(db, agent.id, userId, event);
 				const triggerConfig = parseTriggerConfig(agent);
 				const rawEvery = triggerConfig.every;
@@ -184,6 +217,13 @@ export async function emitAgentEvent(
 						? Math.max(1, Math.trunc(rawEvery))
 						: 1;
 				if (count % every !== 0) continue;
+				if (overTriggerLimit(agent.id, userId)) {
+					log.warn(`Agent ${agent.id} hit its event trigger limit; dropping "${event}"`, {
+						agentId: agent.id,
+						event
+					});
+					continue;
+				}
 				const occurrence: Occurrence = { event, count, payloadJson: JSON.stringify(payload) };
 				const queued = pending.get(agent.id)?.get(userId);
 				if (isBusy(db, agent.id) || queued) {

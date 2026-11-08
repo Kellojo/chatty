@@ -29,7 +29,8 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 const VOL = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-gitimport-'));
 process.env.SKILLS_VOLUME = VOL;
 
-const { importSkillsFromGit, parseGitUrl } = await import('./gitImport.js');
+const { importSkillsFromGit, parseGitUrl, limitedCheckoutFs, guardedHttp, ImportLimitError } =
+	await import('./gitImport.js');
 const { skillsRoot } = await import('./paths.js');
 const scanner = await import('./scanner.js');
 
@@ -264,5 +265,54 @@ describe('importSkillsFromGit', () => {
 		await args.fs.promises.symlink('/etc/passwd', file);
 		expect(fs.lstatSync(file).isSymbolicLink()).toBe(false);
 		expect(fs.readFileSync(file, 'utf8')).toBe('/etc/passwd');
+	});
+});
+
+describe('git import size limits', () => {
+	it('aborts the checkout past the file-count or byte limit, ignoring .git data', async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-limit-'));
+		fs.mkdirSync(path.join(dir, '.git'));
+		const lfs = limitedCheckoutFs(dir, { maxFiles: 2, maxBytes: 10 });
+		await lfs.promises.writeFile(path.join(dir, '.git', 'pack'), 'x'.repeat(100));
+		await lfs.promises.writeFile(path.join(dir, 'a'), 'aaaa');
+		await lfs.promises.writeFile(path.join(dir, 'b'), 'bbbb');
+		expect(() => lfs.promises.writeFile(path.join(dir, 'c'), 'c')).toThrow(ImportLimitError);
+		const bytes = limitedCheckoutFs(dir, { maxFiles: 100, maxBytes: 10 });
+		expect(() => bytes.promises.writeFile(path.join(dir, 'd'), 'x'.repeat(11))).toThrow(
+			/too large/
+		);
+		expect(fs.existsSync(path.join(dir, 'd'))).toBe(false);
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+
+	it('aborts downloads past the byte limit', async () => {
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = vi.fn(async () => new Response('x'.repeat(64))) as typeof fetch;
+		try {
+			const drain = async (body: AsyncIterableIterator<Uint8Array> | undefined) => {
+				let n = 0;
+				for await (const chunk of body!) n += chunk.byteLength;
+				return n;
+			};
+			// The budget is shared across all requests of one import.
+			const http = guardedHttp(100);
+			expect(await drain((await http.request({ url: 'https://example.com/a' })).body)).toBe(64);
+			const second = await http.request({ url: 'https://example.com/b' });
+			await expect(drain(second.body)).rejects.toThrow(ImportLimitError);
+		} finally {
+			globalThis.fetch = realFetch;
+		}
+	});
+
+	it('removes the temp checkout when the clone hits a limit', async () => {
+		const git = (await import('isomorphic-git')).default;
+		const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('ai-chat-skill-import-'));
+		const spy = vi.spyOn(git, 'clone').mockRejectedValueOnce(new ImportLimitError('2000 files'));
+		await expect(importSkillsFromGit({ gitUrl: REPO_URL, userId: 'u1' })).rejects.toThrow(
+			/too large/
+		);
+		const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('ai-chat-skill-import-'));
+		expect(after.sort()).toEqual(before.sort());
+		spy.mockRestore();
 	});
 });

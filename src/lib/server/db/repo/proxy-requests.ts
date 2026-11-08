@@ -25,6 +25,8 @@ export interface ProxyRequestRow {
 	latency_ms: number | null;
 	input_tokens: number | null;
 	output_tokens: number | null;
+	cache_read_tokens: number | null;
+	cache_write_tokens: number | null;
 	cost_usd: number | null;
 	stream: number;
 	error: string | null;
@@ -54,6 +56,8 @@ export function toPublic(row: ProxyRequestRow): ProxyRequest {
 		latencyMs: row.latency_ms,
 		inputTokens: row.input_tokens,
 		outputTokens: row.output_tokens,
+		cacheReadTokens: row.cache_read_tokens ?? null,
+		cacheWriteTokens: row.cache_write_tokens ?? null,
 		costUsd: row.cost_usd,
 		stream: row.stream === 1,
 		error: row.error,
@@ -115,6 +119,8 @@ export interface FinalizeProxyRequestInput {
 	fallbackIndex?: number;
 	inputTokens?: number | null;
 	outputTokens?: number | null;
+	cacheReadTokens?: number | null;
+	cacheWriteTokens?: number | null;
 	costUsd?: number | null;
 	error?: string | null;
 	compression?: ProxyCompression | null;
@@ -124,7 +130,7 @@ export function finalizeProxyRequest(db: Db, id: string, patch: FinalizeProxyReq
 	db.prepare(
 		`UPDATE proxy_requests SET status = ?, http_status = ?, latency_ms = ?, mapping_id = ?,
 		 provider_id = ?, model_id = ?, fallback_index = ?, input_tokens = ?, output_tokens = ?,
-		 cost_usd = ?, error = ?, compression = ?
+		 cache_read_tokens = ?, cache_write_tokens = ?, cost_usd = ?, error = ?, compression = ?
 		 WHERE id = ?`
 	).run(
 		patch.status,
@@ -136,6 +142,8 @@ export function finalizeProxyRequest(db: Db, id: string, patch: FinalizeProxyReq
 		patch.fallbackIndex ?? 0,
 		patch.inputTokens ?? null,
 		patch.outputTokens ?? null,
+		patch.cacheReadTokens ?? null,
+		patch.cacheWriteTokens ?? null,
 		patch.costUsd ?? null,
 		patch.error ?? null,
 		patch.compression ? JSON.stringify(patch.compression) : null,

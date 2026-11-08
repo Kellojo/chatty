@@ -106,6 +106,30 @@ describe('tickAgents', () => {
 		expect(runAgentFn).toHaveBeenCalledWith(agent.id, 'u2');
 	});
 
+	it("keeps running a built-in agent for later users when one user's run fails", async () => {
+		db.prepare(
+			`INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role) VALUES ('u2', 'd@e.f', 'D', 0, 0, 0, 'user')`
+		).run();
+		createConversation(db, 'u1', { title: 'a' });
+		createConversation(db, 'u2', { title: 'b' });
+		const agent = createAgent(db, null, {
+			name: 'builtin',
+			systemPrompt: 'x',
+			triggerType: 'schedule',
+			triggerConfig: { cron: '* * * * *' },
+			nextRunAt: Date.now() - 1000
+		});
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		const runAgentFn = vi
+			.fn()
+			.mockRejectedValueOnce(new Error('no model'))
+			.mockResolvedValue(undefined);
+		await tickAgents(db, runAgentFn);
+		expect(runAgentFn).toHaveBeenCalledTimes(2);
+		expect(runAgentFn).toHaveBeenLastCalledWith(agent.id, 'u2');
+		consoleError.mockRestore();
+	});
+
 	it('skips users whose override disables a built-in agent', async () => {
 		db.prepare(
 			'INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role) VALUES (\'u2\', \'d@e.f\', \'D\', 0, 0, 0, \'user\')'

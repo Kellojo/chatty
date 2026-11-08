@@ -2,7 +2,7 @@ import type { BetterAuthOptions } from 'better-auth';
 import { genericOAuth } from 'better-auth/plugins';
 import { config } from '../config.js';
 import { getAppSecret } from '../crypto.js';
-import { getDb } from '../db/index.js';
+import { getDb, type Db } from '../db/index.js';
 
 const oidc =
 	config.OIDC_ISSUER && config.OIDC_CLIENT_ID && config.OIDC_CLIENT_SECRET
@@ -14,6 +14,25 @@ const oidc =
 				scopes: config.OIDC_SCOPES.split(' ')
 			}
 		: null;
+
+/**
+ * Makes `userId` an admin iff it is the earliest-inserted user and no admin
+ * exists yet. A single statement in a transaction: SQLite serializes writers,
+ * so only one of several concurrent first signups can win.
+ */
+export function promoteFirstUser(db: Db, userId: string): boolean {
+	return db.transaction(
+		() =>
+			db
+				.prepare(
+					`UPDATE "user" SET role = 'admin'
+					 WHERE id = ?
+					   AND rowid = (SELECT MIN(rowid) FROM "user")
+					   AND NOT EXISTS (SELECT 1 FROM "user" WHERE role = 'admin')`
+				)
+				.run(userId).changes > 0
+	)();
+}
 
 export function authOptions(): BetterAuthOptions {
 	return {
@@ -33,14 +52,10 @@ export function authOptions(): BetterAuthOptions {
 		databaseHooks: {
 			user: {
 				create: {
-					before: async (user) => {
-						if (config.AUTO_PROMOTE_FIRST_USER) {
-							const { c } = getDb().prepare('SELECT COUNT(*) AS c FROM user').get() as {
-								c: number;
-							};
-							if (c === 0) return { data: { ...user, role: 'admin' } };
-						}
-						return { data: user };
+					// Promote after the insert, in one conditional UPDATE, so two
+					// simultaneous first signups can't both see an empty table.
+					after: async (user) => {
+						if (config.AUTO_PROMOTE_FIRST_USER) promoteFirstUser(getDb(), user.id);
 					}
 				}
 			}

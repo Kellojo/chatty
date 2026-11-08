@@ -21,6 +21,8 @@ export interface ModelRow {
 	enabled: number;
 	price_input: number | null;
 	price_output: number | null;
+	price_cache_read: number | null;
+	price_cache_write: number | null;
 	context_length: number | null;
 }
 
@@ -33,6 +35,8 @@ export interface ChatModel {
 	enabled: boolean;
 	priceInput: number | null;
 	priceOutput: number | null;
+	priceCacheRead: number | null;
+	priceCacheWrite: number | null;
 	contextLength: number | null;
 }
 
@@ -46,6 +50,8 @@ export function toPublic(row: ModelRow): ChatModel {
 		enabled: row.enabled === 1,
 		priceInput: row.price_input,
 		priceOutput: row.price_output,
+		priceCacheRead: row.price_cache_read ?? null,
+		priceCacheWrite: row.price_cache_write ?? null,
 		contextLength: row.context_length
 	};
 }
@@ -120,6 +126,8 @@ export interface UpdateModelInput {
 	enabled?: boolean;
 	priceInput?: number | null;
 	priceOutput?: number | null;
+	priceCacheRead?: number | null;
+	priceCacheWrite?: number | null;
 	contextLength?: number | null;
 }
 
@@ -127,7 +135,8 @@ export function updateModel(db: Db, id: string, patch: UpdateModelInput): ModelR
 	const existing = getModel(db, id);
 	if (!existing) return undefined;
 	db.prepare(
-		`UPDATE models SET display_name = ?, capabilities = ?, enabled = ?, price_input = ?, price_output = ?, context_length = ?
+		`UPDATE models SET display_name = ?, capabilities = ?, enabled = ?, price_input = ?, price_output = ?,
+		 price_cache_read = ?, price_cache_write = ?, context_length = ?
 		 WHERE id = ?`
 	).run(
 		patch.displayName ?? existing.display_name,
@@ -135,6 +144,8 @@ export function updateModel(db: Db, id: string, patch: UpdateModelInput): ModelR
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
 		patch.priceInput !== undefined ? patch.priceInput : existing.price_input,
 		patch.priceOutput !== undefined ? patch.priceOutput : existing.price_output,
+		patch.priceCacheRead !== undefined ? patch.priceCacheRead : existing.price_cache_read,
+		patch.priceCacheWrite !== undefined ? patch.priceCacheWrite : existing.price_cache_write,
 		patch.contextLength !== undefined ? patch.contextLength : existing.context_length,
 		id
 	);
@@ -181,6 +192,8 @@ export function findRoleModel(db: Db, role: ModelRole): ModelRow | undefined {
 			enabled: 1,
 			price_input: null,
 			price_output: null,
+			price_cache_read: null,
+			price_cache_write: null,
 			context_length: null
 		};
 	}
@@ -199,6 +212,8 @@ export interface FetchedModel {
 	capabilities?: string[];
 	priceInput?: number | null;
 	priceOutput?: number | null;
+	priceCacheRead?: number | null;
+	priceCacheWrite?: number | null;
 	contextLength?: number | null;
 }
 
@@ -222,6 +237,8 @@ export function upsertFetchedModels(
 					updateModel(db, created.id, {
 						priceInput: model.priceInput ?? null,
 						priceOutput: model.priceOutput ?? null,
+						priceCacheRead: model.priceCacheRead ?? null,
+						priceCacheWrite: model.priceCacheWrite ?? null,
 						contextLength: model.contextLength ?? null
 					});
 				}
@@ -235,6 +252,8 @@ export function upsertFetchedModels(
 					capabilities: merged,
 					priceInput: model.priceInput ?? null,
 					priceOutput: model.priceOutput ?? null,
+					priceCacheRead: model.priceCacheRead ?? null,
+					priceCacheWrite: model.priceCacheWrite ?? null,
 					contextLength: model.contextLength ?? undefined
 				});
 			}

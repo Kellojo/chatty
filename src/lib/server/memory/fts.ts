@@ -35,11 +35,31 @@ function sanitizeQuery(query: string): string {
 	return tokens.map((t) => `"${t}"`).join(' OR ');
 }
 
+// snippet() copies concept text verbatim, so the highlight markers are control
+// characters that can't appear in it, swapped for the real markup afterwards.
+const MARK_OPEN = '\u0002';
+const MARK_CLOSE = '\u0003';
+
+function escapeHtml(text: string): string {
+	return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+function renderSnippet(raw: string, html: boolean): string {
+	const text = html ? escapeHtml(raw) : raw;
+	return text.split(MARK_OPEN).join('<mark>').split(MARK_CLOSE).join('</mark>');
+}
+
+/**
+ * Full-text search over memory concepts. Snippets wrap matches in `<mark>`;
+ * with `html`, the rest of the snippet is HTML-escaped so it's safe to render
+ * as markup (concept text is often model-written and can contain anything).
+ */
 export function searchMemoryFts(
 	db: Db,
 	scopes: string[],
 	query: string,
-	limit = 10
+	limit = 10,
+	options: { html?: boolean } = {}
 ): MemorySearchHit[] {
 	const match = sanitizeQuery(query);
 	if (!match || scopes.length === 0) return [];
@@ -48,15 +68,18 @@ export function searchMemoryFts(
 	const rows = db
 		.prepare(
 			`SELECT scope, path, title, description, tags,
-				snippet(memory_fts, 5, '<mark>', '</mark>', '…', 24) AS snippet
+				snippet(memory_fts, 5, ?, ?, '…', 24) AS snippet
 			FROM memory_fts
 			WHERE memory_fts MATCH ? AND scope IN (${placeholders})
 			ORDER BY bm25(memory_fts)
 			LIMIT ?`
 		)
-		.all(match, ...scopes, n) as Array<Omit<MemorySearchHit, 'tags'> & { tags: string }>;
+		.all(MARK_OPEN, MARK_CLOSE, match, ...scopes, n) as Array<
+		Omit<MemorySearchHit, 'tags'> & { tags: string }
+	>;
 	return rows.map((r) => ({
 		...r,
+		snippet: renderSnippet(r.snippet, options.html === true),
 		tags: r.tags ? r.tags.split(' ').filter((t) => t.length > 0) : []
 	}));
 }

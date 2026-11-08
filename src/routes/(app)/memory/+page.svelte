@@ -608,9 +608,10 @@
 														<Badge variant="secondary" class="shrink-0">Shared</Badge>
 													{/if}
 												</span>
-												<!-- Snippet HTML is generated server-side from the caller's own memory files
-											     (SQLite FTS snippet() only injects <mark> tags around matched terms), so
-											     rendering it raw is safe here. -->
+												<!-- Safe to render raw: /api/memory/search calls searchMemoryFts with
+											     { html: true }, which HTML-escapes the whole snippet first and only
+											     then adds the <mark> highlight tags (concept text is often
+											     model-written, so it must never reach the DOM unescaped). -->
 												<!-- eslint-disable svelte/no-at-html-tags -->
 												<span
 													class="line-clamp-2 text-xs text-muted-foreground [&_mark]:rounded-sm [&_mark]:bg-yellow-500/30 [&_mark]:text-foreground"

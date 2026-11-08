@@ -203,7 +203,8 @@ export function writeConcept(
 		scope,
 		path: target.relPath,
 		action,
-		author: audit.author
+		author: audit.author,
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
 	});
 	regenIndex(path.dirname(target.abs));
 	upsertMemoryFts(db, ftsScope(scope, userId), target.relPath, fm, input.body);
@@ -237,7 +238,8 @@ export function deleteConcept(
 		scope,
 		path: target.relPath,
 		action: 'delete',
-		author: audit.author
+		author: audit.author,
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
 	});
 	regenIndex(path.dirname(target.abs));
 	pruneEmptyDirs(path.dirname(target.abs), bundleDir(scope, userId));
@@ -284,7 +286,8 @@ export function moveConcept(
 		scope,
 		path: to.relPath,
 		action: 'update',
-		author: audit.author
+		author: audit.author,
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
 	});
 	return concept;
 }

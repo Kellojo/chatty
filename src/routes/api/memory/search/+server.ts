@@ -10,5 +10,5 @@ export const GET: RequestHandler = ({ locals, url }) => {
 	if (!q) return json({ results: [] });
 	const scopes = [`user:${user.id}`];
 	if ((user as { role?: string }).role === 'admin') scopes.push('shared');
-	return json({ results: searchMemoryFts(getDb(), scopes, q) });
+	return json({ results: searchMemoryFts(getDb(), scopes, q, 10, { html: true }) });
 };

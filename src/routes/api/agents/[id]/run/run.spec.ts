@@ -11,7 +11,7 @@ const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { createAgent } = await import('$lib/server/db/repo/agents.js');
 const { createApiKey } = await import('$lib/server/db/repo/api-keys.js');
 const { startAgentRun } = await import('$lib/server/agents/runner.js');
-const { POST } = await import('./+server.js');
+const { POST, _checkRateLimit, _rateBuckets } = await import('./+server.js');
 
 type Db = ReturnType<typeof getDb>;
 type AgentRunRow = import('$lib/server/db/repo/agent-runs.js').AgentRunRow;
@@ -183,5 +183,19 @@ describe('POST /api/agents/[id]/run auth matrix', () => {
 		const res = await call(POST, { user: u1, params: { id: agent.id } });
 		expect(res.status).toBe(403);
 		expect(mockedStart).not.toHaveBeenCalled();
+	});
+});
+
+describe('rate limit buckets', () => {
+	it('limits per key and prunes expired buckets', () => {
+		_rateBuckets.clear();
+		const t0 = Date.now() + 120_000;
+		for (let i = 0; i < 20; i++) expect(_checkRateLimit('a', t0)).toBe(true);
+		expect(_checkRateLimit('a', t0)).toBe(false);
+		_checkRateLimit('b', t0);
+		expect(_rateBuckets.size).toBe(2);
+		// After the window, a new key's access sweeps the stale buckets.
+		expect(_checkRateLimit('c', t0 + 60_001)).toBe(true);
+		expect([..._rateBuckets.keys()]).toEqual(['c']);
 	});
 });

@@ -59,8 +59,8 @@ vi.mock('../tools/registry.js', () => ({
 
 const { getDb, closeDb } = await import('../db/index.js');
 const { startAgentRun, stopAgentRun, stopAllAgentRuns } = await import('./runner.js');
-const { getAgentRun } = await import('../db/repo/agent-runs.js');
-const { createAgent, getAgent } = await import('../db/repo/agents.js');
+const { createAgentRun, getAgentRun } = await import('../db/repo/agent-runs.js');
+const { createAgent, getAgent, setAgentRunTimes } = await import('../db/repo/agents.js');
 const { getConversation } = await import('../db/repo/conversations.js');
 const { listMessages } = await import('../db/repo/messages.js');
 const { agentWorkspaceName } = await import('../workspaces.js');
@@ -115,6 +115,37 @@ describe('startAgentRun', () => {
 		expect(
 			fs.existsSync(path.join(process.env.WORKSPACES_VOLUME!, agentWorkspaceName(agent.id, run.id)))
 		).toBe(true);
+		closeDb();
+	});
+
+	it("reviews a built-in agent's window from the user's own last run", async () => {
+		behavior = 'ok';
+		const db = getDb();
+		seed(db);
+		db.prepare(
+			`INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u2', 'B', 'b@c.d', 0, 0, 0, 'user')`
+		).run();
+		const agent = createAgent(db, null, {
+			name: 'memory',
+			systemPrompt: 'You distill.',
+			providerId: 'p1',
+			modelId: 'm1',
+			triggerType: 'schedule',
+			triggerConfig: { cron: '0 3 * * *' }
+		});
+		const u1Ended = Date.parse('2026-01-02T03:04:05.000Z');
+		const prior = createAgentRun(db, { agentId: agent.id, userId: 'u1', trigger: 'schedule' });
+		db.prepare("UPDATE agent_runs SET status = 'success', ended_at = ? WHERE id = ?").run(
+			u1Ended,
+			prior.id
+		);
+		// Another user's later run moves the agent's last_run_at, not u1's window.
+		setAgentRunTimes(db, agent.id, { lastRunAt: Date.parse('2026-06-01T00:00:00.000Z') });
+
+		const { done } = await startAgentRun({ agentId: agent.id, trigger: 'schedule', userId: 'u1' });
+		const finished = await done;
+		const [userMessage] = listMessages(db, finished.conversation_id!);
+		expect(userMessage.parts).toContain('updated since 2026-01-02T03:04:05.000Z');
 		closeDb();
 	});
 

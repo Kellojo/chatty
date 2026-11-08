@@ -2,7 +2,7 @@ import { resolveApiKeyIdentity } from '$lib/server/auth/apiKey.js';
 import { getDb } from '$lib/server/db/index.js';
 import { createProxyRequest, finalizeProxyRequest } from '$lib/server/db/repo/proxy-requests.js';
 import { resolveTargets } from '$lib/server/proxy/handler.js';
-import { transcribeAudio, TranscriptionError } from '$lib/server/speech/transcriber.js';
+import { transcribeWithFallbacks, TranscriptionError } from '$lib/server/speech/transcriber.js';
 import type { RequestHandler } from './$types';
 
 function openAiError(status: number, message: string, type: string): Response {
@@ -60,29 +60,24 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	try {
 		const buffer = await audioFile.arrayBuffer();
-		const result = await transcribeAudio(
-			buffer,
-			resolved.targets[0].providerId,
-			resolved.targets[0].modelId,
-			{
-				language: typeof language === 'string' && language ? language : undefined,
-				prompt: typeof prompt === 'string' && prompt ? prompt : undefined,
-				responseFormat:
-					typeof responseFormat === 'string'
-						? (responseFormat as 'json' | 'text' | 'srt' | 'vtt' | 'verbose_json')
-						: 'json',
-				temperature: typeof temperatureRaw === 'string' ? parseFloat(temperatureRaw) : undefined
-			}
-		);
+		const { result, index, target } = await transcribeWithFallbacks(buffer, resolved.targets, {
+			language: typeof language === 'string' && language ? language : undefined,
+			prompt: typeof prompt === 'string' && prompt ? prompt : undefined,
+			responseFormat:
+				typeof responseFormat === 'string'
+					? (responseFormat as 'json' | 'text' | 'srt' | 'vtt' | 'verbose_json')
+					: 'json',
+			temperature: typeof temperatureRaw === 'string' ? parseFloat(temperatureRaw) : undefined
+		});
 
 		finalizeProxyRequest(db, log.id, {
 			status: 'complete',
 			httpStatus: 200,
 			latencyMs: Date.now() - startedAt,
 			mappingId: resolved.mappingId,
-			providerId: resolved.targets[0].providerId,
-			modelId: resolved.targets[0].modelId,
-			fallbackIndex: 0
+			providerId: target.providerId,
+			modelId: target.modelId,
+			fallbackIndex: index
 		});
 
 		if (typeof result === 'string') {

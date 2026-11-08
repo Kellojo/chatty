@@ -12,9 +12,18 @@ import type { RequestHandler } from './$types';
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+let nextSweepAt = 0;
 
-function checkRateLimit(key: string): boolean {
-	const now = Date.now();
+/** Exported (underscore = not a route export) for tests. */
+export const _rateBuckets = rateBuckets;
+
+export function _checkRateLimit(key: string, now = Date.now()): boolean {
+	// Drop expired buckets at most once per window so the map stays bounded
+	// by the keys active in the last window.
+	if (now >= nextSweepAt) {
+		for (const [k, b] of rateBuckets) if (b.resetAt <= now) rateBuckets.delete(k);
+		nextSweepAt = now + RATE_WINDOW_MS;
+	}
 	let bucket = rateBuckets.get(key);
 	if (!bucket || bucket.resetAt <= now) {
 		bucket = { count: 0, resetAt: now + RATE_WINDOW_MS };
@@ -78,7 +87,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		rateKey = `user:${user.id}`;
 	}
 
-	if (!checkRateLimit(rateKey)) error(429, { message: 'Rate limit exceeded' });
+	if (!_checkRateLimit(rateKey)) error(429, { message: 'Rate limit exceeded' });
 
 	const parsed = bodySchema.safeParse(await request.json().catch(() => ({})));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });

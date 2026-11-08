@@ -15,13 +15,14 @@ import {
 	createAgentRun,
 	finishAgentRun,
 	getAgentRun,
+	lastFinishedAgentRunAt,
 	type AgentRunRow
 } from '../db/repo/agent-runs.js';
 import { createConversation } from '../db/repo/conversations.js';
 import { createMessage, updateMessage } from '../db/repo/messages.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
-import { computeCostUsd } from '../proxy/pricing.js';
+import { cacheTokens, computeUsageCostUsd, type PricedUsage } from '../proxy/pricing.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { resolveModel } from '../llm/registry.js';
@@ -166,7 +167,7 @@ export async function startAgentRun(
 			const priceRow = findModel(db, target.providerId, target.modelId);
 			const recordStep = (patch: {
 				status: 'complete' | 'failed';
-				usage?: { inputTokens?: number | null; outputTokens?: number | null };
+				usage?: PricedUsage;
 				error?: string | null;
 			}) => {
 				const now = Date.now();
@@ -187,12 +188,8 @@ export async function startAgentRun(
 					modelId: target.modelId,
 					inputTokens: patch.usage?.inputTokens ?? null,
 					outputTokens: patch.usage?.outputTokens ?? null,
-					costUsd: computeCostUsd(
-						priceRow?.price_input ?? null,
-						priceRow?.price_output ?? null,
-						patch.usage?.inputTokens,
-						patch.usage?.outputTokens
-					),
+					...cacheTokens(patch.usage),
+					costUsd: computeUsageCostUsd(priceRow, patch.usage),
 					error: patch.error ?? null
 				});
 				lastStepAt = now;
@@ -274,12 +271,7 @@ export async function startAgentRun(
 						outputTokens: totalUsage?.outputTokens ?? null,
 						totalTokens: totalUsage?.totalTokens ?? null,
 						latencyMs: Date.now() - startedAt,
-						costUsd: computeCostUsd(
-							priceRow?.price_input ?? null,
-							priceRow?.price_output ?? null,
-							totalUsage?.inputTokens,
-							totalUsage?.outputTokens
-						)
+						costUsd: computeUsageCostUsd(priceRow, totalUsage)
 					}
 				});
 			}
@@ -324,21 +316,26 @@ export async function startAgentRun(
 				errorText = reason instanceof Error ? reason.message : 'Stopped by user';
 			}
 			runControllers.delete(run.id);
-			for (const id of assistantMessageIds) {
-				updateMessage(db, id, {
-					status: errorText ? 'failed' : 'complete',
-					error: errorText
+			try {
+				for (const id of assistantMessageIds) {
+					updateMessage(db, id, {
+						status: errorText ? 'failed' : 'complete',
+						error: errorText
+					});
+				}
+				finishAgentRun(db, run.id, errorText ? 'failed' : 'success', errorText);
+				setAgentRunTimes(db, agent.id, { lastRunAt: Date.now() });
+				publishServerEvent(input.userId, {
+					type: 'agent.run.finished',
+					agentId: agent.id,
+					runId: run.id,
+					status: errorText ? 'failed' : 'success'
 				});
+			} finally {
+				// MCP clients/child processes must be released even if the bookkeeping
+				// above throws (the outer catch then marks the run failed).
+				await close();
 			}
-			finishAgentRun(db, run.id, errorText ? 'failed' : 'success', errorText);
-			setAgentRunTimes(db, agent.id, { lastRunAt: Date.now() });
-			publishServerEvent(input.userId, {
-				type: 'agent.run.finished',
-				agentId: agent.id,
-				runId: run.id,
-				status: errorText ? 'failed' : 'success'
-			});
-			await close();
 		}
 		return getAgentRun(db, run.id)!;
 	})().catch((e) => {
@@ -375,7 +372,7 @@ async function prepareRun(
 		input.instructions ??
 		triggerConfig.instructions ??
 		(agent.user_id === null
-			? `Review conversations updated since ${new Date(agent.last_run_at ?? 0).toISOString()} and distill durable long-term memory from them. Use search_chats with the "since" parameter to list them, read_chat to review their contents, list_concepts/search_memory to check what already exists, then create_concept/update_concept to persist.`
+			? `Review conversations updated since ${new Date(lastFinishedAgentRunAt(db, agent.id, input.userId) ?? 0).toISOString()} and distill durable long-term memory from them. Use search_chats with the "since" parameter to list them, read_chat to review their contents, list_concepts/search_memory to check what already exists, then create_concept/update_concept to persist.`
 			: `Execute your task now. Trigger: ${input.trigger}.`);
 	const uiUserMessage: UIMessage = {
 		id: randomUUID(),

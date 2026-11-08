@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {
 	findSkillFile,
@@ -87,15 +89,39 @@ export function duplicateSkill(userId: string, name: string, newName: string): S
 	});
 }
 
-export function promoteSkill(userId: string, name: string): Skill {
+export async function promoteSkill(userId: string, name: string): Promise<Skill> {
 	const skill = readSkill('user', userId, name);
 	if (!skill) throw new Error(`User skill not found: ${name}`);
 	const destRoot = skillsRoot('shared', userId);
-	fs.mkdirSync(destRoot, { recursive: true });
+	await fsp.mkdir(destRoot, { recursive: true });
 	const dest = resolveSkillDir('shared', userId, name);
 	const src = resolveSkillDir('user', userId, name);
 	if (!dest || !src) throw new Error('Invalid skill name');
-	fs.cpSync(src, dest, { recursive: true });
+	// Replace the shared folder wholesale (files removed from the user copy must
+	// not linger): copy next to it, then swap with renames. Dot-prefixed names
+	// are never valid skill names, so the scanner ignores them meanwhile.
+	const suffix = `${name}-${randomUUID()}`;
+	const tmp = path.join(destRoot, `.promote-${suffix}`);
+	const old = path.join(destRoot, `.old-${suffix}`);
+	try {
+		await fsp.cp(src, tmp, { recursive: true });
+		const hadOld = await fsp
+			.rename(dest, old)
+			.then(() => true)
+			.catch((e: NodeJS.ErrnoException) => {
+				if (e.code === 'ENOENT') return false;
+				throw e;
+			});
+		try {
+			await fsp.rename(tmp, dest);
+		} catch (e) {
+			if (hadOld) await fsp.rename(old, dest);
+			throw e;
+		}
+	} finally {
+		await fsp.rm(tmp, { recursive: true, force: true });
+		await fsp.rm(old, { recursive: true, force: true });
+	}
 	const promoted = readSkill('shared', userId, name);
 	if (!promoted) throw new Error('Failed to promote skill');
 	return promoted;

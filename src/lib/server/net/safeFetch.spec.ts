@@ -85,4 +85,39 @@ describe('safeFetch', () => {
 			{ url: 'https://other.example/b', auth: null }
 		]);
 	});
+
+	it.each([
+		[303, 'POST', 'GET', null],
+		[301, 'POST', 'GET', null],
+		[302, 'POST', 'GET', null],
+		[303, 'PUT', 'GET', null],
+		[302, 'PUT', 'PUT', 'payload'],
+		[307, 'POST', 'POST', 'payload'],
+		[308, 'POST', 'POST', 'payload']
+	])('on %i after %s re-issues as %s', async (status, method, nextMethod, nextBody) => {
+		const seen: Array<{ method?: string; body: unknown; type: string | null }> = [];
+		globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			seen.push({
+				method: init?.method,
+				body: init?.body ?? null,
+				type: new Headers(init?.headers).get('content-type')
+			});
+			if (String(input) === 'https://public.example/a') {
+				return new Response(null, { status, headers: { location: '/b' } });
+			}
+			return new Response('ok');
+		}) as typeof fetch;
+
+		const res = await safeFetch('https://public.example/a', {
+			method,
+			body: 'payload',
+			headers: { 'content-type': 'text/plain' }
+		});
+		expect(await res.text()).toBe('ok');
+		expect(seen[1]).toEqual({
+			method: nextMethod,
+			body: nextBody,
+			type: nextBody ? 'text/plain' : null
+		});
+	});
 });

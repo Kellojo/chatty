@@ -91,4 +91,21 @@ describe('memory fts', () => {
 		expect(fts.searchMemoryFts(db, ['user:u1'], 'alpha')).toEqual([]);
 		expect(fts.searchMemoryFts(db, ['user:u2', 'shared'], 'alpha')).toHaveLength(1);
 	});
+
+	it('HTML-escapes snippets on request, keeping only the highlight markup', () => {
+		fts.upsertMemoryFts(
+			db,
+			'user:xss',
+			'x.md',
+			{ title: 'X', description: '', tags: [] },
+			'payload <img src=x onerror="alert(1)"> zebra'
+		);
+		const [html] = fts.searchMemoryFts(db, ['user:xss'], 'zebra', 10, { html: true });
+		expect(html.snippet).not.toContain('<img');
+		expect(html.snippet).toContain('&#60;img');
+		expect(html.snippet).toContain('<mark>zebra</mark>');
+		const [text] = fts.searchMemoryFts(db, ['user:xss'], 'zebra');
+		expect(text.snippet).toContain('<img');
+		expect(text.snippet).toContain('<mark>zebra</mark>');
+	});
 });

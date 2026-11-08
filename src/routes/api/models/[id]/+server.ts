@@ -13,6 +13,8 @@ const patchSchema = z.object({
 	enabled: z.boolean().optional(),
 	priceInput: z.number().nonnegative().nullable().optional(),
 	priceOutput: z.number().nonnegative().nullable().optional(),
+	priceCacheRead: z.number().nonnegative().nullable().optional(),
+	priceCacheWrite: z.number().nonnegative().nullable().optional(),
 	contextLength: z.number().int().positive().nullable().optional()
 });
 

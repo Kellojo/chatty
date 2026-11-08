@@ -63,6 +63,24 @@ export function setAgentRunConversation(db: Db, id: string, conversationId: stri
 	db.prepare('UPDATE agent_runs SET conversation_id = ? WHERE id = ?').run(conversationId, id);
 }
 
+export function hasRunningAgentRun(db: Db, agentId: string, userId: string): boolean {
+	return (
+		db
+			.prepare(
+				"SELECT 1 FROM agent_runs WHERE agent_id = ? AND user_id = ? AND status = 'running' LIMIT 1"
+			)
+			.get(agentId, userId) !== undefined
+	);
+}
+
+/** When the user's latest finished run of the agent ended, or null if it never ran for them. */
+export function lastFinishedAgentRunAt(db: Db, agentId: string, userId: string): number | null {
+	const row = db
+		.prepare('SELECT MAX(ended_at) AS at FROM agent_runs WHERE agent_id = ? AND user_id = ?')
+		.get(agentId, userId) as { at: number | null };
+	return row.at;
+}
+
 export function getAgentRun(db: Db, id: string): AgentRunRow | undefined {
 	return db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id) as AgentRunRow | undefined;
 }

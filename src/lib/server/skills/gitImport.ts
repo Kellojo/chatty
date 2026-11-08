@@ -79,42 +79,89 @@ export function parseGitUrl(input: string): ParsedGitUrl {
 	};
 }
 
+// Limits for one import, so a huge repo can't fill the disk or memory.
+export const MAX_IMPORT_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+export const MAX_IMPORT_CHECKOUT_BYTES = 50 * 1024 * 1024;
+export const MAX_IMPORT_FILES = 2000;
+
+export class ImportLimitError extends Error {
+	constructor(what: string) {
+		super(`Repository too large: exceeds ${what}`);
+		this.name = 'ImportLimitError';
+	}
+}
+
 // The clone URL is user-supplied, so every request (and redirect hop) goes
 // through safeFetch's private-address guard instead of isomorphic-git's
-// unguarded node client.
-const guardedHttp: HttpClient = {
-	async request({ url, method = 'GET', headers = {}, body, signal }) {
-		let payload: Uint8Array<ArrayBuffer> | undefined;
-		if (body) {
-			const chunks: Uint8Array[] = [];
-			for await (const chunk of body) chunks.push(chunk);
-			payload = new Uint8Array(Buffer.concat(chunks));
+// unguarded node client. Response bytes count against one shared budget.
+export function guardedHttp(maxBytes = MAX_IMPORT_DOWNLOAD_BYTES): HttpClient {
+	let received = 0;
+	return {
+		async request({ url, method = 'GET', headers = {}, body, signal }) {
+			let payload: Uint8Array<ArrayBuffer> | undefined;
+			if (body) {
+				const chunks: Uint8Array[] = [];
+				for await (const chunk of body) chunks.push(chunk);
+				payload = new Uint8Array(Buffer.concat(chunks));
+			}
+			const res = await safeFetch(url, { method, headers, body: payload, signal });
+			async function* iterate(): AsyncGenerator<Uint8Array> {
+				if (!res.body) return;
+				for await (const chunk of res.body) {
+					received += chunk.byteLength;
+					if (received > maxBytes) {
+						throw new ImportLimitError(`${maxBytes / 1024 / 1024} MB download`);
+					}
+					yield chunk;
+				}
+			}
+			return {
+				url: res.url || url,
+				method,
+				statusCode: res.status,
+				statusMessage: res.statusText,
+				headers: Object.fromEntries(res.headers.entries()),
+				body: iterate()
+			};
 		}
-		const res = await safeFetch(url, { method, headers, body: payload, signal });
-		async function* iterate(): AsyncGenerator<Uint8Array> {
-			if (!res.body) return;
-			for await (const chunk of res.body) yield chunk;
-		}
-		return {
-			url: res.url || url,
-			method,
-			statusCode: res.status,
-			statusMessage: res.statusText,
-			headers: Object.fromEntries(res.headers.entries()),
-			body: iterate()
-		};
-	}
-};
+	};
+}
 
 // A repo can contain symlinks (mode 120000) pointing anywhere on the host;
 // materialize them as plain files holding the link target so nothing we later
-// read, rewrite or copy can escape the temp checkout.
-const noSymlinkFs = {
-	promises: {
-		...fs.promises,
-		symlink: (target: string, file: string) => fs.promises.writeFile(file, target)
-	}
-};
+// read, rewrite or copy can escape the temp checkout. Checked-out files (not
+// git's own `.git` data, bounded by the download limit) count against the
+// file-count and size limits, aborting the clone as soon as one is exceeded.
+export function limitedCheckoutFs(
+	dir: string,
+	limits = { maxFiles: MAX_IMPORT_FILES, maxBytes: MAX_IMPORT_CHECKOUT_BYTES }
+) {
+	let files = 0;
+	let bytes = 0;
+	const gitDir = path.join(dir, '.git') + path.sep;
+	const count = (file: string, size: number) => {
+		if (path.resolve(file).startsWith(gitDir)) return;
+		files++;
+		bytes += size;
+		if (files > limits.maxFiles) throw new ImportLimitError(`${limits.maxFiles} files`);
+		if (bytes > limits.maxBytes) {
+			throw new ImportLimitError(`${limits.maxBytes / 1024 / 1024} MB of files`);
+		}
+	};
+	return {
+		promises: {
+			...fs.promises,
+			writeFile: (file: string, data: string | Uint8Array, options?: unknown) => {
+				count(file, typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength);
+				return fs.promises.writeFile(file, data, options as fs.WriteFileOptions);
+			},
+			symlink: (target: string, file: string) => {
+				count(file, Buffer.byteLength(target));
+				return fs.promises.writeFile(file, target);
+			}
+		}
+	};
+}
 
 function assertCloneUrl(gitUrl: string): void {
 	let url: URL;
@@ -160,8 +207,8 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 	const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-import-')));
 	try {
 		await git.clone({
-			fs: noSymlinkFs,
-			http: guardedHttp,
+			fs: limitedCheckoutFs(tmp),
+			http: guardedHttp(),
 			dir: tmp,
 			url: gitUrl,
 			ref: branch,

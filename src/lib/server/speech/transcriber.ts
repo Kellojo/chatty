@@ -1,3 +1,4 @@
+import type { ModelMappingTarget } from '$lib/types.js';
 import { getDb } from '../db/index.js';
 import { findModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
@@ -33,14 +34,24 @@ export async function transcribeAudio(
 	modelId: string,
 	options?: TranscriptionOptions
 ): Promise<{ text: string } | string> {
+	const resolved = resolveRefTargets({ providerId, modelId }, getDb());
+	return (await transcribeWithFallbacks(buffer, resolved.targets, options)).result;
+}
+
+/**
+ * Tries each target in order (a model mapping's primary, then its fallbacks)
+ * and reports which one served the request.
+ */
+export async function transcribeWithFallbacks(
+	buffer: ArrayBuffer,
+	targets: ModelMappingTarget[],
+	options?: TranscriptionOptions
+): Promise<{ result: { text: string } | string; index: number; target: ModelMappingTarget }> {
 	const db = getDb();
-
-	const resolved = resolveRefTargets({ providerId, modelId }, db);
-
 	let lastError: unknown = null;
 
-	for (let i = 0; i < resolved.targets.length; i++) {
-		const target = resolved.targets[i];
+	for (let i = 0; i < targets.length; i++) {
+		const target = targets[i];
 		const provider = getProvider(db, target.providerId);
 		if (!provider || provider.enabled !== 1) {
 			lastError = new ModelUnavailableError(`Provider ${target.providerId} is not available`);
@@ -112,15 +123,14 @@ export async function transcribeAudio(
 				throw new TranscriptionError(res.status, message);
 			}
 
-			if (options?.responseFormat === 'text') {
-				return await res.text();
-			}
-
-			const json = (await res.json()) as { text: string };
-			return json;
+			const result =
+				options?.responseFormat === 'text'
+					? await res.text()
+					: ((await res.json()) as { text: string });
+			return { result, index: i, target };
 		} catch (e) {
 			lastError = e;
-			if (i < resolved.targets.length - 1) continue;
+			if (i < targets.length - 1) continue;
 		}
 	}
 

@@ -98,7 +98,12 @@ describe('llm registry', () => {
 								{
 									id: 'or-model',
 									architecture: { input_modalities: ['text'], output_modalities: ['text'] },
-									pricing: { prompt: '0.00000015', completion: '0.0000006' },
+									pricing: {
+										prompt: '0.00000015',
+										completion: '0.0000006',
+										input_cache_read: '0.000000015',
+										input_cache_write: '0.0000001875'
+									},
 									context_length: 128000
 								},
 								{
@@ -132,6 +137,8 @@ describe('llm registry', () => {
 				capabilities: ['chat', 'streaming'],
 				priceInput: 0.15,
 				priceOutput: 0.6,
+				priceCacheRead: 0.015,
+				priceCacheWrite: 0.1875,
 				contextLength: 128000
 			},
 			{
@@ -139,6 +146,8 @@ describe('llm registry', () => {
 				capabilities: ['chat', 'streaming', 'image'],
 				priceInput: null,
 				priceOutput: null,
+				priceCacheRead: null,
+				priceCacheWrite: null,
 				contextLength: null
 			},
 			{
@@ -146,6 +155,8 @@ describe('llm registry', () => {
 				capabilities: ['chat', 'streaming', 'vision'],
 				priceInput: null,
 				priceOutput: null,
+				priceCacheRead: null,
+				priceCacheWrite: null,
 				contextLength: null
 			},
 			{
@@ -153,6 +164,8 @@ describe('llm registry', () => {
 				capabilities: ['chat', 'streaming'],
 				priceInput: null,
 				priceOutput: null,
+				priceCacheRead: null,
+				priceCacheWrite: null,
 				contextLength: null
 			},
 			{
@@ -160,6 +173,8 @@ describe('llm registry', () => {
 				capabilities: ['chat', 'streaming'],
 				priceInput: null,
 				priceOutput: null,
+				priceCacheRead: null,
+				priceCacheWrite: null,
 				contextLength: null
 			}
 		]);

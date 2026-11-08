@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { getDb, type Db } from '../db/index.js';
 import {
 	claimAgentRun,
-	listActiveUserIds,
+	listUsersWithActivitySinceLastRun,
 	listDueScheduleAgents,
 	listOverridesForAgent,
 	type AgentRow
@@ -76,24 +76,34 @@ async function runScheduledAgent(
 	agent: AgentRow,
 	run: (agentId: string, userId: string) => Promise<unknown>
 ): Promise<void> {
-	try {
-		if (agent.user_id === null) {
-			// One agent's per-user runs stay sequential; different agents don't wait
-			// on each other.
-			const overrides = listOverridesForAgent(db, agent.id);
-			for (const userId of listActiveUserIds(db, agent.last_run_at ?? 0)) {
-				const enabled = overrides.get(userId) ?? agent.enabled === 1;
-				if (!enabled) continue;
-				await run(agent.id, userId);
-			}
-		} else {
-			await run(agent.id, agent.user_id);
+	const runLogged = async (userId: string) => {
+		try {
+			await run(agent.id, userId);
+		} catch (e) {
+			log.error(`Scheduled run of agent ${agent.id} failed`, {
+				agentId: agent.id,
+				userId,
+				error: e instanceof Error ? e.message : String(e)
+			});
 		}
+	};
+	if (agent.user_id !== null) return runLogged(agent.user_id);
+	// One agent's per-user runs stay sequential; different agents don't wait on
+	// each other. One user's failure doesn't skip the users after them.
+	let userIds: string[];
+	let overrides: Map<string, boolean>;
+	try {
+		userIds = listUsersWithActivitySinceLastRun(db, agent.id);
+		overrides = listOverridesForAgent(db, agent.id);
 	} catch (e) {
-		log.error(`Scheduled run of agent ${agent.id} failed`, {
+		log.error(`Failed to list users for scheduled agent ${agent.id}`, {
 			agentId: agent.id,
 			error: e instanceof Error ? e.message : String(e)
 		});
+		return;
+	}
+	for (const userId of userIds) {
+		if (overrides.get(userId) ?? agent.enabled === 1) await runLogged(userId);
 	}
 }
 

@@ -134,6 +134,7 @@ export const linkLocalGuardedAgent = new Agent({
 
 const MAX_REDIRECTS = 5;
 const CREDENTIAL_HEADERS = ['authorization', 'cookie', 'proxy-authorization'];
+const BODY_HEADERS = ['content-type', 'content-length', 'content-encoding', 'content-language'];
 
 function checkUrl(url: URL): void {
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -154,12 +155,16 @@ export async function safeFetch(input: string, init: RequestInit = {}): Promise<
 	const follow = (init.redirect ?? 'follow') === 'follow';
 	let url = new URL(input);
 	const headers = new Headers(init.headers);
+	let method = (init.method ?? 'GET').toUpperCase();
+	let body = init.body;
 	for (let hop = 0; ; hop++) {
 		checkUrl(url);
 		let res: Response;
 		try {
 			res = await fetch(url, {
 				...init,
+				method,
+				body,
 				headers,
 				redirect: 'manual',
 				// undici-specific option honoured by Node's built-in fetch.
@@ -175,6 +180,16 @@ export async function safeFetch(input: string, init: RequestInit = {}): Promise<
 		await res.body?.cancel();
 		if (hop >= MAX_REDIRECTS) throw new Error('too many redirects');
 		const next = new URL(location, url);
+		// Fetch spec: 303 (except for HEAD), and 301/302 after a POST, are
+		// re-issued as GET without a body; 307/308 keep method and body.
+		if (
+			(res.status === 303 && method !== 'HEAD') ||
+			((res.status === 301 || res.status === 302) && method === 'POST')
+		) {
+			method = 'GET';
+			body = undefined;
+			for (const h of BODY_HEADERS) headers.delete(h);
+		}
 		// Like browsers, don't forward credentials to a different origin.
 		if (next.origin !== url.origin) for (const h of CREDENTIAL_HEADERS) headers.delete(h);
 		url = next;

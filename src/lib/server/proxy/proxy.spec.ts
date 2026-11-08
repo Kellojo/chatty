@@ -7,6 +7,13 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 let behavior: 'ok' | 'fail-first' | 'always-error' = 'ok';
 const resolvedRefs: { providerId: string; modelId: string }[] = [];
 let capturedOptions: unknown;
+const defaultInputUsage = {
+	total: 1,
+	noCache: undefined as number | undefined,
+	cacheRead: undefined as number | undefined,
+	cacheWrite: undefined as number | undefined
+};
+let inputUsage = defaultInputUsage;
 
 vi.mock('$lib/server/llm/registry.js', async () => {
 	const { MockLanguageModelV3 } = await import('ai/test');
@@ -29,12 +36,7 @@ vi.mock('$lib/server/llm/registry.js', async () => {
 							type: 'finish',
 							finishReason: 'stop',
 							usage: {
-								inputTokens: {
-									total: 1,
-									noCache: undefined,
-									cacheRead: undefined,
-									cacheWrite: undefined
-								},
+								inputTokens: inputUsage,
 								outputTokens: { total: 2, text: undefined, reasoning: undefined }
 							}
 						} as never
@@ -60,7 +62,7 @@ const { createApiKey } = await import('../db/repo/api-keys.js');
 const { createModelMapping } = await import('../db/repo/model-mappings.js');
 const { listProxyRequests } = await import('../db/repo/proxy-requests.js');
 const { createProvider } = await import('../db/repo/providers.js');
-const { createModel } = await import('../db/repo/models.js');
+const { createModel, updateModel } = await import('../db/repo/models.js');
 const { POST } = await import('../../../routes/api/v1/chat/completions/+server.js');
 const { GET: GET_MODELS } = await import('../../../routes/api/v1/models/+server.js');
 
@@ -164,6 +166,7 @@ beforeEach(async () => {
 	behavior = 'ok';
 	resolvedRefs.length = 0;
 	capturedOptions = undefined;
+	inputUsage = defaultInputUsage;
 });
 
 describe('GET /api/v1/models', () => {
@@ -263,6 +266,34 @@ describe('POST /api/v1/chat/completions', () => {
 		expect(row.latency_ms).not.toBeNull();
 		expect(row.http_status).toBe(200);
 		expect(row.stream).toBe(0);
+	});
+
+	it('records cached input tokens and prices them separately', async () => {
+		const db = getDb();
+		const model = createModel(db, { providerId, modelId: 'cached' });
+		updateModel(db, model.id, {
+			priceInput: 10,
+			priceOutput: 20,
+			priceCacheRead: 1,
+			priceCacheWrite: 12.5
+		});
+		inputUsage = { total: 1000, noCache: 100, cacheRead: 800, cacheWrite: 100 };
+		for (const stream of [false, true]) {
+			const res = await callResponse(POST, {
+				headers: auth(),
+				body: chatBody('cached', { stream })
+			});
+			await res.text();
+		}
+		const rows = listProxyRequests(db, {}).rows;
+		expect(rows).toHaveLength(2);
+		for (const row of rows) {
+			expect(row.input_tokens).toBe(1000);
+			expect(row.cache_read_tokens).toBe(800);
+			expect(row.cache_write_tokens).toBe(100);
+			// (100*10 + 800*1 + 100*12.5 + 2*20) / 1M
+			expect(row.cost_usd).toBeCloseTo(3090 / 1_000_000, 12);
+		}
 	});
 
 	it('streams SSE chunks with usage and finalizes the log row', async () => {

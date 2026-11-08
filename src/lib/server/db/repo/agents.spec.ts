@@ -7,12 +7,12 @@ import {
 	deleteAgent,
 	effectiveEnabled,
 	getAgent,
-	listActiveUserIds,
 	listAgentOverrides,
 	listAgents,
 	listDueScheduleAgents,
 	listOverridesForAgent,
 	listPersonaAgents,
+	listUsersWithActivitySinceLastRun,
 	setAgentOverride,
 	setAgentRunTimes,
 	toPublic,
@@ -116,19 +116,47 @@ describe('agents repo', () => {
 		expect(listDueScheduleAgents(db, Date.now()).map((a) => a.id)).toEqual([due.id, builtin.id]);
 	});
 
-	it('listActiveUserIds returns distinct users with recent, non-deleted conversations', () => {
-		db.prepare(
-			'INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role) VALUES (\'u2\', \'d@e.f\', \'D\', 0, 0, 0, \'user\')'
-		).run();
-		db.prepare(
-			'INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role) VALUES (\'u3\', \'g@h.i\', \'G\', 0, 0, 0, \'user\')'
-		).run();
-		createConversation(db, 'u1', { title: 'a' });
-		createConversation(db, 'u1', { title: 'b' });
-		createConversation(db, 'u2', { title: 'c' });
-		softDeleteConversation(db, 'u3', createConversation(db, 'u3', { title: 'd' }).id);
-		expect(listActiveUserIds(db, 0)).toEqual(['u1', 'u2']);
-		expect(listActiveUserIds(db, Date.now() + 1000)).toEqual([]);
+	it('listUsersWithActivitySinceLastRun tracks each user against their own last run', () => {
+		for (const id of ['u2', 'u3', 'u4']) {
+			db.prepare(
+				`INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role) VALUES (?, ?, ?, 0, 0, 0, 'user')`
+			).run(id, `${id}@x.y`, id);
+		}
+		const agent = createAgent(db, null, {
+			name: 'mem',
+			systemPrompt: 'x',
+			triggerType: 'schedule',
+			triggerConfig: { cron: '* * * * *' }
+		});
+		const setUpdated = (id: string, at: number) =>
+			db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(at, id);
+		const endRun = (userId: string, at: number) => {
+			const run = createAgentRun(db, { agentId: agent.id, userId, trigger: 'schedule' });
+			db.prepare("UPDATE agent_runs SET status = 'success', ended_at = ? WHERE id = ?").run(
+				at,
+				run.id
+			);
+		};
+		// u1 never ran: any activity counts.
+		setUpdated(createConversation(db, 'u1', { title: 'a' }).id, 100);
+		// u2's last run ended after its activity; another user's later run doesn't matter.
+		setUpdated(createConversation(db, 'u2', { title: 'b' }).id, 500);
+		endRun('u2', 600);
+		endRun('u1', 50);
+		// u3 was active after its last run, even though u2 ran later.
+		setUpdated(createConversation(db, 'u3', { title: 'c' }).id, 400);
+		endRun('u3', 300);
+		// u4's only newer conversation is the agent's own run transcript.
+		const transcript = createConversation(db, 'u4', {
+			title: 'run',
+			kind: 'agent-run',
+			agentId: agent.id
+		});
+		setUpdated(transcript.id, 900);
+		endRun('u4', 800);
+		softDeleteConversation(db, 'u4', createConversation(db, 'u4', { title: 'd' }).id);
+
+		expect(listUsersWithActivitySinceLastRun(db, agent.id)).toEqual(['u1', 'u3']);
 	});
 
 	it('listDueScheduleAgents excludes agents with a running run', () => {

@@ -54,7 +54,7 @@ import {
 	toResponsesSdkToolChoice,
 	toResponsesSdkTools
 } from './openaiResponses.js';
-import { computeCostUsd } from './pricing.js';
+import { cacheTokens, computeUsageCostUsd } from './pricing.js';
 
 export interface OpenAiModelEntry {
 	id: string;
@@ -313,13 +313,7 @@ function servedCost(
 		return rawCost;
 	}
 	// Fall back to calculating from stored pricing
-	const row = findModel(db, target.providerId, target.modelId);
-	return computeCostUsd(
-		row?.price_input ?? null,
-		row?.price_output ?? null,
-		usage?.inputTokens,
-		usage?.outputTokens
-	);
+	return computeUsageCostUsd(findModel(db, target.providerId, target.modelId), usage);
 }
 
 async function respondNonStreaming(
@@ -358,6 +352,7 @@ async function respondNonStreaming(
 				fallbackIndex: i,
 				inputTokens: usage?.inputTokens ?? null,
 				outputTokens: usage?.outputTokens ?? null,
+				...cacheTokens(usage),
 				costUsd: servedCost(db, target, usage),
 				compression: finalizeCompression(db, compression, usage?.outputTokens ?? null)
 			});
@@ -461,6 +456,7 @@ function respondStreaming(
 					fallbackIndex: served.index,
 					inputTokens: served.usage?.inputTokens ?? null,
 					outputTokens: served.usage?.outputTokens ?? null,
+					...cacheTokens(served.usage),
 					costUsd: servedCost(db, served.target, served.usage),
 					compression: finalizeCompression(db, compression, served.usage?.outputTokens ?? null)
 				});

@@ -6,6 +6,8 @@ import {
 	finishAgentRun,
 	getAgentRun,
 	getAgentRunByConversation,
+	hasRunningAgentRun,
+	lastFinishedAgentRunAt,
 	listAgentRuns,
 	listRunningAgentIds,
 	toPublic
@@ -37,6 +39,20 @@ describe('agent-runs repo', () => {
 		const pub = toPublic(done);
 		expect(pub.agentId).toBe(agentId);
 		expect(pub.status).toBe('success');
+	});
+
+	it('hasRunningAgentRun and lastFinishedAgentRunAt are per agent and user', () => {
+		expect(lastFinishedAgentRunAt(db, agentId, 'u1')).toBeNull();
+		const first = createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
+		expect(hasRunningAgentRun(db, agentId, 'u1')).toBe(true);
+		expect(hasRunningAgentRun(db, agentId, 'u2')).toBe(false);
+		db.prepare("UPDATE agent_runs SET status = 'success', ended_at = 123 WHERE id = ?").run(
+			first.id
+		);
+		expect(hasRunningAgentRun(db, agentId, 'u1')).toBe(false);
+		createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
+		expect(lastFinishedAgentRunAt(db, agentId, 'u1')).toBe(123);
+		expect(lastFinishedAgentRunAt(db, agentId, 'u2')).toBeNull();
 	});
 
 	it('finishAgentRun persists errors', () => {
