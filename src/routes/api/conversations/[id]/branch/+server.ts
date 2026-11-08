@@ -9,6 +9,7 @@ import {
 	toPublicWithBranches
 } from '$lib/server/db/repo/messages.js';
 import { hasActiveStream } from '$lib/server/chat/streams.js';
+import { publishServerEvent } from '$lib/server/events/bus.js';
 import type { RequestHandler } from './$types';
 
 const bodySchema = z.object({ messageId: z.string().min(1) });
@@ -30,6 +31,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!activateBranch(db, params.id, parsed.data.messageId)) {
 		error(400, { message: 'Unknown message id' });
 	}
+	publishServerEvent(user.id, { type: 'conversation.branch_changed', conversationId: params.id });
 	const page = listMessagesPage(db, params.id)!;
 	return json({
 		messages: toPublicWithBranches(db, params.id, page.rows),

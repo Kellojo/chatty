@@ -10,13 +10,14 @@ import {
 	listSettledConversations,
 	markConversationRead,
 	searchConversations,
+	searchConversationsSql,
 	settleConversation,
 	softDeleteConversation,
 	togglePin,
 	unsettleConversation,
 	updateConversation
 } from './conversations.js';
-import { createMessage } from './messages.js';
+import { activateBranch, createMessage } from './messages.js';
 
 let db: Db;
 
@@ -130,20 +131,58 @@ describe('conversations repo', () => {
 
 	it('searchConversations runs FTS once and walks the user index', () => {
 		const plan = db
-			.prepare(
-				`EXPLAIN QUERY PLAN SELECT c.id FROM conversations c
-				 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
-				 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
-				   AND (c.title LIKE ? ESCAPE '!' OR cc.project_title LIKE ? ESCAPE '!'
-				     OR c.id IN (SELECT conversation_id FROM messages_fts WHERE messages_fts MATCH ?))
-				 ORDER BY c.pinned DESC, c.updated_at DESC LIMIT ? OFFSET ?`
-			)
-			.all('u1', '%a%', '%a%', '"a"*', 50, 0) as { detail: string }[];
+			.prepare(`EXPLAIN QUERY PLAN ${searchConversationsSql(true)}`)
+			.all('"a"*', 'u1', 'u1', '%a%', '%a%', 50, 0) as { detail: string }[];
 		const details = plan.map((p) => p.detail);
 		expect(details.some((d) => /SEARCH c USING INDEX/.test(d))).toBe(true);
-		expect(details.some((d) => /^SCAN c\b/.test(d))).toBe(false);
 		expect(details.some((d) => /VIRTUAL TABLE INDEX/.test(d))).toBe(true);
 		expect(details.some((d) => /CORRELATED/.test(d))).toBe(false);
+		// No full scan of conversations or messages: only the FTS hits and the
+		// CTEs built from them are scanned.
+		expect(details.filter((d) => /^SCAN (c|hc|m)\b/.test(d))).toEqual([]);
+	});
+
+	it('searchConversations matches message text only on the shown version', () => {
+		const c = createConversation(db, 'u1', { title: 'branches' });
+		const text = (t: string) => [{ type: 'text', text: t }];
+		const original = createMessage(db, {
+			conversationId: c.id,
+			role: 'user',
+			parts: text('original zebra question')
+		}).id;
+		createMessage(db, { conversationId: c.id, role: 'assistant', parts: text('shared reply') });
+		// an edit starts a new version from the root, which becomes the shown one
+		const edit = createMessage(db, {
+			conversationId: c.id,
+			role: 'user',
+			parts: text('edited giraffe question'),
+			parentId: null
+		}).id;
+		createMessage(db, { conversationId: c.id, role: 'assistant', parts: text('newer answer') });
+		expect(searchConversations(db, 'u1', 'zebra')).toEqual([]);
+		expect(searchConversations(db, 'u1', 'giraffe').map((h) => h.id)).toEqual([c.id]);
+		expect(searchConversations(db, 'u1', 'shared')).toEqual([]);
+
+		activateBranch(db, c.id, original);
+		expect(searchConversations(db, 'u1', 'zebra').map((h) => h.id)).toEqual([c.id]);
+		expect(searchConversations(db, 'u1', 'shared').map((h) => h.id)).toEqual([c.id]);
+		expect(searchConversations(db, 'u1', 'giraffe')).toEqual([]);
+		// title matches don't depend on the version
+		expect(searchConversations(db, 'u1', 'branches').map((h) => h.id)).toEqual([c.id]);
+		activateBranch(db, c.id, edit);
+		expect(searchConversations(db, 'u1', 'giraffe').map((h) => h.id)).toEqual([c.id]);
+	});
+
+	it('searchConversations still matches messages of a conversation without a leaf pointer', () => {
+		const c = createConversation(db, 'u1');
+		createMessage(db, {
+			conversationId: c.id,
+			role: 'user',
+			parts: [{ type: 'text', text: 'okapi' }]
+		});
+		db.prepare('UPDATE conversations SET active_leaf_id = NULL WHERE id = ?').run(c.id);
+		expect(searchConversations(db, 'u1', 'okapi').map((h) => h.id)).toEqual([c.id]);
+		expect(searchConversations(db, 'u2', 'okapi')).toEqual([]);
 	});
 
 	it('searchConversations matches a coding task by its project name', () => {
