@@ -11,7 +11,9 @@
 	import MapWidget from './map-widget.svelte';
 	import FileWidget from './file-widget.svelte';
 	import ChatsWidget from './chats-widget.svelte';
+	import MarkdownLink from './markdown-link.svelte';
 	import { codingAssetUrl, escapeLocalImagePaths, isLocalImagePath } from '$lib/coding-assets.js';
+	import { t3ThreadLinkToPath } from '$lib/t3-thread-links.js';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -43,6 +45,8 @@
 		if (key === 'src' && conversationId && isLocalImagePath(url)) {
 			return codingAssetUrl(conversationId, url);
 		}
+		// T3 Code thread links open the thread's conversation in Chatty.
+		if (key === 'href') return t3ThreadLinkToPath(url) ?? url;
 		return url;
 	}
 
@@ -83,7 +87,7 @@
 				{ language: 'chats', component: ChatsWidget }
 			]
 		}}
-		components={{ img: MarkdownImage }}
+		components={{ img: MarkdownImage, a: MarkdownLink }}
 		linkSafety={{ enabled: true, renderModal: linkSafetyModal }}
 		theme={{
 			h1: { base: 'mt-8 mb-3 text-3xl font-semibold text-foreground' },

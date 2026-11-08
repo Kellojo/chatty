@@ -216,9 +216,6 @@ describe('handleChatRequest', () => {
 		const assistant1 = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
 
 		// regenerate: resubmit the user message; the old answer becomes a sibling
-		const { subscribeServerEvents } = await import('../events/bus.js');
-		const events: { type: string; conversationId?: string }[] = [];
-		const stop = subscribeServerEvents('u1', (_user, event) => events.push(event));
 		const res = await handleChatRequest('u1', {
 			conversationId: conversation.id,
 			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
@@ -227,12 +224,6 @@ describe('handleChatRequest', () => {
 		expect(res.status).toBe(200);
 		const body = await res.text();
 		await new Promise((r) => setTimeout(r, 50));
-		stop();
-		// other tabs learn that the shown version changed
-		expect(events).toContainEqual({
-			type: 'conversation.branch_changed',
-			conversationId: conversation.id
-		});
 
 		const messages = listMessages(db, conversation.id);
 		expect(messages).toHaveLength(2);

@@ -97,12 +97,6 @@ export type ServerEvent =
 	/** Persisted messages changed outside a live stream; an open chat should reload them. */
 	| { type: 'chat.messages.updated'; conversationId: string }
 	| { type: 'conversation.updated'; conversationId: string }
-	/**
-	 * The conversation's shown version changed: a branch was switched to or
-	 * deleted, or an edit/regenerate started a new one. An open chat should
-	 * reload its active path (e.g. GET /api/conversations/[id]/messages).
-	 */
-	| { type: 'conversation.branch_changed'; conversationId: string }
 	| { type: 'conversation.compacted'; conversationId: string }
 	| { type: 'conversation.settle_changed'; conversationIds: string[]; settled: boolean }
 	/** A coding task's status, pending approval, branch or PR changed. */

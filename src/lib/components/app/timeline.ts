@@ -1,3 +1,4 @@
+import { readHtmlRender } from '$lib/html-render.js';
 import { describeTool, toolFailed, type ToolKind } from '$lib/tool-meta.js';
 
 /** Minimal shape of a UIMessage part, enough to group and summarise it. */
@@ -28,6 +29,8 @@ export function isToolPart(part: PartLike): boolean {
 }
 
 function isActivity(part: PartLike): boolean {
+	// A published HTML page is shown inline, like text, rather than folded away.
+	if (readHtmlRender(part)) return false;
 	return part.type === 'reasoning' || isToolPart(part);
 }
 

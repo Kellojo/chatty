@@ -220,8 +220,6 @@ describe('proxy-requests repo', () => {
 			avgLatencyMs: 200,
 			inputTokens: 10,
 			outputTokens: 27,
-			cacheReadTokens: 0,
-			cacheWriteTokens: 0,
 			costUsd: 0.001,
 			pricedRequests: 1,
 			distinctModels: 2,
@@ -276,13 +274,7 @@ describe('proxyRequestProviderUsage', () => {
 		providerId: string | null,
 		modelId: string | null,
 		startedAt: number,
-		usage: {
-			input: number;
-			output: number;
-			cost: number | null;
-			cacheRead?: number;
-			cacheWrite?: number;
-		}
+		usage: { input: number; output: number; cost: number | null }
 	) {
 		const row = logRequest(userId, 'alias');
 		finalizeProxyRequest(db, row.id, {
@@ -293,8 +285,6 @@ describe('proxyRequestProviderUsage', () => {
 			modelId,
 			inputTokens: usage.input,
 			outputTokens: usage.output,
-			cacheReadTokens: usage.cacheRead ?? null,
-			cacheWriteTokens: usage.cacheWrite ?? null,
 			costUsd: usage.cost
 		});
 		db.prepare('UPDATE proxy_requests SET started_at = ? WHERE id = ?').run(startedAt, row.id);
@@ -324,8 +314,6 @@ describe('proxyRequestProviderUsage', () => {
 				pricedRequests: 2,
 				inputTokens: 30,
 				outputTokens: 10,
-				cacheReadTokens: 0,
-				cacheWriteTokens: 0,
 				costUsd: 0.03
 			},
 			{
@@ -337,8 +325,6 @@ describe('proxyRequestProviderUsage', () => {
 				pricedRequests: 0,
 				inputTokens: 1,
 				outputTokens: 1,
-				cacheReadTokens: 0,
-				cacheWriteTokens: 0,
 				costUsd: 0
 			},
 			{
@@ -350,33 +336,9 @@ describe('proxyRequestProviderUsage', () => {
 				pricedRequests: 1,
 				inputTokens: 3,
 				outputTokens: 3,
-				cacheReadTokens: 0,
-				cacheWriteTokens: 0,
 				costUsd: 0.5
 			}
 		]);
-	});
-
-	it('sums cache read and write tokens in provider usage, stats and top models', () => {
-		served('u1', 'p1', 'gpt-x', base, { input: 100, output: 5, cost: 0.01, cacheRead: 60 });
-		served('u1', 'p1', 'gpt-x', base + 1000, {
-			input: 50,
-			output: 5,
-			cost: 0.01,
-			cacheRead: 10,
-			cacheWrite: 30
-		});
-		served('u1', 'p1', 'gpt-x', base + 2000, { input: 7, output: 1, cost: 0 });
-		const [row] = proxyRequestProviderUsage(db, { userId: 'u1' });
-		expect(row).toMatchObject({ inputTokens: 157, cacheReadTokens: 70, cacheWriteTokens: 30 });
-		expect(proxyRequestStats(db, { userId: 'u1' })).toMatchObject({
-			cacheReadTokens: 70,
-			cacheWriteTokens: 30
-		});
-		expect(proxyRequestTopModels(db, 10, { userId: 'u1' })[0]).toMatchObject({
-			cacheReadTokens: 70,
-			cacheWriteTokens: 30
-		});
 	});
 
 	it('filters by user and time window', () => {

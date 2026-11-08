@@ -447,57 +447,25 @@ export function searchConversations(
 	const offset = Math.max(0, Math.floor(options.offset ?? 0));
 	const like = `%${escapeLike(trimmed)}%`;
 	const ftsQuery = toFtsQuery(trimmed);
-	const params: unknown[] = ftsQuery
-		? [ftsQuery, userId, userId, like, like]
-		: [userId, like, like];
-	params.push(limit, offset);
-	return db.prepare(searchConversationsSql(ftsQuery !== null)).all(...params) as ConversationRow[];
-}
-
-/**
- * The search statement. Message text counts only on the version a conversation
- * shows: FTS runs once (an uncorrelated lookup, one index probe per term), then
- * only the conversations it hit have their active path walked (from
- * `active_leaf_id` up `parent_id`), and a hit must lie on it. A conversation
- * without a leaf pointer keeps matching any of its messages.
- *
- * Parameters: with FTS `[ftsQuery, userId, userId, like, like, limit, offset]`,
- * without `[userId, like, like, limit, offset]`. Exported for query-plan tests.
- */
-export function searchConversationsSql(withFts: boolean): string {
-	const cte = withFts
-		? `WITH RECURSIVE
-			 hits(id, conversation_id) AS MATERIALIZED (
-			   SELECT m.id, m.conversation_id FROM messages_fts f CROSS JOIN messages m ON m.rowid = f.rowid
-			   WHERE messages_fts MATCH ?
-			 ),
-			 hit_conversations(id, leaf) AS MATERIALIZED (
-			   SELECT hc.id, hc.active_leaf_id FROM conversations hc
-			   WHERE hc.id IN (SELECT conversation_id FROM hits) AND hc.user_id = ?
-			 ),
-			 path(conversation_id, id) AS (
-			   SELECT id, leaf FROM hit_conversations WHERE leaf IS NOT NULL
-			   UNION
-			   SELECT p.conversation_id, m.parent_id FROM path p CROSS JOIN messages m ON m.id = p.id
-			   WHERE m.parent_id IS NOT NULL AND +m.conversation_id = p.conversation_id
-			 ),
-			 matched(conversation_id) AS MATERIALIZED (
-			   SELECT h.conversation_id FROM hits h CROSS JOIN path p
-			   WHERE p.conversation_id = h.conversation_id AND p.id = h.id
-			   UNION
-			   SELECT h.conversation_id FROM hits h CROSS JOIN hit_conversations hc
-			   WHERE hc.id = h.conversation_id AND hc.leaf IS NULL
-			 )
-			 `
+	// The FTS lookup runs once as an uncorrelated subquery (one index probe per
+	// term) instead of being re-evaluated per conversation inside a join.
+	const ftsClause = ftsQuery
+		? 'OR c.id IN (SELECT conversation_id FROM messages_fts WHERE messages_fts MATCH ?)'
 		: '';
-	const ftsClause = withFts ? 'OR c.id IN (SELECT conversation_id FROM matched)' : '';
-	return `${cte}SELECT c.*, ${CODING_SUMMARY_COLUMNS}
-		 FROM conversations c
-		 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
-		 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
-		   AND (c.title LIKE ? ESCAPE '!' OR cc.project_title LIKE ? ESCAPE '!' ${ftsClause})
-		 ORDER BY c.pinned DESC, c.updated_at DESC
-		 LIMIT ? OFFSET ?`;
+	const params: unknown[] = [userId, like, like];
+	if (ftsQuery) params.push(ftsQuery);
+	params.push(limit, offset);
+	return db
+		.prepare(
+			`SELECT c.*, ${CODING_SUMMARY_COLUMNS}
+			 FROM conversations c
+			 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
+			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
+			   AND (c.title LIKE ? ESCAPE '!' OR cc.project_title LIKE ? ESCAPE '!' ${ftsClause})
+			 ORDER BY c.pinned DESC, c.updated_at DESC
+			 LIMIT ? OFFSET ?`
+		)
+		.all(...params) as ConversationRow[];
 }
 
 export function countConversations(db: Db): number {

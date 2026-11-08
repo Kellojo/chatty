@@ -10,6 +10,8 @@
 	import { Markdown } from '$lib/components/ai/markdown/index.js';
 	import { Message, MessageActions, MessageContent } from '$lib/components/ai/message/index.js';
 	import ActivityGroup from './ActivityGroup.svelte';
+	import HtmlRenderFrame from './HtmlRenderFrame.svelte';
+	import { readHtmlRender } from '$lib/html-render.js';
 	import { groupParts } from './timeline.js';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -177,6 +179,8 @@
 					{:else}
 						<Markdown class="w-full max-w-none" content={part.text} {conversationId} />
 					{/if}
+				{:else if part && conversationId && readHtmlRender(part)}
+					<HtmlRenderFrame {conversationId} {part} />
 				{:else if part?.type === 'file'}
 					{@const url = (part as { url?: string }).url ?? ''}
 					{#if part.mediaType?.startsWith('image/')}

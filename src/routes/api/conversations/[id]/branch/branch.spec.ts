@@ -7,7 +7,6 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { createConversation } = await import('$lib/server/db/repo/conversations.js');
 const { createMessage, listMessages } = await import('$lib/server/db/repo/messages.js');
-const { subscribeServerEvents } = await import('$lib/server/events/bus.js');
 const { POST } = await import('./+server.js');
 
 interface Page {
@@ -80,21 +79,6 @@ describe('POST /api/conversations/[id]/branch', () => {
 		expect(listMessages(getDb(), s.conversationId).map((m) => m.id)).toEqual([s.user, s.reply]);
 		const back = await post(u1, s.conversationId, { messageId: s.edit });
 		expect(back.body.messages.map((m) => m.id)).toEqual([s.edit, s.editReply]);
-	});
-
-	it('publishes conversation.branch_changed on a switch only', async () => {
-		const s = seed();
-		const events: unknown[] = [];
-		const stop = subscribeServerEvents('u1', (_user, event) => events.push(event));
-		try {
-			await post(u1, s.conversationId, { messageId: s.user });
-			await post(u1, s.conversationId, { messageId: 'nope' });
-		} finally {
-			stop();
-		}
-		expect(events).toEqual([
-			{ type: 'conversation.branch_changed', conversationId: s.conversationId }
-		]);
 	});
 
 	it('404s for a conversation of another user', async () => {

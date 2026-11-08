@@ -101,6 +101,31 @@ export function getCodingConversationForUser(
 		.get(conversationId, userId) as CodingConversationRow | undefined;
 }
 
+/**
+ * The user's (not deleted) conversation for a T3 thread. `remoteEnvironmentId`
+ * is the T3 server's own id, as in its thread links; conversations on an
+ * environment with that id are preferred, but thread ids are unique so any
+ * match of the user's counts (e.g. the environment predates that column).
+ */
+export function findThreadConversationForUser(
+	db: Db,
+	userId: string,
+	remoteEnvironmentId: string,
+	threadId: string
+): { conversationId: string; title: string } | undefined {
+	return db
+		.prepare(
+			`SELECT c.id AS conversationId, c.title AS title FROM coding_conversations cc
+			 JOIN conversations c ON c.id = cc.conversation_id
+			 LEFT JOIN coding_environments e ON e.id = cc.environment_id
+			 WHERE cc.thread_id = ? AND c.user_id = ? AND c.deleted_at IS NULL
+			 ORDER BY (e.remote_environment_id = ?) DESC, c.updated_at DESC
+			 LIMIT 1`
+		)
+		.get(threadId, userId, remoteEnvironmentId) as
+		{ conversationId: string; title: string } | undefined;
+}
+
 export interface CreateCodingConversationInput {
 	conversationId: string;
 	environmentId: string;
