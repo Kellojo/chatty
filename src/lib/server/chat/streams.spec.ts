@@ -2,6 +2,8 @@ import type { UIMessageChunk } from 'ai';
 import { describe, expect, it } from 'vitest';
 import {
 	abortStreamAndWait,
+	claimStream,
+	hasActiveStream,
 	appendChunk,
 	getStreamState,
 	markDone,
@@ -98,5 +100,53 @@ describe('replay buffer', () => {
 		// A partial replay would leave a hole in the message, so none is offered.
 		expect(getStreamState('c5')).toBeNull();
 		releaseStream('c5', controller);
+	});
+});
+
+describe('claimStream', () => {
+	it('registers synchronously after the wait, so a concurrent claim waits for it', async () => {
+		const first = await claimStream('c6');
+		expect(hasActiveStream('c6')).toBe(true);
+		let secondClaimed = false;
+		const second = claimStream('c6').then((c) => {
+			secondClaimed = true;
+			return c;
+		});
+		await new Promise((r) => setTimeout(r, 5));
+		// The second claim aborted the first and waits until it is released.
+		expect(first.signal.aborted).toBe(true);
+		expect(secondClaimed).toBe(false);
+		releaseStream('c6', first);
+		const controller = await second;
+		expect(controller.signal.aborted).toBe(false);
+		expect(hasActiveStream('c6')).toBe(true);
+		releaseStream('c6', controller);
+		expect(hasActiveStream('c6')).toBe(false);
+	});
+
+	it('lets only one of two simultaneous waiters proceed at a time', async () => {
+		const running = await claimStream('c7');
+		const order: string[] = [];
+		const a = claimStream('c7').then((c) => (order.push('a'), c));
+		const b = claimStream('c7').then((c) => (order.push('b'), c));
+		releaseStream('c7', running);
+		const winner = await Promise.race([a, b]);
+		await new Promise((r) => setTimeout(r, 5));
+		// The loser saw the winner's claim, aborted it and is waiting for it.
+		expect(order).toHaveLength(1);
+		expect(winner.signal.aborted).toBe(true);
+		releaseStream('c7', winner);
+		const loser = await (order[0] === 'a' ? b : a);
+		expect(loser.signal.aborted).toBe(false);
+		releaseStream('c7', loser);
+	});
+
+	it('takes over a stream that is never released after the timeout', async () => {
+		const stuck = await claimStream('c8');
+		const controller = await claimStream('c8', 5);
+		expect(stuck.signal.aborted).toBe(true);
+		expect(hasActiveStream('c8')).toBe(true);
+		releaseStream('c8', controller);
+		releaseStream('c8', stuck);
 	});
 });

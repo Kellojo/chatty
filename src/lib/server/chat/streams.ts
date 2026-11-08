@@ -163,6 +163,29 @@ export async function abortStreamAndWait(
 	clearTimeout(timer);
 }
 
+/**
+ * Takes over a conversation for a new response: aborts and waits for whatever
+ * is running (bounded, as in `abortStreamAndWait`), then registers a fresh
+ * controller with no await in between, so a concurrent request always sees
+ * this claim and in turn aborts/waits for it. The caller owns the claim and
+ * must `releaseStream` it on every path.
+ */
+export async function claimStream(
+	conversationId: string,
+	timeoutMs = DEFAULT_ABORT_WAIT_MS
+): Promise<AbortController> {
+	const deadline = Date.now() + timeoutMs;
+	// Another request may claim while we wait, so re-check after every wait.
+	while (streams.has(conversationId)) {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) break;
+		await abortStreamAndWait(conversationId, remaining);
+	}
+	const controller = new AbortController();
+	registerStream(conversationId, controller);
+	return controller;
+}
+
 export function releaseStream(conversationId: string, controller: AbortController): void {
 	byController.get(controller)?.release();
 	if (streams.get(conversationId)?.controller === controller) {

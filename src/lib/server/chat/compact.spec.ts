@@ -61,6 +61,16 @@ function seedConversation(
 	return { convId: conv.id, providerId: provider.id, modelId: 'm1' };
 }
 
+function seedMessages(convId: string, count: number, textLength = 10): void {
+	for (let i = 0; i < count; i++) {
+		createMessage(getDb(), {
+			conversationId: convId,
+			role: i % 2 === 0 ? 'user' : 'assistant',
+			parts: textParts('x'.repeat(textLength))
+		});
+	}
+}
+
 describe('compactThreshold', () => {
 	beforeEach(() => {
 		closeDb();
@@ -186,6 +196,51 @@ describe('maybeCompactConversation', () => {
 			.prepare("SELECT status FROM proxy_requests WHERE purpose = 'compaction'")
 			.get() as { status: string };
 		expect(failed.status).toBe('failed');
+	});
+
+	function toolMessage(convId: string, output: string) {
+		return createMessage(getDb(), {
+			conversationId: convId,
+			role: 'assistant',
+			parts: [
+				{
+					type: 'tool-webfetch',
+					toolCallId: 'c1',
+					state: 'output-available',
+					input: { url: 'https://example.com' },
+					output
+				}
+			]
+		});
+	}
+
+	it('counts tool output towards the threshold and summarizes it truncated', async () => {
+		const { convId, providerId, modelId } = seedConversation(2, 10);
+		toolMessage(convId, 'z'.repeat(8000)); // ~2000 tokens, no text at all
+		seedMessages(convId, 4);
+		const conv = getConversation(getDb(), 'u1', convId)!;
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		expect(generateTextMock).toHaveBeenCalledOnce();
+		const prompt = generateTextMock.mock.calls[0][0].prompt as string;
+		expect(prompt).toContain('[tool call webfetch] {"url":"https://example.com"}');
+		expect(prompt).toContain('[tool result webfetch] zzz');
+		expect(prompt).toContain('chars truncated]');
+		expect(prompt.length).toBeLessThan(4000);
+	});
+
+	it('shrinks the keep-window when it alone would blow the budget', async () => {
+		const { convId, providerId, modelId } = seedConversation(4, 10);
+		seedMessages(convId, 1);
+		const big = toolMessage(convId, 'z'.repeat(8000));
+		const conv = getConversation(getDb(), 'u1', convId)!;
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		expect(generateTextMock).toHaveBeenCalledOnce();
+		const rows = getDb()
+			.prepare('SELECT id FROM messages WHERE conversation_id = ? ORDER BY rowid')
+			.all(convId) as { id: string }[];
+		// 6 messages; the default window of 4 would fold only 2, the shrunk one keeps 2.
+		expect(latestSummary(getDb(), convId)!.through_message_id).toBe(rows[3].id);
+		expect(rows[5].id).toBe(big.id);
 	});
 
 	it('records the compaction request with the compaction purpose', async () => {

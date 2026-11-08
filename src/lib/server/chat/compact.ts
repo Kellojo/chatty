@@ -1,9 +1,10 @@
-import { generateText } from 'ai';
+import { generateText, type UIMessage } from 'ai';
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
-import { createSummary, latestSummary } from '../db/repo/conversation-summaries.js';
+import { createSummary, unsummarizedMessages } from '../db/repo/conversation-summaries.js';
 import type { ConversationRow } from '../db/repo/conversations.js';
-import { extractText, listMessages, type MessageRow } from '../db/repo/messages.js';
+import { listMessages, type MessageRow } from '../db/repo/messages.js';
+import { estimateMessagesChars } from '../llm/promptBreakdown.js';
 import { findModel, findRoleModel, type ModelRow } from '../db/repo/models.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
 import { publishServerEvent } from '../events/bus.js';
@@ -20,12 +21,74 @@ const RESPONSE_RESERVE_TOKENS = 4096;
 const MIN_THRESHOLD_TOKENS = 4000;
 const SUMMARY_TARGET_TOKENS = 2000;
 
+// The trailing keep-window is never folded, so a few huge messages in it (e.g.
+// a 1MB webfetch result) would keep the prompt over budget forever. It is
+// shrunk until it fits in this share of the threshold, down to MIN_KEEP.
+const KEEP_WINDOW_SHARE = 0.5;
+const MIN_KEEP_MESSAGES = 2;
+// Per tool input/output in the summarization transcript.
+const TRANSCRIPT_TOOL_CHARS = 2000;
+
 export function estimateTokens(text: string): number {
 	return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-function messageText(m: MessageRow): string {
-	return extractText(JSON.parse(m.parts) as unknown[]);
+function messageParts(m: MessageRow): UIMessage['parts'] {
+	return JSON.parse(m.parts) as UIMessage['parts'];
+}
+
+/** Everything that is sent to the model for a message: text, reasoning, tool calls and results. */
+export function estimateMessageTokens(m: MessageRow): number {
+	return Math.ceil(
+		estimateMessagesChars([{ id: m.id, role: 'user', parts: messageParts(m) }]) / CHARS_PER_TOKEN
+	);
+}
+
+function truncate(text: string, max: number): string {
+	return text.length <= max
+		? text
+		: `${text.slice(0, max)}… [${text.length - max} chars truncated]`;
+}
+
+function serialize(value: unknown): string {
+	if (typeof value === 'string') return value;
+	try {
+		return JSON.stringify(value) ?? '';
+	} catch {
+		return String(value);
+	}
+}
+
+/** Transcript lines for a message: its text plus tool calls/results, each truncated. */
+export function messageTranscript(m: MessageRow): string {
+	const lines: string[] = [];
+	for (const part of messageParts(m)) {
+		const p = part as {
+			type: string;
+			text?: string;
+			toolName?: string;
+			input?: unknown;
+			output?: unknown;
+			errorText?: string;
+			filename?: string;
+		};
+		if (p.type === 'text' && p.text?.trim()) {
+			lines.push(p.text);
+		} else if (p.type === 'dynamic-tool' || p.type.startsWith('tool-')) {
+			const name = p.type === 'dynamic-tool' ? (p.toolName ?? 'tool') : p.type.slice(5);
+			const input =
+				p.input === undefined ? '' : truncate(serialize(p.input), TRANSCRIPT_TOOL_CHARS);
+			lines.push(`[tool call ${name}] ${input}`.trimEnd());
+			if (p.output !== undefined) {
+				lines.push(`[tool result ${name}] ${truncate(serialize(p.output), TRANSCRIPT_TOOL_CHARS)}`);
+			} else if (p.errorText) {
+				lines.push(`[tool error ${name}] ${truncate(p.errorText, TRANSCRIPT_TOOL_CHARS)}`);
+			}
+		} else if (p.type === 'file') {
+			lines.push(`[file${p.filename ? `: ${p.filename}` : ''}]`);
+		}
+	}
+	return lines.join('\n');
 }
 
 export function compactThreshold(
@@ -81,24 +144,33 @@ export async function maybeCompactConversation(
 	// 'partial' is a response still being generated; dead ones are settled at
 	// startup by finalizeInterruptedMessages.
 	const messages = listMessages(db, conversation.id).filter((m) => m.status !== 'partial');
-	if (messages.length <= keep) return;
+	const { summary: existing, rows: unsummarized } = unsummarizedMessages(
+		db,
+		conversation.id,
+		messages
+	);
+	if (unsummarized.length <= MIN_KEEP_MESSAGES) return;
 
-	const existing = latestSummary(db, conversation.id);
-	const unsummarized = existing
-		? messages.filter((m) => m.rowid > existing.through_rowid)
-		: messages;
+	// The prompt is the existing summary plus every unsummarized message,
+	// including the keep-window, so that is what has to fit.
+	const tokens = unsummarized.map(estimateMessageTokens);
+	const existingTokens = existing ? existing.token_estimate : 0;
+	if (tokens.reduce((sum, t) => sum + t, 0) + existingTokens < threshold) return;
 
 	// Fold everything except the trailing keep-window into the summary.
-	const foldable = unsummarized.slice(0, Math.max(0, unsummarized.length - keep));
+	let keepCount = Math.min(keep, unsummarized.length);
+	let keptTokens = tokens.slice(-keepCount).reduce((sum, t) => sum + t, 0);
+	while (keepCount > MIN_KEEP_MESSAGES && keptTokens > threshold * KEEP_WINDOW_SHARE) {
+		keptTokens -= tokens[tokens.length - keepCount];
+		keepCount--;
+	}
+	const foldable = unsummarized.slice(0, unsummarized.length - keepCount);
 	if (foldable.length === 0) return;
 
-	const foldableTokens = foldable.reduce((sum, m) => sum + estimateTokens(messageText(m)), 0);
-	const existingTokens = existing ? existing.token_estimate : 0;
-	if (foldableTokens + existingTokens < threshold) return;
-
 	const transcript = foldable
-		.map((m) => `${m.role.toUpperCase()}: ${messageText(m)}`)
-		.filter((line) => line.trim().length > 0)
+		.map((m) => ({ role: m.role, text: messageTranscript(m) }))
+		.filter((m) => m.text.trim().length > 0)
+		.map((m) => `${m.role.toUpperCase()}: ${m.text}`)
 		.join('\n\n');
 	if (transcript.trim().length === 0) return;
 

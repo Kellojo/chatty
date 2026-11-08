@@ -233,6 +233,40 @@ describe('handleChatRequest', () => {
 		closeDb();
 	});
 
+	it('drops summaries of truncated messages and shows the regenerated ones', async () => {
+		const { createSummary, latestSummary } = await import('../db/repo/conversation-summaries.js');
+		const db = getDb();
+		const conversation = seed(db);
+		const first = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+		});
+		await first.text();
+		await new Promise((r) => setTimeout(r, 50));
+		const assistant1 = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+		createSummary(db, {
+			conversationId: conversation.id,
+			throughMessageId: assistant1.id,
+			throughRowid: assistant1.rowid,
+			summaryText: 'STALE SUMMARY',
+			tokenEstimate: 5
+		});
+
+		const res = await handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello again' }] },
+			truncateFrom: 'msg-1'
+		});
+		await res.text();
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(latestSummary(db, conversation.id)).toBeUndefined();
+		const prompt = JSON.stringify(registry.__getLastPrompt());
+		expect(prompt).not.toContain('STALE SUMMARY');
+		expect(prompt).toContain('hello again');
+		closeDb();
+	});
+
 	it('rejects with 400 when truncateFrom references an unknown message', async () => {
 		const db = getDb();
 		const conversation = seed(db);
@@ -584,6 +618,76 @@ describe('handleChatRequest', () => {
 			if (createdDir) await fsp.rm(createdDir, { recursive: true, force: true });
 			closeDb();
 		}
+	});
+
+	it('replaces an attachment whose file is missing with a text note', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const { createAttachment } = await import('../db/repo/attachments.js');
+		const att = createAttachment(db, {
+			kind: 'image',
+			path: `${conversation.id}/attachments/gone.png`,
+			mime: 'image/png',
+			sha256: 'x'
+		});
+		try {
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: {
+					id: 'msg-1',
+					role: 'user',
+					parts: [
+						{ type: 'text', text: 'look' },
+						{
+							type: 'file',
+							url: `/api/conversations/${conversation.id}/attachments/${att.id}`,
+							mediaType: 'image/png',
+							filename: 'gone.png'
+						}
+					]
+				}
+			});
+			expect(res.status).toBe(200);
+			await res.text();
+			await new Promise((r) => setTimeout(r, 50));
+
+			const prompt = registry.__getLastPrompt() as {
+				role: string;
+				content: { type: string; text?: string }[];
+			}[];
+			const content = prompt.find((m) => m.role === 'user')!.content;
+			expect(content.map((c) => c.type)).toEqual(['text', 'text', 'text']);
+			expect(content[1].text).toContain(att.id);
+			expect(content[2].text).toBe('[attachment unavailable: gone.png]');
+			expect(JSON.stringify(prompt)).not.toContain('/api/conversations/');
+		} finally {
+			closeDb();
+		}
+	});
+
+	it('lets a second concurrent request take over before the first starts streaming', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const { hasActiveStream } = await import('./streams.js');
+		const first = handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'one' }] }
+		});
+		const second = handleChatRequest('u1', {
+			conversationId: conversation.id,
+			message: { id: 'msg-2', role: 'user', parts: [{ type: 'text', text: 'two' }] }
+		});
+		await expect(first).rejects.toMatchObject({ status: 409 });
+		const res = await second;
+		expect(res.status).toBe(200);
+		await res.text();
+		await new Promise((r) => setTimeout(r, 50));
+
+		const messages = listMessages(db, conversation.id);
+		expect(messages.map((m) => m.role)).toEqual(['user', 'user', 'assistant']);
+		expect(messages.every((m) => m.status === 'complete')).toBe(true);
+		expect(hasActiveStream(conversation.id)).toBe(false);
+		closeDb();
 	});
 
 	it('ignores attachments stored under another conversation', async () => {

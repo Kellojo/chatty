@@ -187,16 +187,22 @@ export function deleteMessage(db: Db, id: string): boolean {
 	return db.prepare('DELETE FROM messages WHERE id = ?').run(id).changes > 0;
 }
 
+/**
+ * Deletes `messageId` and every later message. Compaction summaries folded
+ * through any of them describe history that no longer exists, so they are
+ * dropped in the same transaction (summaries only ever fold older messages, so
+ * a summary covers deleted content exactly when its anchor is deleted).
+ */
 export function deleteMessagesFrom(db: Db, conversationId: string, messageId: string): number {
 	const ref = getMessage(db, messageId);
 	if (!ref || ref.conversation_id !== conversationId) return 0;
-	const anchor = db.prepare('SELECT rowid AS rowid FROM messages WHERE id = ?').get(messageId) as {
-		rowid: number;
-	};
-	return db
-		.prepare(
-			`DELETE FROM messages WHERE conversation_id = ?
-			 AND (created_at > ? OR (created_at = ? AND rowid >= ?))`
-		)
-		.run(conversationId, ref.created_at, ref.created_at, anchor.rowid).changes;
+	const suffix = 'conversation_id = ? AND (created_at > ? OR (created_at = ? AND rowid >= ?))';
+	const args = [conversationId, ref.created_at, ref.created_at, ref.rowid];
+	return db.transaction(() => {
+		db.prepare(
+			`DELETE FROM conversation_summaries WHERE conversation_id = ?
+			 AND through_message_id IN (SELECT id FROM messages WHERE ${suffix})`
+		).run(conversationId, ...args);
+		return db.prepare(`DELETE FROM messages WHERE ${suffix}`).run(...args).changes;
+	})();
 }

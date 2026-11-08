@@ -20,6 +20,24 @@ export function latestSummary(db: Db, conversationId: string): ConversationSumma
 		.get(conversationId) as ConversationSummaryRow | undefined;
 }
 
+/**
+ * Splits an ordered history (`listMessages` order) at the latest summary: the
+ * summary plus the messages after the one it was folded through. Position, not
+ * rowid, decides what is covered, since SQLite reuses the rowids of deleted
+ * messages. A summary whose anchor message is gone no longer describes this
+ * history and is ignored.
+ */
+export function unsummarizedMessages<T extends { id: string }>(
+	db: Db,
+	conversationId: string,
+	rows: T[]
+): { summary: ConversationSummaryRow | undefined; rows: T[] } {
+	const summary = latestSummary(db, conversationId);
+	const index = summary ? rows.findIndex((r) => r.id === summary.through_message_id) : -1;
+	if (!summary || index === -1) return { summary: undefined, rows };
+	return { summary, rows: rows.slice(index + 1) };
+}
+
 export function createSummary(
 	db: Db,
 	input: {

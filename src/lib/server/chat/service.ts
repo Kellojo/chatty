@@ -42,7 +42,7 @@ import { getAgent } from '../db/repo/agents.js';
 import { getCodingConversation } from '../db/repo/coding-conversations.js';
 import { queueThreadStatePush } from '../t3/thread-state.js';
 import { CodingTaskError, startCodingTurn } from '../t3/tasks.js';
-import { latestSummary } from '../db/repo/conversation-summaries.js';
+import { unsummarizedMessages } from '../db/repo/conversation-summaries.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
@@ -55,17 +55,17 @@ import { resolveModel, ModelUnavailableError } from '../llm/registry.js';
 import { isRetryableModelError, resolveRefTargets } from '../llm/mapped.js';
 import { buildSystemPromptParts } from '../llm/systemPrompt.js';
 import { estimateMessagesChars, estimateToolChars } from '../llm/promptBreakdown.js';
+import { withAnthropicPromptCache } from '../llm/promptCache.js';
 import { resolveSkill } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
 import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
 import { attachmentCache } from './attachmentCache.js';
 import { maybeCompactConversation } from './compact.js';
 import {
-	abortStreamAndWait,
 	appendChunk,
+	claimStream,
 	getStreamStartedAt,
 	markDone,
-	registerStream,
 	releaseStream
 } from './streams.js';
 import { generateConversationTitle } from './title.js';
@@ -124,7 +124,16 @@ async function inlineAttachmentParts(
 							}
 							return [...idNote, { ...part, url: dataUri }];
 						} catch {
-							return [...idNote, part];
+							// The internal URL is unfetchable for the provider and would fail
+							// every later turn, so tell the model the file is gone instead.
+							const name = part.filename ?? attachmentId;
+							return [
+								...idNote,
+								{
+									type: 'text',
+									text: `[attachment unavailable: ${name}]`
+								} as UIMessage['parts'][number]
+							];
 						}
 					})
 				)
@@ -150,9 +159,11 @@ function ensureModel(db: Db, userId: string, conversation: ConversationRow): Con
 }
 
 function historyFromDb(db: Db, conversationId: string): UIMessage[] {
-	const rows = listMessages(db, conversationId);
-	const summary = latestSummary(db, conversationId);
-	const visible = summary ? rows.filter((r) => r.rowid > summary.through_rowid) : rows;
+	const { summary, rows: visible } = unsummarizedMessages(
+		db,
+		conversationId,
+		listMessages(db, conversationId)
+	);
 	// A failed response with no output only carries an error for the UI; an empty
 	// assistant turn is not valid model input.
 	const messages = visible.map(toPublic).flatMap((message) => {
@@ -317,36 +328,14 @@ function afterUserMessage(
 	touchConversation(db, conversation.id);
 }
 
-export async function handleChatRequest(
+/** Everything between claiming the conversation and building the prompt. */
+async function prepareTurn(
+	db: Db,
 	userId: string,
-	body: { conversationId: string; message: UIMessage; truncateFrom?: string; skill?: string }
-): Promise<Response> {
-	const db = getDb();
-	let conversation = getConversation(db, userId, body.conversationId);
-	if (!conversation) throw new ChatRequestError(404, 'Conversation not found');
-	if (conversation.kind !== 'chat') throw new ChatRequestError(400, 'Not a chat conversation');
-
-	// Coding tasks: the reply comes from a remote T3 Code thread, not our model loop.
-	const coding = getCodingConversation(db, conversation.id);
-	if (coding) {
-		if (body.truncateFrom !== undefined) {
-			throw new ChatRequestError(400, 'Coding tasks cannot rewind their history');
-		}
-		const userMessage = upsertUserMessage(db, conversation.id, body.message);
-		afterUserMessage(db, userId, conversation, userMessage);
-		try {
-			return await startCodingTurn(userId, coding, userMessage);
-		} catch (e) {
-			if (e instanceof CodingTaskError) throw new ChatRequestError(e.status, e.message);
-			throw e;
-		}
-	}
-
-	// A new message takes over from a response that is still running. Its partial
-	// output has to be persisted first so that it is part of the history below.
-	await abortStreamAndWait(conversation.id);
-
-	conversation = ensureModel(db, userId, conversation);
+	initial: ConversationRow,
+	body: { message: UIMessage; truncateFrom?: string }
+) {
+	const conversation = ensureModel(db, userId, initial);
 	const agent = conversation.agent_id ? getAgent(db, conversation.agent_id) : undefined;
 	if (body.truncateFrom !== undefined) {
 		const anchor = getMessage(db, body.truncateFrom);
@@ -383,7 +372,6 @@ export async function handleChatRequest(
 			.join('; ');
 		throw new ChatRequestError(400, `The selected model is not available: ${detail}`);
 	}
-	targets = available;
 
 	const { tools, close } = await buildTools({
 		userId,
@@ -394,9 +382,54 @@ export async function handleChatRequest(
 			: undefined,
 		conversationId: conversation.id
 	});
+	return { conversation, agent, lastUserMessage, ref, targets: available, tools, close };
+}
 
-	const controller = new AbortController();
-	registerStream(conversation.id, controller);
+export async function handleChatRequest(
+	userId: string,
+	body: { conversationId: string; message: UIMessage; truncateFrom?: string; skill?: string }
+): Promise<Response> {
+	const db = getDb();
+	let conversation = getConversation(db, userId, body.conversationId);
+	if (!conversation) throw new ChatRequestError(404, 'Conversation not found');
+	if (conversation.kind !== 'chat') throw new ChatRequestError(400, 'Not a chat conversation');
+
+	// Coding tasks: the reply comes from a remote T3 Code thread, not our model loop.
+	const coding = getCodingConversation(db, conversation.id);
+	if (coding) {
+		if (body.truncateFrom !== undefined) {
+			throw new ChatRequestError(400, 'Coding tasks cannot rewind their history');
+		}
+		const userMessage = upsertUserMessage(db, conversation.id, body.message);
+		afterUserMessage(db, userId, conversation, userMessage);
+		try {
+			return await startCodingTurn(userId, coding, userMessage);
+		} catch (e) {
+			if (e instanceof CodingTaskError) throw new ChatRequestError(e.status, e.message);
+			throw e;
+		}
+	}
+
+	// A new message takes over from a response that is still running. Its partial
+	// output has to be persisted first so that it is part of the history below.
+	// The claim is taken before any await of our own, so a concurrent request for
+	// this conversation waits for (and aborts) this one instead of racing it.
+	const controller = await claimStream(conversation.id);
+	let turn: Awaited<ReturnType<typeof prepareTurn>>;
+	try {
+		turn = await prepareTurn(db, userId, conversation, body);
+	} catch (e) {
+		releaseStream(conversation.id, controller);
+		throw e;
+	}
+	const { agent, lastUserMessage, ref, targets, tools, close } = turn;
+	conversation = turn.conversation;
+	if (controller.signal.aborted) {
+		// A newer request took over while the tools were being built.
+		releaseStream(conversation.id, controller);
+		await close().catch(() => undefined);
+		throw new ChatRequestError(409, 'Superseded by a newer message');
+	}
 	publishServerEvent(userId, {
 		type: 'chat.stream.started',
 		conversationId: conversation.id,
@@ -543,11 +576,14 @@ export async function handleChatRequest(
 						streamIndex: i,
 						totalStreams: targets.length
 					});
+					// Targets can be fallbacks on other providers, so decide per target.
+					const prompt =
+						getProvider(db, target.providerId)?.type === 'anthropic'
+							? withAnthropicPromptCache({ system, messages: modelMessages, tools })
+							: { system, messages: modelMessages, tools };
 					const result = streamText({
 						model,
-						system,
-						tools,
-						messages: modelMessages,
+						...prompt,
 						stopWhen,
 						abortSignal: controller.signal,
 						...(conversation.temperature != null ? { temperature: conversation.temperature } : {}),
