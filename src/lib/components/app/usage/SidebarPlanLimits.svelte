@@ -85,12 +85,14 @@
 </script>
 
 {#if tightest}
+	<!-- Phones show just the percentage: the drawer's Workspace tiles only have room for a
+	     small corner badge, and anything wider spills past the drawer onto the page. -->
 	<span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums" {title}>
 		{#if tightest.brand}
-			<ProviderIcon brand={tightest.brand} class="size-3 shrink-0" />
+			<ProviderIcon brand={tightest.brand} class="size-3 shrink-0 max-md:hidden" />
 		{/if}
 		<span
-			class="h-1 w-8 overflow-hidden rounded-full bg-foreground/10"
+			class="h-1 w-8 overflow-hidden rounded-full bg-foreground/10 max-md:hidden"
 			role="progressbar"
 			aria-label="{tightest.label} plan: remaining"
 			aria-valuemin={0}

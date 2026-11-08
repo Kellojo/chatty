@@ -692,7 +692,8 @@
 
 <svelte:window onkeydown={onGlobalKeydown} />
 
-<aside class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30">
+<!-- Phones: clip, so nothing pokes out of the closed drawer onto the page. -->
+<aside class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30 max-md:overflow-hidden">
 	<div
 		class="flex items-center justify-between gap-2 p-3 pt-[calc(0.75rem+env(safe-area-inset-top))]"
 	>
