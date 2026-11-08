@@ -14,7 +14,12 @@ import {
 	updateCodingEnvironment
 } from '$lib/server/db/repo/coding-environments.js';
 import { T3ClientError } from '$lib/server/t3/client.js';
-import { environmentPatchSchema, resolveEnvironmentConnection } from '$lib/server/t3/input.js';
+import {
+	environmentPatchSchema,
+	probeRemoteEnvironmentId,
+	rejectDuplicateEnvironment,
+	resolveEnvironmentConnection
+} from '$lib/server/t3/input.js';
 import { applyEnvironmentChange, syncCodingEnvironment } from '$lib/server/t3/sync.js';
 import type { RequestHandler } from './$types';
 
@@ -27,6 +32,20 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (!existing) error(404, { message: 'Environment not found' });
 
 	const { baseUrl, token, pairingToken, ...rest } = parsed.data;
+	// Moving to another URL must not make this a second copy of a connected
+	// server. Checked before pairing, which spends the single-use token.
+	const newBaseUrl = baseUrl && baseUrl.baseUrl !== existing.base_url ? baseUrl.baseUrl : undefined;
+	let remoteEnvironmentId: string | null | undefined;
+	if (newBaseUrl) {
+		rejectDuplicateEnvironment(db, user.id, { baseUrl: newBaseUrl }, existing.id);
+		remoteEnvironmentId = await probeRemoteEnvironmentId(newBaseUrl);
+		rejectDuplicateEnvironment(
+			db,
+			user.id,
+			{ baseUrl: newBaseUrl, remoteEnvironmentId },
+			existing.id
+		);
+	}
 	let connection: { baseUrl: string | undefined; token: string | undefined } = {
 		baseUrl: baseUrl?.baseUrl,
 		token
@@ -55,10 +74,20 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		error(400, { message: 'Changing the URL requires a new token or pairing link' });
 	}
 
+	if (newBaseUrl) {
+		// Re-checked after the awaits above: another request may have added it.
+		rejectDuplicateEnvironment(
+			db,
+			user.id,
+			{ baseUrl: newBaseUrl, remoteEnvironmentId },
+			existing.id
+		);
+	}
 	const row = updateCodingEnvironment(db, user.id, params.id, {
 		...rest,
 		baseUrl: connection.baseUrl,
-		token: connection.token
+		token: connection.token,
+		...(remoteEnvironmentId ? { remoteEnvironmentId } : {})
 	});
 	if (!row) error(404, { message: 'Environment not found' });
 	const connectionChanged =

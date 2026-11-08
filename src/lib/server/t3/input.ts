@@ -1,6 +1,9 @@
+import { error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { parseEnvironmentUrl } from '$lib/coding-environments.js';
-import { exchangePairingToken } from './client.js';
+import type { Db } from '../db/index.js';
+import { findDuplicateCodingEnvironment } from '../db/repo/coding-environments.js';
+import { exchangePairingToken, fetchEnvironmentDescriptor } from './client.js';
 
 /**
  * A T3 Code server URL, either a base URL (`https://devbox.tailnet.ts.net`) or a
@@ -58,4 +61,29 @@ export async function resolveEnvironmentConnection(input: {
 	const pairingToken = input.pairingToken ?? input.baseUrl.pairingToken;
 	if (!pairingToken) return { baseUrl, token: undefined };
 	return { baseUrl, token: await exchangePairingToken(baseUrl, pairingToken) };
+}
+
+/**
+ * The id a T3 server reports for itself, or null when it can't be reached or
+ * predates the field (then only the URL identifies it).
+ */
+export async function probeRemoteEnvironmentId(baseUrl: string): Promise<string | null> {
+	try {
+		return (await fetchEnvironmentDescriptor(baseUrl)).environmentId;
+	} catch {
+		return null;
+	}
+}
+
+/** Fails with 409 when the user already connected this server (same URL or server id). */
+export function rejectDuplicateEnvironment(
+	db: Db,
+	userId: string,
+	target: { baseUrl: string; remoteEnvironmentId?: string | null },
+	excludeId?: string
+): void {
+	const duplicate = findDuplicateCodingEnvironment(db, userId, target, excludeId);
+	if (duplicate) {
+		error(409, { message: `This T3 Code server is already connected as "${duplicate.name}"` });
+	}
 }

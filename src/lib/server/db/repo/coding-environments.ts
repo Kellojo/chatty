@@ -18,6 +18,8 @@ export interface CodingEnvironmentRow {
 	status: CodingEnvironmentStatus;
 	server_version: string | null;
 	environment_label: string | null;
+	/** Id the remote server reports for itself; null until first reached. */
+	remote_environment_id: string | null;
 	last_error: string | null;
 	last_checked_at: number | null;
 	last_synced_at: number | null;
@@ -78,11 +80,39 @@ export function getCodingEnvironment(
 		.get(id, userId) as CodingEnvironmentRow | undefined;
 }
 
+/**
+ * An environment of the user that is the same T3 server as the given one: same
+ * base URL, or same server-reported environment id. `excludeId` skips the
+ * environment being edited.
+ */
+export function findDuplicateCodingEnvironment(
+	db: Db,
+	userId: string,
+	target: { baseUrl: string; remoteEnvironmentId?: string | null },
+	excludeId?: string
+): CodingEnvironmentRow | undefined {
+	return db
+		.prepare(
+			`SELECT * FROM coding_environments
+			 WHERE user_id = ? AND id IS NOT ?
+			   AND (lower(base_url) = lower(?) OR (? IS NOT NULL AND remote_environment_id = ?))
+			 ORDER BY created_at LIMIT 1`
+		)
+		.get(
+			userId,
+			excludeId ?? null,
+			normalizeBaseUrl(target.baseUrl),
+			target.remoteEnvironmentId ?? null,
+			target.remoteEnvironmentId ?? null
+		) as CodingEnvironmentRow | undefined;
+}
+
 export interface CreateCodingEnvironmentInput {
 	name: string;
 	baseUrl: string;
 	token: string;
 	enabled?: boolean;
+	remoteEnvironmentId?: string | null;
 }
 
 export function createCodingEnvironment(
@@ -93,8 +123,9 @@ export function createCodingEnvironment(
 	const id = randomUUID();
 	const now = Date.now();
 	db.prepare(
-		`INSERT INTO coding_environments (id, user_id, name, base_url, token_enc, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		`INSERT INTO coding_environments (id, user_id, name, base_url, token_enc, enabled,
+		   remote_environment_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
@@ -102,6 +133,7 @@ export function createCodingEnvironment(
 		normalizeBaseUrl(input.baseUrl),
 		encryptSecret(input.token),
 		input.enabled === false ? 0 : 1,
+		input.remoteEnvironmentId ?? null,
 		now,
 		now
 	);
@@ -114,6 +146,11 @@ export interface UpdateCodingEnvironmentInput {
 	/** Undefined keeps the stored token; a string replaces it. */
 	token?: string;
 	enabled?: boolean;
+	/**
+	 * The new server's id when known. A changed URL otherwise clears the stored
+	 * one: it may belong to a different server.
+	 */
+	remoteEnvironmentId?: string | null;
 }
 
 export function updateCodingEnvironment(
@@ -124,18 +161,25 @@ export function updateCodingEnvironment(
 ): CodingEnvironmentRow | undefined {
 	const existing = getCodingEnvironment(db, userId, id);
 	if (!existing) return undefined;
-	const connectionChanged =
-		(patch.baseUrl !== undefined && normalizeBaseUrl(patch.baseUrl) !== existing.base_url) ||
-		patch.token !== undefined;
+	const urlChanged =
+		patch.baseUrl !== undefined && normalizeBaseUrl(patch.baseUrl) !== existing.base_url;
+	const connectionChanged = urlChanged || patch.token !== undefined;
+	const remoteEnvironmentId =
+		patch.remoteEnvironmentId !== undefined
+			? patch.remoteEnvironmentId
+			: urlChanged
+				? null
+				: existing.remote_environment_id;
 	db.prepare(
 		`UPDATE coding_environments SET name = ?, base_url = ?, token_enc = ?, enabled = ?,
-		 status = ?, last_error = ?, updated_at = ?
+		 remote_environment_id = ?, status = ?, last_error = ?, updated_at = ?
 		 WHERE id = ? AND user_id = ?`
 	).run(
 		patch.name ?? existing.name,
 		patch.baseUrl !== undefined ? normalizeBaseUrl(patch.baseUrl) : existing.base_url,
 		patch.token !== undefined ? encryptSecret(patch.token) : existing.token_enc,
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
+		remoteEnvironmentId,
 		connectionChanged ? 'unknown' : existing.status,
 		connectionChanged ? null : existing.last_error,
 		Date.now(),
@@ -208,6 +252,7 @@ export interface EnvironmentCheckResult {
 	status: CodingEnvironmentStatus;
 	serverVersion?: string | null;
 	environmentLabel?: string | null;
+	remoteEnvironmentId?: string | null;
 	error?: string | null;
 	synced?: boolean;
 }
@@ -218,6 +263,7 @@ export function recordEnvironmentCheck(db: Db, id: string, result: EnvironmentCh
 		`UPDATE coding_environments SET status = ?,
 		   server_version = COALESCE(?, server_version),
 		   environment_label = COALESCE(?, environment_label),
+		   remote_environment_id = COALESCE(?, remote_environment_id),
 		   last_error = ?, last_checked_at = ?,
 		   last_synced_at = CASE WHEN ? THEN ? ELSE last_synced_at END
 		 WHERE id = ?`
@@ -225,6 +271,7 @@ export function recordEnvironmentCheck(db: Db, id: string, result: EnvironmentCh
 		result.status,
 		result.serverVersion ?? null,
 		result.environmentLabel ?? null,
+		result.remoteEnvironmentId ?? null,
 		result.error ?? null,
 		now,
 		result.synced ? 1 : 0,

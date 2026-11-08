@@ -80,6 +80,7 @@ async function runSync(db: Db, env: CodingEnvironmentRow): Promise<void> {
 			status: 'online',
 			serverVersion: descriptor.serverVersion,
 			environmentLabel: descriptor.label,
+			remoteEnvironmentId: descriptor.environmentId,
 			synced: true
 		});
 	} finally {

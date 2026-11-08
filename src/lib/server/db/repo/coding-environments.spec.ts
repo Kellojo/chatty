@@ -216,4 +216,37 @@ describe('coding environments repo', () => {
 			});
 		}
 	});
+
+	it('finds duplicates by URL or server id, per user', () => {
+		const a = repo.createCodingEnvironment(db, 'u1', {
+			name: 'A',
+			baseUrl: 'http://devbox.test/',
+			token: 't',
+			remoteEnvironmentId: 'env-1'
+		});
+		const find = (target: { baseUrl: string; remoteEnvironmentId?: string | null }, user = 'u1') =>
+			repo.findDuplicateCodingEnvironment(db, user, target)?.id;
+		expect(find({ baseUrl: 'http://DEVBOX.test' })).toBe(a.id);
+		expect(find({ baseUrl: 'http://10.0.0.2', remoteEnvironmentId: 'env-1' })).toBe(a.id);
+		expect(find({ baseUrl: 'http://10.0.0.2', remoteEnvironmentId: 'env-2' })).toBeUndefined();
+		expect(find({ baseUrl: 'http://10.0.0.2', remoteEnvironmentId: null })).toBeUndefined();
+		expect(find({ baseUrl: 'http://devbox.test' }, 'u2')).toBeUndefined();
+		expect(
+			repo.findDuplicateCodingEnvironment(db, 'u1', { baseUrl: 'http://devbox.test' }, a.id)
+		).toBeUndefined();
+	});
+
+	it('records the server id on a check and clears it when the URL changes', () => {
+		const row = repo.createCodingEnvironment(db, 'u1', {
+			name: 'A',
+			baseUrl: 'http://a.test',
+			token: 't'
+		});
+		repo.recordEnvironmentCheck(db, row.id, { status: 'online', remoteEnvironmentId: 'env-1' });
+		expect(repo.getCodingEnvironment(db, 'u1', row.id)?.remote_environment_id).toBe('env-1');
+		repo.updateCodingEnvironment(db, 'u1', row.id, { name: 'Renamed' });
+		expect(repo.getCodingEnvironment(db, 'u1', row.id)?.remote_environment_id).toBe('env-1');
+		repo.updateCodingEnvironment(db, 'u1', row.id, { baseUrl: 'http://b.test' });
+		expect(repo.getCodingEnvironment(db, 'u1', row.id)?.remote_environment_id).toBeNull();
+	});
 });
