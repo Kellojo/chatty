@@ -45,6 +45,7 @@
 	import { CODING_PR_STATE_STYLE } from '$lib/coding-status.js';
 	import CodingRunTimer from './CodingRunTimer.svelte';
 	import PullRequestIcon from './PullRequestIcon.svelte';
+	import SidebarPlanLimits from './usage/SidebarPlanLimits.svelte';
 
 	let {
 		user,
@@ -875,17 +876,21 @@
 		>
 			<GaugeIcon class="size-4" />
 			Usage
-			{#if user.role === 'admin' && requestStats}
-				<span
-					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
-					title="{requestStats.total} requests all time · {requestStats.running} running"
-				>
-					{#if requestStats.running > 0}
-						<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
-					{/if}
-					{formatCount(requestStats.total)}
-				</span>
-			{/if}
+			<span class="ml-auto inline-flex items-center gap-3">
+				<!-- The subscription limit closest to its cap. -->
+				<SidebarPlanLimits />
+				{#if user.role === 'admin' && requestStats}
+					<span
+						class="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
+						title="{requestStats.total} requests all time · {requestStats.running} running"
+					>
+						{#if requestStats.running > 0}
+							<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
+						{/if}
+						{formatCount(requestStats.total)}
+					</span>
+				{/if}
+			</span>
 		</a>
 	</div>
 

@@ -17,6 +17,7 @@ import { listProviders } from '$lib/server/db/repo/providers.js';
 import { dayInZone } from '$lib/server/t3/usage.js';
 import {
 	formatDayShort,
+	groupUsageAccounts,
 	isUsagePeriod,
 	parseUsagePeriod,
 	periodDays,
@@ -26,7 +27,6 @@ import {
 	type PaygUsage,
 	type SubscriptionProvider,
 	type SubscriptionUsage,
-	type UsageAccount,
 	type UsagePeriod
 } from '$lib/components/app/usage/usage.js';
 
@@ -200,27 +200,7 @@ export function loadSubscriptionUsage(
 	const envNames = new Map(environments.map((e) => [e.id, e.name]));
 
 	// ── limit windows, grouped per provider account ──
-	const accounts = new Map<string, UsageAccount>();
-	for (const w of listUsageLimits(db, userId)) {
-		const key = `${w.environmentId}:${w.accountId}`;
-		let account = accounts.get(key);
-		if (!account) {
-			account = {
-				key,
-				environmentId: w.environmentId,
-				environmentName: envNames.get(w.environmentId) ?? '',
-				provider: w.provider,
-				accountLabel: w.accountLabel,
-				accountEmail: w.accountEmail,
-				accountPlan: w.accountPlan,
-				checkedAt: w.checkedAt,
-				windows: []
-			};
-			accounts.set(key, account);
-		}
-		account.checkedAt = Math.max(account.checkedAt, w.checkedAt);
-		account.windows.push(w);
-	}
+	const accounts = groupUsageAccounts(listUsageLimits(db, userId), envNames);
 
 	// ── daily token/cost buckets ──
 	// Subscription usage only exists as whole days: 24h shows today's bucket, "all time" starts
@@ -308,7 +288,7 @@ export function loadSubscriptionUsage(
 
 	return {
 		environments,
-		accounts: [...accounts.values()],
+		accounts,
 		providers: sorted,
 		dailyRows,
 		totalValueUsd: sorted.reduce((sum, p) => sum + p.costUsd, 0),

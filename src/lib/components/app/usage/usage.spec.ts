@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { CodingUsageLimitWindow } from '$lib/coding-environments.js';
 import {
 	billedParts,
+	constrainingWindow,
+	distinctUsageAccounts,
+	groupUsageAccounts,
 	mostUsedWindow,
 	remainingPercent,
 	resetLabel,
@@ -138,5 +142,67 @@ describe('mostUsedWindow', () => {
 		expect(mostUsedWindow(accounts, now)?.window.windowId).toBe('weekly');
 		expect(mostUsedWindow([account([win('session', 81, now - 1)])], now)).toBeNull();
 		expect(resetLabel(now - 1, now)).toBe('reset — awaiting sync');
+	});
+});
+
+describe('plan limit accounts', () => {
+	const now = 1_000_000;
+	const win = (o: Partial<CodingUsageLimitWindow> = {}): CodingUsageLimitWindow => ({
+		environmentId: 'e1',
+		accountId: 'a1',
+		provider: 'claude',
+		accountLabel: 'Claude',
+		accountEmail: 'me@x.test',
+		accountPlan: 'Max',
+		windowId: 'w',
+		windowKind: 'weekly',
+		windowLabel: 'Weekly',
+		usedPercent: 10,
+		resetsAt: now + 1000,
+		checkedAt: now,
+		...o
+	});
+
+	it('groups windows per environment account', () => {
+		const accounts = groupUsageAccounts(
+			[win(), win({ windowId: 'w2' }), win({ environmentId: 'e2' })],
+			new Map([['e1', 'Devbox']])
+		);
+		expect(accounts.map((a) => [a.key, a.environmentName, a.windows.length])).toEqual([
+			['e1:a1', 'Devbox', 2],
+			['e2:a1', '', 1]
+		]);
+	});
+
+	it('picks the live window closest to its cap, else the most used stale one', () => {
+		const [account] = groupUsageAccounts(
+			[
+				win({ windowId: 'session', usedPercent: 40 }),
+				win({ windowId: 'weekly', usedPercent: 70 }),
+				win({ windowId: 'old', usedPercent: 99, resetsAt: now - 1 })
+			],
+			new Map()
+		);
+		expect(constrainingWindow(account, now)?.windowId).toBe('weekly');
+		const [stale] = groupUsageAccounts(
+			[
+				win({ windowId: 'a', usedPercent: 30, resetsAt: now - 1 }),
+				win({ windowId: 'b', usedPercent: 50, resetsAt: now - 1 })
+			],
+			new Map()
+		);
+		expect(constrainingWindow(stale, now)?.windowId).toBe('b');
+	});
+
+	it('shows a login seen through several environments once, keeping the latest', () => {
+		const accounts = groupUsageAccounts(
+			[
+				win({ environmentId: 'e1', checkedAt: now }),
+				win({ environmentId: 'e2', accountEmail: 'ME@x.test', checkedAt: now + 5 }),
+				win({ environmentId: 'e3', accountEmail: null })
+			],
+			new Map()
+		);
+		expect(distinctUsageAccounts(accounts).map((a) => a.key)).toEqual(['e2:a1', 'e3:a1']);
 	});
 });

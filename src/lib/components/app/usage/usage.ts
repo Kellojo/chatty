@@ -317,6 +317,66 @@ export function remainingPercent(window: CodingUsageLimitWindow): number {
 	return Math.min(100, Math.max(0, Math.round(100 - window.usedPercent)));
 }
 
+/** Limit windows grouped per provider account of each environment, in input order. */
+export function groupUsageAccounts(
+	windows: CodingUsageLimitWindow[],
+	environmentNames: ReadonlyMap<string, string>
+): UsageAccount[] {
+	const accounts = new Map<string, UsageAccount>();
+	for (const w of windows) {
+		const key = `${w.environmentId}:${w.accountId}`;
+		let account = accounts.get(key);
+		if (!account) {
+			account = {
+				key,
+				environmentId: w.environmentId,
+				environmentName: environmentNames.get(w.environmentId) ?? '',
+				provider: w.provider,
+				accountLabel: w.accountLabel,
+				accountEmail: w.accountEmail,
+				accountPlan: w.accountPlan,
+				checkedAt: w.checkedAt,
+				windows: []
+			};
+			accounts.set(key, account);
+		}
+		account.checkedAt = Math.max(account.checkedAt, w.checkedAt);
+		account.windows.push(w);
+	}
+	return [...accounts.values()];
+}
+
+/**
+ * One account's window that matters most: the live one closest to its cap, or,
+ * when every window is past its reset (stale until the next sync), the most used.
+ */
+export function constrainingWindow(
+	account: UsageAccount,
+	now = Date.now()
+): CodingUsageLimitWindow | null {
+	const live = account.windows.filter((w) => !isExpiredWindow(w, now));
+	const pool = live.length > 0 ? live : account.windows;
+	return pool.reduce<CodingUsageLimitWindow | null>(
+		(best, w) => (!best || w.usedPercent > best.usedPercent ? w : best),
+		null
+	);
+}
+
+/**
+ * Accounts with the same login seen through several environments, once each
+ * (the most recently checked copy). Accounts without an email are kept apart.
+ */
+export function distinctUsageAccounts(accounts: UsageAccount[]): UsageAccount[] {
+	const loginKey = (a: UsageAccount) =>
+		a.accountEmail ? `login:${a.provider}:${a.accountEmail.toLowerCase()}` : a.key;
+	const latest = new Map<string, UsageAccount>();
+	for (const account of accounts) {
+		const seen = latest.get(loginKey(account));
+		if (!seen || account.checkedAt > seen.checkedAt) latest.set(loginKey(account), account);
+	}
+	return accounts.filter((a) => latest.get(loginKey(a)) === a);
+}
+
 /** The plan-limit window closest to its cap, across all accounts (expired windows skipped). */
 export function mostUsedWindow(
 	accounts: UsageAccount[],
