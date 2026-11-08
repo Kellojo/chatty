@@ -148,17 +148,32 @@
 	// The remote agent can't rewind or read attachments, so hide those affordances.
 	const isCoding = $derived(coding !== null);
 
-	// Page data reloads (invalidate) carry fresh task state too.
-	$effect(() => {
-		if (initialCoding) coding = initialCoding;
-	});
-
+	// Only the most recently started refresh may apply, so a slow stale response
+	// can't restore an old status or a cleared pending request.
+	let codingRefreshSeq = 0;
 	async function refreshCoding() {
+		const seq = ++codingRefreshSeq;
 		const res = await fetch(`/api/coding/tasks/${encodeURIComponent(conversation.id)}`);
-		if (!res.ok) return;
+		if (!res.ok || seq !== codingRefreshSeq) return;
 		const data = (await res.json()) as { coding: CodingConversation };
-		coding = data.coding;
+		if (seq === codingRefreshSeq) coding = data.coding;
 	}
+
+	// Page data reloads (invalidate) carry task state too, but a load can resolve
+	// after a newer fetched snapshot. Take it as-is only when nothing is known yet
+	// (e.g. a hand-off just made this a coding task); otherwise re-read through
+	// the sequenced refresh.
+	// svelte-ignore state_referenced_locally
+	let seenInitialCoding = initialCoding;
+	$effect(() => {
+		const next = initialCoding;
+		if (!next || next === seenInitialCoding) return;
+		seenInitialCoding = next;
+		untrack(() => {
+			if (coding === null) coding = next;
+			else void refreshCoding().catch(() => undefined);
+		});
+	});
 
 	$effect(() => {
 		if (!isCoding) return;
@@ -244,22 +259,46 @@
 		await invalidateWhenIdle();
 	}
 
+	const localBusy = () => chat.status === 'streaming' || chat.status === 'submitted' || sending;
+
+	/**
+	 * A stream is (or was) running server-side. Attach to it for live tokens;
+	 * a 204 means it already finished, so just reload the persisted state.
+	 */
+	function resumeRemoteStream() {
+		chat
+			.resumeStream()
+			.catch(() => undefined)
+			.finally(() => {
+				if (chat.status !== 'streaming' && chat.status !== 'submitted') {
+					remoteGenerating = false;
+					void invalidateWhenIdle();
+				}
+			});
+	}
+
 	onMount(() => {
-		if (remoteGenerating) {
-			// A stream is (or was) running server-side. Attach to it for live tokens;
-			// a 204 means it already finished, so just reload the persisted state.
-			chat
-				.resumeStream()
-				.catch(() => undefined)
-				.finally(() => {
-					if (chat.status !== 'streaming' && chat.status !== 'submitted') {
-						remoteGenerating = false;
-						void invalidateWhenIdle();
-					}
-				});
-		} else {
-			markRead();
-		}
+		if (remoteGenerating) resumeRemoteStream();
+		else markRead();
+	});
+
+	// A reply started elsewhere while this view is open (another tab, a turn
+	// started on T3). Streams this tab started itself are already attached.
+	$effect(() => {
+		const id = conversation.id;
+		return onServerEvent((event) => {
+			if (event.type !== 'chat.stream.started' || event.conversationId !== id) return;
+			if (remoteGenerating || localBusy()) return;
+			void (async () => {
+				remoteGenerating = true;
+				// Pick up the user message that started the turn before attaching.
+				await invalidateWhenIdle();
+				await tick();
+				if (!remoteGenerating || localBusy() || conversation.id !== id) return;
+				chat.messages = initialMessages.map(chatMessageToUIMessage);
+				resumeRemoteStream();
+			})();
+		});
 	});
 
 	$effect(() => {

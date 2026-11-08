@@ -279,7 +279,7 @@
 				>
 					<CopyIcon class="size-3.5" />
 				</button>
-				{#if message.role === 'user' && onedit}
+				{#if message.role === 'user' && onedit && !streaming}
 					<button
 						title="Edit"
 						aria-label="Edit message"

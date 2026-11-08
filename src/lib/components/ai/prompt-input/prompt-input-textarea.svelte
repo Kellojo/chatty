@@ -32,7 +32,8 @@
 	});
 
 	function handleKeyDown(e: KeyboardEvent & { currentTarget: HTMLTextAreaElement }) {
-		if (e.key === 'Enter' && !e.shiftKey) {
+		// Enter while an IME is composing confirms the candidate; don't submit.
+		if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
 			e.preventDefault();
 			context.onSubmit?.();
 		}
