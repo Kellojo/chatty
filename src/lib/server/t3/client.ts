@@ -6,12 +6,16 @@
 //   short-lived ticket; the socket at `/ws?orchestrationProtocol=2&wsTicket=…`
 //   speaks Effect RPC with JSON serialization: one JSON message per frame.
 //
-// Only one-shot RPCs are used here (no streams), so no stream Acks are needed.
+// Both one-shot RPCs and streaming RPCs (subscriptions) are used; every stream
+// chunk is acked so the server never stalls.
 // T3 Code moves fast; everything decoded from it is treated as untrusted and
 // parsed defensively (see ./usage.ts).
 
 import net from 'node:net';
+import { createLogger } from '../logger.js';
 import { isLinkLocalOrReserved, linkLocalGuardedAgent } from '../net/safeFetch.js';
+
+const log = createLogger('t3-client');
 
 export const ORCHESTRATION_PROTOCOL_VERSION = 2;
 
@@ -407,8 +411,11 @@ export class T3Connection {
 				for (const value of m.values) {
 					try {
 						stream.onValue(value);
-					} catch {
+					} catch (e) {
 						// A consumer bug must not stall the stream.
+						log.error('T3 stream handler failed', {
+							error: e instanceof Error ? e.message : String(e)
+						});
 					}
 				}
 			}
@@ -481,10 +488,6 @@ export class T3Connection {
 }
 
 /**
- * Authenticated JSON GET against the server's HTTP API (e.g. `/api/projects`).
- * Sends the orchestration protocol header the `/api/orchestration/*` routes require.
- */
-/**
  * Downloads a binary T3 resource (a signed `/api/assets/…` URL), capped at
  * `maxBytes`. Returns null when T3 doesn't have it.
  */
@@ -513,6 +516,37 @@ export async function t3FetchBinary(
 	};
 }
 
+/**
+ * Uploads `bytes` to a same-server path T3 signed for it (e.g. the URL from
+ * `attachments.createUploadUrl`), the way T3's own client POSTs a file there.
+ */
+export async function t3PostBinary(
+	baseUrl: string,
+	token: string,
+	path: string,
+	contentType: string,
+	bytes: Uint8Array
+): Promise<void> {
+	const res = await fetchWithTimeout(
+		joinUrl(baseUrl, path),
+		{
+			method: 'POST',
+			headers: { authorization: `Bearer ${token}`, 'content-type': contentType },
+			body: bytes as BodyInit
+		},
+		BINARY_TIMEOUT_MS
+	);
+	await res.body?.cancel().catch(() => {});
+	if (res.status === 401 || res.status === 403) {
+		throw new T3ClientError('Access token was rejected or lacks permission', 'unauthorized');
+	}
+	if (!res.ok) throw new T3ClientError(`Upload rejected (${res.status})`, 'remote');
+}
+
+/**
+ * Authenticated JSON GET against the server's HTTP API (e.g. `/api/projects`).
+ * Sends the orchestration protocol header the `/api/orchestration/*` routes require.
+ */
 export async function t3HttpGet<T = unknown>(
 	baseUrl: string,
 	token: string,

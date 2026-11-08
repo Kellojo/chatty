@@ -116,27 +116,28 @@ describe('importCodingConversation', () => {
 		}).id;
 	});
 
-	const importOne = (settled = false) =>
-		coding.importCodingConversation(db, {
-			userId: 'u1',
-			environmentId,
-			threadId: 't1',
-			projectId: 'p1',
-			projectTitle: 'Chatty',
-			title: 'Fix the build',
-			providerInstanceId: 'codex',
-			model: 'gpt-5',
-			runtimeMode: 'full-access',
-			workspaceMode: 'worktree',
-			baseBranch: null,
-			branch: 't3/fix-build',
-			status: 'idle',
-			settled,
-			pinned: true,
-			visitedAt: 1500,
-			createdAt: 1000,
-			updatedAt: 2000
-		});
+	const importInput = (settled = false, threadId = 't1') => ({
+		userId: 'u1',
+		environmentId,
+		threadId,
+		projectId: 'p1',
+		projectTitle: 'Chatty',
+		title: 'Fix the build',
+		providerInstanceId: 'codex',
+		model: 'gpt-5',
+		runtimeMode: 'full-access',
+		workspaceMode: 'worktree' as const,
+		baseBranch: null,
+		branch: 't3/fix-build',
+		status: 'idle' as const,
+		settled,
+		pinned: true,
+		visitedAt: 1500,
+		createdAt: 1000,
+		updatedAt: 2000
+	});
+	const importOne = (settled = false, threadId = 't1') =>
+		coding.importCodingConversation(db, importInput(settled, threadId))!;
 
 	it('creates the conversation with the thread timestamps, settled, pinned and read state', () => {
 		const id = importOne(true);
@@ -163,15 +164,15 @@ describe('importCodingConversation', () => {
 
 	it('stops importing once the environment holds the maximum of thread conversations', () => {
 		expect(importBudget(db, environmentId)).toBe(MAX_IMPORTS_PER_PASS);
-		for (let i = 0; i < MAX_THREAD_CONVERSATIONS_PER_ENV - 3; i++) importOne();
+		for (let i = 0; i < MAX_THREAD_CONVERSATIONS_PER_ENV - 3; i++) importOne(false, `t${i}`);
 		expect(coding.countThreadCodingConversations(db, environmentId)).toBe(
 			MAX_THREAD_CONVERSATIONS_PER_ENV - 3
 		);
 		expect(importBudget(db, environmentId)).toBe(3);
-		for (let i = 0; i < 3; i++) importOne();
+		for (let i = 0; i < 3; i++) importOne(false, `x${i}`);
 		expect(importBudget(db, environmentId)).toBe(0);
 		// Deleted conversations don't count.
-		const id = importOne();
+		const id = importOne(false, 'extra');
 		conversations.purgeConversation(db, id);
 		expect(importBudget(db, environmentId)).toBe(0);
 		conversations.purgeConversation(
@@ -220,5 +221,30 @@ describe('importCodingConversation', () => {
 		conversations.purgeConversation(db, id);
 		expect(coding.getCodingConversation(db, id)).toBeUndefined();
 		expect(coding.listKnownThreadIds(db, environmentId)).toEqual(new Set(['t1']));
+	});
+
+	it('does not import a thread that is already linked, even on another environment', () => {
+		const first = importOne();
+		const count = () =>
+			(
+				db
+					.prepare('SELECT COUNT(*) AS n FROM coding_conversations WHERE thread_id = ?')
+					.get('t1') as {
+					n: number;
+				}
+			).n;
+		expect(coding.importCodingConversation(db, { ...importInput(), environmentId })).toBeNull();
+		const second = createCodingEnvironment(db, 'u1', {
+			name: 'Same server',
+			baseUrl: 'http://192.168.0.2:3773',
+			token: 'token'
+		}).id;
+		expect(
+			coding.importCodingConversation(db, { ...importInput(), environmentId: second })
+		).toBeNull();
+		// Deleted (not purged) conversations keep their thread too.
+		conversations.softDeleteConversation(db, 'u1', first);
+		expect(coding.importCodingConversation(db, { ...importInput(), environmentId })).toBeNull();
+		expect(count()).toBe(1);
 	});
 });

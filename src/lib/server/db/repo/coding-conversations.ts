@@ -140,6 +140,9 @@ export function createCodingConversation(
 
 export interface CodingConversationPatch {
 	threadId?: string | null;
+	providerInstanceId?: string;
+	model?: string;
+	runtimeMode?: string;
 	status?: CodingTaskStatus;
 	branch?: string | null;
 	prUrl?: string | null;
@@ -167,6 +170,9 @@ export function updateCodingConversation(
 		values.push(value);
 	};
 	if (patch.threadId !== undefined) set('thread_id', patch.threadId);
+	if (patch.providerInstanceId !== undefined) set('provider_instance_id', patch.providerInstanceId);
+	if (patch.model !== undefined) set('model', patch.model);
+	if (patch.runtimeMode !== undefined) set('runtime_mode', patch.runtimeMode);
 	if (patch.status !== undefined) set('status', patch.status);
 	if (patch.branch !== undefined) set('branch', patch.branch);
 	if (patch.prUrl !== undefined) set('pr_url', patch.prUrl);
@@ -330,9 +336,24 @@ export interface ImportCodingConversationInput extends Omit<
  * Creates the conversation + task record for a thread that was started on the
  * T3 server itself. It starts out read as far as T3 has seen it (the thread
  * state sync takes it from there); the follower fills in the history.
+ *
+ * Returns null without creating anything when the thread is already linked to
+ * one of the user's conversations (deleted ones included, as in
+ * {@link listLinkedThreadIds}), e.g. by an import that ran meanwhile.
  */
-export function importCodingConversation(db: Db, input: ImportCodingConversationInput): string {
+export function importCodingConversation(
+	db: Db,
+	input: ImportCodingConversationInput
+): string | null {
 	return db.transaction(() => {
+		const linked = db
+			.prepare(
+				`SELECT 1 FROM coding_conversations cc
+				 JOIN conversations c ON c.id = cc.conversation_id
+				 WHERE cc.thread_id = ? AND c.user_id = ? LIMIT 1`
+			)
+			.get(input.threadId, input.userId);
+		if (linked) return null;
 		const conversation = createConversation(db, input.userId, {
 			kind: 'chat',
 			mode: 'agent',

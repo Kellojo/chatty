@@ -8,7 +8,8 @@ import { decryptSecret } from '../crypto.js';
 import type { Db } from '../db/index.js';
 import { getCodingConversationForUser } from '../db/repo/coding-conversations.js';
 import { getCodingEnvironment } from '../db/repo/coding-environments.js';
-import { connectT3, t3FetchBinary, T3ClientError, type T3Connection } from './client.js';
+import { t3FetchBinary, T3ClientError, type T3Connection } from './client.js';
+import { acquireT3Connection } from './pool.js';
 import { CodingTaskError } from './tasks.js';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -88,22 +89,25 @@ export async function fetchCodingImage(
 
 	const token = decryptSecret(env.token_enc);
 	let relativeUrl: string | null;
-	let conn: T3Connection;
+	const lease = acquireT3Connection(env);
 	try {
-		conn = await connectT3(env.base_url, token);
-	} catch (e) {
-		throw toAssetError(e);
-	}
-	try {
-		const result = await conn.call<{ relativeUrl?: unknown }>('assets.createUrl', {
-			resource: { _tag: 'media-file', threadId: coding.thread_id, path }
-		});
-		relativeUrl = typeof result?.relativeUrl === 'string' ? result.relativeUrl : null;
-	} catch (e) {
-		if (e instanceof T3ClientError && e.kind === 'unauthorized') throw toAssetError(e);
-		throw new CodingTaskError(404, 'Image not available on the coding machine');
+		let conn: T3Connection;
+		try {
+			conn = await lease.connection();
+		} catch (e) {
+			throw toAssetError(e);
+		}
+		try {
+			const result = await conn.call<{ relativeUrl?: unknown }>('assets.createUrl', {
+				resource: { _tag: 'media-file', threadId: coding.thread_id, path }
+			});
+			relativeUrl = typeof result?.relativeUrl === 'string' ? result.relativeUrl : null;
+		} catch (e) {
+			if (e instanceof T3ClientError && e.kind === 'unauthorized') throw toAssetError(e);
+			throw new CodingTaskError(404, 'Image not available on the coding machine');
+		}
 	} finally {
-		conn.close();
+		lease.release();
 	}
 	// Signed URLs are always same-server paths; refuse anything else.
 	if (!relativeUrl || !relativeUrl.startsWith('/api/assets/')) {

@@ -249,4 +249,48 @@ describe('coding environments repo', () => {
 		repo.updateCodingEnvironment(db, 'u1', row.id, { baseUrl: 'http://b.test' });
 		expect(repo.getCodingEnvironment(db, 'u1', row.id)?.remote_environment_id).toBeNull();
 	});
+
+	it('flags the newer of two environments a check finds to be the same server', () => {
+		const older = repo.createCodingEnvironment(db, 'u1', {
+			name: 'Devbox',
+			baseUrl: 'http://devbox.test',
+			token: 't'
+		});
+		const newer = repo.createCodingEnvironment(db, 'u1', {
+			name: 'Devbox (LAN)',
+			baseUrl: 'http://10.0.0.2:3773',
+			token: 't'
+		});
+		db.prepare('UPDATE coding_environments SET created_at = created_at + 1 WHERE id = ?').run(
+			newer.id
+		);
+		// Another user's environment on the same server doesn't count.
+		const foreign = repo.createCodingEnvironment(db, 'u2', {
+			name: 'Theirs',
+			baseUrl: 'http://devbox.test',
+			token: 't'
+		});
+		const get = (id: string, user = 'u1') => repo.getCodingEnvironment(db, user, id)!;
+		const expected = repo.duplicateEnvironmentError('Devbox');
+
+		repo.recordEnvironmentCheck(db, older.id, { status: 'online', remoteEnvironmentId: 'env-1' });
+		repo.recordEnvironmentCheck(db, foreign.id, { status: 'online', remoteEnvironmentId: 'env-1' });
+		expect(get(older.id)).toMatchObject({ status: 'online', last_error: null });
+		expect(get(foreign.id, 'u2')).toMatchObject({ status: 'online', last_error: null });
+
+		// The newer one checked: it is the one flagged.
+		repo.recordEnvironmentCheck(db, newer.id, { status: 'online', remoteEnvironmentId: 'env-1' });
+		expect(get(newer.id)).toMatchObject({ status: 'error', last_error: expected });
+		expect(get(older.id)).toMatchObject({ status: 'online', last_error: null });
+
+		// The older one checked again later: still the newer one.
+		repo.recordEnvironmentCheck(db, older.id, { status: 'online', remoteEnvironmentId: 'env-1' });
+		expect(get(older.id).status).toBe('online');
+		expect(get(newer.id)).toMatchObject({ status: 'error', last_error: expected });
+
+		// Once the older one is gone, the newer one checks out fine.
+		repo.deleteCodingEnvironment(db, 'u1', older.id);
+		repo.recordEnvironmentCheck(db, newer.id, { status: 'online', remoteEnvironmentId: 'env-1' });
+		expect(get(newer.id)).toMatchObject({ status: 'online', last_error: null });
+	});
 });

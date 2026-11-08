@@ -2,7 +2,6 @@
 // T3 Code server) into Chatty's DB. Runs on demand and every SYNC_INTERVAL_MS.
 
 import { config } from '../config.js';
-import { decryptSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
 import {
 	getCodingEnvironment,
@@ -16,10 +15,10 @@ import { createLogger } from '../logger.js';
 import {
 	ORCHESTRATION_PROTOCOL_VERSION,
 	T3ClientError,
-	connectT3,
 	fetchEnvironmentDescriptor
 } from './client.js';
 import { stopFollowersForEnvironment } from './follower.js';
+import { withT3Connection } from './pool.js';
 import { resumeCodingTasks } from './tasks.js';
 import { refreshShellWatchers, startThreadSync, stopThreadSync } from './thread-sync.js';
 import { dayInZone, parseUsageLimits, parseUsageSummary } from './usage.js';
@@ -50,8 +49,7 @@ async function runSync(db: Db, env: CodingEnvironmentRow): Promise<void> {
 		);
 	}
 
-	const connection = await connectT3(env.base_url, decryptSecret(env.token_enc));
-	try {
+	await withT3Connection(env, async (connection) => {
 		const serverConfig = await connection.call('server.getConfig', {});
 		const limits = parseUsageLimits(serverConfig);
 
@@ -76,6 +74,9 @@ async function runSync(db: Db, env: CodingEnvironmentRow): Promise<void> {
 				summary.rows
 			);
 		})();
+		// Two environments may turn out to be the same server only now (e.g. one
+		// added before duplicates were refused, or reached under another URL):
+		// the check then flags the newer one.
 		recordEnvironmentCheck(db, env.id, {
 			status: 'online',
 			serverVersion: descriptor.serverVersion,
@@ -83,9 +84,7 @@ async function runSync(db: Db, env: CodingEnvironmentRow): Promise<void> {
 			remoteEnvironmentId: descriptor.environmentId,
 			synced: true
 		});
-	} finally {
-		connection.close();
-	}
+	});
 }
 
 /**
@@ -125,7 +124,8 @@ ${env.token_enc}`;
 /**
  * Applies an edit (new URL or token, enabled, disabled) or removal of an
  * environment to everything connected to it: followers and the live thread
- * watch using the old connection are dropped, and while the environment is
+ * watch using the old connection are dropped (and its shared sockets closed,
+ * see stopFollowersForEnvironment), and while the environment is
  * still enabled its live tasks are re-attached with the current row right away.
  * `reason` is shown on replies whose stream is cut off.
  */

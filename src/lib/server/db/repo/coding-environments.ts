@@ -257,7 +257,50 @@ export interface EnvironmentCheckResult {
 	synced?: boolean;
 }
 
+/** Shown on the newer of two environments that turned out to be the same T3 server. */
+export function duplicateEnvironmentError(otherName: string): string {
+	return `Same T3 server as "${otherName}" — remove one`;
+}
+
+/**
+ * Records the outcome of reaching an environment. When a successful check
+ * reports a server id another environment of the same user already has (the
+ * same server, connected twice), the newer of the two is marked as an error
+ * naming the older one, instead of both quietly syncing the same server.
+ */
 export function recordEnvironmentCheck(db: Db, id: string, result: EnvironmentCheckResult): void {
+	db.transaction(() => {
+		writeEnvironmentCheck(db, id, result);
+		if (result.status === 'online' && result.remoteEnvironmentId) {
+			flagDuplicateEnvironments(db, id, result.remoteEnvironmentId);
+		}
+	})();
+}
+
+function flagDuplicateEnvironments(db: Db, id: string, remoteEnvironmentId: string): void {
+	const self = db.prepare('SELECT * FROM coding_environments WHERE id = ?').get(id) as
+		CodingEnvironmentRow | undefined;
+	if (!self) return;
+	const others = db
+		.prepare(
+			`SELECT * FROM coding_environments
+			 WHERE user_id = ? AND id != ? AND remote_environment_id = ?
+			 ORDER BY created_at, id`
+		)
+		.all(self.user_id, self.id, remoteEnvironmentId) as CodingEnvironmentRow[];
+	const flag = db.prepare(
+		`UPDATE coding_environments SET status = 'error', last_error = ? WHERE id = ?`
+	);
+	for (const other of others) {
+		const selfIsNewer =
+			self.created_at > other.created_at ||
+			(self.created_at === other.created_at && self.id > other.id);
+		const [newer, older] = selfIsNewer ? [self, other] : [other, self];
+		flag.run(duplicateEnvironmentError(older.name), newer.id);
+	}
+}
+
+function writeEnvironmentCheck(db: Db, id: string, result: EnvironmentCheckResult): void {
 	const now = Date.now();
 	db.prepare(
 		`UPDATE coding_environments SET status = ?,

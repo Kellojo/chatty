@@ -19,7 +19,6 @@
 // changes one of these on a coding conversation (see queueThreadStatePush).
 
 import { randomUUID } from 'node:crypto';
-import { decryptSecret } from '../crypto.js';
 import type { Db } from '../db/index.js';
 import {
 	getCodingConversation,
@@ -40,7 +39,8 @@ import {
 } from '../db/repo/conversations.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
-import { connectT3, type T3Connection } from './client.js';
+import type { T3Connection } from './client.js';
+import { withT3Connection } from './pool.js';
 
 const log = createLogger('t3-thread-state');
 
@@ -310,12 +310,9 @@ export async function pushThreadState(
 			if (!env || env.enabled !== 1) return;
 			for (const id of ids) pushing.add(id);
 			try {
-				const conn = await connectT3(env.base_url, decryptSecret(env.token_enc));
-				try {
+				await withT3Connection(env, async (conn) => {
 					for (const id of ids) await pushOne(db, conn, userId, id);
-				} finally {
-					conn.close();
-				}
+				});
 			} catch (e) {
 				log.warn('Could not reach T3 to sync thread state', {
 					environmentId,

@@ -17,7 +17,8 @@ import { decryptSecret } from '../crypto.js';
 import type { Db } from '../db/index.js';
 import { getCodingConversationForUser } from '../db/repo/coding-conversations.js';
 import { getCodingEnvironment } from '../db/repo/coding-environments.js';
-import { connectT3, openT3MediaSocket, T3ClientError } from './client.js';
+import { openT3MediaSocket, T3ClientError } from './client.js';
+import { withT3Connection, type T3EnvironmentRef } from './pool.js';
 import { CodingTaskError } from './tasks.js';
 
 const STREAM_PATH = '/api/preview-stream/ws';
@@ -30,6 +31,7 @@ const MAX_URL_LENGTH = 4096;
 const MAX_TEXT_LENGTH = 10_000;
 
 interface TaskTarget {
+	env: T3EnvironmentRef;
 	baseUrl: string;
 	token: string;
 	threadId: string;
@@ -43,6 +45,7 @@ function resolveTask(db: Db, userId: string, conversationId: string): TaskTarget
 	const env = getCodingEnvironment(db, userId, coding.environment_id);
 	if (!env || env.enabled !== 1) throw new CodingTaskError(404, 'Coding environment not found');
 	return {
+		env,
 		baseUrl: env.base_url,
 		token: decryptSecret(env.token_enc),
 		threadId: coding.thread_id
@@ -113,12 +116,11 @@ export async function listCodingPreviewTabs(
 ): Promise<CodingPreviewTab[]> {
 	const task = resolveTask(db, userId, conversationId);
 	try {
-		const conn = await connectT3(task.baseUrl, task.token);
-		try {
-			return parsePreviewTabs(await conn.call('preview.list', { threadId: task.threadId }));
-		} finally {
-			conn.close();
-		}
+		// The panel polls this: the environment's shared socket saves a ticket and
+		// handshake per poll.
+		return await withT3Connection(task.env, async (conn) =>
+			parsePreviewTabs(await conn.call('preview.list', { threadId: task.threadId }))
+		);
 	} catch (e) {
 		throw toPreviewError(e);
 	}
@@ -301,11 +303,19 @@ interface ViewerEntry {
 }
 
 const viewers = new Map<string, ViewerEntry>();
+/** Viewers still opening their socket, per user; they count toward the limit. */
+const openingViewers = new Map<string, number>();
 
 function viewerCount(userId: string): number {
-	let count = 0;
+	let count = openingViewers.get(userId) ?? 0;
 	for (const entry of viewers.values()) if (entry.userId === userId) count++;
 	return count;
+}
+
+function releaseOpening(userId: string): void {
+	const count = (openingViewers.get(userId) ?? 0) - 1;
+	if (count > 0) openingViewers.set(userId, count);
+	else openingViewers.delete(userId);
 }
 
 /**
@@ -324,6 +334,8 @@ export async function openPreviewViewer(
 		throw new CodingTaskError(429, 'Too many browser previews are open — close one first');
 	}
 	const task = resolveTask(db, userId, conversationId);
+	// Hold the slot across the await so concurrent opens can't exceed the limit.
+	openingViewers.set(userId, (openingViewers.get(userId) ?? 0) + 1);
 	let ws: WebSocket;
 	try {
 		ws = await openT3MediaSocket(task.baseUrl, task.token, STREAM_PATH, {
@@ -334,6 +346,8 @@ export async function openPreviewViewer(
 		});
 	} catch (e) {
 		throw toPreviewError(e);
+	} finally {
+		releaseOpening(userId);
 	}
 
 	const id = randomUUID();

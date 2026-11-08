@@ -110,16 +110,16 @@ export async function importHistoryThreads(
 ): Promise<string[]> {
 	const wanted = new Set(threadIds.slice(0, MAX_HISTORY_IMPORT));
 	const threads = (await loadHistory(db, env)).filter((t) => wanted.has(t.threadId));
-	// Synchronous from here on, so a concurrent import can't link a thread twice.
-	const imported = threads.map((thread) => ({
-		threadId: thread.threadId,
-		conversationId: importCodingConversation(db, {
+	// Synchronous from here on; threads linked during the await above are skipped.
+	const imported = threads.flatMap((thread) => {
+		const conversationId = importCodingConversation(db, {
 			userId: env.user_id,
 			environmentId: env.id,
 			baseBranch: null,
 			...thread
-		})
-	}));
+		});
+		return conversationId ? [{ threadId: thread.threadId, conversationId }] : [];
+	});
 	undismissThreads(
 		db,
 		env.id,

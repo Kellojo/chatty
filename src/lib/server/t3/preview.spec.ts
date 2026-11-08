@@ -230,3 +230,25 @@ describe('closeAllPreviewViewers', () => {
 		expect(sendPreviewInput('u1', 'c1', viewers[0].id, [{ type: 'reload' }])).toBe(false);
 	});
 });
+
+describe('openPreviewViewer', () => {
+	const size = { maxWidth: 800, maxHeight: 600 };
+	const handlers = { onFrame: () => {}, onEvent: () => {} };
+	const open = (tab: string) => openPreviewViewer({} as never, 'u1', 'c1', tab, size, handlers);
+
+	it('holds the per-user limit across concurrent opens', async () => {
+		const results = await Promise.allSettled([1, 2, 3, 4, 5].map((i) => open(`tab-${i}`)));
+		expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(4);
+		expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+		closeAllPreviewViewers();
+	});
+
+	it('frees the slot when the socket fails to open', async () => {
+		const { openT3MediaSocket } = await import('./client.js');
+		vi.mocked(openT3MediaSocket).mockRejectedValueOnce(new Error('refused'));
+		await expect(open('tab-x')).rejects.toThrow();
+		const results = await Promise.allSettled([1, 2, 3, 4].map((i) => open(`tab-${i}`)));
+		expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+		closeAllPreviewViewers();
+	});
+});

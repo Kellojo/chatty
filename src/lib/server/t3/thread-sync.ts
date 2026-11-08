@@ -27,8 +27,9 @@ import {
 } from '../db/repo/coding-environments.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
-import { connectT3, t3HttpGet, type T3Connection, type T3Stream } from './client.js';
+import { t3HttpGet, type T3Stream } from './client.js';
 import { ensureFollower, getFollower } from './follower.js';
+import { acquireT3Connection, type T3Lease } from './pool.js';
 import {
 	pushThreadState,
 	reconcileThreadState,
@@ -91,6 +92,15 @@ export function shellProjects(shell: unknown): Map<string, string> {
 	return projects;
 }
 
+/** Whether a shell thread is one the user started (not a subagent or delegated one). */
+function isTopLevelThread(t: Rec): boolean {
+	return !(
+		rec(t.lineage)?.relationshipToParent === 'subagent' ||
+		t.relationshipToParent === 'subagent' ||
+		rec(t.delegatedFrom)
+	);
+}
+
 /**
  * Reads a shell thread as an import, or null when it can't be one: deleted,
  * not top-level (subagent or delegated), outside a live project in `projects`
@@ -102,15 +112,7 @@ export function parseImportableThread(
 ): ImportableThread | null {
 	const t = rec(entry);
 	const threadId = str(t?.id);
-	if (!t || !threadId || t.deletedAt) return null;
-	const lineage = rec(t.lineage);
-	if (
-		lineage?.relationshipToParent === 'subagent' ||
-		t.relationshipToParent === 'subagent' ||
-		rec(t.delegatedFrom)
-	) {
-		return null;
-	}
+	if (!t || !threadId || t.deletedAt || !isTopLevelThread(t)) return null;
 	const projectId = str(t.projectId);
 	const projectTitle = projectId ? projects.get(projectId) : undefined;
 	if (!projectId || projectTitle === undefined) return null;
@@ -199,6 +201,7 @@ function importThreads(db: Db, env: CodingEnvironmentRow, shell: unknown): void 
 		capWarned.delete(env.id);
 	}
 	const threads = importable.slice(0, budget);
+	let imported = 0;
 	for (const thread of threads) {
 		const conversationId = importCodingConversation(db, {
 			userId: env.user_id,
@@ -206,6 +209,8 @@ function importThreads(db: Db, env: CodingEnvironmentRow, shell: unknown): void 
 			baseBranch: null,
 			...thread
 		});
+		if (!conversationId) continue; // linked meanwhile
+		imported++;
 		publishServerEvent(env.user_id, { type: 'conversation.updated', conversationId });
 		void ensureFollower({
 			conversationId,
@@ -215,8 +220,8 @@ function importThreads(db: Db, env: CodingEnvironmentRow, shell: unknown): void 
 			quietHistory: true
 		}).follow();
 	}
-	if (threads.length > 0) {
-		log.info(`Imported ${threads.length} thread(s) from T3`, { environmentId: env.id });
+	if (imported > 0) {
+		log.info(`Imported ${imported} thread(s) from T3`, { environmentId: env.id });
 	}
 }
 
@@ -425,10 +430,34 @@ export async function syncAllThreads(
 
 const SHELL_RECONNECT_MIN_MS = 2000;
 const SHELL_RECONNECT_MAX_MS = 60_000;
+/** Delay before importing a thread the live watch reported but Chatty doesn't know. */
+export const LIVE_IMPORT_DEBOUNCE_MS = 5000;
+
+/** Whether `threads` (T3 thread shells) include a top-level live thread Chatty doesn't know. */
+function hasUnknownThread(db: Db, env: CodingEnvironmentRow, threads: unknown[]): boolean {
+	const candidates = threads.filter((entry) => {
+		const t = rec(entry);
+		const activeAt = time(t?.updatedAt) ?? time(t?.createdAt);
+		return (
+			!!t &&
+			!!str(t.id) &&
+			!t.deletedAt &&
+			!t.archivedAt &&
+			isTopLevelThread(t) &&
+			// Older threads are only imported from the history on request.
+			activeAt !== null &&
+			activeAt >= env.created_at
+		);
+	});
+	if (candidates.length === 0) return false;
+	const known = listKnownThreadIds(db, env.id);
+	return candidates.some((t) => !known.has(String(rec(t)!.id)));
+}
 
 class ShellWatcher {
-	private conn: T3Connection | null = null;
+	private lease: T3Lease | null = null;
 	private stream: T3Stream | null = null;
+	private importTimer: ReturnType<typeof setTimeout> | null = null;
 	private retryTimer: ReturnType<typeof setTimeout> | null = null;
 	private retryDelay = SHELL_RECONNECT_MIN_MS;
 	private stopped = false;
@@ -447,27 +476,23 @@ class ShellWatcher {
 		this.stopped = true;
 		if (this.retryTimer) clearTimeout(this.retryTimer);
 		this.retryTimer = null;
-		this.disconnect();
-	}
-
-	private disconnect(): void {
-		const conn = this.conn;
+		if (this.importTimer) clearTimeout(this.importTimer);
+		this.importTimer = null;
 		this.stream?.cancel();
 		this.stream = null;
-		this.conn = null;
-		conn?.close();
+		this.lease?.release();
+		this.lease = null;
 	}
 
 	private async connect(): Promise<void> {
 		if (this.stopped) return;
 		try {
-			const conn = await connectT3(this.env.base_url, decryptSecret(this.env.token_enc));
-			if (this.stopped) {
-				conn.close();
-				return;
-			}
-			this.conn = conn;
-			this.stream = conn.stream(
+			this.lease ??= acquireT3Connection(this.env);
+			const conn = await this.lease.connection();
+			if (this.stopped || this.stream) return;
+			// The stream also ends when the shared socket closes; the next attempt
+			// reconnects it (or reuses it, if someone else already did).
+			const stream = conn.stream(
 				'orchestration.subscribeShell',
 				{ omitIdleSubagents: true, omitOlderSettled: true },
 				{
@@ -477,13 +502,13 @@ class ShellWatcher {
 						this.onItem(value);
 					},
 					onEnd: (error) => {
-						this.stream = null;
+						if (this.stream === stream) this.stream = null;
 						if (error) this.warn(error);
-						this.disconnect();
 						this.scheduleRetry();
 					}
 				}
 			);
+			this.stream = stream;
 		} catch (e) {
 			this.warn(e);
 			this.scheduleRetry();
@@ -492,14 +517,23 @@ class ShellWatcher {
 
 	private onItem(value: unknown): void {
 		const item = rec(value);
-		// Snapshots (on connect) are left to the periodic pass.
-		if (item?.kind !== 'thread.updated' || !rec(item.thread)) return;
+		let threads: unknown[];
+		if (item?.kind === 'snapshot') {
+			// Sent on every (re)connect: catches up on whatever changed while the
+			// watch was down, instead of waiting for the periodic pass.
+			threads = list(rec(item.snapshot)?.threads);
+		} else if (item?.kind === 'thread.updated' && rec(item.thread)) {
+			threads = [item.thread];
+		} else {
+			return;
+		}
 		// A run started on T3 (or finished there) shows up right away rather
 		// than on the next periodic pass; the follower keeps the status current.
 		const sync = async () => {
 			if (this.stopped || !isCurrentEnvironment(this.db, this.env)) return;
-			followThreads(this.db, this.env, [item.thread], { onlyListed: true });
-			await reconcileThreadStates(this.db, this.env, [item.thread]);
+			if (hasUnknownThread(this.db, this.env, threads)) this.scheduleImport();
+			followThreads(this.db, this.env, threads, { onlyListed: true });
+			await reconcileThreadStates(this.db, this.env, threads);
 		};
 		sync().catch((e) =>
 			log.error('Live thread sync failed', {
@@ -507,6 +541,29 @@ class ShellWatcher {
 				error: e instanceof Error ? e.message : String(e)
 			})
 		);
+	}
+
+	/**
+	 * Imports new threads soon after T3 first reports them, rather than on the
+	 * next periodic pass. Debounced: a new thread comes with a burst of updates.
+	 */
+	private scheduleImport(): void {
+		if (this.stopped || this.importTimer) return;
+		this.importTimer = setTimeout(() => {
+			this.importTimer = null;
+			const run = async () => {
+				const shell = await loadShell(this.env);
+				if (this.stopped || !isCurrentEnvironment(this.db, this.env)) return;
+				importThreads(this.db, this.env, shell);
+			};
+			run().catch((e) =>
+				log.warn('Could not import new T3 threads', {
+					environmentId: this.env.id,
+					error: e instanceof Error ? e.message : String(e)
+				})
+			);
+		}, LIVE_IMPORT_DEBOUNCE_MS);
+		this.importTimer.unref?.();
 	}
 
 	private scheduleRetry(): void {

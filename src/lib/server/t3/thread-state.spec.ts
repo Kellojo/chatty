@@ -6,6 +6,26 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 
 const publishServerEvent = vi.fn();
 vi.doMock('../events/bus.js', () => ({ publishServerEvent }));
+/** Commands sent to T3; each call waits on `nextCall` when set. */
+const dispatched: Record<string, unknown>[] = [];
+let nextCall: Promise<void> | null = null;
+const fakeConnection = {
+	closed: false,
+	onClose: () => () => {},
+	call: vi.fn(async (_tag: string, command: Record<string, unknown>) => {
+		dispatched.push(command);
+		const wait = nextCall;
+		nextCall = null;
+		if (wait) await wait;
+		return {};
+	}),
+	close: vi.fn()
+};
+const { T3ClientError } = await import('./client.js');
+vi.doMock('./client.js', () => ({
+	connectT3: vi.fn(async () => fakeConnection),
+	T3ClientError
+}));
 
 const { openDatabase } = await import('../db/index.js');
 const conversations = await import('../db/repo/conversations.js');
@@ -15,6 +35,7 @@ const { createCodingEnvironment } = await import('../db/repo/coding-environments
 const {
 	MAX_THREAD_TITLE_CHARS,
 	mergeValue,
+	pushThreadState,
 	reconcileThreadState,
 	remoteThreadState,
 	threadSettled
@@ -258,5 +279,45 @@ describe('read state', () => {
 		expect(reconcile({ read: { visitedAt: 1999, completedAt: 2000, running: false } })).toBe(false);
 		expect(unread()).toBe(true);
 		expect(agreed().remote_visited_at).toBe(1999);
+	});
+});
+
+describe('pushThreadState', () => {
+	beforeEach(() => {
+		dispatched.length = 0;
+		nextCall = null;
+		coding.updateCodingConversation(db, conversationId, {
+			remoteSettled: false,
+			remotePinned: false,
+			remoteTitle: 'Fix the build'
+		});
+	});
+
+	it('sends only what differs from the agreed state, and records it', async () => {
+		conversations.settleConversation(db, 'u1', conversationId, 'manual');
+		await pushThreadState(db, 'u1', [conversationId]);
+		expect(dispatched.map((c) => c.type)).toEqual(['thread.settle']);
+		expect(agreed().remote_settled).toBe(1);
+		await pushThreadState(db, 'u1', [conversationId]);
+		expect(dispatched).toHaveLength(1);
+	});
+
+	it('pushes again after the push in flight when the state changes meanwhile', async () => {
+		let release!: () => void;
+		nextCall = new Promise<void>((resolve) => (release = resolve));
+		conversations.settleConversation(db, 'u1', conversationId, 'manual');
+		const first = pushThreadState(db, 'u1', [conversationId]);
+		await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+
+		// Renamed while the settle is still being sent: queued, not sent twice at once.
+		conversations.updateConversation(db, 'u1', conversationId, { title: 'Renamed' });
+		await pushThreadState(db, 'u1', [conversationId]);
+		expect(dispatched).toHaveLength(1);
+
+		release();
+		await first;
+		expect(dispatched.map((c) => c.type)).toEqual(['thread.settle', 'thread.metadata.update']);
+		expect(dispatched[1]).toMatchObject({ title: 'Renamed' });
+		expect(agreed().remote_title).toBe('Renamed');
 	});
 });

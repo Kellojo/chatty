@@ -6,22 +6,30 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 
 type Handlers = { onValue: (value: unknown) => void; onEnd: (error: Error | null) => void };
 const streams: { tag: string; payload: unknown; handlers: Handlers; cancel: () => void }[] = [];
-const fakeConnection = () => ({
-	stream: vi.fn((tag: string, payload: unknown, handlers: Handlers) => {
-		const stream = { tag, payload, handlers, cancel: vi.fn() };
-		streams.push(stream);
-		return { cancel: stream.cancel };
-	}),
-	call: vi.fn(async () => ({})),
-	close: vi.fn()
-});
+const fakeConnection = () => {
+	const conn = {
+		closed: false,
+		stream: vi.fn((tag: string, payload: unknown, handlers: Handlers) => {
+			const stream = { tag, payload, handlers, cancel: vi.fn() };
+			streams.push(stream);
+			return { cancel: stream.cancel };
+		}),
+		onClose: vi.fn(() => () => {}),
+		call: vi.fn(async () => ({})),
+		close: vi.fn(() => {
+			conn.closed = true;
+		})
+	};
+	return conn;
+};
 const connectT3 = vi.fn(async () => fakeConnection());
 const t3HttpGet = vi.fn(async (): Promise<unknown> => ({
 	projects: [],
 	threads: [],
 	archivedThreads: []
 }));
-vi.doMock('./client.js', () => ({ connectT3, t3HttpGet }));
+const { T3ClientError } = await import('./client.js');
+vi.doMock('./client.js', () => ({ connectT3, t3HttpGet, T3ClientError }));
 const ensureFollower = vi.fn<(input: { conversationId: string }) => { follow: () => void }>(() => ({
 	follow: vi.fn()
 }));
@@ -33,7 +41,9 @@ const conversations = await import('../db/repo/conversations.js');
 const coding = await import('../db/repo/coding-conversations.js');
 const { createCodingEnvironment, updateCodingEnvironment } =
 	await import('../db/repo/coding-environments.js');
-const { syncAllThreads, stopThreadSync } = await import('./thread-sync.js');
+const { syncAllThreads, stopThreadSync, LIVE_IMPORT_DEBOUNCE_MS } =
+	await import('./thread-sync.js');
+const { closeAllT3Connections } = await import('./pool.js');
 
 type Db = ReturnType<typeof openDatabase>;
 let db: Db;
@@ -79,7 +89,11 @@ beforeEach(() => {
 const envId = () => coding.getCodingConversation(db, conversationId)!.environment_id!;
 const followed = () => ensureFollower.mock.calls.map(([input]) => input.conversationId);
 
-afterEach(() => stopThreadSync());
+afterEach(() => {
+	stopThreadSync();
+	closeAllT3Connections();
+	vi.useRealTimers();
+});
 
 const shellStream = async () => {
 	await syncAllThreads(db);
@@ -100,9 +114,6 @@ describe('live shell watch', () => {
 		const stream = await shellStream();
 		const settled = { id: 't1', settledAt: '2026-11-07T17:45:41.897Z', settledOverride: 'settled' };
 
-		stream.handlers.onValue({ kind: 'snapshot', snapshot: { threads: [settled] } });
-		expect(conversations.getConversation(db, 'u1', conversationId)!.settled_at).toBeNull();
-
 		stream.handlers.onValue({ kind: 'thread.updated', location: 'active', thread: settled });
 		expect(conversations.getConversation(db, 'u1', conversationId)!.settled_at).not.toBeNull();
 		expect(coding.getCodingConversation(db, conversationId)!.remote_settled).toBe(1);
@@ -112,6 +123,75 @@ describe('live shell watch', () => {
 			thread: { id: 't1', settledAt: null, settledOverride: 'active' }
 		});
 		expect(conversations.getConversation(db, 'u1', conversationId)!.settled_at).toBeNull();
+	});
+
+	it('catches up from the snapshot it gets on (re)connect', async () => {
+		const stream = await shellStream();
+		const settled = { id: 't1', settledAt: '2026-11-07T17:45:41.897Z', activeRunId: 'r1' };
+
+		stream.handlers.onValue({ kind: 'snapshot', snapshot: { threads: [settled] } });
+
+		expect(conversations.getConversation(db, 'u1', conversationId)!.settled_at).not.toBeNull();
+		expect(followed()).toEqual([conversationId]);
+	});
+
+	it('resubscribes after the stream ends, reopening the shared socket only once it closed', async () => {
+		const stream = await shellStream();
+		const connects = connectT3.mock.calls.length;
+		vi.useFakeTimers();
+
+		stream.handlers.onEnd(new Error('stream failed'));
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(streams).toHaveLength(2);
+		expect(connectT3.mock.calls.length).toBe(connects); // same socket
+
+		const conn = await connectT3.mock.results.at(-1)!.value;
+		conn.closed = true;
+		streams[1].handlers.onEnd(new Error('Connection closed'));
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(streams).toHaveLength(2); // backing off: 4 s now
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(streams).toHaveLength(3);
+		expect(connectT3.mock.calls.length).toBe(connects + 1);
+
+		// A value resets the backoff.
+		streams[2].handlers.onValue({ kind: 'snapshot', snapshot: { threads: [] } });
+		streams[2].handlers.onEnd(new Error('stream failed'));
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(streams).toHaveLength(4);
+	});
+
+	it('imports a thread T3 reports that Chatty does not know yet, once per burst', async () => {
+		const stream = await shellStream();
+		const loads = t3HttpGet.mock.calls.length;
+		vi.useFakeTimers();
+		const now = new Date(Date.now() + 1000).toISOString();
+		const fresh = {
+			id: 't9',
+			projectId: 'p1',
+			title: 'New on T3',
+			modelSelection: { instanceId: 'codex', model: 'gpt-5' },
+			runtimeMode: 'full-access',
+			createdAt: now,
+			updatedAt: now
+		};
+		t3HttpGet.mockResolvedValueOnce({
+			projects: [{ id: 'p1', title: 'Project' }],
+			threads: [fresh],
+			archivedThreads: []
+		});
+
+		stream.handlers.onValue({ kind: 'thread.updated', thread: fresh });
+		stream.handlers.onValue({ kind: 'thread.updated', thread: { ...fresh, title: 'Renamed' } });
+		// Known threads and subagents don't trigger an import.
+		stream.handlers.onValue({ kind: 'thread.updated', thread: { id: 't1', updatedAt: now } });
+		await vi.advanceTimersByTimeAsync(LIVE_IMPORT_DEBOUNCE_MS);
+
+		expect(t3HttpGet.mock.calls.length).toBe(loads + 1);
+		expect(coding.listKnownThreadIds(db, envId())).toEqual(new Set(['t1', 't9']));
+		expect(ensureFollower).toHaveBeenCalledWith(
+			expect.objectContaining({ threadId: 't9', quietHistory: true })
+		);
 	});
 
 	it('follows a task as soon as T3 reports its thread running', async () => {

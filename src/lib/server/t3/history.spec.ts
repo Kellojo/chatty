@@ -107,7 +107,7 @@ describe('history repo helpers', () => {
 			updatedAt: 2000
 		};
 		coding.importCodingConversation(db, { ...input, threadId: 'kept' });
-		const purged = coding.importCodingConversation(db, { ...input, threadId: 'purged' });
+		const purged = coding.importCodingConversation(db, { ...input, threadId: 'purged' })!;
 		conversations.purgeConversation(db, purged);
 
 		expect(coding.listLinkedThreadIds(db, environmentId)).toEqual(new Set(['kept']));

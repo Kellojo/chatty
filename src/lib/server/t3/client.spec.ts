@@ -157,4 +157,33 @@ describe('T3Connection silence watchdog', () => {
 			vi.useRealTimers();
 		}
 	});
+	it('logs a failing stream handler and still acks the chunk', async () => {
+		const { T3Connection } = await import('./client.js');
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const socket = Object.assign(new FakeSocket(), { readyState: WebSocket.OPEN });
+		const conn = new T3Connection(socket as unknown as WebSocket);
+		const values: unknown[] = [];
+		conn.stream(
+			'test.stream',
+			{},
+			{
+				onValue: (value) => {
+					values.push(value);
+					throw new Error('boom');
+				},
+				onEnd: () => {}
+			}
+		);
+		const requestId = (socket.sent[0] as { id: number }).id;
+		socket.dispatchEvent(
+			new MessageEvent('message', {
+				data: JSON.stringify({ _tag: 'Chunk', requestId: String(requestId), values: [1, 2] })
+			})
+		);
+		expect(values).toEqual([1, 2]);
+		expect(error).toHaveBeenCalledWith(expect.stringContaining('boom'));
+		expect(socket.sent).toContainEqual({ _tag: 'Ack', requestId: String(requestId) });
+		error.mockRestore();
+		conn.close();
+	});
 });

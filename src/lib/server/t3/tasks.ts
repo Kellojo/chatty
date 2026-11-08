@@ -11,12 +11,14 @@ import type {
 	CodingWorkspaceMode
 } from '$lib/coding-environments.js';
 import { repositoryName, type CodingModelRef } from '$lib/coding-environments.js';
+import { autonomyFromRuntimeMode, CODING_RUNTIME_MODES } from '$lib/coding-task-details.js';
 import { createStreamReplayResponse } from '../chat/replay.js';
 import { decryptSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
 import {
 	createCodingConversation,
 	getCodingConversation,
+	getCodingConversationForUser,
 	listLiveCodingConversations,
 	updateCodingConversation,
 	type CodingConversationRow
@@ -26,8 +28,16 @@ import { createConversation, getConversation } from '../db/repo/conversations.js
 import { createMessage, extractText } from '../db/repo/messages.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
-import { connectT3, t3HttpGet, T3ClientError, type T3Connection } from './client.js';
+import {
+	ATTACHMENTS_ONLY_TEXT,
+	CodingAttachmentError,
+	readCodingAttachments,
+	uploadCodingAttachments,
+	type CodingUpload
+} from './attachments.js';
+import { t3HttpGet, T3ClientError } from './client.js';
 import { ensureFollower, getFollower } from './follower.js';
+import { withT3Connection } from './pool.js';
 import {
 	parseFavorites,
 	parseModelSelection,
@@ -48,17 +58,7 @@ export class CodingTaskError extends Error {
 }
 
 /** Maps Chatty's autonomy choice to T3's runtime mode. */
-export const RUNTIME_MODES: Record<CodingAutonomy, string> = {
-	supervised: 'approval-required',
-	'auto-edits': 'auto-accept-edits',
-	auto: 'auto',
-	'full-access': 'full-access'
-};
-
-function autonomyFromRuntimeMode(mode: unknown): CodingAutonomy | null {
-	const entry = Object.entries(RUNTIME_MODES).find(([, runtime]) => runtime === mode);
-	return entry ? (entry[0] as CodingAutonomy) : null;
-}
+export const RUNTIME_MODES: Record<CodingAutonomy, string> = CODING_RUNTIME_MODES;
 
 const workspaceModeFromEnvMode = (mode: unknown): CodingWorkspaceMode | null =>
 	mode === 'local' ? 'local' : mode === 'worktree' ? 'worktree' : null;
@@ -79,17 +79,8 @@ function requireEnvironment(db: Db, userId: string, environmentId: string): Codi
 	return env;
 }
 
-async function withConnection<T>(
-	env: CodingEnvironmentRow,
-	fn: (conn: T3Connection) => Promise<T>
-): Promise<T> {
-	const conn = await connectT3(env.base_url, decryptSecret(env.token_enc));
-	try {
-		return await fn(conn);
-	} finally {
-		conn.close();
-	}
-}
+/** One-off calls share the environment's socket with its followers (see ./pool.ts). */
+const withConnection = withT3Connection;
 
 type Rec = Record<string, unknown>;
 const rec = (v: unknown): Rec | null =>
@@ -418,12 +409,16 @@ export async function startCodingTurn(
 	message: UIMessage,
 	db: Db = getDb()
 ): Promise<Response> {
-	const text = extractText(message.parts).trim();
-	if (!text) throw new CodingTaskError(400, 'Message is empty');
-	if (message.parts.some((p) => p.type === 'file')) {
-		throw new CodingTaskError(400, 'Attachments are not supported for coding tasks yet');
+	let files: CodingUpload[];
+	try {
+		files = await readCodingAttachments(db, coding.conversation_id, message.parts);
+	} catch (e) {
+		if (e instanceof CodingAttachmentError) throw new CodingTaskError(400, e.message);
+		throw e;
 	}
-	await sendCodingTurn(userId, coding, { id: message.id, text }, db);
+	const text = extractText(message.parts).trim() || (files.length > 0 ? ATTACHMENTS_ONLY_TEXT : '');
+	if (!text) throw new CodingTaskError(400, 'Message is empty');
+	await sendCodingTurn(userId, coding, { id: message.id, text, files }, db);
 	return createStreamReplayResponse(coding.conversation_id) ?? new Response(null, { status: 204 });
 }
 
@@ -452,11 +447,19 @@ async function serializedByConversation<T>(
 	}
 }
 
+/** A user message on its way to the thread. */
+interface CodingTurnMessage {
+	id: string;
+	text: string;
+	/** Attachments, uploaded to T3 right before the message is sent. */
+	files?: readonly CodingUpload[];
+}
+
 /** Launches the thread on the first message, otherwise sends a follow-up. */
 function sendCodingTurn(
 	userId: string,
 	coding: CodingConversationRow,
-	message: { id: string; text: string },
+	message: CodingTurnMessage,
 	db: Db
 ): Promise<void> {
 	return serializedByConversation(coding.conversation_id, () =>
@@ -473,7 +476,7 @@ function sendCodingTurn(
 async function sendCodingTurnNow(
 	userId: string,
 	coding: CodingConversationRow,
-	message: { id: string; text: string },
+	message: CodingTurnMessage,
 	db: Db
 ): Promise<void> {
 	if (!coding.environment_id) {
@@ -491,6 +494,13 @@ async function sendCodingTurnNow(
 	});
 	follower.beginTurn(message.id);
 	try {
+		const files = message.files ?? [];
+		const attachments =
+			files.length === 0
+				? []
+				: await withConnection(env, (conn) =>
+						uploadCodingAttachments(conn, env, { threadId, messageId: message.id, files })
+					);
 		if (!coding.thread_id) {
 			updateCodingConversation(db, coding.conversation_id, {
 				threadId,
@@ -508,10 +518,10 @@ async function sendCodingTurnNow(
 					coding.workspace_mode === 'worktree'
 						? { type: 'worktree', baseRef: coding.base_branch ?? 'main' }
 						: { type: 'root' },
-				message: { id: message.id, text }
+				message: { id: message.id, text, attachments }
 			});
 		} else {
-			await follower.sendMessage({ id: message.id, text });
+			await follower.sendMessage({ id: message.id, text, attachments });
 		}
 	} catch (e) {
 		const firstLaunch = !coding.thread_id;
@@ -690,5 +700,113 @@ export function resumeCodingTasks(db: Db = getDb()): void {
 			env,
 			threadId: row.thread_id
 		}).follow();
+	}
+}
+
+export interface CodingTaskSettingsInput {
+	providerInstanceId?: string;
+	model?: string;
+	autonomy?: CodingAutonomy;
+}
+
+/**
+ * Changes a task's model and/or autonomy. Once the thread exists, T3 is told
+ * first (`thread.model-selection.set`, `thread.runtime-mode.set`, as T3's own
+ * client does) and the change is only stored when it accepted; before that the
+ * stored values are what the launch uses. A run in progress keeps going; T3
+ * applies the change from the next turn.
+ */
+export async function updateCodingTaskSettings(
+	userId: string,
+	conversationId: string,
+	input: CodingTaskSettingsInput,
+	db: Db = getDb()
+): Promise<CodingConversationRow> {
+	if (!getCodingConversationForUser(db, userId, conversationId)) {
+		throw new CodingTaskError(404, 'Coding task not found');
+	}
+	if (!!input.providerInstanceId !== !!input.model) {
+		throw new CodingTaskError(400, 'Choose a model and its provider together');
+	}
+	// Serialized with sent turns, so a launch in flight can't miss the change.
+	return serializedByConversation(conversationId, async () => {
+		const row = getCodingConversation(db, conversationId);
+		if (!row) throw new CodingTaskError(404, 'Coding task not found');
+		const providerInstanceId = input.providerInstanceId ?? row.provider_instance_id;
+		const model = input.model ?? row.model;
+		const runtimeMode = input.autonomy ? RUNTIME_MODES[input.autonomy] : row.runtime_mode;
+		const modelChanged = providerInstanceId !== row.provider_instance_id || model !== row.model;
+		const runtimeChanged = runtimeMode !== row.runtime_mode;
+		if (!modelChanged && !runtimeChanged) return row;
+
+		if (row.thread_id) {
+			if (!row.environment_id) {
+				throw new CodingTaskError(409, 'The coding environment for this task was removed');
+			}
+			const env = requireEnvironment(db, userId, row.environment_id);
+			const threadId = row.thread_id;
+			try {
+				await withConnection(env, async (conn) => {
+					if (modelChanged) {
+						await conn.call('orchestration.dispatchCommand', {
+							type: 'thread.model-selection.set',
+							commandId: randomUUID(),
+							threadId,
+							modelSelection: { instanceId: providerInstanceId, model }
+						});
+						// Stored as soon as T3 took it, even if the runtime mode fails next.
+						updateCodingConversation(db, conversationId, { providerInstanceId, model });
+					}
+					if (runtimeChanged) {
+						await conn.call('orchestration.dispatchCommand', {
+							type: 'thread.runtime-mode.set',
+							commandId: randomUUID(),
+							threadId,
+							runtimeMode
+						});
+					}
+				});
+			} catch (e) {
+				publishServerEvent(userId, { type: 'coding.task.updated', conversationId });
+				throw asTaskError(e, 'Could not change the coding agent settings');
+			}
+		}
+		const updated = updateCodingConversation(db, conversationId, {
+			providerInstanceId,
+			model,
+			runtimeMode
+		})!;
+		publishServerEvent(userId, { type: 'coding.task.updated', conversationId });
+		return updated;
+	});
+}
+
+/**
+ * Archives a deleted task's thread on T3, so it leaves T3's thread list too
+ * (Chatty already won't import it again). Best-effort: failures are logged,
+ * never thrown.
+ */
+export async function archiveCodingThread(
+	userId: string,
+	conversationId: string,
+	db: Db = getDb()
+): Promise<void> {
+	const coding = getCodingConversation(db, conversationId);
+	if (!coding?.thread_id || !coding.environment_id) return;
+	const env = getCodingEnvironment(db, userId, coding.environment_id);
+	if (!env || env.enabled !== 1) return;
+	try {
+		await withConnection(env, (conn) =>
+			conn.call('orchestration.dispatchCommand', {
+				type: 'thread.archive',
+				commandId: randomUUID(),
+				threadId: coding.thread_id
+			})
+		);
+	} catch (e) {
+		log.warn('Could not archive the coding thread on T3', {
+			conversationId,
+			error: e instanceof Error ? e.message : String(e)
+		});
 	}
 }
