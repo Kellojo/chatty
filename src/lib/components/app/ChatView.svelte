@@ -1079,7 +1079,7 @@
 			<Button
 				variant="outline"
 				size="icon"
-				class="absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 rounded-full bg-background shadow-md dark:bg-background"
+				class="absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 rounded-full bg-background shadow-md hover:bg-muted dark:bg-background dark:hover:bg-muted"
 				title="Jump to latest"
 				onclick={() => scroll?.scrollToBottom()}
 			>
