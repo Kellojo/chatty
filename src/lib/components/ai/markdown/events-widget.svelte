@@ -27,7 +27,9 @@
 
 	const list = $derived(isIncomplete ? null : parseEvents(code, viewerTimeZone));
 	const today = $derived(
-		new Intl.DateTimeFormat('en-CA', { timeZone: viewerTimeZone }).format(now ?? Date.now())
+		new Intl.DateTimeFormat('en-CA', { timeZone: list?.timeZone ?? viewerTimeZone }).format(
+			now ?? Date.now()
+		)
 	);
 
 	const utc = (day: string) => new Date(`${day}T12:00:00Z`);
@@ -47,20 +49,32 @@
 	const time = (hhmm: string) => timeFmt.format(new Date(`2000-01-01T${hhmm}:00Z`));
 
 	function timeLabel(e: EventItem): string | null {
-		if (!e.start.time) return e.end && e.end.date !== e.start.date ? null : 'All day';
+		if (!e.start.time)
+			return e.allDay && !(e.end && e.end.date !== e.start.date) ? 'All day' : null;
 		if (e.end?.time && e.end.date === e.start.date)
 			return `${time(e.start.time)} – ${time(e.end.time)}`;
 		return time(e.start.time);
 	}
 
-	function relative(e: EventItem): { label: string; past: boolean } | null {
+	function relative(e: EventItem): { label: string; past: boolean; now: boolean } | null {
 		const lastDay = e.end?.date ?? e.start.date;
-		if (lastDay < today) return { label: 'Past', past: true };
+		if (lastDay < today) return { label: 'Past', past: true, now: false };
 		const d = daysBetween(today, e.start.date);
-		if (d < 0) return { label: 'Happening now', past: false };
-		if (d === 0) return { label: 'Today', past: false };
-		if (d === 1) return { label: 'Tomorrow', past: false };
-		if (d < 7) return { label: `In ${d} days`, past: false };
+		if (d < 0) {
+			// Under way: say when it wraps up rather than just "now".
+			const left = daysBetween(today, lastDay);
+			const label =
+				left === 0
+					? 'Ends today'
+					: left < 7
+						? `On until ${weekday.format(utc(lastDay))}`
+						: `On until ${rangeFmt.format(utc(lastDay))}`;
+			return { label, past: false, now: true };
+		}
+		if (d === 0) return { label: 'Today', past: false, now: true };
+		if (d === 1) return { label: 'Tomorrow', past: false, now: false };
+		// Up to a month out a countdown still helps; further than that the tile says enough.
+		if (d <= 31) return { label: `In ${d} days`, past: false, now: false };
 		return null;
 	}
 
@@ -69,7 +83,11 @@
 		soldout: { label: 'Sold out', class: 'bg-muted text-muted-foreground' },
 		few: { label: 'Few tickets left', class: AMBER },
 		cancelled: { label: 'Cancelled', class: 'bg-destructive/10 text-destructive' },
-		postponed: { label: 'Postponed', class: AMBER },
+		// Sky, not amber: a moved date is news, not scarcity.
+		postponed: {
+			label: 'Postponed',
+			class: 'bg-sky-500/12 text-sky-700 dark:bg-sky-400/15 dark:text-sky-300'
+		},
 		free: {
 			label: 'Free',
 			class: 'bg-emerald-500/12 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300'
@@ -77,7 +95,8 @@
 	};
 
 	const subtitle = $derived.by(() => {
-		if (!list) return null;
+		// One event: its own row (and tile) already carries the date.
+		if (!list || list.total === 1) return null;
 		const first = list.events[0].start.date;
 		const last = list.events.reduce(
 			(max, e) => ((e.end?.date ?? e.start.date) > max ? (e.end?.date ?? e.start.date) : max),
@@ -112,17 +131,27 @@
 	}
 </script>
 
-{#snippet dateTile(event: EventItem, past: boolean)}
-	<!-- A calendar page: tinted month over a large day, weekday underneath. -->
+{#snippet dateTile(event: EventItem, past: boolean, now: boolean)}
+	<!-- A calendar page: tinted month over a large day, weekday underneath. Today's
+	     (or an ongoing festival's) page is tinted so it stands out in the list. -->
 	<div
-		class="flex w-12 shrink-0 flex-col items-center self-start rounded-xl bg-muted/60 py-1.5 text-center ring-1 ring-border/60 ring-inset"
+		class={cn(
+			'flex w-12 shrink-0 flex-col items-center self-start rounded-xl py-1.5 text-center ring-1 ring-inset',
+			now
+				? 'bg-rose-500/10 ring-rose-500/30 dark:bg-rose-400/12 dark:ring-rose-400/30'
+				: 'bg-muted/60 ring-border/60'
+		)}
 		aria-label={ariaDate(event)}
 		role="img"
 	>
 		<span
 			class={cn(
 				'text-[10px] leading-3 font-semibold tracking-wider uppercase',
-				past ? 'text-muted-foreground' : 'text-rose-600 dark:text-rose-400'
+				past
+					? 'text-muted-foreground'
+					: now
+						? 'text-rose-700 dark:text-rose-300'
+						: 'text-rose-600 dark:text-rose-400'
 			)}>{monthShort.format(utc(event.start.date))}</span
 		>
 		<span
@@ -146,9 +175,11 @@
 	raw={code}
 	title={list?.title ?? 'Events'}
 	{subtitle}
-	meta={list
-		? `${list.events.length < list.total ? `${list.events.length} of ${list.total}` : list.total} ${list.total === 1 ? 'event' : 'events'}`
-		: 'Loading…'}
+	meta={list?.total === 1
+		? null
+		: list
+			? `${list.events.length < list.total ? `${list.events.length} of ${list.total}` : list.total} ${list.total === 1 ? 'event' : 'events'}`
+			: 'Loading…'}
 >
 	{#if !list}
 		<div class="flex flex-col gap-0.5 p-1.5" role="status" aria-busy="true">
@@ -164,6 +195,9 @@
 						></div>
 						<div
 							class="h-2.5 w-1/3 animate-pulse rounded-full bg-muted-foreground/10 motion-reduce:animate-none"
+						></div>
+						<div
+							class="h-2.5 w-2/5 animate-pulse rounded-full bg-muted-foreground/10 motion-reduce:animate-none"
 						></div>
 					</div>
 				</div>
@@ -181,7 +215,12 @@
 				{/if}
 				<ol class="flex flex-col gap-0.5">
 					{#each month.events as event (event.key)}
-						{@const rel = relative(event)}
+						{@const rawRel = relative(event)}
+						<!-- No countdown to a cancelled or postponed date: the badge says what's going on. -->
+						{@const rel =
+							(event.status === 'cancelled' || event.status === 'postponed') && !rawRel?.past
+								? null
+								: rawRel}
 						{@const t = timeLabel(event)}
 						{@const cancelled = event.status === 'cancelled'}
 						{@const place = [event.venue, event.city].filter(Boolean).join(', ')}
@@ -192,7 +231,11 @@
 						{@const price =
 							event.price && event.status !== 'free' && !rel?.past ? event.price : null}
 						<li class="flex min-w-0 gap-3 rounded-xl px-2.5 py-2.5">
-							{@render dateTile(event, (rel?.past ?? false) || cancelled)}
+							{@render dateTile(
+								event,
+								(rel?.past ?? false) || cancelled || event.status === 'postponed',
+								!cancelled && (rel?.now ?? false)
+							)}
 							<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 								<h5
 									class={cn(
@@ -203,24 +246,27 @@
 								>
 									{event.title}
 								</h5>
-								{#if event.lineup.length}
-									<p class="line-clamp-1 text-xs text-muted-foreground">
-										with {event.lineup.join(', ')}
-									</p>
+								{#if event.category || event.lineup.length}
+									{@const about = [
+										event.category,
+										event.lineup.length ? `with ${event.lineup.join(', ')}` : null
+									]
+										.filter(Boolean)
+										.join(' · ')}
+									<p class="line-clamp-1 text-xs text-muted-foreground" title={about}>{about}</p>
 								{/if}
 								<div
 									class="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
 								>
-									{#if span}
-										<span class="font-medium whitespace-nowrap text-foreground">{span}</span>
-									{/if}
-									{#if rel}
-										<span
-											class={cn(
-												'whitespace-nowrap',
-												rel.past ? 'text-muted-foreground' : 'font-medium text-foreground'
-											)}>{rel.label}</span
-										>
+									{#if span || rel}
+										<span class="whitespace-nowrap">
+											{#if span}<span class="text-foreground">{span}</span
+												>{/if}{#if span && rel}<span aria-hidden="true">&nbsp;·&nbsp;</span
+												>{/if}{#if rel}<span
+													class={rel.past ? 'text-muted-foreground' : 'font-medium text-foreground'}
+													>{rel.label}</span
+												>{/if}
+										</span>
 									{/if}
 									{#if event.status}
 										<span
@@ -230,21 +276,30 @@
 											)}>{STATUS[event.status].label}</span
 										>
 									{/if}
-									{#if t}
+									{#if t === 'All day'}
+										<span class="whitespace-nowrap">All day</span>
+									{:else if t}
 										<span class="flex items-center gap-1 whitespace-nowrap tabular-nums">
 											<ClockIcon class="size-3" aria-hidden="true" />
-											{t}{#if event.doors}<span class="text-muted-foreground/80"
-													>(doors {time(event.doors)})</span
-												>{/if}
-										</span>
-									{/if}
-									{#if place}
-										<span class="flex max-w-full min-w-0 items-center gap-1">
-											<MapPinIcon class="size-3 shrink-0" aria-hidden="true" />
-											<span class="truncate">{place}</span>
+											{#if event.doors}Doors {time(event.doors)}&nbsp;· Show {t}{:else}{t}{/if}
 										</span>
 									{/if}
 								</div>
+								<!-- Where gets its own line, so every row reads when → where at any width. -->
+								{#if place}
+									<p class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+										<MapPinIcon class="size-3 shrink-0" aria-hidden="true" />
+										<span class="truncate" title={place}>{place}</span>
+									</p>
+								{/if}
+								{#if event.notes}
+									<p
+										class="line-clamp-2 text-xs text-pretty text-muted-foreground"
+										title={event.notes}
+									>
+										{event.notes}
+									</p>
+								{/if}
 								{#if event.url || price}
 									<div class="mt-1.5 flex items-center gap-1.5 text-xs @md:hidden">
 										{#if price}
@@ -259,8 +314,8 @@
 												href={event.url}
 												target="_blank"
 												rel="noopener noreferrer"
-												class="inline-flex w-fit items-center gap-0.5 rounded-sm text-xs font-medium text-rose-600 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none dark:text-rose-400"
-												aria-label={`${linkLabel(event)} for ${event.title}`}
+												class="-my-1.5 inline-flex w-fit items-center gap-0.5 rounded-sm py-1.5 text-xs font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+												aria-label={`${linkLabel(event)} for ${event.title}, opens in a new tab`}
 												onclick={(e) => intercept(e, event.url!)}
 												onauxclick={(e) => intercept(e, event.url!)}
 											>
@@ -284,20 +339,22 @@
 								/>
 							{/if}
 							{#if event.url || price}
-								<div class="hidden shrink-0 flex-col items-end gap-1 pt-0.5 @md:flex">
-									{#if price}
-										<span class="text-xs whitespace-nowrap text-foreground tabular-nums"
-											>{price}</span
-										>
-									{/if}
+								<div
+									class="hidden shrink-0 flex-col items-end justify-center gap-1 self-center @md:flex"
+								>
+									<!-- A fixed price slot (empty without one) keeps buttons aligned down the list. -->
+									<span
+										class="min-h-4 text-xs leading-4 whitespace-nowrap text-foreground tabular-nums"
+										>{price ?? ''}</span
+									>
 									{#if event.url}
 										<!-- eslint-disable svelte/no-navigation-without-resolve -- external ticket URL -->
 										<a
 											href={event.url}
 											target="_blank"
 											rel="noopener noreferrer"
-											class="flex h-8 items-center gap-1 rounded-lg border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-											aria-label={`${linkLabel(event)} for ${event.title}`}
+											class="flex h-8 min-w-[5.5rem] items-center justify-center gap-1 rounded-lg border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+											aria-label={`${linkLabel(event)} for ${event.title}, opens in a new tab`}
 											onclick={(e) => intercept(e, event.url!)}
 											onauxclick={(e) => intercept(e, event.url!)}
 										>

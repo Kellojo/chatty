@@ -25,6 +25,8 @@ export type EventItem = {
 	price: string | null;
 	status: EventStatus | null;
 	doors: string | null;
+	/** Only when the payload says so: a missing time means "unknown", not "all day". */
+	allDay: boolean;
 	notes: string | null;
 };
 
@@ -35,6 +37,8 @@ export type EventList = {
 	events: EventItem[];
 	months: EventMonth[];
 	total: number;
+	/** The payload's (valid) venue zone, so "today" is judged where the events happen. */
+	timeZone: string | null;
 };
 
 const MAX_EVENTS = 30;
@@ -161,6 +165,7 @@ function parseEvent(v: unknown, i: number, timeZone: string | undefined): EventI
 		price,
 		status: statusOf(e.status, price),
 		doors: hhmm(e.doors),
+		allDay: e.allDay === true,
 		notes: str(e.notes) ?? str(e.description)
 	};
 }
@@ -178,7 +183,8 @@ export function parseEvents(code: string, viewerTimeZone?: string): EventList | 
 	const list = Array.isArray(parsed) ? parsed : (root?.events ?? root?.items);
 	if (!Array.isArray(list)) return null;
 	const tzIn = str(root?.timeZone);
-	const timeZone = tzIn && isValidZone(tzIn) ? tzIn : viewerTimeZone;
+	const venueZone = tzIn && isValidZone(tzIn) ? tzIn : null;
+	const timeZone = venueZone ?? viewerTimeZone;
 
 	const all = list
 		.map((e, i) => parseEvent(e, i, timeZone))
@@ -193,5 +199,5 @@ export function parseEvents(code: string, viewerTimeZone?: string): EventList | 
 		if (months.at(-1)?.key !== key) months.push({ key, events: [] });
 		months.at(-1)!.events.push(event);
 	}
-	return { title: str(root?.title), events, months, total: all.length };
+	return { title: str(root?.title), events, months, total: all.length, timeZone: venueZone };
 }

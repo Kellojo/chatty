@@ -51,7 +51,9 @@ describe('EventsWidget', () => {
 		// Past events don't advertise a price.
 		expect(screen.getByText('€18').elements()).toHaveLength(0);
 		await expect
-			.element(screen.getByRole('link', { name: 'Tickets for Moderat' }).first())
+			.element(
+				screen.getByRole('link', { name: 'Tickets for Moderat, opens in a new tab' }).first()
+			)
 			.toHaveAttribute('href', 'https://example.com/moderat');
 	});
 });
