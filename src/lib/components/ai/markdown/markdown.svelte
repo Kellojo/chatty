@@ -16,6 +16,8 @@
 	import CalcWidget from './calc-widget.svelte';
 	import MemoryWidget from './memory-widget.svelte';
 	import AgentWidget from './agent-widget.svelte';
+	import MealplanWidget from './mealplan-widget.svelte';
+	import EventsWidget from './events-widget.svelte';
 	import MarkdownLink from './markdown-link.svelte';
 	import { codingAssetUrl, escapeLocalImagePaths, isLocalImagePath } from '$lib/coding-assets.js';
 	import { t3ThreadLinkToPath } from '$lib/t3-thread-links.js';
@@ -120,7 +122,9 @@
 				{ language: 'links', component: LinksWidget },
 				{ language: 'calc', component: CalcWidget },
 				{ language: 'memory', component: MemoryWidget },
-				{ language: 'agent', component: AgentWidget }
+				{ language: 'agent', component: AgentWidget },
+				{ language: 'mealplan', component: MealplanWidget },
+				{ language: 'events', component: EventsWidget }
 			]
 		}}
 		components={{ img: MarkdownImage, a: MarkdownLink }}

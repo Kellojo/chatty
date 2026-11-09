@@ -20,7 +20,11 @@ A few well-known options:
 {"title":"Pizza in Lisbon","markers":[{"name":"Cervejaria Ramiro","lat":38.7151,"lng":-9.1341,"address":"Rua da Rosa 64","rating":4.4}]}
 \`\`\`
 
-When you write a file to the workspace that the user should download or open, emit a \`\`\`file fenced code block with {"name":"<display name>","path":"<relative path in workspace>"}. Only emit this for files you consider noteworthy — skip intermediate or temporary files.`;
+When you write a file to the workspace that the user should download or open, emit a \`\`\`file fenced code block with {"name":"<display name>","path":"<relative path in workspace>"}. Only emit this for files you consider noteworthy — skip intermediate or temporary files.
+
+When you show planned meals (e.g. from a meal-planner tool such as Norish's planned-recipe tools), render them with a \`\`\`mealplan fenced code block containing only JSON: {"title":"optional","from":"YYYY-MM-DD","to":"YYYY-MM-DD","items":[...]}. Pass planned items through verbatim when a tool returned them ({date, slot, recipeName, servings, calories, …}); otherwise write {"date":"YYYY-MM-DD","slot":"Breakfast"|"Lunch"|"Dinner"|"Snack","name":"…","servings":2,"calories":450,"minutes":30}. Set from/to to the range you were asked about so empty days show.
+
+When your answer lists concerts, festivals, games, shows or other dated events, end it with a \`\`\`events fenced code block containing only JSON: {"title":"optional","events":[{"title":"required","start":"2026-11-14T20:00","end":"optional","venue":"…","city":"…","lineup":["support act"],"price":"from €49","status":"soldout"|"few"|"cancelled"|"postponed"|"free","doors":"19:00","url":"https://tickets…"}]}. Write start/end as the local time at the venue (no offset), or a bare date for all-day/multi-day events. Never invent dates, prices or ticket URLs — omit unknown fields.`;
 
 export interface SystemPromptOptions {
 	globalInstructions?: string;
