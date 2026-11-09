@@ -5,12 +5,20 @@
 	let { children }: { children: Snippet } = $props();
 </script>
 
-<main class="flex min-h-dvh flex-col items-center justify-center bg-background p-6">
-	<div class="flex w-full max-w-sm flex-col items-center gap-6">
-		<div class="flex items-center gap-2.5">
+<main
+	class="auth-bg flex min-h-dvh flex-col items-center justify-start bg-background px-4 pt-[12dvh] pb-10 sm:px-6 sm:pt-[14dvh]"
+>
+	<div class="flex w-full max-w-sm flex-col items-center gap-8">
+		<a
+			href="https://github.com/Kellojo/ai-chat"
+			target="_blank"
+			rel="noopener noreferrer"
+			class="group flex flex-col items-center gap-3 rounded-2xl outline-none focus-visible:ring-3 focus-visible:ring-ring/30"
+			title="Chatty on GitHub"
+		>
 			<svg
 				viewBox="0 0 24 24"
-				class="size-6 shrink-0 rounded-lg bg-foreground text-background"
+				class="size-11 shrink-0 rounded-2xl bg-foreground text-background shadow-sm transition-transform group-hover:scale-105"
 				aria-hidden="true"
 			>
 				<g
@@ -25,22 +33,23 @@
 					<path class="brand-cursor" d="M12.5 18h6" />
 				</g>
 			</svg>
-			<a
-				href="https://github.com/Kellojo/ai-chat"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="text-base font-semibold tracking-tight hover:underline"
-				title="GitHub repository"
-			>
-				Chatty
-			</a>
-			<span class="text-xs text-muted-foreground">v{version}</span>
-		</div>
+			<span class="flex items-baseline gap-1.5">
+				<span class="text-lg font-semibold tracking-tight">Chatty</span>
+				<span class="text-xs text-muted-foreground">v{version}</span>
+			</span>
+		</a>
 		{@render children()}
 	</div>
 </main>
 
 <style>
+	.auth-bg {
+		background-image: radial-gradient(
+			ellipse 60% 40% at 50% 0%,
+			color-mix(in oklch, var(--foreground) 6%, transparent),
+			transparent
+		);
+	}
 	.brand-cursor {
 		animation: brand-blink 1.06s steps(1) infinite;
 	}
