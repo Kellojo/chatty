@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import ProviderIcon from './ProviderIcon.svelte';
@@ -8,19 +9,36 @@
 	import { codingFavoriteKey, getFavoriteModels } from '$lib/state/favorite-models.svelte.js';
 	import { encodeCodingModel, type CodingTaskState } from '$lib/state/coding-task.svelte.js';
 	import type { CodingModelOption } from '$lib/coding-environments.js';
+	import { registerModelPicker, shortcutLabel } from '$lib/state/shortcuts.js';
 
 	let {
 		state: task,
 		disabled = false,
+		shortcut = false,
 		class: triggerClass = 'w-40 sm:w-64'
 	}: {
 		state: CodingTaskState;
 		disabled?: boolean;
+		/** The chat's own picker: the model shortcut opens it. */
+		shortcut?: boolean;
 		/** Sizing for the trigger; defaults to the compact toolbar width. */
 		class?: string;
 	} = $props();
 
 	const favorites = getFavoriteModels();
+
+	// Focus goes to the trigger first, as with a click, so the arrow keys move through the list.
+	let open = $state(false);
+	let trigger = $state<HTMLElement | null>(null);
+	onMount(() => {
+		if (!shortcut) return;
+		return registerModelPicker(() => {
+			if (disabled || empty) return false;
+			trigger?.focus();
+			open = true;
+			return true;
+		});
+	});
 
 	const empty = $derived(!task.options || task.options.models.length === 0);
 	const label = $derived.by(() => {
@@ -72,13 +90,21 @@
 	</ModelOptionItem>
 {/snippet}
 
-<Select.Root type="single" value={task.modelValue} onValueChange={(v) => task.setModel(v)}>
+<Select.Root
+	type="single"
+	bind:open
+	value={task.modelValue}
+	onValueChange={(v) => task.setModel(v)}
+>
 	<Select.Trigger
+		bind:ref={trigger}
 		class={triggerClass}
 		disabled={disabled || empty}
-		title={task.selectedModel
-			? `${task.selectedModel.providerLabel} · ${task.selectedModel.label}`
-			: label}
+		title={`${
+			task.selectedModel
+				? `${task.selectedModel.providerLabel} · ${task.selectedModel.label}`
+				: label
+		}${shortcut ? ` (${shortcutLabel('model-picker')})` : ''}`}
 	>
 		<span class="flex min-w-0 flex-1 items-center gap-1.5 text-left">
 			{#if task.optionsLoading}

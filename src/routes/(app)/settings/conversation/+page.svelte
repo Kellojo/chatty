@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
+	import { guardUnsavedChanges } from '$lib/components/app/settings/unsaved-changes.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
@@ -50,20 +51,8 @@
 		}
 	}
 
-	async function resetInstructions() {
-		if (instructionsBusy || !savedInstructions) return;
-		instructionsBusy = true;
-		try {
-			await putSettings({ globalInstructions: '' });
-			instructions = '';
-			savedInstructions = '';
-			toast.success('Instructions cleared');
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to reset instructions');
-		} finally {
-			instructionsBusy = false;
-		}
-	}
+	const instructionsDirty = $derived(instructions.trim() !== savedInstructions);
+	guardUnsavedChanges(() => instructionsDirty);
 </script>
 
 <svelte:head><title>Conversation · Settings · Chatty</title></svelte:head>
@@ -92,20 +81,20 @@
 			>
 		</div>
 	</div>
-	<div class="flex justify-end gap-2">
+	<div class="flex items-center justify-end gap-2">
+		{#if instructionsDirty && !instructionsBusy}
+			<span class="mr-1 text-xs text-muted-foreground">Unsaved changes</span>
+		{/if}
+		<!-- Clearing only empties the field; Save commits it like any other edit. -->
 		<Button
 			variant="ghost"
 			size="sm"
-			onclick={resetInstructions}
-			disabled={instructionsBusy || !savedInstructions}
+			onclick={() => (instructions = '')}
+			disabled={instructionsBusy || !instructions}
 		>
 			Clear
 		</Button>
-		<Button
-			size="sm"
-			onclick={saveInstructions}
-			disabled={instructionsBusy || instructions.trim() === savedInstructions}
-		>
+		<Button size="sm" onclick={saveInstructions} disabled={instructionsBusy || !instructionsDirty}>
 			{instructionsBusy ? 'Saving…' : 'Save'}
 		</Button>
 	</div>

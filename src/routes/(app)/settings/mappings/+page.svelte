@@ -173,16 +173,19 @@
 
 <svelte:head><title>Mappings · Settings · Chatty</title></svelte:head>
 
-<SettingsHeader title="Model mappings">
+<SettingsHeader title="Mappings">
 	{#snippet description()}
-		Named aliases served by the AI proxy. Clients pass the name in the
-		<code class="rounded bg-muted px-1 py-0.5 text-xs">model</code> field and its targets are tried in
-		order until one answers.
+		Named aliases that try their target models in order until one answers. Pick them like any model
+		in chats and Defaults, or pass the name in the
+		<code class="rounded bg-muted px-1 py-0.5 text-xs">model</code> field of the API.
 	{/snippet}
 	{#snippet actions()}
-		<Button onclick={openAdd} disabled={data.models.length === 0}>
-			<PlusIcon class="size-4" />Add mapping
-		</Button>
+		<!-- The empty state below has its own button; one is enough. -->
+		{#if data.mappings.length > 0}
+			<Button onclick={openAdd} disabled={data.models.length === 0}>
+				<PlusIcon class="size-4" />Add mapping
+			</Button>
+		{/if}
 	{/snippet}
 </SettingsHeader>
 
@@ -270,7 +273,11 @@
 <Dialog.Root bind:open={dialogOpen}>
 	<Dialog.Content class="sm:max-w-xl">
 		<Dialog.Header>
-			<Dialog.Title>{editingId ? 'Edit mapping' : 'Add mapping'}</Dialog.Title>
+			<Dialog.Title
+				>{editingId
+					? `Edit ${data.mappings.find((m) => m.id === editingId)?.name ?? 'mapping'}`
+					: 'Add mapping'}</Dialog.Title
+			>
 			<Dialog.Description>
 				A named alias with ordered fallback targets, tried in order until one answers.
 			</Dialog.Description>
@@ -299,6 +306,7 @@
 							onclick={() => moveTarget(i, -1)}
 							disabled={i === 0}
 							title="Move up"
+							aria-label="Move target {i + 1} up"
 						>
 							<ArrowUpIcon class="size-4" />
 						</Button>
@@ -308,6 +316,7 @@
 							onclick={() => moveTarget(i, 1)}
 							disabled={i === formTargets.length - 1}
 							title="Move down"
+							aria-label="Move target {i + 1} down"
 						>
 							<ArrowDownIcon class="size-4" />
 						</Button>
@@ -317,6 +326,7 @@
 							onclick={() => removeTarget(i)}
 							disabled={formTargets.length <= 1}
 							title="Remove target"
+							aria-label="Remove target {i + 1}"
 						>
 							<XIcon class="size-4" />
 						</Button>
@@ -335,8 +345,13 @@
 				</div>
 			</div>
 			<Dialog.Footer>
+				<Dialog.Close>
+					{#snippet child({ props })}
+						<Button {...props} type="button" variant="outline">Cancel</Button>
+					{/snippet}
+				</Dialog.Close>
 				<Button type="submit" disabled={formBusy}>
-					{formBusy ? 'Saving…' : editingId ? 'Save mapping' : 'Add mapping'}
+					{formBusy ? 'Saving…' : editingId ? 'Save changes' : 'Add mapping'}
 				</Button>
 			</Dialog.Footer>
 		</form>
@@ -346,9 +361,12 @@
 <Dialog.Root open={deleteId !== null} onOpenChange={(open) => !open && (deleteId = null)}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Delete mapping?</Dialog.Title>
+			<Dialog.Title
+				>Delete {data.mappings.find((m) => m.id === deleteId)?.name ?? 'mapping'}?</Dialog.Title
+			>
 			<Dialog.Description>
-				Proxy clients using this alias will fail with an unknown model error once it is gone.
+				Chats, Defaults and API clients that use this alias stop working until you pick another
+				model.
 			</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>

@@ -392,7 +392,7 @@
 	title="Compression"
 	description="Reduce token usage for proxy requests made with your API keys."
 >
-	<SettingsRow label="Caveman" for="caveman-level" stack>
+	<SettingsRow label="Caveman mode" for="caveman-level" stack>
 		{#snippet description()}
 			<p>{cavemanDescriptions[caveman]}</p>
 			<p class="mt-1 text-xs">
@@ -492,6 +492,11 @@
 					</div>
 				</div>
 				<Dialog.Footer>
+					<Dialog.Close>
+						{#snippet child({ props })}
+							<Button {...props} type="button" variant="outline">Cancel</Button>
+						{/snippet}
+					</Dialog.Close>
 					<Button
 						type="submit"
 						disabled={keyBusy || !keyLabel.trim() || selectedScopes.length === 0}
@@ -507,7 +512,9 @@
 <Dialog.Root open={deleteKeyId !== null} onOpenChange={(open) => !open && (deleteKeyId = null)}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Delete API key?</Dialog.Title>
+			<Dialog.Title
+				>Delete key {data.apiKeys.find((k) => k.id === deleteKeyId)?.label ?? ''}?</Dialog.Title
+			>
 			<Dialog.Description>
 				Any service using this key will immediately lose access. This cannot be undone.
 			</Dialog.Description>

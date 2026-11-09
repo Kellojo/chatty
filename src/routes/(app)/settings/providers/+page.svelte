@@ -178,15 +178,15 @@
 				return parts.join(', ');
 			})
 			.catch((e: unknown) => {
-				throw e instanceof Error ? e : new Error('Failed to fetch models');
+				throw e instanceof Error ? e : new Error('Failed to sync models');
 			})
 			.finally(() => {
 				syncingIds = syncingIds.filter((syncing) => syncing !== id);
 			});
 		toast.promise(promise, {
-			loading: `Fetching models from ${name}…`,
+			loading: `Syncing models from ${name}…`,
 			success: (msg) => msg,
-			error: (e: unknown) => (e instanceof Error ? e.message : 'Failed to fetch models')
+			error: (e: unknown) => (e instanceof Error ? e.message : 'Failed to sync models')
 		});
 	}
 
@@ -231,13 +231,16 @@
 
 <SettingsHeader title="Providers">
 	{#snippet description()}
-		LLM APIs Chatty can call. Fetch a provider's models, then choose them in
+		LLM APIs Chatty can call. Sync a provider's models, then choose which to offer in
 		<a class="underline underline-offset-4 hover:text-foreground" href={resolve('/settings/models')}
 			>Models</a
 		>.
 	{/snippet}
 	{#snippet actions()}
-		<Button onclick={openAdd}><PlusIcon class="size-4" />Add provider</Button>
+		<!-- The empty state below has its own button; one is enough. -->
+		{#if data.providers.length > 0}
+			<Button onclick={openAdd}><PlusIcon class="size-4" />Add provider</Button>
+		{/if}
 	{/snippet}
 </SettingsHeader>
 
@@ -305,6 +308,12 @@
 							label="Actions for {provider.name}"
 							items={[
 								{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(provider) },
+								{
+									label: 'Sync models',
+									icon: RefreshCwIcon,
+									disabled: !provider.enabled || syncingIds.includes(provider.id),
+									onSelect: () => fetchModels(provider.id, provider.name)
+								},
 								'separator',
 								{
 									label: 'Delete',
@@ -371,6 +380,11 @@
 				<Input id="add-apikey" type="password" bind:value={addApiKey} autocomplete="off" />
 			</div>
 			<Dialog.Footer>
+				<Dialog.Close>
+					{#snippet child({ props })}
+						<Button {...props} type="button" variant="outline">Cancel</Button>
+					{/snippet}
+				</Dialog.Close>
 				<Button type="submit" disabled={addBusy}>{addBusy ? 'Adding…' : 'Add provider'}</Button>
 			</Dialog.Footer>
 		</form>
@@ -380,7 +394,9 @@
 <Dialog.Root open={editId !== null} onOpenChange={(open) => !open && (editId = null)}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Edit provider</Dialog.Title>
+			<Dialog.Title
+				>Edit {data.providers.find((p) => p.id === editId)?.name ?? 'provider'}</Dialog.Title
+			>
 			<Dialog.Description>Leave the API key blank to keep the current one.</Dialog.Description>
 		</Dialog.Header>
 		<form onsubmit={submitEdit} class="flex flex-col gap-4">
@@ -401,10 +417,15 @@
 					type="password"
 					bind:value={editApiKey}
 					autocomplete="off"
-					placeholder="Unchanged"
+					placeholder="Leave empty to keep the current key"
 				/>
 			</div>
 			<Dialog.Footer>
+				<Dialog.Close>
+					{#snippet child({ props })}
+						<Button {...props} type="button" variant="outline">Cancel</Button>
+					{/snippet}
+				</Dialog.Close>
 				<Button type="submit" disabled={editBusy}>{editBusy ? 'Saving…' : 'Save changes'}</Button>
 			</Dialog.Footer>
 		</form>
@@ -414,7 +435,9 @@
 <Dialog.Root open={deleteId !== null} onOpenChange={(open) => !open && (deleteId = null)}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Delete provider?</Dialog.Title>
+			<Dialog.Title
+				>Delete {data.providers.find((p) => p.id === deleteId)?.name ?? 'provider'}?</Dialog.Title
+			>
 			<Dialog.Description>
 				This also deletes all models registered for this provider. Conversations keep their history.
 			</Dialog.Description>

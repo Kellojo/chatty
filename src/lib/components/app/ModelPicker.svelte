@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import ModelSelect from './ModelSelect.svelte';
+	import { registerModelPicker, shortcutLabel } from '$lib/state/shortcuts.js';
 	import type { ModelMapping, ModelsByProvider } from '$lib/types.js';
 
 	let {
@@ -21,12 +23,28 @@
 		align?: 'start' | 'end';
 		class?: string;
 	} = $props();
+
+	// The chat's picker (topbar or new-chat page): the model shortcut opens it. Focus
+	// goes to the trigger first, as with a click, so the arrow keys move through the list.
+	let open = $state(false);
+	let trigger = $state<HTMLElement | null>(null);
+	onMount(() =>
+		registerModelPicker(() => {
+			if (disabled) return false;
+			trigger?.focus();
+			open = true;
+			return true;
+		})
+	);
 </script>
 
 <ModelSelect
 	{groups}
 	{mappings}
 	{value}
+	bind:open
+	bind:trigger
+	shortcut={shortcutLabel('model-picker')}
 	{onselect}
 	{disabled}
 	{placeholder}

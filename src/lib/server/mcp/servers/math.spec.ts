@@ -30,8 +30,10 @@ function resultText(res: unknown): string {
 	return r.content?.[0]?.text ?? '';
 }
 
+/** The numeric answer from a calculate / convert payload (first target for conversions). */
 function resultNum(res: unknown): number {
-	return Number(resultText(res));
+	const data = JSON.parse(resultText(res));
+	return data.kind === 'convert' ? data.to[0].value : data.result;
 }
 
 function isErr(res: unknown): boolean {
@@ -97,6 +99,31 @@ describe('math server', () => {
 		expect(single.stdev).toBeNull();
 	});
 
+	it('returns calc fence payloads', async () => {
+		expect(JSON.parse(resultText(await calc(' 0.1 + 0.2 ')))).toEqual({
+			kind: 'calculate',
+			expression: '0.1 + 0.2',
+			result: 0.3
+		});
+		const stats = JSON.parse(resultText(await callTool('statistics', { values: [3, 1, 2, 4] })));
+		expect(stats).toMatchObject({ kind: 'statistics', q1: 1.75, q3: 3.25, sample: false });
+		expect(stats.values).toEqual([1, 2, 3, 4]);
+		expect(stats.histogram).toBeUndefined();
+	});
+
+	it('bins large samples into a histogram instead of echoing every value', async () => {
+		const values = Array.from({ length: 500 }, (_, i) => i % 50);
+		const stats = JSON.parse(resultText(await callTool('statistics', { values })));
+		expect(stats.values).toBeUndefined();
+		expect(stats.histogram).toHaveLength(24);
+		expect(stats.histogram.reduce((s: number, n: number) => s + n, 0)).toBe(500);
+		const same = JSON.parse(
+			resultText(await callTool('statistics', { values: Array(100).fill(7) }))
+		);
+		expect(same.histogram.reduce((s: number, n: number) => s + n, 0)).toBe(100);
+		expect(same.stdev).toBe(0);
+	});
+
 	describe('unit conversion', () => {
 		it('converts between units', async () => {
 			expect(
@@ -111,6 +138,32 @@ describe('math server', () => {
 			expect(resultNum(await callTool('convert_units', { value: 1, from: 'GB', to: 'MB' }))).toBe(
 				1000
 			);
+		});
+
+		it('returns display symbols, names and several targets', async () => {
+			const res = JSON.parse(
+				resultText(
+					await callTool('convert_units', { value: 12.4, from: 'km', to: ['miles', 'ft', 'm'] })
+				)
+			);
+			expect(res.kind).toBe('convert');
+			expect(res.measure).toBe('length');
+			expect(res.from).toEqual({ value: 12.4, unit: 'km', name: 'kilometers' });
+			expect(res.to.map((t: { unit: string }) => t.unit)).toEqual(['mi', 'ft', 'm']);
+			expect(res.to[0].name).toBe('miles');
+			expect(res.to[1].name).toBe('feet');
+			expect(res.to[2].value).toBe(12400);
+			const temp = JSON.parse(
+				resultText(await callTool('convert_units', { value: 20, from: 'C', to: 'F' }))
+			);
+			expect(temp.from.unit).toBe('°C');
+			expect(temp.to[0]).toEqual({ value: 68, unit: '°F', name: 'fahrenheit' });
+			const many = JSON.parse(
+				resultText(await callTool('convert_many', { expression: '2h 30min', to: ['min', 's'] }))
+			);
+			expect(many.from).toEqual({ expression: '2h 30min' });
+			expect(many.measure).toBe('time');
+			expect(many.to[1].value).toBe(9000);
 		});
 
 		it('rejects unknown units and cross-measure conversions', async () => {

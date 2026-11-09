@@ -29,6 +29,11 @@ const RECONNECT_CODE = 1012;
 const MAX_VIEWERS_PER_USER = 4;
 const MAX_URL_LENGTH = 4096;
 const MAX_TEXT_LENGTH = 10_000;
+/**
+ * JPEG quality for frames. T3 defaults to 70, which smears text; it drops to 50
+ * at half size while scrolling, so the cost is mostly on still pages.
+ */
+const FRAME_QUALITY = 90;
 
 interface TaskTarget {
 	env: T3EnvironmentRef;
@@ -342,7 +347,8 @@ export async function openPreviewViewer(
 			threadId: task.threadId,
 			tabId,
 			maxWidth: String(size.maxWidth),
-			maxHeight: String(size.maxHeight)
+			maxHeight: String(size.maxHeight),
+			quality: String(FRAME_QUALITY)
 		});
 	} catch (e) {
 		throw toPreviewError(e);

@@ -350,3 +350,41 @@ describe('delete_agent', () => {
 		expect(isErr(res)).toBe(true);
 	});
 });
+
+describe('agent card payload', () => {
+	it('adds the model display name the ```agent card shows', async () => {
+		const db = getDb();
+		const { createProvider } = await import('../../db/repo/providers.js');
+		const { createModel } = await import('../../db/repo/models.js');
+		const provider = createProvider(db, { name: 'P', type: 'openai-compatible' });
+		createModel(db, { providerId: provider.id, modelId: 'm-1', displayName: 'Model One' });
+		const id = createAgent(db, 'u1', {
+			name: 'card agent',
+			systemPrompt: 'x',
+			triggerType: 'manual',
+			providerId: provider.id,
+			modelId: 'm-1'
+		}).id;
+
+		const withModel = JSON.parse(resultText(await callTool('get_agent', { agentId: id })));
+		expect(withModel.modelName).toBe('Model One');
+		const noModel = JSON.parse(resultText(await callTool('get_agent', { agentId: ownId })));
+		expect(noModel.modelName).toBeNull();
+	});
+
+	it('tells the model about the ```agent fence', async () => {
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const server = createAgentsServer(ctx);
+		await server.connect(serverTransport);
+		const client = await createMCPClient({ transport: clientTransport, maxRetries: 0 });
+		try {
+			const tools = (await client.tools()) as Record<string, { description?: string }>;
+			for (const name of ['get_agent', 'create_agent', 'update_agent']) {
+				expect(tools[name].description).toContain('```agent');
+			}
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+});

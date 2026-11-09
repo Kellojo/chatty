@@ -28,6 +28,7 @@
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
+	import KeyboardIcon from '@lucide/svelte/icons/keyboard';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
@@ -61,7 +62,10 @@
 		settledCount,
 		autoSettleDays,
 		onclose,
-		closeButton = $bindable(null)
+		onshowshortcuts,
+		onopenresult,
+		closeButton = $bindable(null),
+		searchInput = $bindable(null)
 	}: {
 		user: { name: string; email: string; image: string | null; role: string };
 		conversations: Conversation[];
@@ -70,8 +74,14 @@
 		settledCount: number;
 		autoSettleDays: number;
 		onclose: () => void;
+		/** Opens the keyboard shortcuts dialog. */
+		onshowshortcuts: () => void;
+		/** A search result was opened from the keyboard; focus belongs in the chat now. */
+		onopenresult?: () => void;
 		/** The header's close button, so the layout can move focus to it on open. */
 		closeButton?: HTMLElement | null;
+		/** The search box, so the layout's search shortcut can focus it after opening the sidebar. */
+		searchInput?: HTMLInputElement | null;
 	} = $props();
 
 	const isMobile = new MediaQuery('(max-width: 767px)');
@@ -178,7 +188,6 @@
 	}
 
 	let query = $state('');
-	let searchInput = $state<HTMLInputElement | null>(null);
 	let searchResults = $state<Conversation[] | null>(null);
 	let renameTarget = $state<Conversation | null>(null);
 	let renameText = $state('');
@@ -238,14 +247,6 @@
 		serverActiveChats.clear();
 		for (const [id, startedAt] of next) serverActiveChats.set(id, startedAt);
 		if (completed) await invalidateWhenIdle(CONVERSATIONS_KEY);
-	}
-
-	function onGlobalKeydown(event: KeyboardEvent) {
-		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-			event.preventDefault();
-			searchInput?.focus();
-			searchInput?.select();
-		}
 	}
 
 	onMount(() => {
@@ -376,21 +377,80 @@
 	const flipDuration = $derived(reducedMotion.current ? 0 : 200);
 	const fadeDuration = $derived(reducedMotion.current ? 0 : 150);
 
+	// One request per keystroke; only the latest may set the results, so a slow
+	// earlier response can't replace them (and Enter can't open a stale match).
+	let searchSeq = 0;
+	/** The query the shown results answer; while a newer one is loading, keys wait. */
+	let resultsQuery = '';
 	async function search() {
+		const seq = ++searchSeq;
 		const q = query.trim();
 		if (!q) {
 			searchResults = null;
+			activeResultId = null;
 			return;
 		}
 		const res = await fetch(`/api/conversations/search?q=${encodeURIComponent(q)}`);
-		if (res.ok) {
-			searchResults = ((await res.json()) as { conversations: Conversation[] }).conversations;
+		if (!res.ok) return;
+		const data = (await res.json()) as { conversations: Conversation[] };
+		if (seq !== searchSeq) return;
+		searchResults = data.conversations;
+		resultsQuery = q;
+		activeResultId = null;
+	}
+
+	function clearSearch() {
+		searchSeq++;
+		query = '';
+		searchResults = null;
+		activeResultId = null;
+	}
+
+	// ↑/↓ move through the search results and Enter opens the highlighted one
+	// (or the first), while focus stays in the search box.
+	let activeResultId = $state<string | null>(null);
+	// The highlight is only a ring, so screen readers hear which result it moved to.
+	// Results in the order they're shown (grouped by date, pinned first).
+	const shownResults = $derived(
+		searchResults ? visibleEntries.flatMap((e) => (e.kind === 'row' ? [e.conversation] : [])) : []
+	);
+	const activeResultAnnouncement = $derived.by(() => {
+		const index = shownResults.findIndex((c) => c.id === activeResultId);
+		const c = shownResults[index];
+		return c ? `${displayTitle(c)}, ${index + 1} of ${shownResults.length}` : '';
+	});
+	let listEl = $state<HTMLElement | null>(null);
+
+	function onSearchKeydown(event: KeyboardEvent) {
+		if (event.isComposing) return;
+		// Esc clears the search here; it never reaches the chat (which would stop a reply).
+		if (event.key === 'Escape' && !event.shiftKey && query) {
+			event.preventDefault();
+			clearSearch();
+			return;
+		}
+		if (!searchResults || resultsQuery !== query.trim()) return;
+		if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+		const ids = shownResults.map((c) => c.id);
+		if (ids.length === 0) return;
+		const index = activeResultId ? ids.indexOf(activeResultId) : -1;
+		if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+			event.preventDefault();
+			const step = event.key === 'ArrowDown' ? 1 : -1;
+			const next = index === -1 ? (step === 1 ? 0 : ids.length - 1) : index + step;
+			activeResultId = ids[(next + ids.length) % ids.length];
+			listEl
+				?.querySelector(`a[data-conversation-id="${CSS.escape(activeResultId)}"]`)
+				?.scrollIntoView({ block: 'nearest' });
+		} else if (event.key === 'Enter') {
+			event.preventDefault();
+			void goto(resolve(`/chat/${activeResultId ?? ids[0]}`)).then(() => onopenresult?.());
+			handleNavigate();
 		}
 	}
 
 	async function newChat() {
-		query = '';
-		searchResults = null;
+		clearSearch();
 		goto(resolve('/'));
 	}
 
@@ -419,7 +479,7 @@
 
 	/** Second line of a chat row: the model it talks to, without the vendor prefix. */
 	function chatSource(c: Conversation): string {
-		return c.modelId?.split('/').pop() || 'Chat';
+		return c.modelId?.split('/').pop() ?? '';
 	}
 
 	function settledTitle(c: Conversation): string {
@@ -464,6 +524,9 @@
 
 	function rowState(c: Conversation): RowState {
 		const status = c.coding?.status;
+		// A question or approval blocks the agent mid-run, so its reply stream is
+		// still open: the wait for you outranks "working".
+		if (status === 'awaiting_input') return 'needs-you';
 		if (
 			activeChats.has(c.id) ||
 			serverActiveChats.has(c.id) ||
@@ -471,7 +534,6 @@
 			status === 'starting'
 		)
 			return 'working';
-		if (status === 'awaiting_input') return 'needs-you';
 		// Failures, like replies, stop asking for attention once they've been seen.
 		const unread = unreadIds.includes(c.id) && page.url.pathname !== `/chat/${c.id}`;
 		if (!unread) return 'idle';
@@ -550,6 +612,7 @@
 		!settled && (state === 'needs-you' || state === 'failed' || state === 'unread')}
 	{@const status = rowStatus(c, state)}
 	{@const leads = state === 'working' || attention}
+	{@const source = c.coding ? c.coding.projectTitle : chatSource(c)}
 	<!-- The type icon takes the title's emphasis: full strength on rows that need you. -->
 	{@const iconTone =
 		attention || c.id === currentId
@@ -566,10 +629,13 @@
 	<div
 		class="group mb-0.5 flex w-full items-start rounded-md text-sm {c.id === currentId
 			? 'bg-accent text-accent-foreground'
-			: 'hover:bg-accent/50'} {settled && c.id !== currentId ? 'text-muted-foreground' : ''}"
+			: 'hover:bg-accent/50'} {settled && c.id !== currentId
+			? 'text-muted-foreground'
+			: ''} {searchResults && c.id === activeResultId ? 'ring-2 ring-ring/50' : ''}"
 	>
 		<a
 			href={resolve(`/chat/${c.id}`)}
+			data-conversation-id={c.id}
 			class="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
 			title={rowTitle(c, state)}
 			onclick={handleNavigate}
@@ -592,56 +658,59 @@
 							? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground dark:text-foreground/60'
 							: ''}">{displayTitle(c)}</span
 				>
-				<span class="flex min-w-0 items-center gap-1 text-xs leading-4 text-muted-foreground">
-					<span class="sr-only">,</span>
-					{#if status && leads}
-						<span class="inline-flex shrink-0 items-center gap-1 {status.tone}">
-							<span class="flex size-3 items-center justify-center" aria-hidden="true">
-								{#if state === 'working'}
-									<LoaderCircleIcon
-										class="size-3 animate-spin motion-reduce:hidden"
-										strokeWidth={2.5}
-									/>
-									<!-- A frozen spinner looks broken; reduced motion gets a still mark. -->
-									<CircleDotDashedIcon
-										class="hidden size-3 motion-reduce:block"
-										strokeWidth={2.5}
-									/>
-								{:else if state === 'needs-you'}
-									<CircleAlertIcon class="size-3" strokeWidth={2.5} />
-								{:else if state === 'failed'}
-									<TriangleAlertIcon class="size-3" strokeWidth={2.5} />
-								{:else}
-									<span class="size-2 rounded-full bg-success"></span>
+				<!-- Nothing to say (a chat with no model on record and no status): one line. -->
+				{#if source || status || c.coding?.pullRequest}
+					<span class="flex min-w-0 items-center gap-1 text-xs leading-4 text-muted-foreground">
+						<span class="sr-only">,</span>
+						{#if status && leads}
+							<span class="inline-flex shrink-0 items-center gap-1 {status.tone}">
+								<span class="flex size-3 items-center justify-center" aria-hidden="true">
+									{#if state === 'working'}
+										<LoaderCircleIcon
+											class="size-3 animate-spin motion-reduce:hidden"
+											strokeWidth={2.5}
+										/>
+										<!-- A frozen spinner looks broken; reduced motion gets a still mark. -->
+										<CircleDotDashedIcon
+											class="hidden size-3 motion-reduce:block"
+											strokeWidth={2.5}
+										/>
+									{:else if state === 'needs-you'}
+										<CircleAlertIcon class="size-3" strokeWidth={2.5} />
+									{:else if state === 'failed'}
+										<TriangleAlertIcon class="size-3" strokeWidth={2.5} />
+									{:else}
+										<span class="size-2 rounded-full bg-success"></span>
+									{/if}
+								</span>
+								{status.label}
+								{#if runStartedAt}
+									<span aria-hidden="true">
+										<CodingRunTimer startedAt={runStartedAt} dot={false} />
+									</span>
 								{/if}
 							</span>
-							{status.label}
-							{#if runStartedAt}
-								<span aria-hidden="true">
-									<CodingRunTimer startedAt={runStartedAt} dot={false} />
-								</span>
-							{/if}
-						</span>
-						<span class="shrink-0" aria-hidden="true">·</span>
-					{/if}
-					<span class="truncate">{c.coding ? c.coding.projectTitle : chatSource(c)}</span>
-					{#if status && !leads}
-						<span class="shrink-0" aria-hidden="true">·</span>
-						<!-- Settled rows are put away: their words stay, without the colour. -->
-						<span class="shrink-0 {settled ? '' : status.tone}">{status.label}</span>
-					{/if}
-					{#if c.coding?.pullRequest}
-						{@const prState = c.coding.pullRequest.state}
-						{@const prLabel = prState
-							? `Pull request ${CODING_PR_STATE_STYLE[prState].label.toLowerCase()}`
-							: 'Has a pull request'}
-						<span class="ml-auto inline-flex shrink-0 items-center pl-2" title={prLabel}>
-							<!-- Muted so it never reads as a second status mark; its shape still tells the state. -->
-							<PullRequestIcon state={prState} class="size-3 text-muted-foreground!" />
-							<span class="sr-only">, {prLabel}</span>
-						</span>
-					{/if}
-				</span>
+							{#if source}<span class="shrink-0" aria-hidden="true">·</span>{/if}
+						{/if}
+						{#if source}<span class="truncate">{source}</span>{/if}
+						{#if status && !leads}
+							{#if source}<span class="shrink-0" aria-hidden="true">·</span>{/if}
+							<!-- Settled rows are put away: their words stay, without the colour. -->
+							<span class="shrink-0 {settled ? '' : status.tone}">{status.label}</span>
+						{/if}
+						{#if c.coding?.pullRequest}
+							{@const prState = c.coding.pullRequest.state}
+							{@const prLabel = prState
+								? `Pull request ${CODING_PR_STATE_STYLE[prState].label.toLowerCase()}`
+								: 'Has a pull request'}
+							<span class="ml-auto inline-flex shrink-0 items-center pl-2" title={prLabel}>
+								<!-- Muted so it never reads as a second status mark; its shape still tells the state. -->
+								<PullRequestIcon state={prState} class="size-3 text-muted-foreground!" />
+								<span class="sr-only">, {prLabel}</span>
+							</span>
+						{/if}
+					</span>
+				{/if}
 			</span>
 		</a>
 		{#if searchResults && settled}
@@ -666,6 +735,7 @@
 	>
 		<a
 			href={resolve(`/chat/${c.id}`)}
+			data-conversation-id={c.id}
 			class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:py-2.5"
 			title={rowTitle(c, state)}
 			onclick={handleNavigate}
@@ -785,8 +855,6 @@
 	</span>
 {/snippet}
 
-<svelte:window onkeydown={onGlobalKeydown} />
-
 <!-- Phones: clip, so nothing pokes out of the closed drawer onto the page. -->
 <aside class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30 max-md:overflow-hidden">
 	<div
@@ -829,7 +897,7 @@
 			bind:ref={closeButton}
 			onclick={() => onclose()}
 			aria-label="Close sidebar"
-			title="Close sidebar"
+			title="Close sidebar ({shortcutLabel('toggle-sidebar')})"
 		>
 			<XIcon class="size-[18px] md:hidden" strokeWidth={1.75} />
 			<PanelLeftIcon class="size-4 max-md:hidden" strokeWidth={1.75} />
@@ -844,11 +912,18 @@
 				title="Search conversations ({shortcutLabel('search')})"
 				bind:value={query}
 				oninput={search}
+				onkeydown={onSearchKeydown}
+				onblur={() => (activeResultId = null)}
+				aria-describedby="search-hint"
 				class="h-8 pr-8 text-sm pointer-coarse:h-10 pointer-coarse:pr-11"
 			/>
+			<span id="search-hint" class="sr-only"
+				>Up and down arrows move through the results; Enter opens one.</span
+			>
+			<span class="sr-only" aria-live="polite">{activeResultAnnouncement}</span>
 			<button
 				type="button"
-				class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground pointer-coarse:right-1 pointer-coarse:rounded-full pointer-coarse:bg-primary pointer-coarse:p-2 pointer-coarse:text-primary-foreground"
+				class="absolute top-1/2 right-1 -translate-y-1/2 rounded-full bg-primary p-1 text-primary-foreground transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none pointer-coarse:p-2"
 				onclick={() => {
 					newChat();
 					handleNavigate();
@@ -861,6 +936,7 @@
 		</div>
 	</div>
 	<nav
+		bind:this={listEl}
 		class="flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)] px-2 pb-2"
 	>
 		{#each visibleEntries as entry (entry.key)}
@@ -982,21 +1058,22 @@
 		>
 			<BotIcon class="size-4" />
 			Agents
-			{#if agentStats}
+			{#if agentStats && agentStats.running > 0}
+				{@const runningLabel = `${agentStats.running} ${agentStats.running === 1 ? 'agent' : 'agents'} running`}
+				<!-- Only activity earns a badge: a bare total of built-ins read as "you have agents"
+					next to an empty Agents page. -->
 				<span
 					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px]"
-					title="{agentStats.running} running of {agentStats.total} agents"
+					title={runningLabel}
 				>
-					{#if agentStats.running > 0}
-						<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
-					{/if}
-					<!-- Touch has no hover title to explain "1/3"; say it in words, only when it matters. -->
-					<span class="pointer-coarse:hidden">{agentStats.running}/{agentStats.total}</span>
-					{#if agentStats.running > 0}
-						<span class="hidden max-md:hidden pointer-coarse:inline"
-							>{agentStats.running} running</span
-						>
-					{/if}
+					<span class="sr-only">{runningLabel}</span>
+					<span
+						class="size-1.5 animate-pulse rounded-full bg-info motion-reduce:animate-none"
+						aria-hidden="true"
+					></span>
+					<span aria-hidden="true"
+						>{agentStats.running}<span class="max-md:hidden"> running</span></span
+					>
 				</span>
 			{/if}
 		</a>
@@ -1011,12 +1088,10 @@
 		>
 			<BrainIcon class="size-4" />
 			Memory
-			{#if memoryCount !== null}
+			<!-- A zero is noise; the Memory page says it's empty. -->
+			{#if memoryCount}
 				<span
-					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px] {memoryCount ===
-					0
-						? 'max-md:hidden'
-						: ''}"
+					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px]"
 					title="{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}">{memoryCount}</span
 				>
 			{/if}
@@ -1094,10 +1169,23 @@
 				size="icon"
 				href={resolve('/settings')}
 				aria-label="Settings"
-				title="Settings"
+				aria-current={page.url.pathname.startsWith('/settings') ? 'page' : undefined}
+				title="Settings ({shortcutLabel('open-settings')})"
+				class={page.url.pathname.startsWith('/settings') ? 'bg-accent text-foreground' : ''}
 				onclick={handleNavigate}
 			>
 				<SettingsIcon class="size-4" />
+			</Button>
+			<!-- Touch screens have no keyboard to use them with. -->
+			<Button
+				variant="ghost"
+				size="icon"
+				class="pointer-coarse:hidden"
+				onclick={onshowshortcuts}
+				aria-label="Keyboard shortcuts"
+				title="Keyboard shortcuts ({shortcutLabel('show-shortcuts')})"
+			>
+				<KeyboardIcon class="size-4" />
 			</Button>
 			<Button variant="ghost" size="icon" onclick={signOut} aria-label="Sign out" title="Sign out">
 				<LogOutIcon class="size-4" />

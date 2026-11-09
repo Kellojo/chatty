@@ -38,7 +38,8 @@
 	// these never collide; the getter binding below keeps them from becoming the selection.
 	const NEW_PROJECT = ':new';
 	const CLONE_PROJECT = ':clone';
-	const SEARCH_THRESHOLD = 6;
+	// Project and branch lists longer than this get a search box at the top.
+	const SEARCH_THRESHOLD = 7;
 
 	let dialogOpen = $state(false);
 	let dialogMode = $state<'empty' | 'clone'>('clone');

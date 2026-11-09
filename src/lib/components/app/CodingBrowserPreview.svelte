@@ -2,6 +2,10 @@
 	// Watches (and, with control, drives) the browser tabs a coding agent opened
 	// in T3 Code. Frames arrive over SSE from Chatty's relay; input is posted back
 	// in small ordered batches.
+	//
+	// One stream feeds two views: the full dialog, and on desktop a small
+	// picture-in-picture in the bottom right that opens while the agent uses
+	// the browser during a run.
 	import { untrack } from 'svelte';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -11,20 +15,87 @@
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import Maximize2Icon from '@lucide/svelte/icons/maximize-2';
+	import PictureInPicture2Icon from '@lucide/svelte/icons/picture-in-picture-2';
+	import XIcon from '@lucide/svelte/icons/x';
 	import {
 		MAX_PREVIEW_INPUT_BATCH,
+		fitSize,
 		previewModifiers,
 		toPagePoint,
+		type CodingBrowserActivity,
 		type CodingPreviewTab,
 		type PreviewController,
 		type PreviewStreamEvent
 	} from '$lib/coding-preview.js';
 
-	let { conversationId, open = $bindable(false) }: { conversationId: string; open?: boolean } =
-		$props();
+	let {
+		conversationId,
+		open = $bindable(false),
+		activity = null
+	}: {
+		conversationId: string;
+		open?: boolean;
+		/** The agent's browser use in the current run; null when no run is using it. */
+		activity?: CodingBrowserActivity | null;
+	} = $props();
 
 	const TAB_REFRESH_MS = 5000;
 	const MAX_RECONNECTS = 3;
+	/** Frames are re-requested once the view needs this much more resolution than it asked for. */
+	const UPSIZE_FACTOR = 1.2;
+	const UPSIZE_DEBOUNCE_MS = 400;
+	/** T3 only draws a tab it shows; say so when frames don't come. */
+	const NO_FRAME_HINT_MS = 8000;
+	/** Where the picture-in-picture makes sense: a wide screen with a mouse. */
+	const PIP_MEDIA = '(min-width: 1024px) and (pointer: fine)';
+
+	/** The small floating view; the dialog takes over while it's open. */
+	let pip = $state(false);
+	/** The run whose picture-in-picture was closed, so the agent's next call doesn't reopen it. */
+	let dismissedRun: string | null = null;
+	let lastCalls = 0;
+	const showPip = $derived(pip && !open);
+	/** Whether a view is showing, so the tabs and stream are live. */
+	const active = $derived(open || pip);
+
+	// Opens the picture-in-picture when the agent uses its browser again, and
+	// closes it when the run ends.
+	$effect(() => {
+		const current = activity;
+		untrack(() => {
+			if (!current) {
+				pip = false;
+				lastCalls = 0;
+				return;
+			}
+			const used = current.calls > lastCalls;
+			lastCalls = current.calls;
+			if (!used || open || dismissedRun === current.run) return;
+			if (!window.matchMedia(PIP_MEDIA).matches) return;
+			if (current.tabId) {
+				wantedTabId = current.tabId;
+				if (tabs?.some((t) => t.tabId === current.tabId)) selectedTabId = current.tabId;
+			}
+			pip = true;
+		});
+	});
+
+	function closePip(): void {
+		pip = false;
+		dismissedRun = activity?.run ?? null;
+	}
+
+	function expandPip(): void {
+		pip = false;
+		open = true;
+	}
+
+	function minimize(): void {
+		pip = true;
+		dismissedRun = null;
+		open = false;
+	}
 
 	const base = $derived(`/api/coding/tasks/${encodeURIComponent(conversationId)}/preview`);
 
@@ -44,6 +115,7 @@
 	let imgEl = $state<HTMLImageElement | null>(null);
 	let surfaceEl = $state<HTMLDivElement | null>(null);
 
+	/** Whether your input goes to the page, from the dialog or the picture-in-picture. */
 	const driving = $derived(control?.controller === 'you');
 
 	/** Bumped per tab-list request, so only the latest response applies. */
@@ -83,13 +155,12 @@
 	// Tab list: loaded on open and refreshed while open (and visible), so titles,
 	// URLs and new tabs show up.
 	$effect(() => {
-		if (!open) return;
+		if (!active) return;
 		void base;
 		const controller = new AbortController();
 		untrack(() => {
 			tabs = null;
 			tabsError = null;
-			wantedTabId = null;
 			void loadTabs(controller.signal);
 		});
 		const timer = setInterval(() => {
@@ -103,6 +174,7 @@
 			controller.abort();
 			clearInterval(timer);
 			document.removeEventListener('visibilitychange', onVisible);
+			wantedTabId = null;
 		};
 	});
 
@@ -110,36 +182,97 @@
 		if (!urlEditing) urlDraft = selected?.url ?? '';
 	});
 
-	// One stream per selected tab while the dialog is open.
+	/**
+	 * Frame pixels per CSS pixel. At least 2: T3 renders pages at 2x, and
+	 * downscaling a sharper frame keeps text crisp on 1x screens too.
+	 */
+	function frameScale(): number {
+		return Math.max(window.devicePixelRatio || 1, 2);
+	}
+
+	/** The view's layout size in CSS pixels (untransformed, so the dialog's zoom-in doesn't shrink it). */
+	let box = $state<{ width: number; height: number } | null>(null);
+	$effect(() => {
+		const el = surfaceEl;
+		if (!el) return;
+		const measure = () => (box = { width: el.clientWidth, height: el.clientHeight });
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(el);
+		return () => observer.disconnect();
+	});
+
+	/** The last frame's pixel size, for when T3 hasn't reported the page's size. */
+	let frameSize = $state<{ width: number; height: number } | null>(null);
+	/** The page's size; frames vary in resolution (T3 halves them while scrolling). */
+	const pageSize = $derived(viewport ?? frameSize);
+	/** The frame shown fitted to the view, whatever resolution it arrived in. */
+	const display = $derived(pageSize && box ? fitSize(pageSize, box) : null);
+
+	/** The frame size the open stream asked for, in device pixels. */
+	let requested: { width: number; height: number } | null = null;
+	/** Bumped to reopen the stream at a higher resolution, keeping the current frame up meanwhile. */
+	let upsizeNonce = $state(0);
+	let handledUpsize = 0;
+	let noFrameHint = $state(false);
+
+	// The view grew (window resized, picture-in-picture expanded): ask for sharper frames.
+	$effect(() => {
+		const shown = display;
+		if (!shown || !requested || !pageSize) return;
+		const dpr = frameScale();
+		// T3 fits the page into the requested box, so only the binding side counts.
+		const deliverable = fitSize(pageSize, requested);
+		if (shown.width * dpr <= deliverable.width * UPSIZE_FACTOR) return;
+		const timer = setTimeout(() => upsizeNonce++, UPSIZE_DEBOUNCE_MS);
+		return () => clearTimeout(timer);
+	});
+
+	// One stream per selected tab while a view is showing.
 	$effect(() => {
 		const tabId = selectedTabId;
 		const streamBase = base;
 		void reconnectNonce;
-		if (!open || !tabId) return;
+		const upsizing = upsizeNonce !== handledUpsize;
+		handledUpsize = upsizeNonce;
+		if (!active || !tabId) return;
 		const controller = new AbortController();
 		let source: EventSource | null = null;
 		let retryTimer: ReturnType<typeof setTimeout> | null = null;
+		let hintTimer: ReturnType<typeof setTimeout> | null = null;
 		let reconnects = 0;
 		let stopped = false;
 
-		const connect = () => {
-			frame = null;
-			viewport = null;
+		const connect = (keepFrame = false) => {
+			if (!keepFrame) {
+				frame = null;
+				frameSize = null;
+				viewport = null;
+			}
 			control = null;
 			viewerId = null;
 			streamMessage = null;
 			streamDead = false;
-			const rect = surfaceEl?.getBoundingClientRect();
-			const dpr = window.devicePixelRatio || 1;
+			noFrameHint = false;
+			const dpr = frameScale();
+			requested = {
+				width: Math.round(Math.max(surfaceEl?.clientWidth || 1280, 640) * dpr),
+				height: Math.round(Math.max(surfaceEl?.clientHeight || 800, 400) * dpr)
+			};
 			const params = new URLSearchParams({
 				tab: tabId,
-				w: String(Math.round(Math.max(rect?.width ?? 1280, 640) * dpr)),
-				h: String(Math.round(Math.max(rect?.height ?? 800, 400) * dpr))
+				w: String(requested.width),
+				h: String(requested.height)
 			});
 			const es = new EventSource(`${streamBase}/stream?${params}`);
 			source = es;
+			if (hintTimer) clearTimeout(hintTimer);
+			hintTimer = setTimeout(() => {
+				if (source === es && frame === null) noFrameHint = true;
+			}, NO_FRAME_HINT_MS);
 			es.addEventListener('frame', (event) => {
 				frame = `data:image/jpeg;base64,${(event as MessageEvent<string>).data}`;
+				noFrameHint = false;
 				reconnects = 0;
 			});
 			es.addEventListener('state', (event) => {
@@ -171,7 +304,7 @@
 			}
 			reconnects++;
 			streamMessage = 'Reconnecting…';
-			retryTimer = setTimeout(connect, 1000 * reconnects);
+			retryTimer = setTimeout(() => connect(), 1000 * reconnects);
 		};
 
 		const onStreamEvent = (event: PreviewStreamEvent, es: EventSource) => {
@@ -206,11 +339,12 @@
 			}
 		};
 
-		untrack(connect);
+		untrack(() => connect(upsizing && frame !== null));
 		return () => {
 			stopped = true;
 			controller.abort();
 			if (retryTimer) clearTimeout(retryTimer);
+			if (hintTimer) clearTimeout(hintTimer);
 			source?.close();
 			source = null;
 			viewerId = null;
@@ -366,6 +500,89 @@
 	}
 </script>
 
+{#snippet surface(sizing: string)}
+	<!-- A remote page: while you drive it, it takes focus and every key, like an embedded app. -->
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+	<div
+		bind:this={surfaceEl}
+		class="relative flex min-h-0 {sizing} items-center justify-center overflow-hidden rounded-lg bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
+		role="application"
+		aria-label="Browser page"
+		tabindex={driving ? 0 : -1}
+		onkeydown={(e) => key(e, 'down')}
+		onkeyup={(e) => key(e, 'up')}
+		onpaste={paste}
+	>
+		{#if tabsError}
+			<p class="px-6 text-center text-sm text-muted-foreground">{tabsError}</p>
+		{:else if tabs === null}
+			<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
+		{:else if tabs.length === 0}
+			<p class="max-w-sm px-6 text-center text-sm text-muted-foreground">
+				The agent hasn't opened a browser tab for this task. Tabs it opens in T3 Code show up here.
+			</p>
+		{:else if frame}
+			<img
+				bind:this={imgEl}
+				src={frame}
+				alt={selected ? `Page: ${tabLabel(selected)}` : 'Browser page'}
+				draggable="false"
+				style:width={display ? `${display.width}px` : undefined}
+				style:height={display ? `${display.height}px` : undefined}
+				class="block max-h-full max-w-full object-contain select-none {driving
+					? 'cursor-default'
+					: open
+						? 'cursor-not-allowed'
+						: ''}"
+				onload={() => {
+					const img = imgEl;
+					if (
+						img &&
+						(frameSize?.width !== img.naturalWidth || frameSize?.height !== img.naturalHeight)
+					) {
+						frameSize = { width: img.naturalWidth, height: img.naturalHeight };
+					}
+				}}
+				onpointerdown={(e) => pointer(e, 'down')}
+				onpointerup={(e) => pointer(e, 'up')}
+				onpointermove={(e) => pointer(e, 'move')}
+				oncontextmenu={(e) => driving && e.preventDefault()}
+			/>
+		{:else if !streamMessage}
+			<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
+		{/if}
+		{#if noFrameHint && !frame && !streamMessage}
+			<p
+				class="absolute inset-x-0 bottom-3 mx-auto w-fit max-w-[90%] rounded-md bg-background/90 px-3 py-1.5 text-center text-xs text-muted-foreground shadow"
+				role="status"
+			>
+				Waiting for the coding machine to draw this tab. T3 Code only streams tabs it shows.
+			</p>
+		{/if}
+		{#if streamMessage}
+			<div
+				class="absolute inset-x-0 bottom-3 mx-auto flex w-fit max-w-[90%] items-center gap-2 rounded-md bg-background/90 px-3 py-1.5 text-center text-xs text-muted-foreground shadow"
+				role="status"
+			>
+				<span>{streamMessage}</span>
+				{#if streamDead}
+					<Button
+						variant="outline"
+						size="xs"
+						onclick={() => {
+							streamDead = false;
+							reconnectNonce++;
+						}}
+					>
+						<RotateCwIcon />
+						Reconnect
+					</Button>
+				{/if}
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
 <Dialog.Root bind:open>
 	<Dialog.Content
 		class="flex h-[calc(100dvh-2rem)] max-h-[60rem] w-full max-w-[calc(100vw-2rem)] flex-col gap-3 p-4 sm:max-w-6xl"
@@ -378,11 +595,21 @@
 			}
 		}}
 	>
-		<Dialog.Header class="pr-10">
-			<Dialog.Title class="flex items-center gap-2">
+		<Dialog.Header class="flex-row items-center gap-2 pr-10">
+			<Dialog.Title class="flex flex-1 items-center gap-2">
 				<GlobeIcon class="size-4" />
 				Browser preview
 			</Dialog.Title>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				class="text-muted-foreground hover:text-foreground max-lg:hidden"
+				title="Picture in picture"
+				aria-label="Keep watching in a small window"
+				onclick={minimize}
+			>
+				<PictureInPicture2Icon />
+			</Button>
 			<Dialog.Description class="sr-only">
 				Browser tabs the coding agent opened for this task, streamed from the coding machine.
 			</Dialog.Description>
@@ -466,66 +693,7 @@
 			</div>
 		{/if}
 
-		<!-- A remote page: while you drive it, it takes focus and every key, like an embedded app. -->
-		<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-		<div
-			bind:this={surfaceEl}
-			class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring"
-			role="application"
-			aria-label="Browser page"
-			tabindex={driving ? 0 : -1}
-			onkeydown={(e) => key(e, 'down')}
-			onkeyup={(e) => key(e, 'up')}
-			onpaste={paste}
-		>
-			{#if tabsError}
-				<p class="px-6 text-center text-sm text-muted-foreground">{tabsError}</p>
-			{:else if tabs === null}
-				<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
-			{:else if tabs.length === 0}
-				<p class="max-w-sm px-6 text-center text-sm text-muted-foreground">
-					The agent hasn't opened a browser tab for this task. Tabs it opens in T3 Code show up
-					here.
-				</p>
-			{:else if frame}
-				<img
-					bind:this={imgEl}
-					src={frame}
-					alt={selected ? `Page: ${tabLabel(selected)}` : 'Browser page'}
-					draggable="false"
-					class="block h-auto max-h-full w-auto max-w-full select-none {driving
-						? 'cursor-default'
-						: 'cursor-not-allowed'}"
-					onpointerdown={(e) => pointer(e, 'down')}
-					onpointerup={(e) => pointer(e, 'up')}
-					onpointermove={(e) => pointer(e, 'move')}
-					oncontextmenu={(e) => driving && e.preventDefault()}
-				/>
-			{:else if !streamMessage}
-				<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
-			{/if}
-			{#if streamMessage}
-				<div
-					class="absolute inset-x-0 bottom-3 mx-auto flex w-fit max-w-[90%] items-center gap-2 rounded-md bg-background/90 px-3 py-1.5 text-center text-xs text-muted-foreground shadow"
-					role="status"
-				>
-					<span>{streamMessage}</span>
-					{#if streamDead}
-						<Button
-							variant="outline"
-							size="xs"
-							onclick={() => {
-								streamDead = false;
-								reconnectNonce++;
-							}}
-						>
-							<RotateCwIcon />
-							Reconnect
-						</Button>
-					{/if}
-				</div>
-			{/if}
-		</div>
+		{@render surface('flex-1')}
 
 		{#if control}
 			<p class="text-xs text-muted-foreground">
@@ -539,3 +707,59 @@
 		{/if}
 	</Dialog.Content>
 </Dialog.Root>
+
+<!-- Watches the tab; take control to click and type in it, or expand it for the toolbar. -->
+{#if showPip}
+	<section
+		class="fixed right-4 bottom-4 z-40 flex w-[22rem] flex-col overflow-hidden rounded-xl border bg-background shadow-lg max-lg:hidden"
+		aria-label="Browser preview"
+	>
+		<header class="flex items-center gap-1 py-1 pr-1 pl-3 text-xs text-muted-foreground">
+			<GlobeIcon class="size-3.5 shrink-0" />
+			<span class="min-w-0 flex-1 truncate" title={selected?.url ?? undefined}>
+				{selected ? tabLabel(selected) : 'Browser preview'}
+			</span>
+			{#if control?.canOperate}
+				<Button
+					variant={driving ? 'secondary' : 'ghost'}
+					size="xs"
+					title={driving ? 'Hand the tab back' : 'Click and type in this tab'}
+					onclick={() => send({ type: driving ? 'releaseControl' : 'takeControl' })}
+				>
+					{driving ? 'Release' : 'Take control'}
+				</Button>
+			{/if}
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				title="Expand"
+				aria-label="Open the full browser preview"
+				onclick={expandPip}
+			>
+				<Maximize2Icon />
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				title="Close"
+				aria-label="Close the picture in picture"
+				onclick={closePip}
+			>
+				<XIcon />
+			</Button>
+		</header>
+		<!-- Watching, the frame is a big target for expanding (the header's Expand button is the
+		     keyboard route); in control, it's the page. -->
+		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+		<div
+			class="max-h-[50vh] p-1 pt-0 {driving ? '' : 'cursor-pointer'}"
+			style:aspect-ratio={pageSize ? `${pageSize.width} / ${pageSize.height}` : '16 / 10'}
+			onclick={(event) => {
+				// Buttons inside the frame (Reconnect) do their own thing.
+				if (!driving && !(event.target as Element).closest('button')) expandPip();
+			}}
+		>
+			{@render surface('size-full')}
+		</div>
+	</section>
+{/if}

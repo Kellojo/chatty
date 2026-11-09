@@ -259,19 +259,30 @@
 			</p>
 		{/if}
 		{#snippet trailing()}
-			<Switch
-				checked={skill.enabled}
-				aria-label="Enable {skill.title}"
-				disabled={toggleBusy !== null || !canToggle}
-				onCheckedChange={(checked) => toggleSkill(skill, checked)}
-			/>
+			{#if canToggle}
+				<Switch
+					checked={skill.enabled}
+					aria-label="Enable {skill.title}"
+					disabled={toggleBusy !== null}
+					onCheckedChange={(checked) => toggleSkill(skill, checked)}
+				/>
+			{:else if !skill.enabled}
+				<!-- A locked switch reads as broken; shared skills are on unless an admin says otherwise. -->
+				<Badge
+					variant="outline"
+					class="font-normal text-muted-foreground"
+					title="Turned off for everyone by an admin"
+				>
+					Off
+				</Badge>
+			{/if}
 			<RowMenu label="Actions for {skill.title}" items={menuItems(skill)} />
 		{/snippet}
 	</SettingsListItem>
 {/snippet}
 
 <div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
+	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 *:max-w-4xl md:p-6">
 		<PageHeader
 			title="Skills"
 			icon={SparklesIcon}

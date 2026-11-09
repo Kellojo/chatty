@@ -82,5 +82,8 @@
 			New chat
 		</Button>
 	</EmptyState>
-	<p class="text-xs text-muted-foreground tabular-nums">Error {page.status}</p>
+	<!-- The code only helps when reporting a fault; a 403/404 is already said in words. -->
+	{#if page.status >= 500}
+		<p class="text-xs text-muted-foreground tabular-nums">Error {page.status}</p>
+	{/if}
 </div>

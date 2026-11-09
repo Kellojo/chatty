@@ -14,7 +14,7 @@
 <svelte:head><title>{data.agent.name} · Agents · Chatty</title></svelte:head>
 
 <div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
-	<div class="mx-auto w-full max-w-6xl p-4 md:p-6">
+	<div class="mx-auto w-full max-w-6xl p-4 *:max-w-4xl md:p-6">
 		<div class="flex w-full flex-col gap-6">
 			<AgentHeader agent={data.agent} active="setup" />
 			{#if builtin}

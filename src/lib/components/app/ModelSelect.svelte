@@ -20,6 +20,9 @@
 		groups,
 		mappings = [],
 		value = $bindable(''),
+		open = $bindable(false),
+		trigger = $bindable(null),
+		shortcut,
 		onselect,
 		disabled = false,
 		placeholder = 'Select model',
@@ -32,6 +35,12 @@
 		groups: ModelsByProvider[];
 		mappings?: ModelMapping[];
 		value: string;
+		/** Whether the list is showing. */
+		open?: boolean;
+		/** The trigger button, which holds focus (and so the arrow keys) while the list is open. */
+		trigger?: HTMLElement | null;
+		/** The keys that open it, for the tooltip. */
+		shortcut?: string;
 		onselect: (value: string) => void;
 		disabled?: boolean;
 		placeholder?: string;
@@ -189,8 +198,13 @@
 	/>
 {/snippet}
 
-<Select.Root type="single" bind:value={selectedValue as never} onValueChange={onSelect}>
-	<Select.Trigger class={className} {disabled} title={label}>
+<Select.Root type="single" bind:open bind:value={selectedValue as never} onValueChange={onSelect}>
+	<Select.Trigger
+		bind:ref={trigger}
+		class={className}
+		{disabled}
+		title={shortcut ? `${label} (${shortcut})` : label}
+	>
 		<span class="flex min-w-0 flex-1 items-center gap-1.5 text-left">
 			<!-- data-model-icon / data-model-source let compact callers (phone topbar and composer)
 			     drop the icon and the " · Provider" suffix and keep just the model name.

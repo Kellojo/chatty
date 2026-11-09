@@ -13,30 +13,44 @@
 </script>
 
 <script lang="ts">
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 
 	let {
 		label,
-		items
-	}: { /** Names the row, e.g. "Actions for OpenAI". */ label: string; items: RowMenuItem[] } =
-		$props();
+		items,
+		text
+	}: {
+		/** Names the row, e.g. "Actions for OpenAI". */
+		label: string;
+		items: RowMenuItem[];
+		/** Visible trigger text, for menus that act on a whole section rather than one row. */
+		text?: string;
+	} = $props();
 </script>
 
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger>
 		{#snippet child({ props })}
-			<Button
-				{...props}
-				variant="ghost"
-				size="icon-sm"
-				class="relative"
-				title="More actions"
-				aria-label={label}
-			>
-				<EllipsisIcon class="size-4" />
-			</Button>
+			{#if text}
+				<Button {...props} variant="ghost" size="sm" class="relative" aria-label={label}>
+					{text}
+					<ChevronDownIcon class="size-4" />
+				</Button>
+			{:else}
+				<Button
+					{...props}
+					variant="ghost"
+					size="icon-sm"
+					class="relative"
+					title="More actions"
+					aria-label={label}
+				>
+					<EllipsisIcon class="size-4" />
+				</Button>
+			{/if}
 		{/snippet}
 	</DropdownMenu.Trigger>
 	<DropdownMenu.Content align="end" class="min-w-40">

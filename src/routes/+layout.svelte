@@ -24,7 +24,7 @@
 <ModeWatcher
 	defaultMode={data.theme}
 	disableHeadScriptInjection
-	themeColors={{ light: '#f9f8f7', dark: '#161413' }}
+	themeColors={{ light: '#f9f8f7', dark: '#0e0d0c' }}
 />
 {@render children()}
 <Toaster />

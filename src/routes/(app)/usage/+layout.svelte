@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { buttonRowClasses, getSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
+	import PageHeader from '$lib/components/app/PageHeader.svelte';
 	import { resolve } from '$app/paths';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -16,8 +16,6 @@
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
-
-	const buttonRow = $derived(buttonRowClasses(getSidebarState(), '2xl'));
 
 	const path = $derived(page.url.pathname.replace(/\/$/, ''));
 	const onRequests = $derived(path.startsWith('/usage/requests'));
@@ -100,26 +98,21 @@
 </script>
 
 <div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-6">
-		<!-- Phones: title + time control share the first row, tabs below.
-		     Desktop: title on its own row, time control right of the tabs on one baseline. -->
-		<div
-			class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-3 md:gap-x-0 {buttonRow.lift}"
-		>
-			<!-- The title shares a row with the floating "open sidebar" button wherever it can
-			     overlap (same top and height), padded to clear it. -->
-			<h1
-				class="col-start-1 row-start-1 flex min-h-10 items-center gap-2 text-xl font-semibold md:col-span-2 md:min-h-9 {buttonRow.pad}"
-			>
-				<GaugeIcon class="size-5" />
-				Usage
-			</h1>
+	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
+		<PageHeader
+			title="Usage"
+			icon={GaugeIcon}
+			description="Tokens, cost and requests across your chats, agents and API keys."
+		/>
+		<!-- Tabs, with the time control right of them on one baseline; phones get a select
+		     under the tabs instead. -->
+		<div class="-mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-y-3">
 			<!-- Tabs sit on the line instead of overlapping it, so the scroller never overflows
 				     vertically (which showed a stray scrollbar). -->
 			<nav
-				class="col-span-2 row-start-2 -mx-4 flex [scrollbar-width:none] gap-1 self-end overflow-x-auto overflow-y-hidden border-b px-4 md:col-start-1 md:mx-0 md:px-0 {showTimeControl
-					? 'md:col-span-1'
-					: 'md:col-span-2'}"
+				class="col-span-2 row-start-1 -mx-4 flex [scrollbar-width:none] gap-1 self-end overflow-x-auto overflow-y-hidden border-b px-4 sm:mx-0 sm:px-0 {showTimeControl
+					? 'sm:col-span-1'
+					: ''}"
 				aria-label="Usage"
 			>
 				{#each tabs as tab (tab.href)}
@@ -138,7 +131,7 @@
 			</nav>
 			{#if showTimeControl}
 				<!-- Phones: a compact select on its own row under the tabs. -->
-				<div class="col-span-2 row-start-3 sm:hidden">
+				<div class="col-span-2 row-start-2 sm:hidden">
 					<Select.Root
 						type="single"
 						value={activeOption}
@@ -158,7 +151,7 @@
 				</div>
 				<!-- From sm up: the segmented control. -->
 				<div
-					class="col-start-2 row-start-1 hidden min-w-0 justify-end self-stretch sm:flex md:row-start-2 md:items-end md:border-b md:pb-1.5 md:pl-3"
+					class="col-start-2 row-start-1 hidden min-w-0 items-end justify-end self-stretch border-b pb-1.5 pl-3 sm:flex"
 				>
 					<div
 						class="flex max-w-full overflow-x-auto rounded-lg border p-0.5"

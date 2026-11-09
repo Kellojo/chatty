@@ -21,7 +21,13 @@
 	import RowMenu, { type RowMenuItem } from '$lib/components/app/settings/RowMenu.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
-	import { EVENT_LABELS, ordinal, TRIGGER_LABELS } from '$lib/agent-labels.js';
+	import {
+		agentDisplayName,
+		EVENT_LABELS,
+		isAgentSlug,
+		ordinal,
+		TRIGGER_LABELS
+	} from '$lib/agent-labels.js';
 	import { describeCron } from '$lib/cron.js';
 	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
@@ -174,11 +180,11 @@
 {/snippet}
 
 <div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
+	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 *:max-w-4xl md:p-6">
 		<PageHeader
 			title="Agents"
 			icon={BotIcon}
-			description="Assistants that run on a schedule, on events, over HTTP or on demand, and personas you can chat with."
+			description="Assistants that run on a schedule, on events or on demand, and personas you can chat with."
 		>
 			{#snippet actions()}
 				<!-- The empty state carries these actions until there is something listed. -->
@@ -207,7 +213,8 @@
 							{#each section.agents as agent (agent.id)}
 								{@const running = data.runningAgentIds.includes(agent.id)}
 								<SettingsListItem
-									title={agent.name}
+									title={agentDisplayName(agent.name)}
+									titleAttr={agent.name}
 									href={resolve(`/agents/${agent.id}`)}
 									muted={!agent.enabled}
 								>
@@ -236,17 +243,31 @@
 										{/if}
 									{/snippet}
 									{#snippet meta()}
-										<span class="text-foreground/80">{@render triggerLabel(agent)}</span>
-										{#if agent.enabled && agent.nextRunAt}
-											· <span title={formatDateTime(agent.nextRunAt, data.timeFormat)}
-												>Next {formatDateTime(agent.nextRunAt, data.timeFormat)}</span
-											>
-										{/if}
-										{#if agent.lastRunAt}
-											· <span title={formatDateTime(agent.lastRunAt, data.timeFormat)}
-												>Last ran {formatTimeAgo(agent.lastRunAt)}</span
-											>
-										{/if}
+										<!-- Phones stack the facts; wider screens run them together with trailing dots, each fact
+										     wrapping as a whole so a line never starts with a separator. -->
+										<span
+											class="flex flex-col sm:inline-flex sm:flex-row sm:flex-wrap sm:gap-x-1 sm:[&>span:not(:last-child)]:after:ml-1 sm:[&>span:not(:last-child)]:after:content-['·']"
+										>
+											{#if isAgentSlug(agent.name)}
+												<!-- Phones: the slug is on the agent's page. -->
+												<span class="font-mono max-sm:hidden">{agent.name}</span>
+											{/if}
+											<span class="text-foreground/80">{@render triggerLabel(agent)}</span>
+											{#if agent.enabled && agent.nextRunAt}
+												<span
+													class="whitespace-nowrap"
+													title={formatDateTime(agent.nextRunAt, data.timeFormat)}
+													>Next {formatDateTime(agent.nextRunAt, data.timeFormat)}</span
+												>
+											{/if}
+											{#if agent.lastRunAt}
+												<span
+													class="whitespace-nowrap"
+													title={formatDateTime(agent.lastRunAt, data.timeFormat)}
+													>Last ran {formatTimeAgo(agent.lastRunAt)}</span
+												>
+											{/if}
+										</span>
 									{/snippet}
 									{@const blurb = agent.description.replace(/\s*\(built-in\)(?=\.?$)/i, '')}
 									{#if blurb}
@@ -264,7 +285,7 @@
 											size="icon-sm"
 											class="hidden sm:inline-flex"
 											title="Run now"
-											aria-label="Run {agent.name} now"
+											aria-label="Run {agentDisplayName(agent.name)} now"
 											disabled={runBusy !== null || running}
 											onclick={() => runNow(agent)}
 										>
@@ -276,11 +297,14 @@
 										</Button>
 										<Switch
 											checked={agent.enabled}
-											aria-label="Enable {agent.name}"
+											aria-label="Enable {agentDisplayName(agent.name)}"
 											disabled={toggleBusy !== null}
 											onCheckedChange={(checked) => toggleAgent(agent, checked)}
 										/>
-										<RowMenu label="Actions for {agent.name}" items={menuItems(agent, running)} />
+										<RowMenu
+											label="Actions for {agentDisplayName(agent.name)}"
+											items={menuItems(agent, running)}
+										/>
 									{/snippet}
 								</SettingsListItem>
 							{/each}

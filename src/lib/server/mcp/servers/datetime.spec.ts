@@ -73,6 +73,31 @@ describe('datetime server', () => {
 		expect(parsed.iso).toContain('+02:00');
 	});
 
+	it('now and convert include a clock widget payload', async () => {
+		const now = JSON.parse(resultText(await callTool('now', { tz: 'Asia/Tokyo' }))) as {
+			clock: unknown;
+		};
+		expect(now.clock).toEqual({ zones: [{ label: 'Tokyo', tz: 'Asia/Tokyo' }] });
+
+		const conv = JSON.parse(
+			resultText(
+				await callTool('convert', {
+					iso: '2024-06-15T15:00:00',
+					fromTz: 'America/Los_Angeles',
+					toTz: 'Europe/Berlin'
+				})
+			)
+		) as { clock: unknown };
+		expect(conv.clock).toEqual({
+			at: '2024-06-15T22:00:00.000Z',
+			convert: true,
+			zones: [
+				{ label: 'Los Angeles', tz: 'America/Los_Angeles' },
+				{ label: 'Berlin', tz: 'Europe/Berlin' }
+			]
+		});
+	});
+
 	it('rejects invalid timezones and timestamps', async () => {
 		expect(isErr(await callTool('now', { tz: 'Bogus/Zone' }))).toBe(true);
 		expect(isErr(await callTool('format', { iso: 'not-a-date', fmt: 'yyyy', tz: 'UTC' }))).toBe(

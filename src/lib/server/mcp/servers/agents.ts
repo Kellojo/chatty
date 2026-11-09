@@ -6,15 +6,17 @@ import {
 	prepareAgentCreate,
 	prepareAgentUpdate
 } from '../../agentInput.js';
-import { getDb } from '../../db/index.js';
+import { getDb, type Db } from '../../db/index.js';
 import {
 	createAgent,
 	deleteAgent,
 	getAgent,
 	listAgents,
 	toPublic,
-	updateAgent
+	updateAgent,
+	type AgentRow
 } from '../../db/repo/agents.js';
+import { findModel } from '../../db/repo/models.js';
 import { createLogger } from '../../logger.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
@@ -25,6 +27,17 @@ const MODEL_FIELD_DESCRIPTIONS = {
 	providerId: 'Provider id (must be given together with modelId)',
 	modelId: 'Model id (must be given together with providerId)'
 };
+
+const CARD_HINT =
+	'To show the agent as a card with Open and Run buttons, reply with a ```agent fenced code block containing the result JSON (systemPrompt may be left out).';
+
+/** The public agent plus its model's display name, which the ```agent card shows. */
+function agentResult(db: Db, row: AgentRow) {
+	const agent = toPublic(row);
+	const model =
+		agent.providerId && agent.modelId ? findModel(db, agent.providerId, agent.modelId) : undefined;
+	return text(JSON.stringify({ ...agent, modelName: model?.display_name ?? null }));
+}
 
 export function createAgentsServer(ctx: CallerContext): McpServer {
 	const server = new McpServer({ name: 'ai-chat-agents', version: '0.1.0' });
@@ -64,7 +77,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'get_agent',
 		{
-			description: 'Get the full configuration of one agent by id',
+			description: `Get the full configuration of one agent by id. ${CARD_HINT}`,
 			inputSchema: { agentId: z.string() }
 		},
 		async ({ agentId }) => {
@@ -75,7 +88,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 				return err('agent not found');
 			}
 			log.info('get_agent', { userId: ctx.userId, agentId });
-			return text(JSON.stringify(toPublic(agent)));
+			return agentResult(db, agent);
 		}
 	);
 
@@ -83,7 +96,8 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		'create_agent',
 		{
 			description:
-				'Create a new agent for the current user. triggerType persona makes it selectable in chat; schedule requires a cron expression; event requires an event name.',
+				'Create a new agent for the current user. triggerType persona makes it selectable in chat; schedule requires a cron expression; event requires an event name. ' +
+				CARD_HINT,
 			inputSchema: {
 				...agentCreateSchema.shape,
 				providerId: agentCreateSchema.shape.providerId.describe(
@@ -103,7 +117,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 				name: input.name,
 				triggerType: input.triggerType
 			});
-			return text(JSON.stringify(toPublic(agent)));
+			return agentResult(db, agent);
 		}
 	);
 
@@ -111,7 +125,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		'update_agent',
 		{
 			description:
-				'Update an existing agent owned by the current user. Only provided fields are changed. Built-in agents cannot be modified.',
+				'Update an existing agent owned by the current user. Only provided fields are changed. Built-in agents cannot be modified. Returns the same JSON as get_agent (```agent card).',
 			inputSchema: {
 				agentId: z.string(),
 				...agentPatchSchema.shape,
@@ -143,7 +157,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 			if (!prepared.ok) return err(prepared.error);
 			const updated = updateAgent(db, agentId, prepared.value);
 			log.info('update_agent', { userId: ctx.userId, agentId, fields: Object.keys(patch) });
-			return text(JSON.stringify(toPublic(updated!)));
+			return agentResult(db, updated!);
 		}
 	);
 

@@ -69,6 +69,7 @@
 	} from '$lib/types.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
+	import { browserActivity } from '$lib/coding-preview.js';
 
 	let {
 		conversation: initialConversation,
@@ -301,10 +302,20 @@
 		chat.status === 'streaming' || chat.status === 'submitted' || remoteGenerating
 	);
 	const lastAssistant = $derived(chat.messages.findLast((m) => m.role === 'assistant'));
+	/** The coding agent's browser use in the run in progress, for the preview's picture-in-picture. */
+	const codingBrowserActivity = $derived(
+		coding && (coding.status === 'running' || coding.status === 'starting') && lastAssistant
+			? browserActivity(lastAssistant.parts, String(coding.runStartedAt ?? lastAssistant.id))
+			: null
+	);
+	// A coding agent blocked on a question keeps its reply stream open, but it's
+	// waiting on you, not working: the pending request card says so instead.
 	const waiting = $derived(
-		remoteGenerating ||
-			chat.status === 'submitted' ||
-			(chat.status === 'streaming' && (!lastAssistant || !hasVisibleContent(lastAssistant.parts)))
+		!coding?.pendingRequest &&
+			(remoteGenerating ||
+				chat.status === 'submitted' ||
+				(chat.status === 'streaming' &&
+					(!lastAssistant || !hasVisibleContent(lastAssistant.parts))))
 	);
 
 	// When the current wait began: the coding run's own start if known, else when
@@ -731,6 +742,17 @@
 		void tick().then(() => composerTextarea()?.focus());
 	}
 
+	/** ↑ in an empty composer edits your last message, like the timeline's edit button. */
+	function editLastOnArrowUp(event: KeyboardEvent) {
+		if (event.key !== 'ArrowUp' || event.altKey || event.ctrlKey || event.metaKey) return;
+		if (event.shiftKey || event.isComposing) return;
+		if (isCoding || streaming || sending || switchingBranch || editing || hasContent) return;
+		const last = chat.messages.findLast((m) => m.role === 'user');
+		if (!last) return;
+		event.preventDefault();
+		startEdit(last.id, messageText(last));
+	}
+
 	function removeKeptFile(part: FilePart) {
 		if (!editing) return;
 		editing = { ...editing, keptFiles: editing.keptFiles.filter((p) => p !== part) };
@@ -1004,6 +1026,7 @@
 		{personas}
 		{coding}
 		{codingEnvironmentName}
+		{codingBrowserActivity}
 		oncreatepr={isCoding ? createPullRequest : undefined}
 		onrecover={isCoding ? recoverCodingTask : undefined}
 		{codingEnvironments}
@@ -1136,6 +1159,7 @@
 		>
 			<PendingAttachments files={selectedFiles} onremove={removeFile} />
 			<PromptInputTextarea
+				onkeydown={editLastOnArrowUp}
 				placeholder={editing
 					? 'Edit your message…'
 					: streaming

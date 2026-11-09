@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button/index.js';
+	import FolderIcon from '@lucide/svelte/icons/folder';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
-	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import AppWindowIcon from '@lucide/svelte/icons/app-window';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import {
@@ -12,6 +13,7 @@
 		type CodingRecoveryAction
 	} from '$lib/coding-task-details.js';
 	import type { CodingConversation } from '$lib/coding-environments.js';
+	import type { CodingBrowserActivity } from '$lib/coding-preview.js';
 	import { CODING_PR_STATE_STYLE, CODING_STATUS_STYLE } from '$lib/coding-status.js';
 	import PullRequestIcon from './PullRequestIcon.svelte';
 	import CodingRunTimer from './CodingRunTimer.svelte';
@@ -23,14 +25,18 @@
 	let {
 		coding,
 		title = null,
+		environmentName = null,
 		oncreatepr,
 		onrecover,
 		settingsOpen = $bindable(false),
-		previewOpen = $bindable(false)
+		previewOpen = $bindable(false),
+		browserActivity = null
 	}: {
 		coding: CodingConversation;
 		/** Task title, the header's main information. */
 		title?: string | null;
+		/** Where the task runs; named in the project's tooltip. */
+		environmentName?: string | null;
 		/** Asks the agent to commit, push and open a pull request. */
 		oncreatepr?: () => void;
 		/** Sends the follow-up of a failed or interrupted task ("Retry" / "Continue"). */
@@ -39,6 +45,8 @@
 		settingsOpen?: boolean;
 		/** The browser preview; bindable so the phone ⋯ menu can open it. */
 		previewOpen?: boolean;
+		/** The agent's browser use in its current run; opens the preview's picture-in-picture. */
+		browserActivity?: CodingBrowserActivity | null;
 	} = $props();
 
 	const canCreatePr = $derived(!!oncreatepr && canCreatePullRequest(coding));
@@ -50,6 +58,8 @@
 		coding.status === 'running' || coding.status === 'starting' ? coding.runStartedAt : null
 	);
 	const branch = $derived(coding.branch ?? coding.baseBranch);
+	/** Runs in the project checkout itself rather than a worktree on its own branch. */
+	const local = $derived(coding.workspaceMode === 'local');
 	/** Browser tabs live on the T3 thread, so there is nothing to show before it exists. */
 	const hasThread = $derived(!!coding.threadId && !!coding.environmentId);
 	let diffOpen = $state(false);
@@ -59,8 +69,8 @@
 </script>
 
 <!-- Only what changes how you act: where the work lives, how big it is, its state and the PR.
-     Project, environment and model live in the ⋯ menu. Two lines so the title gets the full
-     width and the details stay readable instead of being truncated or hidden. -->
+     The project leads the details on wider screens; environment and model live in the ⋯ menu.
+     Two lines so the title gets the full width and the details stay readable. -->
 <div class="flex min-w-0 flex-1 items-center gap-2 text-sm">
 	<div class="flex min-w-0 flex-1 flex-col">
 		{#if title}
@@ -71,20 +81,41 @@
 				{title}
 			</h1>
 		{/if}
-		<div class="flex min-w-0 items-center gap-2 text-xs leading-4 text-muted-foreground">
+		<div class="flex min-w-0 items-center gap-2.5 text-xs leading-4 text-muted-foreground">
+			{#if coding.projectTitle}
+				<!-- Phones keep just the branch, so the row doesn't truncate into noise. The project
+				     keeps its width before the branch does: it's the more useful of the two. -->
+				<span
+					class="flex max-w-48 min-w-0 shrink items-center gap-1 font-medium text-foreground/80 max-sm:hidden lg:max-w-56"
+					title={environmentName
+						? `Project ${coding.projectTitle} on ${environmentName}`
+						: `Project ${coding.projectTitle}`}
+				>
+					<FolderIcon class="size-3.5 shrink-0" />
+					<span class="truncate">{coding.projectTitle}</span>
+				</span>
+			{/if}
 			{#if branch}
 				<span
-					class="flex min-w-0 items-center gap-1"
-					title={coding.branch ? `Branch ${coding.branch}` : 'Base branch'}
+					class="flex min-w-0 shrink-[2] items-center gap-1"
+					title={local
+						? `Working directly in the project checkout on ${branch}`
+						: coding.branch
+							? `Branch ${coding.branch}`
+							: `Base branch ${branch}`}
 				>
-					<GitBranchIcon class="size-3 shrink-0" />
+					<GitBranchIcon class="size-3.5 shrink-0" />
 					<span class="truncate font-mono">{branch}</span>
+					{#if local}
+						<span class="shrink-0">· Local checkout</span>
+					{/if}
 				</span>
 			{/if}
 			{#if hasThread && hasChanges}
 				<button
 					type="button"
-					class="shrink-0 rounded-sm hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+					class="-mx-1 shrink-0 cursor-pointer rounded-sm px-1 underline decoration-muted-foreground/40 decoration-dotted underline-offset-2 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+					title="Show the changed files"
 					aria-label="Show the changed files"
 					onclick={() => (diffOpen = true)}
 				>
@@ -110,20 +141,9 @@
 			{/if}
 		</div>
 	</div>
-	<!-- On phones only Retry and the PR stay; settings and the preview move into the ⋯ menu. -->
+	<!-- Quiet icons first, then the actions. On phones only Retry and the PR stay; settings and
+	     the preview move into the ⋯ menu. -->
 	<div class="ml-auto flex shrink-0 items-center gap-1">
-		{#if recovery}
-			<Button
-				variant="outline"
-				size="sm"
-				title={recovery.hint}
-				aria-label="{recovery.label}: {recovery.hint}"
-				onclick={() => onrecover?.(recovery)}
-			>
-				<RotateCcwIcon />
-				<span class="hidden sm:inline">{recovery.label}</span>
-			</Button>
-		{/if}
 		{#if coding.environmentId}
 			<Button
 				variant="ghost"
@@ -145,7 +165,19 @@
 				aria-label="Open the agent's browser preview"
 				onclick={() => (previewOpen = true)}
 			>
-				<GlobeIcon />
+				<AppWindowIcon />
+			</Button>
+		{/if}
+		{#if recovery}
+			<Button
+				variant="default"
+				size="sm"
+				title={recovery.hint}
+				aria-label="{recovery.label}: {recovery.hint}"
+				onclick={() => onrecover?.(recovery)}
+			>
+				<RotateCcwIcon />
+				<span class="hidden sm:inline">{recovery.label}</span>
 			</Button>
 		{/if}
 		{#if coding.prUrl}
@@ -167,7 +199,7 @@
 					<span class="hidden text-muted-foreground sm:inline">· {prState}</span>
 				{/if}
 			</Button>
-		{:else if canCreatePr}
+		{:else if canCreatePr && !recovery}
 			<!-- Offered only once the agent is free; a disabled button mid-run is just noise.
 			     On phones it moves into the ⋯ menu, where it can carry a readable label. -->
 			<Button
@@ -186,7 +218,11 @@
 </div>
 
 {#if hasThread}
-	<CodingBrowserPreview conversationId={coding.conversationId} bind:open={previewOpen} />
+	<CodingBrowserPreview
+		conversationId={coding.conversationId}
+		bind:open={previewOpen}
+		activity={browserActivity}
+	/>
 	<CodingDiffDialog conversationId={coding.conversationId} bind:open={diffOpen} />
 {/if}
 {#if coding.environmentId}

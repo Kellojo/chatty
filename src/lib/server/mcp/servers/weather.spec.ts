@@ -29,7 +29,8 @@ const FORECAST = {
 		precipitation: 0,
 		weather_code: 2,
 		wind_speed_10m: 14.1,
-		wind_direction_10m: 230
+		wind_direction_10m: 230,
+		is_day: 0
 	},
 	daily: {
 		time: ['2026-08-01', '2026-08-02'],
@@ -101,6 +102,7 @@ describe('weather server', () => {
 		expect(payload.current.humidity).toBe(55);
 		expect(payload.current.wind).toBe(14.1);
 		expect(payload.current.windDir).toBe(230);
+		expect(payload.current.isDay).toBe(false);
 		expect(payload.current.code).toBe(2);
 		expect(payload.units.temp).toBe('°C');
 		expect(payload.daily).toHaveLength(2);

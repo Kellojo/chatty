@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { buttonRowClasses, getSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
+	import PageHeader from '$lib/components/app/PageHeader.svelte';
 	import { resolve } from '$app/paths';
 	import BellIcon from '@lucide/svelte/icons/bell';
 	import BlocksIcon from '@lucide/svelte/icons/blocks';
 	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import KeyboardIcon from '@lucide/svelte/icons/keyboard';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import RouteIcon from '@lucide/svelte/icons/route';
@@ -17,8 +18,6 @@
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
-
-	const buttonRow = $derived(buttonRowClasses(getSidebarState()));
 
 	// Keep the active phone tab in view; later sections sit past the right edge.
 	let tabStrip = $state<HTMLElement | null>(null);
@@ -49,6 +48,13 @@
 			href: '/settings/notifications',
 			label: 'Notifications',
 			icon: BellIcon,
+			adminOnly: false,
+			group: 'You'
+		},
+		{
+			href: '/settings/shortcuts',
+			label: 'Keyboard shortcuts',
+			icon: KeyboardIcon,
 			adminOnly: false,
 			group: 'You'
 		},
@@ -116,14 +122,11 @@
 
 <div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
 	<div class="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 md:gap-6 md:p-6">
-		<!-- The title shares a row with the floating "open sidebar" button wherever it can
-		     overlap (same top and height), padded to clear it. -->
-		<h1
-			class="flex min-h-10 items-center gap-2 text-xl font-semibold md:min-h-9 {buttonRow.lift} {buttonRow.pad}"
-		>
-			<SettingsIcon class="size-5" />
-			Settings
-		</h1>
+		<PageHeader
+			title="Settings"
+			icon={SettingsIcon}
+			description="Your preferences, the models Chatty can use, and connected services."
+		/>
 
 		<!-- Phones and tablets: one scrollable row of tabs, like the Usage page. -->
 		<nav
@@ -152,7 +155,7 @@
 
 		<div class="flex gap-8">
 			<nav
-				class="sticky top-6 hidden w-52 shrink-0 flex-col gap-4 self-start md:flex"
+				class="sticky top-6 -ml-3 hidden w-52 shrink-0 flex-col gap-4 self-start md:flex"
 				aria-label="Settings sections"
 			>
 				{#each visibleGroups as group (group.name)}

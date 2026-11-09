@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
 	import { afterNavigate, goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
 	import { FavoriteModels, setFavoriteModels } from '$lib/state/favorite-models.svelte.js';
@@ -8,13 +9,20 @@
 	import Sidebar from '$lib/components/app/Sidebar.svelte';
 	import AttentionNotifier from '$lib/components/app/AttentionNotifier.svelte';
 	import OfflineBanner from '$lib/components/app/OfflineBanner.svelte';
+	import ShortcutsDialog from '$lib/components/app/ShortcutsDialog.svelte';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { cn } from '$lib/utils.js';
 	import { startServerEvents } from '$lib/state/events.svelte.js';
 	import { startMessageQueueRunner } from '$lib/state/message-queue-runner.js';
 	import { setSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
-	import { chatShortcuts, isTypingTarget, matchShortcut } from '$lib/state/shortcuts.js';
+	import {
+		chatShortcuts,
+		isTypingTarget,
+		matchShortcut,
+		modelPicker,
+		shortcutLabel
+	} from '$lib/state/shortcuts.js';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -49,15 +57,34 @@
 	// (Closing because a link was followed leaves focus where navigation puts it.)
 	let sidebarCloseButton = $state<HTMLElement | null>(null);
 
-	async function toggleSidebar() {
+	/** `moveFocus` is off for the keyboard shortcut, which leaves focus where you were typing. */
+	async function toggleSidebar(moveFocus = true) {
+		// Closing with focus inside (e.g. Ctrl+K, then Ctrl+B) mustn't leave it in a hidden field.
+		const focusInside = !!document.activeElement?.closest('aside');
 		if (isDesktop.current) {
 			setSidebarOpen(!sidebarOpen);
 		} else {
 			mobileOpen = !mobileOpen;
 		}
 		await tick();
-		if (isDesktop.current ? sidebarOpen : mobileOpen)
+		const open = isDesktop.current ? sidebarOpen : mobileOpen;
+		// The phone drawer covers the page, so focus goes into it even from the shortcut.
+		if (open && (moveFocus || !isDesktop.current))
 			sidebarCloseButton?.focus({ preventScroll: true });
+		if (!open && focusInside && !focusComposer()) sidebarButton?.focus({ preventScroll: true });
+	}
+
+	/** Ctrl/Cmd+K: search lives in the sidebar, so show it first if it's closed. */
+	let sidebarSearch = $state<HTMLInputElement | null>(null);
+	async function focusSearch() {
+		if (isDesktop.current) {
+			if (!sidebarOpen) setSidebarOpen(true);
+		} else {
+			mobileOpen = true;
+		}
+		await tick();
+		sidebarSearch?.focus({ preventScroll: true });
+		sidebarSearch?.select();
 	}
 
 	async function closeSidebar() {
@@ -115,6 +142,36 @@
 		return true;
 	}
 
+	/**
+	 * Scrolls a sidebar row into view within its list only. `scrollIntoView` would also
+	 * scroll sideways, sliding the closed phone drawer onto the screen.
+	 */
+	function scrollIntoList(row: HTMLElement) {
+		const list = row.closest('nav');
+		if (!list) return;
+		const rowBox = row.getBoundingClientRect();
+		const listBox = list.getBoundingClientRect();
+		if (rowBox.top < listBox.top) list.scrollTop -= listBox.top - rowBox.top;
+		else if (rowBox.bottom > listBox.bottom) list.scrollTop += rowBox.bottom - listBox.bottom;
+	}
+
+	/** Moves to the conversation above or below the open one, in sidebar order. */
+	function stepConversation(step: 1 | -1): boolean {
+		const links = [...document.querySelectorAll<HTMLAnchorElement>('a[data-conversation-id]')];
+		if (links.length === 0) return false;
+		const current = links.findIndex((a) => a.dataset.conversationId === page.params.id);
+		// From a page that isn't a listed chat, both directions start at the top (the newest).
+		const next = current === -1 ? 0 : current + step;
+		const target = links[next];
+		const id = target?.dataset.conversationId;
+		if (!id) return false;
+		scrollIntoList(target);
+		void goto(resolve(`/chat/${id}`));
+		return true;
+	}
+
+	let shortcutsOpen = $state(false);
+
 	async function copyLastReply(text: string) {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -130,7 +187,17 @@
 		if (!action) return;
 		switch (action) {
 			case 'escape':
+				// The sidebar's own fields (search) handle Esc; it shouldn't stop a reply.
 				if (inOverlay(event.target)) return;
+				if (event.target instanceof Element && event.target.closest('aside')) {
+					// Esc in an empty search box goes back to where you were (Ctrl+K, then Esc).
+					if (event.target === sidebarSearch && !sidebarSearch.value) {
+						event.preventDefault();
+						if (!isDesktop.current) mobileOpen = false;
+						if (!focusComposer()) sidebarSearch.blur();
+					}
+					return;
+				}
 				if (chatShortcuts()?.escape()) event.preventDefault();
 				return;
 			case 'focus-composer':
@@ -138,10 +205,43 @@
 				if (focusComposer()) event.preventDefault();
 				return;
 			case 'new-chat':
+				if (inOverlay(event.target)) return;
 				event.preventDefault();
 				void goto(resolve('/')).then(focusComposer);
 				return;
+			case 'show-shortcuts':
+				// Toggles: the same keys close it again, but don't stack it on another modal.
+				if (!shortcutsOpen && inOverlay(event.target)) return;
+				event.preventDefault();
+				shortcutsOpen = !shortcutsOpen;
+				return;
+			case 'search':
+				if (inOverlay(event.target)) return;
+				event.preventDefault();
+				void focusSearch();
+				return;
+			case 'toggle-sidebar':
+				if (inOverlay(event.target)) return;
+				event.preventDefault();
+				void toggleSidebar(false);
+				return;
+			case 'open-settings':
+				if (inOverlay(event.target)) return;
+				event.preventDefault();
+				// Already in settings: stay on the section you're in.
+				if (!page.url.pathname.startsWith('/settings')) void goto(resolve('/settings'));
+				return;
+			case 'previous-chat':
+			case 'next-chat':
+				if (inOverlay(event.target)) return;
+				if (stepConversation(action === 'next-chat' ? 1 : -1)) event.preventDefault();
+				return;
+			case 'model-picker':
+				if (inOverlay(event.target)) return;
+				if (modelPicker()?.()) event.preventDefault();
+				return;
 			case 'copy-last-reply': {
+				if (inOverlay(event.target)) return;
 				const text = chatShortcuts()?.lastReply();
 				if (!text) return;
 				event.preventDefault();
@@ -166,6 +266,8 @@
 <svelte:window onkeydown={onKeydown} />
 
 <OfflineBanner />
+
+<ShortcutsDialog bind:open={shortcutsOpen} />
 
 <AttentionNotifier
 	conversations={data.conversations}
@@ -197,7 +299,10 @@
 				settledCount={data.settledCount}
 				autoSettleDays={data.autoSettleDays}
 				bind:closeButton={sidebarCloseButton}
+				bind:searchInput={sidebarSearch}
 				onclose={closeSidebar}
+				onshowshortcuts={() => (shortcutsOpen = true)}
+				onopenresult={() => void tick().then(focusComposer)}
 			/>
 		</div>
 		<div class="h-full w-1/2 shrink-0 md:contents">
@@ -224,9 +329,9 @@
 		bind:ref={sidebarButton}
 		tabindex={buttonHidden && !isDesktop.current ? -1 : undefined}
 		aria-hidden={buttonHidden && !isDesktop.current ? 'true' : undefined}
-		onclick={toggleSidebar}
+		onclick={() => toggleSidebar()}
 		aria-label="Open sidebar"
-		title="Open sidebar"
+		title="Open sidebar ({shortcutLabel('toggle-sidebar')})"
 	>
 		<PanelLeftIcon class="size-[18px] md:size-4" strokeWidth={1.75} />
 	</Button>

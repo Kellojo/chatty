@@ -8,6 +8,8 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
+	import ToggleLeftIcon from '@lucide/svelte/icons/toggle-left';
+	import ToggleRightIcon from '@lucide/svelte/icons/toggle-right';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -19,6 +21,8 @@
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
+	import { MODEL_ROLE_LABEL } from '$lib/model-roles.js';
+	import type { ModelRole } from '$lib/types.js';
 	import { formatCount } from '$lib/formats.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
@@ -28,16 +32,20 @@
 	let { data }: { data: PageData } = $props();
 
 	type Model = PageData['models'][number];
-	type Capability = 'chat' | 'vision' | 'tool_use' | 'streaming' | 'image' | 'decisions';
+	type Capability =
+		'chat' | 'vision' | 'tool_use' | 'streaming' | 'image' | 'decisions' | 'transcription';
 
-	const allCapabilities: Capability[] = [
-		'chat',
-		'vision',
-		'tool_use',
-		'streaming',
-		'image',
-		'decisions'
-	];
+	const CAPABILITY_LABEL: Record<Capability, string> = {
+		chat: 'Chat',
+		vision: 'Vision (image input)',
+		tool_use: 'Tool use',
+		streaming: 'Streaming',
+		image: 'Image generation',
+		decisions: 'Decisions API',
+		transcription: 'Speech to text'
+	};
+	const allCapabilities = Object.keys(CAPABILITY_LABEL) as Capability[];
+	const capLabel = (cap: string) => CAPABILITY_LABEL[cap as Capability] ?? cap;
 
 	let addOpen = $state(false);
 	let addProviderId = $state('');
@@ -115,6 +123,90 @@
 		}
 	}
 
+	let bulkBusy = $state<string | null>(null);
+
+	/** Model id → the Defaults purposes it serves. */
+	const rolesByModel = $derived.by(() => {
+		const byModel: Record<string, string[]> = {};
+		for (const [role, id] of Object.entries(data.roleDefaults) as [ModelRole, string][]) {
+			(byModel[id] ??= []).push(MODEL_ROLE_LABEL[role]);
+		}
+		return byModel;
+	});
+	const defaultIds = $derived(new Set(Object.keys(rolesByModel)));
+
+	/** Turns the listed models on or off; only touches rows that need it. Disabling skips
+	 *  models picked in Defaults, since that would break the feature they serve. */
+	async function setAllEnabled(providerId: string, list: Model[], enabled: boolean) {
+		if (bulkBusy) {
+			toast.info('Wait for the current update to finish.');
+			return;
+		}
+		const targets = list.filter((m) => m.enabled !== enabled && (enabled || !defaultIds.has(m.id)));
+		const kept = enabled ? 0 : list.filter((m) => m.enabled && defaultIds.has(m.id)).length;
+		const plural = (n: number) => `${n} model${n === 1 ? '' : 's'}`;
+		if (targets.length === 0) {
+			if (kept > 0)
+				toast.info(`Only models used in Defaults are left on; change them in Defaults first.`);
+			return;
+		}
+		if (
+			!enabled &&
+			!confirm(
+				`Disable ${plural(targets.length)}? They'll disappear from the model picker, and mappings that point at them will skip them.` +
+					(kept > 0 ? ` ${plural(kept)} used in Defaults stay on.` : '')
+			)
+		)
+			return;
+		bulkBusy = providerId;
+		const verb = enabled ? 'enabled' : 'disabled';
+		const toastId = toast.loading(
+			`${enabled ? 'Enabling' : 'Disabling'} ${plural(targets.length)}…`
+		);
+		let failed = 0;
+		const queue = [...targets];
+		const worker = async () => {
+			for (let m = queue.shift(); m; m = queue.shift()) {
+				await api(`/api/models/${m.id}`, 'PATCH', { enabled }).catch(() => failed++);
+			}
+		};
+		try {
+			await Promise.all(Array.from({ length: 6 }, worker));
+			await invalidateAll();
+			const done = targets.length - failed;
+			if (failed > 0) {
+				toast.error(`${plural(done)} ${verb}, ${failed} failed`, { id: toastId });
+			} else {
+				toast.success(`${plural(done)} ${verb}`, {
+					id: toastId,
+					action: {
+						label: `Undo (${targets.length})`,
+						onClick: () =>
+							setAllEnabled(
+								providerId,
+								targets.map((m) => ({ ...m, enabled })),
+								!enabled
+							)
+					}
+				});
+			}
+		} finally {
+			bulkBusy = null;
+		}
+	}
+
+	function setEnabled(model: Model, enabled: boolean) {
+		if (
+			!enabled &&
+			defaultIds.has(model.id) &&
+			!confirm(
+				`${model.displayName} is used in Defaults for: ${rolesByModel[model.id]?.join(', ')}. Disable it anyway?`
+			)
+		)
+			return;
+		patch(model.id, { enabled }, `${model.displayName} ${enabled ? 'enabled' : 'disabled'}`);
+	}
+
 	async function submitAdd(event: SubmitEvent) {
 		event.preventDefault();
 		addBusy = true;
@@ -153,7 +245,13 @@
 		if (!capsModel) return;
 		capsBusy = true;
 		try {
-			await api(`/api/models/${capsModel.id}`, 'PATCH', { capabilities: capsSelected });
+			// Keep anything this dialog doesn't list, so saving never drops it.
+			const unlisted = capsModel.capabilities.filter(
+				(c) => !allCapabilities.includes(c as Capability)
+			);
+			await api(`/api/models/${capsModel.id}`, 'PATCH', {
+				capabilities: [...capsSelected, ...unlisted]
+			});
 			toast.success('Capabilities updated');
 			capsModel = null;
 			await invalidateAll();
@@ -255,9 +353,10 @@
 
 <SettingsHeader title="Models">
 	{#snippet description()}
-		Models offered in the model picker. {enabledCount} of {data.models.length} enabled.
+		Models offered in the model picker.{#if data.providers.length > 1}
+			{enabledCount} of {data.models.length} enabled.{/if}
 		<span class="max-md:hidden"
-			>Choose which one serves new chats, titles and memory in
+			>Pick the model for each purpose (chat, titles, memory, images…) in
 			<a
 				class="underline underline-offset-4 hover:text-foreground"
 				href={resolve('/settings/defaults')}>Defaults</a
@@ -265,9 +364,12 @@
 		>
 	{/snippet}
 	{#snippet actions()}
-		<Button onclick={() => (addOpen = true)} disabled={data.providers.length === 0}>
-			<PlusIcon class="size-4" />Add model
-		</Button>
+		<!-- Without providers the empty state points to Providers instead. -->
+		{#if data.providers.length > 0}
+			<Button onclick={() => (addOpen = true)}>
+				<PlusIcon class="size-4" />Add model
+			</Button>
+		{/if}
 	{/snippet}
 </SettingsHeader>
 
@@ -323,9 +425,33 @@
 		{#snippet icon()}
 			{#if providerBrand}<ProviderIcon brand={providerBrand} class="size-4 shrink-0" />{/if}
 		{/snippet}
+		{#snippet action()}
+			{#if models.length > 1}
+				{@const scope = filtering ? `${models.length} shown` : 'all'}
+				{@const busy = bulkBusy !== null}
+				<RowMenu
+					text="Bulk actions"
+					label="Bulk actions for {provider.name} models"
+					items={[
+						{
+							label: `Enable ${scope}`,
+							icon: ToggleRightIcon,
+							disabled: busy || models.every((m) => m.enabled),
+							onSelect: () => setAllEnabled(provider.id, models, true)
+						},
+						{
+							label: `Disable ${scope}`,
+							icon: ToggleLeftIcon,
+							disabled: busy || models.every((m) => !m.enabled || defaultIds.has(m.id)),
+							onSelect: () => setAllEnabled(provider.id, models, false)
+						}
+					]}
+				/>
+			{/if}
+		{/snippet}
 		{#if models.length === 0}
 			<p class="px-6 pb-4 text-sm text-muted-foreground">
-				No models yet. Use “Fetch models” on
+				No models yet. Use “Sync models” on
 				<a class="underline underline-offset-4" href={resolve('/settings/providers')}>Providers</a>
 				or add one manually.
 			</p>
@@ -358,36 +484,54 @@
 								>{#if i > 0}<span class="mr-1" aria-hidden="true">·</span>{/if}{part.text}</span
 							>{/each}{#if caps.length > 0}<wbr /><span
 								class="sm:hidden {details.length > 0 ? 'ml-1' : ''}"
-								>{#if details.length > 0}<span class="mr-1" aria-hidden="true">·</span
-									>{/if}{caps.join(', ')}</span
+								>{#if details.length > 0}<span class="mr-1" aria-hidden="true">·</span>{/if}{caps
+									.map(capLabel)
+									.join(', ')}</span
 							>{/if}
 					{/snippet}
 					<SettingsListItem
 						{title}
 						titleAttr={model.modelId}
+						onclick={() => openCaps(model)}
 						muted={!model.enabled}
 						leading={showBrandIcons ? modelIcon : undefined}
-						meta={details.length > 0 || caps.length > 0 ? modelMeta : undefined}
+						meta={details.length > 0 ? modelMeta : undefined}
 					>
 						{#snippet badges()}
+							{#if defaultIds.has(model.id)}
+								<Badge
+									variant="outline"
+									class="font-normal"
+									title="Used in Defaults for: {rolesByModel[model.id]?.join(', ')}"
+									>In Defaults</Badge
+								>
+							{/if}
 							{#each caps as cap (cap)}
-								<!-- Phones: chips wrapped rows to double height; the meta line lists them instead. -->
-								<Badge variant="secondary" class="font-normal max-sm:hidden">{cap}</Badge>
+								<!-- Phones: chips wrapped rows to double height, so a meta line lists them
+									instead. Without a meta line there's nothing to wrap under, so keep the chips. -->
+								<Badge
+									variant="secondary"
+									class="font-normal {details.length > 0 ? 'max-sm:hidden' : ''}"
+									>{capLabel(cap)}</Badge
+								>
 							{/each}
 						{/snippet}
 						{#snippet trailing()}
 							<Switch
 								checked={model.enabled}
 								aria-label="Enable {model.displayName}"
-								onCheckedChange={(checked) =>
-									patch(model.id, { enabled: checked }, 'Model updated')}
+								onCheckedChange={(checked) => setEnabled(model, checked)}
 							/>
 							<RowMenu
 								label="Actions for {model.displayName}"
 								items={[
-									{ label: 'Capabilities', icon: SparklesIcon, onSelect: () => openCaps(model) },
 									{
-										label: 'Pricing & context',
+										label: 'Edit capabilities',
+										icon: SparklesIcon,
+										onSelect: () => openCaps(model)
+									},
+									{
+										label: 'Edit pricing & context',
 										icon: CoinsIcon,
 										onSelect: () => openPricing(model)
 									},
@@ -435,7 +579,7 @@
 			{:else}
 				<div class="flex flex-col gap-1">
 					<p class="text-sm font-medium">No providers yet</p>
-					<p class="text-sm text-muted-foreground">Add a provider first, then fetch its models.</p>
+					<p class="text-sm text-muted-foreground">Add a provider first, then sync its models.</p>
 				</div>
 				<Button size="sm" href={resolve('/settings/providers')}>Go to providers</Button>
 			{/if}
@@ -476,6 +620,7 @@
 				<Input id="add-displayname" bind:value={addDisplayName} />
 			</div>
 			<Dialog.Footer>
+				<Button type="button" variant="outline" onclick={() => (addOpen = false)}>Cancel</Button>
 				<Button type="submit" disabled={addBusy || !addProviderId}>
 					{addBusy ? 'Adding…' : 'Add model'}
 				</Button>
@@ -487,22 +632,35 @@
 <Dialog.Root open={capsModel !== null} onOpenChange={(open) => !open && (capsModel = null)}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Capabilities — {capsModel?.displayName}</Dialog.Title>
+			<Dialog.Title>Edit capabilities · {capsModel?.displayName}</Dialog.Title>
 			<Dialog.Description>
-				Vision enables image attachments; tool use is required for MCP tools.
+				Vision enables image attachments; tool use is required for MCP tools. Image generation,
+				Decisions API and Speech to text make the model selectable for that role in Defaults.
 			</Dialog.Description>
 		</Dialog.Header>
 		<div class="flex flex-col gap-3">
 			{#each allCapabilities as cap (cap)}
 				<label class="flex items-center gap-3 text-sm">
 					<Switch checked={capsSelected.includes(cap)} onCheckedChange={() => toggleCap(cap)} />
-					{cap}
+					{CAPABILITY_LABEL[cap]}
 				</label>
 			{/each}
 		</div>
 		<Dialog.Footer>
+			{#if capsModel}
+				{@const model = capsModel}
+				<Button
+					variant="ghost"
+					class="sm:mr-auto"
+					onclick={() => {
+						capsModel = null;
+						openPricing(model);
+					}}>Pricing &amp; context…</Button
+				>
+			{/if}
+			<Button variant="outline" onclick={() => (capsModel = null)}>Cancel</Button>
 			<Button disabled={capsBusy} onclick={submitCaps}>
-				{capsBusy ? 'Saving…' : 'Save capabilities'}
+				{capsBusy ? 'Saving…' : 'Save changes'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
@@ -511,11 +669,11 @@
 <Dialog.Root open={pricingModel !== null} onOpenChange={(open) => !open && (pricingModel = null)}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Pricing &amp; context — {pricingModel?.displayName}</Dialog.Title>
+			<Dialog.Title>Edit pricing &amp; context · {pricingModel?.displayName}</Dialog.Title>
 			<Dialog.Description>
 				USD per 1M tokens. Leave empty when unknown; cost is only reported when both prices are set.
 				Cached prompt tokens use the input price unless a cache price is set. Context length drives
-				automatic chat compaction; providers like OpenRouter fill it on fetch.
+				automatic chat compaction; providers like OpenRouter fill it when you sync models.
 			</Dialog.Description>
 		</Dialog.Header>
 		<form onsubmit={submitPricing} class="flex flex-col gap-4">
@@ -577,8 +735,10 @@
 				/>
 			</div>
 			<Dialog.Footer>
+				<Button type="button" variant="outline" onclick={() => (pricingModel = null)}>Cancel</Button
+				>
 				<Button type="submit" disabled={pricingBusy}>
-					{pricingBusy ? 'Saving…' : 'Save'}
+					{pricingBusy ? 'Saving…' : 'Save changes'}
 				</Button>
 			</Dialog.Footer>
 		</form>
@@ -588,9 +748,16 @@
 <Dialog.Root open={deleteId !== null} onOpenChange={(open) => !open && (deleteId = null)}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Delete model?</Dialog.Title>
+			<Dialog.Title
+				>Delete {data.models.find((m) => m.id === deleteId)?.displayName ?? 'model'}?</Dialog.Title
+			>
 			<Dialog.Description>
-				Conversations that used this model keep their history but cannot continue with it.
+				Conversations that used this model keep their history but cannot continue with it. Synced
+				models come back on the next sync; to hide one, turn it off instead.
+				{#if deleteId && rolesByModel[deleteId]}
+					It's used in Defaults for {rolesByModel[deleteId].join(', ')}, which will be left without
+					a model.
+				{/if}
 			</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>

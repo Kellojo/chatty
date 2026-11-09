@@ -4,6 +4,7 @@
 	import { cn } from '$lib/utils.js';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import LayersIcon from '@lucide/svelte/icons/layers';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { formatElapsed } from '$lib/formats.js';
@@ -73,7 +74,7 @@
 		<div class="w-full min-w-0 text-sm">
 			<button
 				type="button"
-				class="group/tool flex w-full items-center gap-2.5 rounded-md px-2 py-1 text-left text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:py-2"
+				class="group/tool flex w-full items-center gap-2.5 rounded-md px-2 py-1 text-left text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:py-2"
 				aria-expanded={open}
 				onclick={() => (openReasoning[item.index] = !open)}
 			>
@@ -127,34 +128,46 @@
 	<div class="-mx-2 w-[calc(100%+1rem)]">
 		<button
 			type="button"
-			class="group/head flex w-full min-w-0 items-start gap-2.5 rounded-md px-2 py-1 text-left text-sm text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:py-2"
+			class="group/head flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-left text-sm text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:items-start pointer-coarse:py-2"
 			aria-expanded={expanded}
 			aria-label={`${summary.title}, ${summary.steps} ${summary.steps === 1 ? 'step' : 'steps'}${summary.failed > 0 ? `, ${summary.failed} failed` : ''}`}
 			onclick={() => (userOpen = !expanded)}
 		>
-			<span class="flex size-5 shrink-0 items-center justify-center sm:self-center">
+			<!-- Phones: icon and chevron sit on the title's first line when it wraps. -->
+			<span class="flex size-5 shrink-0 items-center justify-center">
 				{#if live}
 					<Loader2Icon class="size-3.5 animate-spin" />
 				{:else}
-					<ChevronRightIcon class={cn('size-3.5 transition-transform', expanded && 'rotate-90')} />
+					<!-- Same shape as a tool row: what it is up front, the disclosure chevron at the end. -->
+					<LayersIcon class="size-3.5" />
 				{/if}
 			</span>
-			<span class="line-clamp-2 min-w-0 self-center font-medium sm:truncate">{summary.title}</span>
-			<span
-				class="hidden shrink-0 self-center text-xs text-muted-foreground/70 tabular-nums sm:inline"
-			>
-				<span aria-hidden="true">·</span>
-				{summary.steps}
-				{summary.steps === 1 ? 'step' : 'steps'}
-			</span>
-			{#if summary.failed > 0}
-				<!-- mr-5 skips the chevron slot so the pill lines up with the rows' status column. -->
-				<span
-					class="mr-5 ml-auto shrink-0 self-center rounded-full bg-destructive/10 px-1.5 py-px text-[11px] font-medium text-destructive"
-				>
-					{summary.failed} failed
+			<!-- Phones: the title gets two lines, with the count and pill underneath. From sm it is one
+			     row: the title truncates so the step count and pill stay visible. -->
+			<span class="flex min-w-0 flex-1 gap-x-2.5 gap-y-0.5 max-sm:flex-col sm:items-center">
+				<span class="min-w-0 font-medium max-sm:line-clamp-2 sm:truncate">{summary.title}</span>
+				<span class="flex shrink-0 items-center gap-2 sm:contents">
+					<span class="shrink-0 text-xs whitespace-nowrap text-muted-foreground/70 tabular-nums">
+						<span aria-hidden="true" class="max-sm:hidden">·</span>
+						{summary.steps}
+						{summary.steps === 1 ? 'step' : 'steps'}
+					</span>
+					{#if summary.failed > 0}
+						<!-- From sm it right-aligns, next to the chevron like a tool row's status. -->
+						<span
+							class="shrink-0 rounded-full bg-destructive/10 px-1.5 py-px text-[11px] font-medium whitespace-nowrap text-destructive sm:ml-auto"
+						>
+							{summary.failed} failed
+						</span>
+					{/if}
 				</span>
-			{/if}
+			</span>
+			<ChevronRightIcon
+				class={cn(
+					'size-3.5 shrink-0 text-muted-foreground transition-transform max-sm:mt-[3px]',
+					expanded && 'rotate-90'
+				)}
+			/>
 		</button>
 		{#if expanded}
 			<div class="mt-0.5 ml-[1.0625rem] flex flex-col border-l border-border pl-1 sm:pl-2">

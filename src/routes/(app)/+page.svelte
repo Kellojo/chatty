@@ -300,7 +300,7 @@
 				<!-- min-w-0 lets the model picker give way on narrow phones instead of pushing Send out. -->
 				<div class="flex min-w-0 items-center gap-1">
 					{#if coding}
-						<CodingModelSelect state={codingTask} disabled={busy} />
+						<CodingModelSelect state={codingTask} disabled={busy} shortcut />
 						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 							<PaperclipIcon class="size-4" />
 						</Button>

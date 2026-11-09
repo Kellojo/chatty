@@ -333,6 +333,7 @@
 						<RowMenu
 							label="Actions for {env.name}"
 							items={[
+								{ label: 'Edit', icon: PencilIcon, onSelect: () => openForm(env) },
 								{
 									label: 'Open in T3 Code',
 									icon: ExternalLinkIcon,
@@ -342,16 +343,15 @@
 								{
 									label: 'Sync now',
 									icon: RefreshCwIcon,
-									disabled: syncBusyId === env.id || !env.enabled,
+									disabled: syncBusyId === env.id || !enabled,
 									onSelect: () => sync(env)
 								},
 								{
 									label: 'Import past sessions',
 									icon: HistoryIcon,
-									disabled: !env.enabled,
+									disabled: !enabled,
 									onSelect: () => openHistory(env)
 								},
-								{ label: 'Edit', icon: PencilIcon, onSelect: () => openForm(env) },
 								'separator',
 								{
 									label: 'Remove',
@@ -374,7 +374,7 @@
 <Dialog.Root bind:open={formOpen}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>{formTarget ? 'Edit environment' : 'Connect environment'}</Dialog.Title>
+			<Dialog.Title>{formTarget ? `Edit ${formTarget.name}` : 'Connect environment'}</Dialog.Title>
 			<Dialog.Description>
 				Point Chatty at a T3 Code server (<code>t3 serve</code>). Use HTTPS or a private network
 				such as Tailscale; the token is encrypted at rest.
@@ -437,6 +437,11 @@
 				</div>
 			{/if}
 			<Dialog.Footer>
+				<Dialog.Close>
+					{#snippet child({ props })}
+						<Button {...props} type="button" variant="outline">Cancel</Button>
+					{/snippet}
+				</Dialog.Close>
 				<Button type="submit" disabled={formBusy}>
 					{#if formBusy}
 						<Loader2Icon class="size-4 animate-spin" />

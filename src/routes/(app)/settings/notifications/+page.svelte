@@ -113,7 +113,11 @@
 	async function sendTest() {
 		if (prefs.sound) playTone(prefs.tone, prefs.volume);
 		if (!prefs.desktop || permission !== 'granted') {
-			toast.info('Desktop notifications are off on this device.');
+			toast.info(
+				prefs.sound
+					? 'Device notifications are off, so only the sound played.'
+					: 'Device notifications are off on this device.'
+			);
 			return;
 		}
 		try {
@@ -142,22 +146,7 @@
 <SettingsHeader
 	title="Notifications"
 	description="How Chatty gets your attention when a reply lands or a task needs you. Nothing alerts while you're looking at the conversation."
->
-	{#snippet actions()}
-		<span title={canTest ? undefined : 'Turn on desktop notifications or a sound first'}>
-			<Button variant="outline" onclick={sendTest} disabled={!canTest}>
-				<BellRingIcon class="size-4" />
-				Send test
-			</Button>
-		</span>
-		{#if !canTest}
-			<!-- Touch screens never show the tooltip above. -->
-			<p class="text-xs text-muted-foreground pointer-fine:hidden">
-				Turn on device notifications or a sound to send a test.
-			</p>
-		{/if}
-	{/snippet}
-</SettingsHeader>
+/>
 
 <SettingsSection title="Notify me about" description="Applies to all your devices.">
 	{#each TRIGGER_ORDER as key (key)}
@@ -176,7 +165,24 @@
 	{/each}
 </SettingsSection>
 
-<SettingsSection title="On this device" description="Saved in this browser only.">
+<SettingsSection title="On this device">
+	{#snippet description()}
+		Saved in this browser only.
+		{#if !canTest}
+			<!-- Touch screens never show the tooltip on the disabled button. -->
+			<span class="pointer-fine:hidden"
+				>Turn on device notifications or a sound to send a test.</span
+			>
+		{/if}
+	{/snippet}
+	{#snippet action()}
+		<span title={canTest ? undefined : 'Turn on device notifications or a sound first'}>
+			<Button variant="outline" size="sm" onclick={sendTest} disabled={!canTest}>
+				<BellRingIcon class="size-4" />
+				Send test
+			</Button>
+		</span>
+	{/snippet}
 	<SettingsRow label="Device notifications" for="pref-desktop">
 		{#snippet description()}
 			<span class={desktopBlocked ? 'text-amber-700 dark:text-amber-400' : undefined}

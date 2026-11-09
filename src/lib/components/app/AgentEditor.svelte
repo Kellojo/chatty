@@ -421,14 +421,14 @@
 				for="agent-max-steps"
 				description={readonly
 					? 'Tool calls per run before the agent stops.'
-					: 'Tool calls per run before the agent stops. Leave empty for 25.'}
+					: 'Tool calls per run before the agent stops.'}
 				stack
 			>
 				{#if readonly}
 					<!-- Read-only: the effective value, not a placeholder that looks empty. -->
 					<p
 						id="agent-max-steps"
-						class="w-full rounded-3xl border border-dashed border-border px-3 py-2 text-sm sm:w-28"
+						class="w-full rounded-3xl border border-dashed border-border px-3 py-2 text-sm sm:w-36"
 					>
 						{form.maxSteps === '' ? '25' : form.maxSteps}
 					</p>
@@ -439,8 +439,8 @@
 						min={1}
 						max={100}
 						bind:value={form.maxSteps}
-						placeholder="25"
-						class="w-full sm:w-28"
+						placeholder="Default (25)"
+						class="w-full sm:w-36"
 					/>
 				{/if}
 			</SettingsRow>
@@ -608,8 +608,12 @@
 	{/if}
 
 	{#if !readonly}
+		<!-- A full-width footer strip: the box shadows paint its background and top border out to the
+			scroll area's edges (and down over the page's bottom padding) without adding overflow, and
+			the clip-path keeps them from bleeding upward over the form. It stays in flow, so the last
+			section always scrolls clear of it. -->
 		<div
-			class="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 border-t bg-background/95 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur max-sm:-mx-4 max-sm:px-4 max-sm:[&>*:not(span)]:flex-1"
+			class="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 bg-background/95 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_100vmax_0_100vmax_color-mix(in_oklab,var(--background)_95%,transparent),0_-1px_0_100vmax_var(--border)] backdrop-blur [clip-path:inset(-1px_-100vmax_-100vmax)] max-sm:[&>*:not(span)]:flex-1"
 		>
 			{#if missing || (agent && dirty)}
 				<span class="self-center text-xs text-muted-foreground max-sm:w-full sm:mr-auto"

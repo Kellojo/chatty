@@ -81,13 +81,10 @@
 </SettingsSection>
 
 {#if isAdmin}
-	<SettingsSection
-		title="Search index"
-		description="Full-text search over memory. Only admins can rebuild it."
-	>
+	<SettingsSection title="Search index">
 		<SettingsRow
 			label="Full-text index"
-			description="Covers all memory bundles. Rebuild it after changing memory files outside the app."
+			description="Lets the assistant search memory by keyword. Rebuild it after changing memory files outside the app."
 			stack
 		>
 			<Button variant="outline" class="w-full sm:w-auto" disabled={reindexBusy} onclick={reindex}>

@@ -11,6 +11,11 @@
 	import MapWidget from './map-widget.svelte';
 	import FileWidget from './file-widget.svelte';
 	import ChatsWidget from './chats-widget.svelte';
+	import ClockWidget from './clock-widget.svelte';
+	import LinksWidget from './links-widget.svelte';
+	import CalcWidget from './calc-widget.svelte';
+	import MemoryWidget from './memory-widget.svelte';
+	import AgentWidget from './agent-widget.svelte';
 	import MarkdownLink from './markdown-link.svelte';
 	import { codingAssetUrl, escapeLocalImagePaths, isLocalImagePath } from '$lib/coding-assets.js';
 	import { t3ThreadLinkToPath } from '$lib/t3-thread-links.js';
@@ -57,8 +62,27 @@
 	let currentTheme = $derived(
 		mode.current === 'dark' ? 'github-dark-default' : 'github-light-default'
 	);
-	// Mermaid's light 'default' theme is lavender; 'neutral' matches the stone palette.
-	let mermaidConfig = $derived({ theme: mode.current === 'dark' ? 'dark' : 'neutral' } as const);
+	// Light: mermaid's 'default' is lavender; 'neutral' matches the stone palette. Dark: its 'dark'
+	// nodes are near-black on our card, so lift them to a visible stone gray.
+	let mermaidConfig = $derived(
+		mode.current === 'dark'
+			? ({
+					// 'base' is the only theme that honours themeVariables in full.
+					theme: 'base',
+					themeVariables: {
+						darkMode: true,
+						background: 'transparent',
+						secondaryColor: '#292524',
+						tertiaryColor: '#1c1917',
+						fontFamily: 'inherit',
+						primaryColor: '#3a3835',
+						primaryBorderColor: '#78716c',
+						primaryTextColor: '#e7e5e4',
+						lineColor: '#a8a29e'
+					}
+				} as const)
+			: ({ theme: 'neutral' } as const)
+	);
 </script>
 
 {#snippet linkSafetyModal(props: {
@@ -91,7 +115,12 @@
 				{ language: 'chart', component: ChartWidget },
 				{ language: 'map', component: MapWidget },
 				{ language: 'file', component: FileWidget },
-				{ language: 'chats', component: ChatsWidget }
+				{ language: 'chats', component: ChatsWidget },
+				{ language: 'clock', component: ClockWidget },
+				{ language: 'links', component: LinksWidget },
+				{ language: 'calc', component: CalcWidget },
+				{ language: 'memory', component: MemoryWidget },
+				{ language: 'agent', component: AgentWidget }
 			]
 		}}
 		components={{ img: MarkdownImage, a: MarkdownLink }}
@@ -117,23 +146,48 @@
 			},
 			codespan: { base: 'rounded bg-muted px-1 py-0.5 font-mono text-[0.9em] text-foreground' },
 			li: { base: 'py-0.5 leading-7 marker:text-muted-foreground', checkbox: 'mr-2' },
-			// The default 500px minimum leaves small diagrams floating in a screen-tall box; phones fit the diagram.
+			// Streamdown merges this over its default `min-h-[500px]`, which left small diagrams
+			// floating in a mostly empty box. The surface now hugs the SVG's natural height (capped so
+			// tall charts stay pannable); pt-11 keeps the top-right zoom controls clear of the diagram.
 			mermaid: {
-				base: 'group relative my-4 h-auto items-center overflow-hidden rounded-lg border border-border bg-card md:min-h-[500px]'
+				base: 'group relative h-auto min-h-28 max-h-[60vh] items-center overflow-hidden rounded-none border-0 border-t border-border bg-background/60 pt-11 pb-4 in-data-[expanded=true]:max-h-none'
 			},
 			table: {
 				wrapper: 'my-4 flex flex-col gap-1 rounded-xl border border-border bg-card p-1.5',
 				toolbar:
 					'ml-auto flex w-fit items-center justify-end gap-1 rounded-md bg-card/80 px-1 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur'
 			},
+			// One card: a header strip over the code, instead of a bordered box inside a padded card.
 			code: {
-				base: 'relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-card p-2 [--sdm-bg:transparent]',
-				header: 'flex h-8 items-center justify-between pr-1 text-muted-foreground text-xs',
+				base: 'relative my-4 flex w-full flex-col gap-0 overflow-hidden rounded-xl border border-border bg-card p-0 [--sdm-bg:transparent]',
+				header: 'flex h-10 items-center justify-between px-3 text-muted-foreground text-xs',
 				actions:
-					'pointer-events-none sticky top-2 right-1 z-10 -mt-10 flex h-8 items-center justify-end pointer-coarse:static',
+					'pointer-events-none sticky top-1 right-1 z-10 -mt-9 flex h-8 items-center justify-end pr-1 pointer-coarse:static pointer-coarse:-mt-9',
 				buttons:
-					'pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-border bg-card/80 px-1.5 py-1 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur'
+					'pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-border bg-card/80 px-1.5 py-1 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur',
+				container:
+					'overflow-x-auto rounded-none border-0 border-t border-border bg-background/60 px-4 py-3 text-sm'
 			}
 		}}
 	/>
 </div>
+
+<style>
+	/*
+	 * Streamdown hard-codes the mermaid zoom controls as a vertical stack in the bottom-left corner.
+	 * Lay them out as a compact horizontal group in the top-right, styled like the code-block toolbar.
+	 */
+	:global(
+		[data-streamdown-mermaid] [data-language='mermaid'] > div > div:has(> button[title='Zoom in'])
+	) {
+		top: 0.375rem;
+		right: 0.375rem;
+		bottom: auto;
+		left: auto;
+		flex-direction: row;
+		gap: 0.25rem;
+		border-color: var(--border);
+		background-color: color-mix(in oklab, var(--card) 80%, transparent);
+		padding: 0.125rem 0.375rem;
+	}
+</style>

@@ -87,6 +87,28 @@ describe('Sidebar row states', () => {
 		document.documentElement.classList.remove('dark');
 	});
 
+	it('shows a task blocked on a question as needing you, though its stream is open', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('{}', { status: 404 }))
+		);
+		// The agent's run is still active while it waits, so the server reports a live stream.
+		serverActiveChats.set('needs-you', now - 5_000);
+		const screen = render(Sidebar, {
+			user: { name: 'Ada Lovelace', email: 'ada@example.com', image: null, role: 'user' },
+			conversations,
+			hasMore: false,
+			unreadIds,
+			settledCount: 0,
+			autoSettleDays: 14,
+			onclose: () => {},
+			onshowshortcuts: () => {}
+		});
+		const row = screen.container.querySelector('[data-conversation-id="needs-you"]');
+		expect(row?.getAttribute('title')).toContain('Needs you');
+		vi.unstubAllGlobals();
+	});
+
 	const touch = matchMedia('(pointer: coarse)').matches;
 	for (const viewport of [
 		{ name: 'desktop', width: 1000, height: 820 },
@@ -109,7 +131,8 @@ describe('Sidebar row states', () => {
 					unreadIds,
 					settledCount: 0,
 					autoSettleDays: 14,
-					onclose: () => {}
+					onclose: () => {},
+					onshowshortcuts: () => {}
 				});
 				// The app gives the sidebar the full width on phones and the window's height.
 				screen.container.style.height = `${viewport.height}px`;

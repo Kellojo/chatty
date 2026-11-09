@@ -5,12 +5,15 @@
 	import ConversationMenu from './ConversationMenu.svelte';
 	import HandoffDialog from './HandoffDialog.svelte';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
+	import SquarePenIcon from '@lucide/svelte/icons/square-pen';
+	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { getSidebarState } from './sidebar-state.svelte.js';
 	import { decodeModelRef, encodeModelRef } from '$lib/model-ref.js';
 	import type { Agent, Conversation, ModelMapping, ModelsByProvider } from '$lib/types.js';
 	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
+	import type { CodingBrowserActivity } from '$lib/coding-preview.js';
 	import { canCreatePullRequest, type CodingRecoveryAction } from '$lib/coding-task-details.js';
 
 	let {
@@ -21,6 +24,7 @@
 		personas,
 		coding = null,
 		codingEnvironmentName = null,
+		codingBrowserActivity = null,
 		oncreatepr,
 		onrecover,
 		codingEnvironments = [],
@@ -37,6 +41,8 @@
 		/** Set for coding tasks: the remote agent's model is fixed, so show the task instead. */
 		coding?: CodingConversation | null;
 		codingEnvironmentName?: string | null;
+		/** The coding agent's browser use in its current run. */
+		codingBrowserActivity?: CodingBrowserActivity | null;
 		oncreatepr?: () => void;
 		/** Retry or continue a failed or interrupted coding task. */
 		onrecover?: (action: CodingRecoveryAction) => void;
@@ -123,10 +129,12 @@
 			<CodingTaskBar
 				{coding}
 				title={displayTitle}
+				environmentName={codingEnvironmentName}
 				{oncreatepr}
 				{onrecover}
 				bind:settingsOpen={codingSettingsOpen}
 				bind:previewOpen={codingPreviewOpen}
+				browserActivity={codingBrowserActivity}
 			/>
 		{:else}
 			<!-- Main info first: what this chat is, then the controls. -->
@@ -141,7 +149,7 @@
 					{personaLabel}
 				</Badge>
 			{/if}
-			<div class="ml-auto flex shrink-0 items-center gap-1">
+			<div class="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
 				<!-- Quiet controls so the title leads; on phones the picker shows just the model name,
 				     keeping the generic icon for mappings so "auto" still reads as a model. -->
 				<ModelPicker
@@ -151,7 +159,7 @@
 					onselect={selectModel}
 					disabled={saving}
 					align="end"
-					class="w-auto max-w-32 shrink-0 bg-transparent pr-2 text-muted-foreground hover:bg-accent hover:text-foreground data-[size=default]:h-8 max-sm:pr-1 sm:max-w-44 lg:max-w-56 pointer-coarse:data-[size=default]:h-10 max-sm:[&_[data-model-icon=brand]]:hidden max-sm:[&_[data-model-source]]:hidden"
+					class="w-auto max-w-32 shrink-0 bg-transparent pr-2 text-muted-foreground hover:bg-accent hover:text-foreground data-[size=default]:h-8 max-sm:max-w-20 max-sm:pr-1 sm:max-w-44 lg:max-w-56 pointer-coarse:data-[size=default]:h-10 max-sm:[&_[data-model-icon=brand]]:hidden max-sm:[&_[data-model-source]]:hidden max-sm:[&>svg:last-child]:hidden"
 				/>
 				{#if canHandoff}
 					<Button
@@ -170,6 +178,17 @@
 				{/if}
 			</div>
 		{/if}
+		<!-- Phones have no sidebar on screen, so starting over shouldn't take a trip through the drawer. -->
+		<Button
+			variant="ghost"
+			size="icon"
+			href={resolve('/')}
+			class="shrink-0 text-muted-foreground hover:text-foreground md:hidden"
+			aria-label="New chat"
+			title="New chat"
+		>
+			<SquarePenIcon />
+		</Button>
 		<!-- Pulled out by the icon's inset so the dots line up with the messages' right edge. -->
 		<div class="-mr-2 flex shrink-0">
 			<ConversationMenu

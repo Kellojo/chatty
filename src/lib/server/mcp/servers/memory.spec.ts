@@ -212,3 +212,57 @@ describe('shared scope', () => {
 		expect(byPath.get('team/values.md')).toBe('shared');
 	});
 });
+
+function widgetItem(res: unknown): Record<string, unknown> {
+	const r = res as { content?: Array<{ type: string; text?: string }> };
+	return JSON.parse(r.content?.[1]?.text ?? 'null') as Record<string, unknown>;
+}
+
+describe('memory widget items', () => {
+	it('returns a ```memory widget item with each write', async () => {
+		const created = await callTool(userCtx, 'create_concept', {
+			path: 'people/maria',
+			title: 'Maria',
+			body: '# Maria\n\nMy **sister**, lives in [[places/valencia.md|Valencia]]. Uses snake_case.'
+		});
+		expect(widgetItem(created)).toEqual({
+			action: 'created',
+			path: 'people/maria.md',
+			scope: 'user',
+			title: 'Maria',
+			snippet: 'Maria My sister, lives in Valencia. Uses snake_case.'
+		});
+
+		const updated = await callTool(userCtx, 'update_concept', {
+			path: 'people/maria.md',
+			description: 'Your sister in Valencia'
+		});
+		expect(widgetItem(updated)).toMatchObject({
+			action: 'updated',
+			title: 'Maria',
+			snippet: 'Your sister in Valencia'
+		});
+
+		const deleted = await callTool(userCtx, 'delete_concept', { path: 'people/maria.md' });
+		expect(widgetItem(deleted)).toMatchObject({ action: 'deleted', path: 'people/maria.md' });
+	});
+
+	it('mentions the fence in the write tool descriptions', async () => {
+		const { createMemoryServer: create } = await import('./memory.js');
+		const server = create(userCtx) as unknown as {
+			_registeredTools: Record<string, { description?: string }>;
+		};
+		expect(server._registeredTools.create_concept.description).toContain('```memory');
+		expect(server._registeredTools.update_concept.description).toContain('```memory');
+	});
+});
+
+describe('memorySnippet', () => {
+	it('prefers the description and truncates long text', async () => {
+		const { memorySnippet } = await import('./memory.js');
+		expect(memorySnippet(' Short note ', 'body')).toBe('Short note');
+		const long = memorySnippet(undefined, 'word '.repeat(80));
+		expect(long.length).toBeLessThanOrEqual(160);
+		expect(long.endsWith('…')).toBe(true);
+	});
+});

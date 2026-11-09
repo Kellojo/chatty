@@ -144,13 +144,7 @@
 <!-- hrefs below are built from resolve() plus a query string / hash. -->
 <!-- eslint-disable svelte/no-navigation-without-resolve -->
 <div class="flex flex-col gap-6">
-	<div class="flex flex-col gap-2">
-		<p class="text-sm text-muted-foreground">
-			Your usage, {rangeLabel}. What you were billed and what your subscriptions covered are shown
-			side by side and never added together.
-		</p>
-		<EnvironmentStatusChips environments={subs.environments} {now} />
-	</div>
+	<EnvironmentStatusChips environments={subs.environments} {now} />
 
 	<!-- Headline: actual spend vs. subscription value. The badge is the only type marker. -->
 	<div class="grid gap-3 md:grid-cols-2">
@@ -163,14 +157,13 @@
 			caption={payg.totalRequests > 0 && payg.pricedRequests === 0 ? 'No cost reported' : undefined}
 			subtitle="Billed per token by the providers configured in Chatty."
 		>
-			<span class="text-sm text-foreground/80 tabular-nums">
-				{#if payg.totalRequests === 0}
-					No requests in this period
-				{:else}
+			<!-- With no requests, the empty state below already says so. -->
+			{#if payg.totalRequests > 0}
+				<span class="text-sm text-foreground/80 tabular-nums">
 					Your {formatCount(payg.totalRequests)}
 					{payg.totalRequests === 1 ? 'request' : 'requests'} · {formatCount(payg.totalTokens)} tokens
-				{/if}
-			</span>
+				</span>
+			{/if}
 			{#if delta}
 				<span class="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
 					{#if delta.up}
@@ -226,8 +219,8 @@
 						<ProviderBillingBadge billing="subscription" />
 					</div>
 					<p class="text-sm text-muted-foreground">
-						Connect a T3 Code coding environment to track your Claude, Codex and other plans:
-						limits, resets and the API-equivalent value of what you use. Chatty never bills for it.
+						Connect a coding environment (T3 Code) to see your Claude and Codex plan limits and
+						their API-equivalent value. Chatty never bills for it.
 					</p>
 					<Button
 						variant="outline"

@@ -68,3 +68,77 @@ export function toPagePoint(
 	const y = rect.height > 0 ? ((clientY - rect.top) / rect.height) * viewport.height : 0;
 	return { x: Math.round(clamp(x, viewport.width)), y: Math.round(clamp(y, viewport.height)) };
 }
+
+/** The largest size with `content`'s aspect ratio that fits in `box`. */
+export function fitSize(
+	content: { width: number; height: number },
+	box: { width: number; height: number }
+): { width: number; height: number } {
+	if (content.width <= 0 || content.height <= 0 || box.width <= 0 || box.height <= 0) {
+		return { width: 0, height: 0 };
+	}
+	const scale = Math.min(box.width / content.width, box.height / content.height);
+	return {
+		width: Math.round(content.width * scale),
+		height: Math.round(content.height * scale)
+	};
+}
+
+/**
+ * The agent's latest use of its browser during a run. `calls` grows with every
+ * browser tool call, so a change means the agent just used it again.
+ */
+export interface CodingBrowserActivity {
+	/** Identifies the run, so dismissing the picture-in-picture lasts until the next one. */
+	run: string;
+	calls: number;
+	/** The tab the latest call used, when it says. */
+	tabId: string | null;
+}
+
+/** Browser tools that look at or drive a tab ("mcp__t3-code__preview_act"), not housekeeping. */
+const BROWSER_TOOL = /(?:^|[_.:])preview_(?!close$|list$|status$)[a-z_]+$/;
+
+export function isBrowserToolName(name: string): boolean {
+	return BROWSER_TOOL.test(name);
+}
+
+interface ToolPartLike {
+	type: string;
+	toolName?: string;
+	input?: unknown;
+	output?: unknown;
+}
+
+const TAB_ID = /"tabId"\s*:\s*"([^"]{1,256})"/;
+
+function tabIdOf(part: ToolPartLike): string | null {
+	const input = part.input as { tabId?: unknown } | null | undefined;
+	if (input && typeof input === 'object' && typeof input.tabId === 'string' && input.tabId) {
+		return input.tabId;
+	}
+	// The result of opening a tab names it; only its start is needed.
+	const output = typeof part.output === 'string' ? part.output : JSON.stringify(part.output ?? '');
+	return TAB_ID.exec(output.slice(0, 4000))?.[1] ?? null;
+}
+
+/** The agent's browser activity in a message's parts, or null when it hasn't used the browser. */
+export function browserActivity(
+	parts: readonly ToolPartLike[],
+	run: string
+): CodingBrowserActivity | null {
+	let calls = 0;
+	let last: ToolPartLike | null = null;
+	for (const part of parts) {
+		const name =
+			part.type === 'dynamic-tool'
+				? (part.toolName ?? '')
+				: part.type.startsWith('tool-')
+					? part.type.slice(5)
+					: '';
+		if (!name || !isBrowserToolName(name)) continue;
+		calls++;
+		last = part;
+	}
+	return last ? { run, calls, tabId: tabIdOf(last) } : null;
+}

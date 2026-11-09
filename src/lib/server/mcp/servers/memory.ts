@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import {
@@ -14,6 +15,47 @@ import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
 
 const scopeSchema = z.enum(['user', 'shared']);
+
+const SNIPPET_MAX = 160;
+
+/** A one-line plain-text preview of a concept for the ```memory widget. */
+export function memorySnippet(description: string | undefined, body: string): string {
+	const source = description?.trim() || body;
+	const plain = source
+		.replace(/^---[\s\S]*?---/, '')
+		.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target: string, label?: string) =>
+			(label ?? target).replace(/\.md$/, '').split('/').pop()!
+		)
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+		.replace(/[#>*`~]+|\b_+|_+\b/g, '')
+		.replace(/^\s*[-+]\s+/gm, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+	return plain.length > SNIPPET_MAX ? `${plain.slice(0, SNIPPET_MAX - 1).trimEnd()}…` : plain;
+}
+
+/**
+ * The tool result, plus the item the ```memory chat widget renders, so the
+ * model can paste it into the fence verbatim.
+ */
+function written(
+	action: 'created' | 'updated' | 'deleted',
+	path: string,
+	scope: MemoryScope,
+	title: string | undefined,
+	snippet: string
+): CallToolResult {
+	const item = { action, path, scope, title: title || undefined, snippet: snippet || undefined };
+	return {
+		content: [
+			{ type: 'text', text: `${action} ${path}` },
+			{ type: 'text', text: JSON.stringify(item) }
+		]
+	};
+}
+
+const FENCE_HINT =
+	'Returns a widget item; to show the user what was remembered, end your reply with a ```memory fenced code block containing {"items":[...]} — the items from all memory writes this turn, verbatim.';
 const pathSchema = z
 	.string()
 	.describe('Concept path, e.g. "people/john.md" (".md" is appended automatically if missing)');
@@ -89,7 +131,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'create_concept',
 		{
-			description: 'Create a new memory concept (fails if the path already exists)',
+			description: `Create a new memory concept (fails if the path already exists). ${FENCE_HINT}`,
 			inputSchema: {
 				path: pathSchema,
 				title: z.string(),
@@ -119,14 +161,14 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
-			return text(`created ${normalized}`);
+			return written('created', normalized, s, title, memorySnippet(description, body));
 		}
 	);
 
 	server.registerTool(
 		'update_concept',
 		{
-			description: 'Update an existing memory concept (omitted fields keep their current values)',
+			description: `Update an existing memory concept (omitted fields keep their current values). ${FENCE_HINT}`,
 			inputSchema: {
 				path: pathSchema,
 				title: z.string().optional(),
@@ -145,34 +187,34 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			if (denied) return err(denied);
 			const existing = readConcept(s, ctx.userId, normalized);
 			if (!existing) return err('concept not found');
+			const next = {
+				frontmatter: {
+					title: title ?? existing.frontmatter.title,
+					type: type ?? existing.frontmatter.type,
+					description: description ?? existing.frontmatter.description,
+					tags: tags ?? existing.frontmatter.tags
+				},
+				body: body ?? existing.body
+			};
 			try {
-				writeConcept(
-					getDb(),
-					s,
-					ctx.userId,
-					normalized,
-					{
-						frontmatter: {
-							title: title ?? existing.frontmatter.title,
-							type: type ?? existing.frontmatter.type,
-							description: description ?? existing.frontmatter.description,
-							tags: tags ?? existing.frontmatter.tags
-						},
-						body: body ?? existing.body
-					},
-					audit()
-				);
+				writeConcept(getDb(), s, ctx.userId, normalized, next, audit());
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
-			return text(`updated ${normalized}`);
+			return written(
+				'updated',
+				normalized,
+				s,
+				next.frontmatter.title,
+				memorySnippet(next.frontmatter.description, next.body)
+			);
 		}
 	);
 
 	server.registerTool(
 		'delete_concept',
 		{
-			description: 'Delete a memory concept',
+			description: 'Delete a memory concept. Returns a ```memory widget item (see create_concept).',
 			inputSchema: { path: pathSchema, scope: scopeSchema.optional() }
 		},
 		async ({ path, scope }) => {
@@ -181,13 +223,20 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			const s = scope ?? 'user';
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
-			if (!readConcept(s, ctx.userId, normalized)) return err('concept not found');
+			const existing = readConcept(s, ctx.userId, normalized);
+			if (!existing) return err('concept not found');
 			try {
 				deleteConcept(getDb(), s, ctx.userId, normalized, audit());
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
-			return text(`deleted ${normalized}`);
+			return written(
+				'deleted',
+				normalized,
+				s,
+				existing.frontmatter.title,
+				memorySnippet(existing.frontmatter.description, existing.body)
+			);
 		}
 	);
 

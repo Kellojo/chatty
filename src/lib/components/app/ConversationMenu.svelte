@@ -12,7 +12,7 @@
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
-	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import AppWindowIcon from '@lucide/svelte/icons/app-window';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
@@ -162,7 +162,7 @@
 			{/if}
 			{#if onpreview}
 				<DropdownMenu.Item class="sm:hidden" onSelect={onpreview}>
-					<GlobeIcon class="size-4" />
+					<AppWindowIcon class="size-4" />
 					Browser preview
 				</DropdownMenu.Item>
 			{/if}

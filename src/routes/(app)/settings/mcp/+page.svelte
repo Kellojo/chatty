@@ -61,9 +61,9 @@
 				};
 		if (server.builtin) return [test, loadMode];
 		return [
+			{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(server) },
 			test,
 			loadMode,
-			{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(server) },
 			'separator',
 			{ label: 'Delete', icon: Trash2Icon, destructive: true, onSelect: () => openDelete(server) }
 		];
@@ -320,7 +320,7 @@
 
 <SettingsHeader
 	title="MCP servers"
-	description="Model Context Protocol servers whose tools are available in chats and agent runs. Tools of on-demand servers stay out of the prompt until the model searches for them, as do a few rarely used built-in tools such as creating skills."
+	description="Tools from Model Context Protocol servers, available in chats and agent runs."
 >
 	{#snippet actions()}
 		<Button onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
@@ -346,7 +346,7 @@
 			{#if (loadModeOverride[server.id] ?? server.loadMode) === 'deferred'}
 				<Badge
 					variant="secondary"
-					title="Tools stay out of the prompt until the model loads them with search_tools"
+					title="Tools load only when the model searches for them, keeping the prompt small"
 				>
 					On demand
 				</Badge>
@@ -393,9 +393,7 @@
 					Add a remote server over HTTP or run a local one over stdio.
 				</p>
 			</div>
-			<Button size="sm" variant="outline" onclick={openAdd}
-				><PlusIcon class="size-4" />Add server</Button
-			>
+			<Button size="sm" onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
 		</div>
 	{:else}
 		<ul class="divide-y divide-border/60" aria-label="Your MCP servers">
@@ -472,6 +470,11 @@
 				</div>
 			{/if}
 			<Dialog.Footer>
+				<Dialog.Close>
+					{#snippet child({ props })}
+						<Button {...props} type="button" variant="outline">Cancel</Button>
+					{/snippet}
+				</Dialog.Close>
 				<Button type="submit" disabled={addBusy}>{addBusy ? 'Adding…' : 'Add server'}</Button>
 			</Dialog.Footer>
 		</form>
@@ -481,7 +484,8 @@
 <Dialog.Root bind:open={editOpen}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Edit server</Dialog.Title>
+			<Dialog.Title>Edit {data.servers.find((s) => s.id === editId)?.name ?? 'server'}</Dialog.Title
+			>
 			<Dialog.Description>Update the connection details for this MCP server.</Dialog.Description>
 		</Dialog.Header>
 		<form onsubmit={submitEdit} class="flex flex-col gap-4">
@@ -522,11 +526,16 @@
 						type="password"
 						bind:value={editToken}
 						autocomplete="off"
-						placeholder="Leave empty to keep current token"
+						placeholder="Leave empty to keep the current token"
 					/>
 				</div>
 			{/if}
 			<Dialog.Footer>
+				<Dialog.Close>
+					{#snippet child({ props })}
+						<Button {...props} type="button" variant="outline">Cancel</Button>
+					{/snippet}
+				</Dialog.Close>
 				<Button type="submit" disabled={editBusy}>{editBusy ? 'Saving…' : 'Save changes'}</Button>
 			</Dialog.Footer>
 		</form>
@@ -536,7 +545,7 @@
 <Dialog.Root bind:open={deleteOpen}>
 	<Dialog.Content>
 		<Dialog.Header>
-			<Dialog.Title>Delete server {deleteTarget?.name}?</Dialog.Title>
+			<Dialog.Title>Delete {deleteTarget?.name}?</Dialog.Title>
 			<Dialog.Description>
 				This removes the server and its stored token. Conversations keep their history.
 			</Dialog.Description>

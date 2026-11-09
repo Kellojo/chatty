@@ -55,8 +55,8 @@ export default defineConfig(({ mode }) => {
 					name: 'Chatty',
 					short_name: 'Chatty',
 					description: 'Self-hosted AI chat',
-					theme_color: '#161413',
-					background_color: '#161413',
+					theme_color: '#0e0d0c',
+					background_color: '#0e0d0c',
 					display: 'standalone',
 					start_url: '/',
 					icons: [

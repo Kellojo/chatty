@@ -17,7 +17,9 @@ const createSchema = z.object({
 	modelId: z.string().min(1).max(200),
 	displayName: z.string().min(1).max(200).optional(),
 	capabilities: z
-		.array(z.enum(['chat', 'vision', 'tool_use', 'streaming', 'image', 'decisions']))
+		.array(
+			z.enum(['chat', 'vision', 'tool_use', 'streaming', 'image', 'decisions', 'transcription'])
+		)
 		.optional()
 });
 

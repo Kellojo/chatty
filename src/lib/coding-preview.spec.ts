@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { previewModifiers, toPagePoint } from './coding-preview.js';
+import {
+	browserActivity,
+	fitSize,
+	isBrowserToolName,
+	previewModifiers,
+	toPagePoint
+} from './coding-preview.js';
 
 describe('previewModifiers', () => {
 	it('uses CDP modifier bits', () => {
@@ -32,5 +38,79 @@ describe('toPagePoint', () => {
 			x: 0,
 			y: 0
 		});
+	});
+});
+
+describe('fitSize', () => {
+	it('fits the content into the box, keeping its aspect ratio', () => {
+		expect(fitSize({ width: 1280, height: 800 }, { width: 640, height: 640 })).toEqual({
+			width: 640,
+			height: 400
+		});
+		expect(fitSize({ width: 390, height: 844 }, { width: 1000, height: 422 })).toEqual({
+			width: 195,
+			height: 422
+		});
+	});
+
+	it('scales small content up to the box', () => {
+		expect(fitSize({ width: 400, height: 300 }, { width: 800, height: 800 })).toEqual({
+			width: 800,
+			height: 600
+		});
+	});
+
+	it('is empty for an empty size', () => {
+		expect(fitSize({ width: 0, height: 800 }, { width: 640, height: 640 })).toEqual({
+			width: 0,
+			height: 0
+		});
+	});
+});
+
+describe('isBrowserToolName', () => {
+	it('matches tools that look at or drive a tab', () => {
+		expect(isBrowserToolName('mcp__t3-code__preview_open')).toBe(true);
+		expect(isBrowserToolName('mcp__t3-code__preview_act')).toBe(true);
+		expect(isBrowserToolName('preview_snapshot')).toBe(true);
+	});
+
+	it('skips housekeeping and unrelated tools', () => {
+		expect(isBrowserToolName('mcp__t3-code__t3_preview_close')).toBe(false);
+		expect(isBrowserToolName('mcp__t3-code__preview_status')).toBe(false);
+		expect(isBrowserToolName('mcp__t3-code__html_preview')).toBe(false);
+		expect(isBrowserToolName('Bash')).toBe(false);
+	});
+});
+
+describe('browserActivity', () => {
+	const tool = (toolName: string, input: unknown = {}, output?: unknown) => ({
+		type: 'dynamic-tool',
+		toolName,
+		input,
+		output
+	});
+
+	it('is null when the agent has not used the browser', () => {
+		expect(browserActivity([{ type: 'text' }, tool('Bash')], 'run')).toBeNull();
+	});
+
+	it('counts browser calls and names the latest tab', () => {
+		const activity = browserActivity(
+			[
+				tool('mcp__t3-code__preview_open', {}, { tabId: 'tab_1', url: 'http://localhost' }),
+				tool('Bash'),
+				tool('mcp__t3-code__preview_act', { tabId: 'tab_2', action: 'click' })
+			],
+			'run-1'
+		);
+		expect(activity).toEqual({ run: 'run-1', calls: 2, tabId: 'tab_2' });
+	});
+
+	it('reads the tab from the result when the call does not name it', () => {
+		const output = JSON.stringify({ available: true, tabId: 'tab_9', tabs: [{ tabId: 'tab_0' }] });
+		expect(browserActivity([tool('mcp__t3-code__preview_open', {}, output)], 'r')?.tabId).toBe(
+			'tab_9'
+		);
 	});
 });

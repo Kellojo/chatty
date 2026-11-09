@@ -80,6 +80,12 @@
 	let currentPassword = $state('');
 	let newPassword = $state('');
 	let confirmNewPassword = $state('');
+	// Only once they've typed as much as the new password, so it doesn't nag mid-entry.
+	const passwordMismatch = $derived(
+		confirmNewPassword.length >= newPassword.length &&
+			confirmNewPassword.length > 0 &&
+			confirmNewPassword !== newPassword
+	);
 	let passwordBusy = $state(false);
 
 	function openPasswordDialog() {
@@ -92,7 +98,9 @@
 	async function submitPassword(event: SubmitEvent) {
 		event.preventDefault();
 		if (passwordBusy || !currentPassword || !newPassword || newPassword !== confirmNewPassword) {
-			toast.error('Please fill in all fields and ensure passwords match.');
+			toast.error(
+				newPassword !== confirmNewPassword ? "Passwords don't match." : 'Fill in all fields.'
+			);
 			return;
 		}
 		passwordBusy = true;
@@ -222,9 +230,19 @@
 					minlength={8}
 					placeholder="Re-enter new password"
 					autocomplete="new-password"
+					aria-invalid={passwordMismatch || undefined}
+					aria-describedby={passwordMismatch ? 'confirm-password-error' : undefined}
 				/>
+				{#if passwordMismatch}
+					<p id="confirm-password-error" class="text-xs text-destructive">Passwords don't match.</p>
+				{/if}
 			</div>
 			<Dialog.Footer>
+				<Dialog.Close>
+					{#snippet child({ props })}
+						<Button {...props} type="button" variant="outline">Cancel</Button>
+					{/snippet}
+				</Dialog.Close>
 				<Button type="submit" disabled={passwordBusy}>
 					{passwordBusy ? 'Saving…' : 'Change password'}
 				</Button>

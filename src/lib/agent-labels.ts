@@ -10,7 +10,7 @@ export const TRIGGER_LABELS: Record<AgentTriggerType, string> = {
 };
 
 export const EVENT_LABELS: Record<AgentEventName, string> = {
-	'memory.changed': 'Memory created/updated/deleted',
+	'memory.changed': 'Memory change',
 	'chat.created': 'Chat created',
 	'chat.message_completed': 'Chat message completed',
 	'skill.created': 'Skill created',
@@ -67,4 +67,21 @@ export function isStoppedRun(run: { status: string; error: string | null }): boo
 export function formatRunError(error: string | null): string | null {
 	if (!error || error === '[object Object]') return null;
 	return error;
+}
+
+const SLUG_RE = /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/;
+
+/** Whether an agent name is a machine slug (e.g. the built-in "memory-cleanup"). */
+export function isAgentSlug(name: string): boolean {
+	return SLUG_RE.test(name);
+}
+
+/** Human-readable agent title: slugs become title case ("memory-cleanup" → "Memory Cleanup",
+ *  like skill titles), names people typed are kept as-is. */
+export function agentDisplayName(name: string): string {
+	if (!isAgentSlug(name)) return name;
+	return name
+		.split(/[-_]+/)
+		.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+		.join(' ');
 }

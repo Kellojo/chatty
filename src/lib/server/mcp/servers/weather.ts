@@ -29,6 +29,7 @@ interface ForecastResponse {
 		weather_code?: number;
 		wind_speed_10m?: number;
 		wind_direction_10m?: number;
+		is_day?: number;
 	};
 	daily?: {
 		time?: string[];
@@ -95,7 +96,7 @@ export function createWeatherServer(): McpServer {
 				timezone: 'auto',
 				forecast_days: String(forecastDays),
 				current:
-					'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m',
+					'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,is_day',
 				daily:
 					'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max'
 			});
@@ -134,7 +135,8 @@ export function createWeatherServer(): McpServer {
 					precip: c.precipitation ?? null,
 					wind: c.wind_speed_10m ?? null,
 					windDir: c.wind_direction_10m ?? null,
-					code: c.weather_code ?? null
+					code: c.weather_code ?? null,
+					isDay: c.is_day === undefined ? null : c.is_day === 1
 				},
 				units: { temp: '°C', wind: 'km/h', precip: 'mm' },
 				daily

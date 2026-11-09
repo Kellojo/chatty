@@ -301,8 +301,9 @@
 					{#if branch && branch.count > 1 && onswitchbranch}
 						{@const prev = branch.ids[branch.index - 1]}
 						{@const next = branch.ids[branch.index + 1]}
+						<!-- Divided off so "delete this version" never reads as one of the message actions. -->
 						<div
-							class="flex items-center text-xs text-muted-foreground tabular-nums"
+							class="mr-1 flex items-center border-r border-border/60 pr-1 text-xs text-muted-foreground tabular-nums"
 							role="group"
 							aria-label="Message versions"
 						>

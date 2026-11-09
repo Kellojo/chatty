@@ -354,7 +354,8 @@
 				<span
 					class={cn(
 						'min-w-0 truncate text-xs',
-						failed && !display.detail ? 'text-destructive/80' : 'text-muted-foreground',
+						// The icon and "Failed" already say it went wrong; the excerpt stays readable grey.
+						'text-muted-foreground',
 						!display.prose && display.detail && 'font-mono'
 					)}
 					title={detail}>{detail}</span

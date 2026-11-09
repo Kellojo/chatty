@@ -2,11 +2,13 @@
 	import { untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import { MAX_SUGGESTIONS } from '$lib/user-settings.js';
+	import { guardUnsavedChanges } from '$lib/components/app/settings/unsaved-changes.js';
 
 	let {
 		title,
@@ -37,6 +39,19 @@
 	const dirty = $derived(
 		cleanedRows.length !== saved.length || cleanedRows.some((text, i) => text !== saved[i])
 	);
+
+	// An empty list already means "show the defaults", so either counts as default.
+	const isDefault = $derived(
+		cleanedRows.length === 0 ||
+			(cleanedRows.length === defaults.length && cleanedRows.every((t, i) => t === defaults[i]))
+	);
+
+	guardUnsavedChanges(() => dirty);
+
+	/** Stages an empty list, which follows the built-in defaults; Save commits it. */
+	function resetToDefaults() {
+		rows = [];
+	}
 
 	function addRow() {
 		if (rows.length >= MAX_SUGGESTIONS) return;
@@ -103,14 +118,25 @@
 		</div>
 	{/if}
 	<div class="flex flex-wrap items-center justify-between gap-2">
-		<Button variant="ghost" size="sm" onclick={addRow} disabled={rows.length >= MAX_SUGGESTIONS}>
-			<PlusIcon class="size-4" />
-			Add suggestion
-		</Button>
+		<div class="flex flex-wrap items-center gap-1">
+			<Button variant="ghost" size="sm" onclick={addRow} disabled={rows.length >= MAX_SUGGESTIONS}>
+				<PlusIcon class="size-4" />
+				Add suggestion
+			</Button>
+			{#if !isDefault}
+				<Button variant="ghost" size="sm" onclick={resetToDefaults}>
+					<RotateCcwIcon class="size-4" />
+					Reset to defaults
+				</Button>
+			{/if}
+		</div>
 		<div class="flex items-center gap-3">
 			<span class="text-xs text-muted-foreground tabular-nums"
 				>{rows.length} of {MAX_SUGGESTIONS}</span
 			>
+			{#if dirty}
+				<span class="text-xs text-muted-foreground">Unsaved changes</span>
+			{/if}
 			<Button size="sm" onclick={onSave} disabled={busy || !dirty}>
 				{busy ? 'Saving…' : 'Save'}
 			</Button>
