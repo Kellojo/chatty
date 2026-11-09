@@ -125,13 +125,27 @@
 	let settledLoading = $state(false);
 	let settledError = $state(false);
 
+	/** Spoken status for the shelf; background refreshes of a shown list stay silent. */
+	const settledAnnouncement = $derived.by(() => {
+		if (!settledOpen) return '';
+		const empty = !settledItems?.length;
+		if (settledError) {
+			return empty ? "Couldn't load the settled list" : "Couldn't load more of the settled list";
+		}
+		return empty && settledLoading ? 'Loading settled conversations' : '';
+	});
+
 	async function loadSettled(reset: boolean) {
 		if (settledLoading && !reset) return;
 		settledLoading = true;
 		settledError = false;
 		try {
 			const offset = reset ? 0 : (settledItems?.length ?? 0);
-			const res = await fetch(`/api/conversations/settled?offset=${offset}`).catch(() => null);
+			// A refresh keeps as many rows as are showing, so "Show more" isn't undone.
+			const limit = reset && settledItems?.length ? `&limit=${settledItems.length}` : '';
+			const res = await fetch(`/api/conversations/settled?offset=${offset}${limit}`).catch(
+				() => null
+			);
 			if (!res?.ok) {
 				settledError = true;
 				return;
@@ -648,7 +662,7 @@
 	<div
 		class="group mb-0.5 flex w-full items-center rounded-md text-sm {current
 			? 'bg-accent text-accent-foreground'
-			: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}"
+			: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground/85'}"
 	>
 		<a
 			href={resolve(`/chat/${c.id}`)}
@@ -881,7 +895,7 @@
 			<div class="mx-2 mt-3 border-t" aria-hidden="true"></div>
 			<button
 				type="button"
-				class="group/shelf mt-1.5 mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground outline-none hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:py-2"
+				class="group/shelf mt-2 mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground outline-none hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:py-2"
 				aria-expanded={settledOpen}
 				aria-controls="settled-shelf"
 				onclick={toggleSettledShelf}
@@ -898,11 +912,7 @@
 			</button>
 			<!-- Announces what the spinner and error line show. -->
 			<p class="sr-only" aria-live="polite">
-				{settledOpen && settledLoading
-					? 'Loading settled conversations'
-					: settledOpen && settledError
-						? "Couldn't load settled conversations"
-						: ''}
+				{settledAnnouncement}
 			</p>
 			<div id="settled-shelf">
 				{#if settledOpen}
@@ -918,15 +928,17 @@
 							<div class="flex justify-center py-2">
 								<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
 							</div>
+						{:else if settledItems && !settledError}
+							<p class="px-2 py-1 text-xs text-muted-foreground">Nothing settled.</p>
 						{/if}
 					{/each}
 					{#if settledError}
 						<p class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
 							<CircleAlertIcon class="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
-							<span class="truncate">Couldn't load settled chats.</span>
+							<span class="truncate">Couldn't load the settled list.</span>
 							<button
 								type="button"
-								class="shrink-0 rounded font-medium text-foreground underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+								class="shrink-0 rounded font-medium text-foreground underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:px-1 pointer-coarse:py-2"
 								onclick={() => loadSettled(settledItems === null || settledItems.length === 0)}
 							>
 								Retry
