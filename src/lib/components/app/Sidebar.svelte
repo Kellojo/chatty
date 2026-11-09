@@ -13,6 +13,8 @@
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import CircleDotDashedIcon from '@lucide/svelte/icons/circle-dot-dashed';
 	import CodeIcon from '@lucide/svelte/icons/code';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -28,7 +30,9 @@
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import XIcon from '@lucide/svelte/icons/x';
+	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -40,7 +44,7 @@
 	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
 	import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
 	import { shortcutLabel } from '$lib/state/shortcuts.js';
-	import { formatCount } from '$lib/formats.js';
+	import { formatAge, formatCount } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { CodingTaskStatus } from '$lib/coding-environments.js';
@@ -56,7 +60,8 @@
 		unreadIds,
 		settledCount,
 		autoSettleDays,
-		onclose
+		onclose,
+		closeButton = $bindable(null)
 	}: {
 		user: { name: string; email: string; image: string | null; role: string };
 		conversations: Conversation[];
@@ -65,6 +70,8 @@
 		settledCount: number;
 		autoSettleDays: number;
 		onclose: () => void;
+		/** The header's close button, so the layout can move focus to it on open. */
+		closeButton?: HTMLElement | null;
 	} = $props();
 
 	const isMobile = new MediaQuery('(max-width: 767px)');
@@ -116,14 +123,19 @@
 	let settledItems = $state<Conversation[] | null>(null);
 	let settledHasMore = $state(false);
 	let settledLoading = $state(false);
+	let settledError = $state(false);
 
 	async function loadSettled(reset: boolean) {
 		if (settledLoading && !reset) return;
 		settledLoading = true;
+		settledError = false;
 		try {
 			const offset = reset ? 0 : (settledItems?.length ?? 0);
-			const res = await fetch(`/api/conversations/settled?offset=${offset}`);
-			if (!res.ok) return;
+			const res = await fetch(`/api/conversations/settled?offset=${offset}`).catch(() => null);
+			if (!res?.ok) {
+				settledError = true;
+				return;
+			}
 			const data = (await res.json()) as { conversations: Conversation[]; hasMore: boolean };
 			const previous = reset ? [] : (settledItems ?? []);
 			const known = new Set(previous.map((c) => c.id));
@@ -398,14 +410,18 @@
 
 	function settledTitle(c: Conversation): string {
 		const title = displayTitle(c);
-		if (c.settledReason !== 'auto') return title;
+		if (c.settledAt === null) return title;
+		const age = formatAge(Date.now() - c.settledAt);
+		const ago = age === '<1m' ? 'just now' : `${age} ago`;
+		if (c.settledReason !== 'auto') return `${title}\nSettled ${ago}`;
 		const after = autoSettleDays > 0 ? ` after ${autoSettleDays} days` : '';
-		return `${title}\nAuto-settled${after} of inactivity`;
+		return `${title}\nAuto-settled${after} of inactivity · ${ago}`;
 	}
 
-	/** Status words shown under a coding task's title; working/idle stay quiet there. */
-	const CODING_STATUS: Partial<Record<CodingTaskStatus, { label: string; tone: string }>> = {
-		awaiting_input: { label: 'Needs you', tone: 'text-amber-700 dark:text-amber-400' },
+	type RowStatus = { label: string; tone: string };
+
+	/** What a seen (idle) coding task last ended in; a plain finished task says nothing. */
+	const IDLE_CODING_STATUS: Partial<Record<CodingTaskStatus, RowStatus>> = {
 		failed: { label: 'Failed', tone: 'text-destructive' },
 		interrupted: { label: 'Stopped', tone: 'text-muted-foreground' }
 	};
@@ -416,13 +432,21 @@
 	 */
 	type RowState = 'working' | 'needs-you' | 'failed' | 'unread' | 'idle';
 
-	const ROW_STATE_LABEL: Record<RowState, string | null> = {
-		working: 'Working',
-		'needs-you': 'Needs you',
-		failed: 'Failed',
-		unread: 'New reply',
-		idle: null
-	};
+	/** The status words on a row's second line, in the same tone as its mark. */
+	function rowStatus(c: Conversation, state: RowState): RowStatus | null {
+		switch (state) {
+			case 'working':
+				return { label: 'Working', tone: 'text-info-foreground' };
+			case 'needs-you':
+				return { label: 'Needs you', tone: 'text-warning-foreground' };
+			case 'failed':
+				return { label: 'Failed', tone: 'text-destructive' };
+			case 'unread':
+				return { label: c.coding ? 'Done' : 'New reply', tone: 'text-success-foreground' };
+			case 'idle':
+				return c.coding ? (IDLE_CODING_STATUS[c.coding.status] ?? null) : null;
+		}
+	}
 
 	function rowState(c: Conversation): RowState {
 		const status = c.coding?.status;
@@ -444,8 +468,8 @@
 		const title = c.settledAt !== null ? settledTitle(c) : displayTitle(c);
 		const details = [
 			c.coding ? 'Coding task' : null,
-			c.coding?.projectTitle,
-			ROW_STATE_LABEL[state] ?? (c.coding ? CODING_STATUS[c.coding.status]?.label : null)
+			c.coding ? c.coding.projectTitle : chatSource(c),
+			rowStatus(c, state)?.label
 		].filter(Boolean);
 		return details.length ? `${title}\n${details.join(' · ')}` : title;
 	}
@@ -510,8 +534,15 @@
 	{@const state = rowState(c)}
 	{@const attention =
 		!settled && (state === 'needs-you' || state === 'failed' || state === 'unread')}
-	{@const codingStatus = c.coding ? CODING_STATUS[c.coding.status] : undefined}
-	{@const stateLabel = ROW_STATE_LABEL[state]}
+	{@const status = rowStatus(c, state)}
+	{@const leads = state === 'working' || attention}
+	<!-- The type icon takes the title's emphasis: full strength on rows that need you. -->
+	{@const iconTone =
+		attention || c.id === currentId
+			? ''
+			: settled
+				? 'text-muted-foreground'
+				: 'text-muted-foreground group-focus-within:text-foreground group-hover:text-foreground'}
 	{@const runStartedAt =
 		state !== 'working'
 			? null
@@ -530,66 +561,60 @@
 			onclick={handleNavigate}
 		>
 			{#if c.coding}
-				<CodeIcon class="mt-[3px] size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+				<CodeIcon class="mt-[3px] size-3.5 shrink-0 {iconTone}" aria-hidden="true" />
 				<span class="sr-only">Coding task:</span>
 			{:else}
-				<MessageCircleIcon
-					class="mt-[3px] size-3.5 shrink-0 text-muted-foreground"
-					aria-hidden="true"
-				/>
+				<MessageCircleIcon class="mt-[3px] size-3.5 shrink-0 {iconTone}" aria-hidden="true" />
 				<span class="sr-only">Chat:</span>
 			{/if}
-			<!-- Chats and coding tasks share one layout: title + state mark, then where
-			     it runs (project or model), its timer or status, and the PR. -->
+			<!-- Chats and coding tasks share one layout: the title, then where it runs
+			     (project or model) and the PR. While something is happening or new, its
+			     status leads the second line with a mark; settled facts trail it quietly. -->
 			<span class="flex min-w-0 flex-1 flex-col">
-				<span class="flex min-w-0 items-center gap-2 leading-5">
-					<span
-						class="min-w-0 flex-1 truncate {attention
-							? 'font-semibold'
-							: (state === 'idle' || state === 'working') && !settled && c.id !== currentId
-								? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground'
-								: ''}">{displayTitle(c)}</span
-					>
-					{#if state === 'working' || attention}
-						<!-- Gives way to the row actions on hover. -->
-						<span
-							class="size-3 shrink-0 items-center justify-center group-focus-within:hidden group-hover:hidden {menuOpenId ===
-							c.id
-								? 'hidden'
-								: 'flex'}"
-							aria-hidden="true"
-						>
-							{#if state === 'working'}
-								<LoaderCircleIcon
-									class="size-3 animate-spin text-info motion-reduce:animate-none"
-								/>
-							{:else}
-								<span
-									class="size-2 rounded-full {state === 'needs-you'
-										? 'bg-amber-700 dark:bg-amber-400'
-										: state === 'failed'
-											? 'bg-destructive'
-											: 'bg-success'}"
-								></span>
-							{/if}
-						</span>
-					{/if}
-				</span>
+				<span
+					class="min-w-0 truncate leading-5 {attention
+						? 'font-semibold'
+						: state === 'idle' && !settled && c.id !== currentId
+							? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground dark:text-foreground/60'
+							: ''}">{displayTitle(c)}</span
+				>
 				<span class="flex min-w-0 items-center gap-1 text-xs leading-4 text-muted-foreground">
 					<span class="sr-only">,</span>
-					<span class="truncate">{c.coding ? c.coding.projectTitle : chatSource(c)}</span>
-					{#if runStartedAt}
-						<span class="shrink-0" aria-hidden="true">·</span>
-						<span class="shrink-0" aria-hidden="true">
-							<CodingRunTimer startedAt={runStartedAt} dot={false} />
+					{#if status && leads}
+						<span class="inline-flex shrink-0 items-center gap-1 {status.tone}">
+							<span class="flex size-3 items-center justify-center" aria-hidden="true">
+								{#if state === 'working'}
+									<LoaderCircleIcon
+										class="size-3 animate-spin motion-reduce:hidden"
+										strokeWidth={2.5}
+									/>
+									<!-- A frozen spinner looks broken; reduced motion gets a still mark. -->
+									<CircleDotDashedIcon
+										class="hidden size-3 motion-reduce:block"
+										strokeWidth={2.5}
+									/>
+								{:else if state === 'needs-you'}
+									<CircleAlertIcon class="size-3" strokeWidth={2.5} />
+								{:else if state === 'failed'}
+									<TriangleAlertIcon class="size-3" strokeWidth={2.5} />
+								{:else}
+									<span class="size-2 rounded-full bg-success"></span>
+								{/if}
+							</span>
+							{status.label}
+							{#if runStartedAt}
+								<span aria-hidden="true">
+									<CodingRunTimer startedAt={runStartedAt} dot={false} />
+								</span>
+							{/if}
 						</span>
-					{:else if state === 'working' && !c.coding}
 						<span class="shrink-0" aria-hidden="true">·</span>
-						<span class="shrink-0" aria-hidden="true">Working</span>
 					{/if}
-					{#if codingStatus}
+					<span class="truncate">{c.coding ? c.coding.projectTitle : chatSource(c)}</span>
+					{#if status && !leads}
 						<span class="shrink-0" aria-hidden="true">·</span>
-						<span class="shrink-0 {codingStatus.tone}">{codingStatus.label}</span>
+						<!-- Settled rows are put away: their words stay, without the colour. -->
+						<span class="shrink-0 {settled ? '' : status.tone}">{status.label}</span>
 					{/if}
 					{#if c.coding?.pullRequest}
 						{@const prState = c.coding.pullRequest.state}
@@ -597,15 +622,13 @@
 							? `Pull request ${CODING_PR_STATE_STYLE[prState].label.toLowerCase()}`
 							: 'Has a pull request'}
 						<span class="ml-auto inline-flex shrink-0 items-center pl-2" title={prLabel}>
-							<PullRequestIcon state={prState} class="size-3" />
+							<!-- Muted so it never reads as a second status mark; its shape still tells the state. -->
+							<PullRequestIcon state={prState} class="size-3 text-muted-foreground!" />
 							<span class="sr-only">, {prLabel}</span>
 						</span>
 					{/if}
 				</span>
 			</span>
-			{#if stateLabel && stateLabel !== codingStatus?.label}
-				<span class="sr-only">, {stateLabel}</span>
-			{/if}
 		</a>
 		{#if searchResults && settled}
 			<span
@@ -613,81 +636,139 @@
 				>Settled</span
 			>
 		{/if}
-		<span
-			class="mt-1.5 shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex pointer-coarse:mt-0.5 pointer-coarse:flex {menuOpenId ===
-			c.id
-				? 'flex'
-				: 'hidden'}"
-		>
-			<button
-				class="rounded p-1 text-muted-foreground hover:text-foreground pointer-coarse:hidden"
-				title={settled ? 'Un-settle' : 'Settle (hide from sidebar)'}
-				aria-label={settled ? 'Un-settle' : 'Settle'}
-				onclick={(e) => {
-					e.stopPropagation();
-					void setSettled(c, !settled);
-				}}
-			>
-				{#if settled}
-					<ArchiveRestoreIcon class="size-4" />
-				{:else}
-					<ArchiveIcon class="size-4" />
-				{/if}
-			</button>
-			<DropdownMenu.Root
-				open={menuOpenId === c.id}
-				onOpenChange={(open) => (menuOpenId = open ? c.id : null)}
-			>
-				<DropdownMenu.Trigger>
-					{#snippet child({ props })}
-						<button
-							{...props}
-							class="rounded p-1 text-muted-foreground hover:text-foreground pointer-coarse:p-2"
-							title="More actions"
-							aria-label="More actions"
-						>
-							<EllipsisIcon class="size-4" />
-						</button>
-					{/snippet}
-				</DropdownMenu.Trigger>
-				<DropdownMenu.Content align="start" class="w-44">
-					<!-- Touch has no hover, so the row's Settle button is hidden there; offer it here. -->
-					<DropdownMenu.Item
-						class="pointer-fine:hidden"
-						onSelect={() => void setSettled(c, !settled)}
-					>
-						{#if settled}<ArchiveRestoreIcon class="size-4" /> Un-settle{:else}<ArchiveIcon
-								class="size-4"
-							/> Settle{/if}
-					</DropdownMenu.Item>
-					{#if !settled}
-						<DropdownMenu.Item onSelect={() => void togglePin(c.id)}>
-							{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
-						</DropdownMenu.Item>
-					{/if}
-					{#if state !== 'working' && state !== 'needs-you' && c.id !== currentId}
-						{@const read = state === 'idle'}
-						<DropdownMenu.Item onSelect={() => void setRead(c, !read)}>
-							{#if read}
-								<MailIcon class="size-4" /> Mark as unread
-							{:else}
-								<MailOpenIcon class="size-4" /> Mark as read
-							{/if}
-						</DropdownMenu.Item>
-					{/if}
-					<DropdownMenu.Item onSelect={() => openRename(c)}>
-						<PencilIcon class="size-4" />
-						Rename
-					</DropdownMenu.Item>
-					<DropdownMenu.Separator />
-					<DropdownMenu.Item variant="destructive" onSelect={() => (deleteTarget = c)}>
-						<Trash2Icon class="size-4" />
-						Delete
-					</DropdownMenu.Item>
-				</DropdownMenu.Content>
-			</DropdownMenu.Root>
-		</span>
+		{@render rowActions(c, state, 'mt-1.5 pointer-coarse:mt-0.5')}
 	</div>
+{/snippet}
+
+<!-- Settled rows are put away: one quiet line each, with how long ago they were settled. -->
+{#snippet settledRow(c: Conversation)}
+	{@const state = rowState(c)}
+	{@const status = state === 'idle' ? null : rowStatus(c, state)}
+	{@const current = c.id === currentId}
+	<div
+		class="group mb-0.5 flex w-full items-center rounded-md text-sm {current
+			? 'bg-accent text-accent-foreground'
+			: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}"
+	>
+		<a
+			href={resolve(`/chat/${c.id}`)}
+			class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:py-2.5"
+			title={rowTitle(c, state)}
+			onclick={handleNavigate}
+		>
+			{#if c.coding}
+				<CodeIcon class="size-3.5 shrink-0" aria-hidden="true" />
+				<span class="sr-only">Coding task:</span>
+			{:else}
+				<MessageCircleIcon class="size-3.5 shrink-0" aria-hidden="true" />
+				<span class="sr-only">Chat:</span>
+			{/if}
+			<span class="min-w-0 flex-1 truncate leading-5">{displayTitle(c)}</span>
+			<!-- Put away, but still worth a look: a small mark in the status's tone. -->
+			{#if status}
+				<span class="flex size-3 shrink-0 items-center justify-center {status.tone}">
+					<span class="size-1.5 rounded-full bg-current" aria-hidden="true"></span>
+					<span class="sr-only">, {status.label}</span>
+				</span>
+			{/if}
+			{#if c.settledAt !== null}
+				{@const age = formatAge(Date.now() - c.settledAt)}
+				<span
+					class="shrink-0 text-xs text-muted-foreground tabular-nums group-focus-within:hidden group-hover:hidden pointer-coarse:hidden {menuOpenId ===
+					c.id
+						? 'hidden'
+						: ''}"
+				>
+					{#if age === '<1m'}
+						<span class="sr-only">, settled just</span> now
+					{:else}
+						<span class="sr-only">, settled</span>
+						{age}
+						<span class="sr-only">ago</span>
+					{/if}
+				</span>
+			{/if}
+		</a>
+		{@render rowActions(c, state, '')}
+	</div>
+{/snippet}
+
+{#snippet rowActions(c: Conversation, state: RowState, offset: string)}
+	{@const settled = c.settledAt !== null}
+	<span
+		class="{offset} shrink-0 gap-0.5 pr-1 group-focus-within:flex group-hover:flex pointer-coarse:flex {menuOpenId ===
+		c.id
+			? 'flex'
+			: 'hidden'}"
+	>
+		<button
+			class="rounded p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:hidden"
+			title={settled ? 'Un-settle' : 'Settle (hide from sidebar)'}
+			aria-label={settled ? 'Un-settle' : 'Settle'}
+			onclick={(e) => {
+				e.stopPropagation();
+				void setSettled(c, !settled);
+			}}
+		>
+			{#if settled}
+				<ArchiveRestoreIcon class="size-4" />
+			{:else}
+				<ArchiveIcon class="size-4" />
+			{/if}
+		</button>
+		<DropdownMenu.Root
+			open={menuOpenId === c.id}
+			onOpenChange={(open) => (menuOpenId = open ? c.id : null)}
+		>
+			<DropdownMenu.Trigger>
+				{#snippet child({ props })}
+					<button
+						{...props}
+						class="rounded p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:p-2"
+						title="More actions"
+						aria-label="More actions"
+					>
+						<EllipsisIcon class="size-4" />
+					</button>
+				{/snippet}
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="start" class="w-44">
+				<!-- Touch has no hover, so the row's Settle button is hidden there; offer it here. -->
+				<DropdownMenu.Item
+					class="pointer-fine:hidden"
+					onSelect={() => void setSettled(c, !settled)}
+				>
+					{#if settled}<ArchiveRestoreIcon class="size-4" /> Un-settle{:else}<ArchiveIcon
+							class="size-4"
+						/> Settle{/if}
+				</DropdownMenu.Item>
+				{#if !settled}
+					<DropdownMenu.Item onSelect={() => void togglePin(c.id)}>
+						{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
+					</DropdownMenu.Item>
+				{/if}
+				{#if state !== 'working' && state !== 'needs-you' && c.id !== currentId}
+					{@const read = state === 'idle'}
+					<DropdownMenu.Item onSelect={() => void setRead(c, !read)}>
+						{#if read}
+							<MailIcon class="size-4" /> Mark as unread
+						{:else}
+							<MailOpenIcon class="size-4" /> Mark as read
+						{/if}
+					</DropdownMenu.Item>
+				{/if}
+				<DropdownMenu.Item onSelect={() => openRename(c)}>
+					<PencilIcon class="size-4" />
+					Rename
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item variant="destructive" onSelect={() => (deleteTarget = c)}>
+					<Trash2Icon class="size-4" />
+					Delete
+				</DropdownMenu.Item>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+	</span>
 {/snippet}
 
 <svelte:window onkeydown={onGlobalKeydown} />
@@ -695,7 +776,7 @@
 <!-- Phones: clip, so nothing pokes out of the closed drawer onto the page. -->
 <aside class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30 max-md:overflow-hidden">
 	<div
-		class="flex items-center justify-between gap-2 p-3 pt-[calc(0.75rem+env(safe-area-inset-top))]"
+		class="flex items-center justify-between gap-2 p-3 pt-[calc(0.75rem+env(safe-area-inset-top))] max-md:pt-[calc(0.25rem+env(safe-area-inset-top))]"
 	>
 		<div class="flex min-w-0 items-center gap-2">
 			<svg
@@ -726,14 +807,18 @@
 			</a>
 			<span class="text-xs text-muted-foreground">v{version}</span>
 		</div>
+		<!-- Desktop: the same panel icon as the floating "open sidebar" button, so the pair reads
+		     as one toggle. Phones: the full-screen drawer closes with an X. -->
 		<Button
 			variant="ghost"
-			size="sm"
-			class="pointer-coarse:size-10"
+			size="icon-sm"
+			bind:ref={closeButton}
 			onclick={() => onclose()}
 			aria-label="Close sidebar"
+			title="Close sidebar"
 		>
-			<XIcon class="size-4" />
+			<XIcon class="size-[18px] md:hidden" strokeWidth={1.75} />
+			<PanelLeftIcon class="size-4 max-md:hidden" strokeWidth={1.75} />
 		</Button>
 	</div>
 
@@ -792,44 +877,82 @@
 			</div>
 		{/if}
 		{#if !searchResults && (settledCount > 0 || (settledItems?.length ?? 0) > 0)}
+			<!-- A shelf below the dated groups: a hairline, then a header that reads like theirs. -->
+			<div class="mx-2 mt-3 border-t" aria-hidden="true"></div>
 			<button
 				type="button"
-				class="mt-3 flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+				class="group/shelf mt-1.5 mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground outline-none hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:py-2"
 				aria-expanded={settledOpen}
+				aria-controls="settled-shelf"
 				onclick={toggleSettledShelf}
 			>
-				<ChevronRightIcon class="size-3.5 transition-transform {settledOpen ? 'rotate-90' : ''}" />
-				Settled ({settledCount})
+				Settled
+				<span class="font-normal tabular-nums">{settledCount}</span>
+				<span class="sr-only">conversations</span>
+				<ChevronRightIcon
+					class="ml-auto size-3.5 opacity-60 transition-transform group-hover/shelf:opacity-100 motion-reduce:transition-none {settledOpen
+						? 'rotate-90'
+						: ''}"
+					aria-hidden="true"
+				/>
 			</button>
-			{#if settledOpen}
-				{#each settledItems ?? [] as c (c.id)}
-					<div
-						animate:flip={{ duration: flipDuration, easing: cubicOut }}
-						transition:fade={{ duration: fadeDuration }}
-					>
-						{@render row(c)}
-					</div>
-				{:else}
-					{#if settledLoading}
-						<div class="flex justify-center py-2">
-							<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
+			<!-- Announces what the spinner and error line show. -->
+			<p class="sr-only" aria-live="polite">
+				{settledOpen && settledLoading
+					? 'Loading settled conversations'
+					: settledOpen && settledError
+						? "Couldn't load settled conversations"
+						: ''}
+			</p>
+			<div id="settled-shelf">
+				{#if settledOpen}
+					{#each settledItems ?? [] as c (c.id)}
+						<div
+							animate:flip={{ duration: flipDuration, easing: cubicOut }}
+							transition:fade={{ duration: fadeDuration }}
+						>
+							{@render settledRow(c)}
 						</div>
-					{/if}
-				{/each}
-				{#if settledHasMore}
-					<button
-						type="button"
-						class="flex w-full items-center justify-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground disabled:opacity-50"
-						disabled={settledLoading}
-						onclick={() => loadSettled(false)}
-					>
+					{:else}
 						{#if settledLoading}
-							<LoaderCircleIcon class="size-3.5 animate-spin" />
+							<div class="flex justify-center py-2">
+								<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
+							</div>
 						{/if}
-						Show more
-					</button>
+					{/each}
+					{#if settledError}
+						<p class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
+							<CircleAlertIcon class="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
+							<span class="truncate">Couldn't load settled chats.</span>
+							<button
+								type="button"
+								class="shrink-0 rounded font-medium text-foreground underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+								onclick={() => loadSettled(settledItems === null || settledItems.length === 0)}
+							>
+								Retry
+							</button>
+						</p>
+					{:else if settledHasMore}
+						{@const remaining = settledCount - (settledItems?.length ?? 0)}
+						<!-- Lines up with the row titles above it. -->
+						<button
+							type="button"
+							class="flex w-full items-center gap-2 rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 pointer-coarse:py-2.5"
+							disabled={settledLoading}
+							onclick={() => loadSettled(false)}
+						>
+							<span class="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+								{#if settledLoading}
+									<LoaderCircleIcon class="size-3.5 animate-spin" />
+								{:else}
+									<EllipsisIcon class="size-3.5 opacity-60" />
+								{/if}
+							</span>
+							{remaining > 0 ? `Show ${remaining} more` : 'Show more'}
+						</button>
+					{/if}
 				{/if}
-			{/if}
+			</div>
 		{/if}
 	</nav>
 

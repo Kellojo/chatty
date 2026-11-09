@@ -8,10 +8,10 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { resolve } from '$app/paths';
-	import DownloadIcon from '@lucide/svelte/icons/download';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
@@ -41,6 +41,7 @@
 	let editBusy = $state(false);
 
 	let deleteId = $state<string | null>(null);
+	let syncingIds = $state<string[]>([]);
 	let deleteBusy = $state(false);
 
 	// Models a sync found stored locally but no longer offered by the provider.
@@ -161,6 +162,8 @@
 	}
 
 	async function fetchModels(id: string, name: string) {
+		if (syncingIds.includes(id)) return;
+		syncingIds = [...syncingIds, id];
 		const promise = api(`/api/providers/${id}/fetch-models`, 'POST')
 			.then(async (res) => {
 				const result = (await res.json()) as { added: number; total: number; stale: StaleModel[] };
@@ -176,6 +179,9 @@
 			})
 			.catch((e: unknown) => {
 				throw e instanceof Error ? e : new Error('Failed to fetch models');
+			})
+			.finally(() => {
+				syncingIds = syncingIds.filter((syncing) => syncing !== id);
 			});
 		toast.promise(promise, {
 			loading: `Fetching models from ${name}…`,
@@ -255,7 +261,11 @@
 		<ul class="divide-y divide-border/60" aria-label="Providers">
 			{#each data.providers as provider (provider.id)}
 				{@const brand = resolveProviderBrand(provider)}
-				<SettingsListItem title={provider.name} muted={!provider.enabled}>
+				<SettingsListItem
+					title={provider.name}
+					muted={!provider.enabled}
+					onclick={() => openEdit(provider)}
+				>
 					{#snippet leading()}
 						{#if brand}<ProviderIcon {brand} class="size-4" />{:else}<PlugIcon
 								class="size-4"
@@ -274,6 +284,18 @@
 						{provider.baseUrl ?? 'Default endpoint'}
 					</p>
 					{#snippet trailing()}
+						{@const syncing = syncingIds.includes(provider.id)}
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							class="text-muted-foreground"
+							title={provider.enabled ? 'Sync models' : 'Enable the provider to sync models'}
+							aria-label="Sync models from {provider.name}"
+							disabled={!provider.enabled || syncing}
+							onclick={() => fetchModels(provider.id, provider.name)}
+						>
+							<RefreshCwIcon class="size-4 {syncing ? 'animate-spin' : ''}" />
+						</Button>
 						<Switch
 							checked={provider.enabled}
 							aria-label="Enable {provider.name}"
@@ -282,12 +304,6 @@
 						<RowMenu
 							label="Actions for {provider.name}"
 							items={[
-								{
-									label: 'Fetch models',
-									icon: DownloadIcon,
-									disabled: !provider.enabled,
-									onSelect: () => fetchModels(provider.id, provider.name)
-								},
 								{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(provider) },
 								'separator',
 								{

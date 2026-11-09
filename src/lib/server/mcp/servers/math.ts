@@ -3,6 +3,7 @@ import { convert, convertMany, getMeasureKind, type Unit } from 'convert';
 import { conversions } from 'convert/conversions';
 import { z } from 'zod';
 import { err, text } from './shared.js';
+import { evaluateExpression, MATH_FUNCTION_NAMES, MathExprError } from './mathExpr.js';
 
 const MEASURE_NAMES: Record<number, string> = {
 	0: 'angle',
@@ -63,29 +64,6 @@ function fmtResult(value: number): ReturnType<typeof text> | ReturnType<typeof e
 	return text(num(value));
 }
 
-function factorial(n: number): number {
-	if (!Number.isInteger(n) || n < 0) return NaN;
-	let out = 1;
-	for (let i = 2; i <= n; i++) out *= i;
-	return out;
-}
-
-function gcdTwo(a: number, b: number): number {
-	let x = Math.abs(a);
-	let y = Math.abs(b);
-	while (y !== 0) {
-		const t = y;
-		y = x % y;
-		x = t;
-	}
-	return x;
-}
-
-function lcmTwo(a: number, b: number): number {
-	if (a === 0 || b === 0) return 0;
-	return Math.abs(a / gcdTwo(a, b)) * Math.abs(b);
-}
-
 function mean(values: number[]): number {
 	return values.reduce((s, v) => s + v, 0) / values.length;
 }
@@ -96,260 +74,61 @@ function median(values: number[]): number {
 	return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-function stdev(values: number[], sample: boolean): number {
+function variance(values: number[], sample: boolean): number {
 	if (sample && values.length < 2) return NaN;
 	const m = mean(values);
-	const variance =
-		values.reduce((s, v) => s + (v - m) ** 2, 0) / (values.length - (sample ? 1 : 0));
-	return Math.sqrt(variance);
+	return values.reduce((s, v) => s + (v - m) ** 2, 0) / (values.length - (sample ? 1 : 0));
 }
 
 export function createMathServer(): McpServer {
-	const server = new McpServer({ name: 'ai-chat-math', version: '0.1.0' });
+	const server = new McpServer({ name: 'ai-chat-math', version: '0.2.0' });
 
 	server.registerTool(
-		'add',
-		{
-			description: 'Add two numbers',
-			inputSchema: { a: z.number(), b: z.number() }
-		},
-		async ({ a, b }) => fmtResult(a + b)
-	);
-
-	server.registerTool(
-		'subtract',
-		{
-			description: 'Subtract b from a',
-			inputSchema: { a: z.number(), b: z.number() }
-		},
-		async ({ a, b }) => fmtResult(a - b)
-	);
-
-	server.registerTool(
-		'multiply',
-		{
-			description: 'Multiply two numbers',
-			inputSchema: { a: z.number(), b: z.number() }
-		},
-		async ({ a, b }) => fmtResult(a * b)
-	);
-
-	server.registerTool(
-		'divide',
-		{
-			description: 'Divide a by b',
-			inputSchema: { a: z.number(), b: z.number() }
-		},
-		async ({ a, b }) => {
-			if (b === 0) return err('division by zero');
-			return fmtResult(a / b);
-		}
-	);
-
-	server.registerTool(
-		'power',
-		{
-			description: 'Raise a to the power of b',
-			inputSchema: { base: z.number(), exponent: z.number() }
-		},
-		async ({ base, exponent }) => fmtResult(base ** exponent)
-	);
-
-	server.registerTool(
-		'sqrt',
-		{
-			description: 'Square root of a non-negative number',
-			inputSchema: { value: z.number().min(0) }
-		},
-		async ({ value }) => fmtResult(Math.sqrt(value))
-	);
-
-	server.registerTool(
-		'abs',
-		{
-			description: 'Absolute value',
-			inputSchema: { value: z.number() }
-		},
-		async ({ value }) => fmtResult(Math.abs(value))
-	);
-
-	server.registerTool(
-		'round',
-		{
-			description: 'Round to the nearest integer, or to a given number of decimal places',
-			inputSchema: {
-				value: z.number(),
-				places: z.number().int().min(0).max(20).optional()
-			}
-		},
-		async ({ value, places }) => {
-			if (places === undefined) return fmtResult(Math.round(value));
-			const factor = 10 ** places;
-			return fmtResult(Math.round(value * factor) / factor);
-		}
-	);
-
-	server.registerTool(
-		'floor',
-		{
-			description: 'Round down to the nearest integer',
-			inputSchema: { value: z.number() }
-		},
-		async ({ value }) => fmtResult(Math.floor(value))
-	);
-
-	server.registerTool(
-		'ceil',
-		{
-			description: 'Round up to the nearest integer',
-			inputSchema: { value: z.number() }
-		},
-		async ({ value }) => fmtResult(Math.ceil(value))
-	);
-
-	server.registerTool(
-		'modulo',
-		{
-			description: 'Remainder of a divided by b',
-			inputSchema: { a: z.number(), b: z.number() }
-		},
-		async ({ a, b }) => {
-			if (b === 0) return err('modulo by zero');
-			return fmtResult(a % b);
-		}
-	);
-
-	server.registerTool(
-		'log',
+		'calculate',
 		{
 			description:
-				'Logarithm of a positive number. Defaults to natural log; provide a base for log base b',
+				'Evaluate an arithmetic expression exactly. Operators: + - * / % (modulo) ^ or ** (power), ! (factorial), parentheses. ' +
+				'Constants: pi, e, tau. Functions: ' +
+				MATH_FUNCTION_NAMES.join(', ') +
+				'. log(x) is natural log, log(x, base) any base; round(x, places); trig uses radians (deg()/rad() convert). ' +
+				'Percentages: "15% of 80" is 0.15 * 80.',
 			inputSchema: {
-				value: z.number().positive(),
-				base: z.number().positive().optional()
+				expression: z.string().min(1).max(2000).describe('e.g. "(2^10 - 24) / sqrt(16)"')
 			}
 		},
-		async ({ value, base }) => {
-			if (base === undefined) return fmtResult(Math.log(value));
-			if (base === 1) return err('log base cannot be 1');
-			return fmtResult(Math.log(value) / Math.log(base));
+		async ({ expression }) => {
+			try {
+				return fmtResult(evaluateExpression(expression));
+			} catch (e) {
+				if (e instanceof MathExprError) return err(e.message);
+				throw e;
+			}
 		}
 	);
 
 	server.registerTool(
-		'exp',
-		{
-			description: 'e raised to the given power',
-			inputSchema: { value: z.number() }
-		},
-		async ({ value }) => fmtResult(Math.exp(value))
-	);
-
-	server.registerTool(
-		'factorial',
-		{
-			description: 'Factorial of a non-negative integer',
-			inputSchema: { value: z.number().int().min(0).max(170) }
-		},
-		async ({ value }) => fmtResult(factorial(value))
-	);
-
-	server.registerTool(
-		'gcd',
-		{
-			description: 'Greatest common divisor of two or more integers',
-			inputSchema: { values: z.array(z.number().int()).min(2) }
-		},
-		async ({ values }) => fmtResult(values.reduce(gcdTwo))
-	);
-
-	server.registerTool(
-		'lcm',
-		{
-			description: 'Least common multiple of two or more integers',
-			inputSchema: { values: z.array(z.number().int()).min(2) }
-		},
-		async ({ values }) => fmtResult(values.reduce(lcmTwo))
-	);
-
-	server.registerTool(
-		'min',
-		{
-			description: 'Smallest of the given numbers',
-			inputSchema: { values: z.array(z.number()).min(1) }
-		},
-		async ({ values }) => fmtResult(Math.min(...values))
-	);
-
-	server.registerTool(
-		'max',
-		{
-			description: 'Largest of the given numbers',
-			inputSchema: { values: z.array(z.number()).min(1) }
-		},
-		async ({ values }) => fmtResult(Math.max(...values))
-	);
-
-	server.registerTool(
-		'sum',
-		{
-			description: 'Sum of a list of numbers',
-			inputSchema: { values: z.array(z.number()).min(1) }
-		},
-		async ({ values }) => fmtResult(values.reduce((s, v) => s + v, 0))
-	);
-
-	server.registerTool(
-		'mean',
-		{
-			description: 'Arithmetic mean of a list of numbers',
-			inputSchema: { values: z.array(z.number()).min(1) }
-		},
-		async ({ values }) => fmtResult(mean(values))
-	);
-
-	server.registerTool(
-		'median',
-		{
-			description: 'Median of a list of numbers',
-			inputSchema: { values: z.array(z.number()).min(1) }
-		},
-		async ({ values }) => fmtResult(median(values))
-	);
-
-	server.registerTool(
-		'stdev',
+		'statistics',
 		{
 			description:
-				'Standard deviation of a list of numbers. Population by default; set sample=true for sample standard deviation',
+				'Summary statistics of a list of numbers: count, sum, mean, median, min, max, variance and standard deviation (population by default; sample=true for sample).',
 			inputSchema: {
 				values: z.array(z.number()).min(1),
 				sample: z.boolean().optional()
 			}
 		},
-		async ({ values, sample }) => fmtResult(stdev(values, sample === true))
-	);
-
-	server.registerTool(
-		'percentage',
-		{
-			description: 'Compute what percent part is of whole, or the value of percent% of whole',
-			inputSchema: {
-				whole: z.number(),
-				percent: z.number().optional(),
-				part: z.number().optional()
-			}
-		},
-		async ({ whole, percent, part }) => {
-			if (percent !== undefined && part !== undefined) {
-				return err('provide either percent or part, not both');
-			}
-			if (percent === undefined && part === undefined) {
-				return err('provide either percent or part');
-			}
-			if (percent !== undefined) return fmtResult((percent / 100) * whole);
-			if (whole === 0) return err('cannot compute percent of zero whole');
-			return fmtResult(((part as number) / whole) * 100);
+		async ({ values, sample }) => {
+			const v = variance(values, sample === true);
+			const stats = {
+				count: values.length,
+				sum: values.reduce((s, x) => s + x, 0),
+				mean: mean(values),
+				median: median(values),
+				min: Math.min(...values),
+				max: Math.max(...values),
+				variance: Number.isFinite(v) ? v : null,
+				stdev: Number.isFinite(v) ? Math.sqrt(v) : null
+			};
+			return text(JSON.stringify(stats));
 		}
 	);
 

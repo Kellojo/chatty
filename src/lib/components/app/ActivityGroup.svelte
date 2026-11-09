@@ -78,13 +78,14 @@
 				onclick={() => (openReasoning[item.index] = !open)}
 			>
 				<span class="flex size-5 shrink-0 items-center justify-center">
-					<BrainIcon class={cn('size-3.5', thinking && 'animate-pulse')} />
+					<BrainIcon class="size-3.5" />
 				</span>
 				{#if thinking}
 					{@const since = thinkingSince(item)}
-					<span class="shrink-0 font-medium">
-						Thinking…
-						{#if since !== null}<LiveElapsed {since} class="ml-0.5 font-normal" />{/if}
+					<!-- Matches ThinkingIndicator, which this row replaces, so the handoff doesn't jump. -->
+					<span class="shrink-0">
+						<span class="text-shimmer font-medium">Thinking</span>
+						{#if since !== null}<LiveElapsed {since} class="ml-2.5 text-xs" />{/if}
 					</span>
 				{:else}
 					<span class="shrink-0 font-medium">{thoughtLabel(item)}</span>

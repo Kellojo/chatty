@@ -88,3 +88,17 @@ export function formatElapsed(ms: number): string {
 	if (m < 60) return `${m}m ${String(total % 60).padStart(2, '0')}s`;
 	return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
 }
+
+/** Compact age for list rows: `<1m`, `5m`, `3h`, `2d`, `3w`, `4mo`, `1y`. */
+export function formatAge(ms: number): string {
+	const minutes = Math.floor(Math.max(0, ms) / 60_000);
+	if (minutes < 1) return '<1m';
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h`;
+	const days = Math.floor(hours / 24);
+	if (days < 7) return `${days}d`;
+	if (days < 30) return `${Math.floor(days / 7)}w`;
+	if (days < 365) return `${Math.floor(days / 30)}mo`;
+	return `${Math.floor(days / 365)}y`;
+}

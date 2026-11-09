@@ -27,9 +27,7 @@
 	const row = $derived(buttonRowClasses(sidebar));
 	// The back link indents with a margin (its own padding is the hover area).
 	const backClear = $derived(
-		!sidebar || sidebar.open
-			? 'ml-9 md:-ml-1 md:h-auto'
-			: 'ml-9 md:max-xl:ml-8 md:max-xl:h-9 xl:-ml-1 xl:h-auto'
+		!sidebar || sidebar.open ? 'ml-9 md:-ml-1 md:h-9' : 'ml-9 md:h-9 md:max-xl:ml-8 xl:-ml-1'
 	);
 </script>
 

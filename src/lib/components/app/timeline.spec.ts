@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeTool, toolFailed } from '$lib/tool-meta.js';
-import { groupParts, summarizeActivity, type PartLike } from './timeline.js';
+import { groupParts, hasVisibleContent, summarizeActivity, type PartLike } from './timeline.js';
 
 const text = (t: string): PartLike => ({ type: 'text', text: t }) as PartLike;
 const reasoning = (): PartLike => ({ type: 'reasoning' });
@@ -216,5 +216,21 @@ describe('reasoningTiming', () => {
 		} as PartLike;
 		expect(reasoningTiming(part)).toEqual({ startedAt: 1000, completedAt: 13000 });
 		expect(reasoningTiming({ type: 'reasoning' })).toEqual({ startedAt: null, completedAt: null });
+	});
+});
+
+describe('hasVisibleContent', () => {
+	it('ignores bookkeeping parts and empty text', () => {
+		expect(hasVisibleContent([])).toBe(false);
+		expect(hasVisibleContent([{ type: 'step-start' }])).toBe(false);
+		expect(hasVisibleContent([{ type: 'step-start' }, text(''), text('  \n')])).toBe(false);
+		expect(hasVisibleContent([{ type: 'reasoning', text: '' } as PartLike])).toBe(false);
+	});
+
+	it('counts text, reasoning, tool calls and files', () => {
+		expect(hasVisibleContent([{ type: 'step-start' }, text('hi')])).toBe(true);
+		expect(hasVisibleContent([{ type: 'reasoning', text: 'hmm' } as PartLike])).toBe(true);
+		expect(hasVisibleContent([tool('fs_read')])).toBe(true);
+		expect(hasVisibleContent([{ type: 'file' }])).toBe(true);
 	});
 });

@@ -72,21 +72,23 @@ describe('fs server', () => {
 		);
 	});
 
-	it('fs_head and fs_tail slice lines', async () => {
+	it('fs_read head and tail slice lines', async () => {
 		const head = resultText(
-			await callTool('fs_head', { scope: 'workspace', path: 'big.txt', lines: 5 })
+			await callTool('fs_read', { scope: 'workspace', path: 'big.txt', head: 5 })
 		);
 		expect(head).toContain('line 01');
 		expect(head).not.toContain('line 06');
 		const tail = resultText(
-			await callTool('fs_tail', { scope: 'workspace', path: 'big.txt', lines: 2 })
+			await callTool('fs_read', { scope: 'workspace', path: 'big.txt', tail: 2 })
 		);
 		expect(tail).toContain('line 60');
 		expect(tail).not.toContain('line 58');
 	});
 
-	it('fs_wc counts lines, words and bytes', async () => {
-		const out = resultText(await callTool('fs_wc', { scope: 'workspace', path: 'src/b.txt' }));
+	it('fs_read stats counts lines, words and bytes', async () => {
+		const out = resultText(
+			await callTool('fs_read', { scope: 'workspace', path: 'src/b.txt', stats: true })
+		);
 		expect(out).toBe(`3 5 ${Buffer.byteLength(B_TXT)} src/b.txt`);
 	});
 

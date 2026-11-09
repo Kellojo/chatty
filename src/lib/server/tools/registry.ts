@@ -6,8 +6,9 @@ import { getDb } from '../db/index.js';
 import { listEnabledMcpServers, type McpServerRow } from '../db/repo/mcp-servers.js';
 import { createLogger } from '../logger.js';
 import { connectServer, MCP_LIST_TIMEOUT_MS, withTimeout } from '../mcp/clientManager.js';
-import { acquireMcpServer } from '../mcp/pool.js';
+import { acquireMcpServer, cachedMcpTools, type McpLease } from '../mcp/pool.js';
 import type { CallerContext } from '../mcp/types.js';
+import { pickDeferredTools, SEARCH_TOOLS_NAME, type ToolCatalog } from './toolSearch.js';
 import { wrapMcpTools } from './wrap.js';
 
 const log = createLogger('tools');
@@ -22,9 +23,7 @@ export interface BuildToolsInput {
 	agentRunId?: string | null;
 }
 
-export interface BuiltTools {
-	tools: Record<string, Tool>;
-	toolToServer: Record<string, string>;
+export interface BuiltTools extends ToolCatalog {
 	close: () => Promise<void>;
 }
 
@@ -62,7 +61,7 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		closers.push(result.value.close);
 		const set = wrapMcpTools(result.value.tools, row.name, result.value.onError);
 		for (const [name, tool] of Object.entries(set)) {
-			if (tools[name]) {
+			if (tools[name] || name === SEARCH_TOOLS_NAME) {
 				log.warn(`MCP tool name collision: "${name}" from ${row.name} skipped`);
 				continue;
 			}
@@ -71,15 +70,23 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		}
 	}
 	let filtered = tools;
+	// An allowlist is already a hand-picked, small set: nothing is deferred.
+	let deferred = new Set<string>();
 	if (input.agentAllowlist) {
 		filtered = {};
 		for (const name of input.agentAllowlist) {
 			if (tools[name]) filtered[name] = tools[name];
 		}
+	} else {
+		const deferredServers = new Set(
+			rows.filter((row) => row.load_mode === 'deferred').map((row) => row.name)
+		);
+		deferred = pickDeferredTools(tools, toolToServer, deferredServers);
 	}
 	return {
 		tools: filtered,
 		toolToServer,
+		deferred,
 		close: async () => {
 			for (const closer of closers.reverse()) {
 				await closer().catch(() => undefined);
@@ -115,17 +122,60 @@ async function openBuiltin(row: McpServerRow, ctx: CallerContext): Promise<Opene
 const CONNECTION_ERROR =
 	/connection closed|not connected|ECONNREFUSED|ECONNRESET|EPIPE|socket hang up|fetch failed|terminated/i;
 
-/** External servers come from the shared pool; the lease is returned when the turn ends. */
+/**
+ * External servers come from the shared pool; the lease is returned when the
+ * turn ends. Once a server's tool list is known, a turn offers those tools
+ * without connecting, and connects on the first call of one of them.
+ */
 async function openPooled(row: McpServerRow): Promise<OpenedServer> {
-	const lease = await acquireMcpServer(row);
+	const cached = cachedMcpTools(row);
+	if (!cached) {
+		const lease = await acquireMcpServer(row);
+		return {
+			tools: lease.tools,
+			close: async () => lease.release(),
+			onError: (e) => {
+				if (isConnectionError(e)) lease.markBroken();
+			}
+		};
+	}
+	let pending: Promise<McpLease> | null = null;
+	const lease = () => {
+		pending ??= acquireMcpServer(row).catch((e: unknown) => {
+			pending = null;
+			throw e;
+		});
+		return pending;
+	};
+	const tools: Record<string, Tool> = {};
+	for (const [name, listed] of Object.entries(cached)) {
+		tools[name] = {
+			...listed,
+			execute: async (input: unknown, options: Parameters<NonNullable<Tool['execute']>>[1]) => {
+				const current = (await lease()).tools[name];
+				if (!current?.execute) throw new Error(`${row.name} no longer offers the tool ${name}`);
+				return current.execute(input as never, options as never);
+			}
+		} as Tool;
+	}
 	return {
-		tools: lease.tools,
-		close: async () => lease.release(),
+		tools,
+		close: async () => {
+			const acquired = await pending?.catch(() => null);
+			acquired?.release();
+		},
 		onError: (e) => {
-			const message = e instanceof Error ? e.message : String(e);
-			if (CONNECTION_ERROR.test(message)) lease.markBroken();
+			if (isConnectionError(e))
+				void pending?.then(
+					(l) => l.markBroken(),
+					() => undefined
+				);
 		}
 	};
+}
+
+function isConnectionError(e: unknown): boolean {
+	return CONNECTION_ERROR.test(e instanceof Error ? e.message : String(e));
 }
 
 /** Lists every tool currently available to the user (for pickers in the UI), sorted by server then name. */

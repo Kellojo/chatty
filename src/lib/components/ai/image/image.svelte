@@ -44,10 +44,7 @@
 	<div
 		aria-label={alt}
 		role="img"
-		class={cn(
-			'h-auto max-w-full animate-pulse overflow-hidden rounded-md bg-gray-100 dark:bg-neutral-800',
-			className
-		)}
+		class={cn('h-auto max-w-full animate-pulse overflow-hidden rounded-md bg-muted', className)}
 	></div>
 {:else}
 	<img

@@ -58,6 +58,12 @@ export interface McpLease {
 
 const entries = new Map<string, Entry>();
 const failures = new Map<string, Failure>();
+/**
+ * The tools each server listed on its last successful connect, by pool key.
+ * They outlive idle connections, so a turn can offer a server's tools without
+ * connecting and only connect when one of them is called.
+ */
+const catalogs = new Map<string, { serverId: string; tools: Record<string, Tool> }>();
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Identifies a server's connection settings: an edit yields a new key, so stale clients are never reused. */
@@ -142,7 +148,10 @@ function open(row: McpServerRow, key: string): Entry {
 		ready: connect()
 	};
 	entry.ready.then(
-		({ conn }) => (entry.conn = conn),
+		({ conn, tools }) => {
+			entry.conn = conn;
+			catalogs.set(key, { serverId: row.id, tools });
+		},
 		() => undefined
 	);
 	entry.ready.catch((e: unknown) => {
@@ -206,9 +215,22 @@ export async function acquireMcpServer(row: McpServerRow): Promise<McpLease> {
 	}
 }
 
+/**
+ * The tools a server listed when it last connected under its current
+ * settings, or undefined if it never did or its last connect just failed.
+ * Their `execute` belongs to that connection: call tools through a lease.
+ */
+export function cachedMcpTools(row: McpServerRow): Record<string, Tool> | undefined {
+	const key = poolKey(row);
+	const failure = failures.get(row.id);
+	if (failure && failure.key === key && failure.until > Date.now()) return undefined;
+	return catalogs.get(key)?.tools;
+}
+
 /** Drops (and closes, once idle) every pooled connection of a server, e.g. after it was edited or deleted. */
 export function invalidateMcpServer(serverId: string): void {
 	failures.delete(serverId);
+	for (const [key, catalog] of catalogs) if (catalog.serverId === serverId) catalogs.delete(key);
 	for (const entry of [...entries.values()]) {
 		if (entry.serverId === serverId) evict(entry);
 	}
@@ -219,6 +241,7 @@ export async function closeAllMcpClients(): Promise<void> {
 	const all = [...entries.values()];
 	entries.clear();
 	failures.clear();
+	catalogs.clear();
 	if (sweepTimer) clearInterval(sweepTimer);
 	sweepTimer = null;
 	await Promise.all(

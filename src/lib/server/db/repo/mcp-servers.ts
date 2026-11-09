@@ -5,6 +5,8 @@ import type { Db } from '../index.js';
 export type McpTransport = 'builtin' | 'stdio' | 'http' | 'sse';
 /** Transports that can be configured through the API (everything but bundled servers). */
 export type ConfigurableMcpTransport = Exclude<McpTransport, 'builtin'>;
+/** 'deferred' tools stay out of the prompt until the model loads them via search_tools. */
+export type McpLoadMode = 'always' | 'deferred';
 
 export interface McpServerRow {
 	id: string;
@@ -16,6 +18,7 @@ export interface McpServerRow {
 	token_enc: string | null;
 	enabled: number;
 	builtin: number;
+	load_mode: McpLoadMode;
 }
 
 export interface McpServer {
@@ -28,6 +31,7 @@ export interface McpServer {
 	hasToken: boolean;
 	enabled: boolean;
 	builtin: boolean;
+	loadMode: McpLoadMode;
 }
 
 /** Parses the JSON `args` column, tolerating malformed values. */
@@ -51,7 +55,8 @@ export function toPublic(row: McpServerRow): McpServer {
 		args: parseMcpArgs(row.args),
 		hasToken: row.token_enc != null && row.token_enc.length > 0,
 		enabled: row.enabled === 1,
-		builtin: row.builtin === 1
+		builtin: row.builtin === 1,
+		loadMode: row.load_mode
 	};
 }
 
@@ -77,13 +82,16 @@ export interface CreateMcpServerInput {
 	command?: string | null;
 	args?: string[];
 	enabled?: boolean;
+	/** Defaults to 'deferred': external servers often bring many tools. */
+	loadMode?: McpLoadMode;
 }
 
 export function createMcpServer(db: Db, input: CreateMcpServerInput): McpServerRow {
 	const id = randomUUID();
 	db.prepare(
-		`INSERT INTO mcp_servers (id, name, transport, command, args, url, token_enc, enabled, builtin)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
+		`INSERT INTO mcp_servers (id, name, transport, command, args, url, token_enc, enabled, builtin,
+		 load_mode)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
 	).run(
 		id,
 		input.name,
@@ -92,7 +100,8 @@ export function createMcpServer(db: Db, input: CreateMcpServerInput): McpServerR
 		JSON.stringify(input.args ?? []),
 		input.url ?? null,
 		input.token ? encryptSecret(input.token) : null,
-		input.enabled === false ? 0 : 1
+		input.enabled === false ? 0 : 1,
+		input.loadMode ?? 'deferred'
 	);
 	return getMcpServer(db, id)!;
 }
@@ -105,6 +114,7 @@ export interface UpdateMcpServerInput {
 	command?: string | null;
 	args?: string[];
 	enabled?: boolean;
+	loadMode?: McpLoadMode;
 }
 
 export function updateMcpServer(
@@ -119,7 +129,7 @@ export function updateMcpServer(
 		!isBuiltin && patch[key] !== undefined;
 	db.prepare(
 		`UPDATE mcp_servers SET name = ?, transport = ?, command = ?, args = ?, url = ?, token_enc = ?,
-		 enabled = ?
+		 enabled = ?, load_mode = ?
 		 WHERE id = ?`
 	).run(
 		editable('name') ? patch.name : existing.name,
@@ -129,6 +139,7 @@ export function updateMcpServer(
 		editable('url') ? patch.url : existing.url,
 		editable('token') ? (patch.token ? encryptSecret(patch.token) : null) : existing.token_enc,
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
+		patch.loadMode ?? existing.load_mode,
 		id
 	);
 	return getMcpServer(db, id);

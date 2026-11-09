@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
@@ -9,6 +9,8 @@
 	import AttentionNotifier from '$lib/components/app/AttentionNotifier.svelte';
 	import OfflineBanner from '$lib/components/app/OfflineBanner.svelte';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { cn } from '$lib/utils.js';
 	import { startServerEvents } from '$lib/state/events.svelte.js';
 	import { startMessageQueueRunner } from '$lib/state/message-queue-runner.js';
 	import { setSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
@@ -42,12 +44,29 @@
 		});
 	}
 
-	function toggleSidebar() {
+	// The open and close buttons swap places, so focus follows: opening moves it to the
+	// sidebar's close button, closing with that button moves it back to the floating one.
+	// (Closing because a link was followed leaves focus where navigation puts it.)
+	let sidebarCloseButton = $state<HTMLElement | null>(null);
+
+	async function toggleSidebar() {
 		if (isDesktop.current) {
 			setSidebarOpen(!sidebarOpen);
 		} else {
 			mobileOpen = !mobileOpen;
 		}
+		await tick();
+		if (isDesktop.current ? sidebarOpen : mobileOpen)
+			sidebarCloseButton?.focus({ preventScroll: true });
+	}
+
+	async function closeSidebar() {
+		const fromCloseButton = !!sidebarCloseButton && document.activeElement === sidebarCloseButton;
+		if (isDesktop.current) setSidebarOpen(false);
+		else mobileOpen = false;
+		if (!fromCloseButton) return;
+		await tick();
+		sidebarButton?.focus({ preventScroll: true });
 	}
 
 	// The floating sidebar button is a plain ghost button until a page scrolls beneath
@@ -57,7 +76,7 @@
 	// they leave it alone.
 	let buttonHidden = $state(false);
 	let overContent = $state(false);
-	let sidebarButton = $state<HTMLButtonElement>();
+	let sidebarButton = $state<HTMLElement | null>(null);
 	const lastScrollTop = new WeakMap<Element, number>();
 	function onAnyScroll(event: Event) {
 		const el = event.target;
@@ -177,7 +196,8 @@
 				unreadIds={data.unreadIds}
 				settledCount={data.settledCount}
 				autoSettleDays={data.autoSettleDays}
-				onclose={() => (isDesktop.current ? setSidebarOpen(false) : (mobileOpen = false))}
+				bind:closeButton={sidebarCloseButton}
+				onclose={closeSidebar}
 			/>
 		</div>
 		<div class="h-full w-1/2 shrink-0 md:contents">
@@ -187,22 +207,27 @@
 		</div>
 	</div>
 
-	<button
-		class={[
+	<!-- The same ghost icon button as the header's ⋯ and the sidebar's close button. -->
+	<Button
+		variant="ghost"
+		size="icon-sm"
+		class={cn(
 			// Sits centred in the first row of every page: the 48px chat header on phones,
 			// 56px on wider screens. Page titles (PageHeader) line up with it.
-			'fixed left-[calc(0.375rem+env(safe-area-inset-left))] z-20 flex items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,box-shadow,opacity,translate] duration-200 outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:left-[calc(1rem+env(safe-area-inset-left))] md:pointer-coarse:left-[calc(0.5rem+env(safe-area-inset-left))]',
-			'top-[calc(0.25rem+env(safe-area-inset-top))] size-10 md:top-[calc(0.75rem+env(safe-area-inset-top))] md:size-8 md:pointer-coarse:top-[calc(0.5rem+env(safe-area-inset-top))] md:pointer-coarse:size-10',
-			overContent && 'bg-background shadow-sm ring-1 ring-border',
+			'fixed top-[calc(0.25rem+env(safe-area-inset-top))] left-[calc(0.375rem+env(safe-area-inset-left))] z-20 size-10 duration-200 md:top-[calc(0.75rem+env(safe-area-inset-top))] md:left-[calc(1rem+env(safe-area-inset-left))] md:size-8 md:pointer-coarse:top-[calc(0.5rem+env(safe-area-inset-top))] md:pointer-coarse:left-[calc(0.5rem+env(safe-area-inset-left))] md:pointer-coarse:size-10',
+			overContent &&
+				'bg-background shadow-sm ring-1 ring-border hover:bg-muted dark:bg-popover dark:shadow-black/40 dark:ring-foreground/15 dark:hover:bg-accent',
 			buttonHidden && 'max-md:pointer-events-none max-md:-translate-y-16 max-md:opacity-0',
 			mobileOpen && 'max-md:hidden',
 			sidebarOpen && 'md:hidden'
-		]}
-		bind:this={sidebarButton}
+		)}
+		bind:ref={sidebarButton}
+		tabindex={buttonHidden && !isDesktop.current ? -1 : undefined}
+		aria-hidden={buttonHidden && !isDesktop.current ? 'true' : undefined}
 		onclick={toggleSidebar}
 		aria-label="Open sidebar"
 		title="Open sidebar"
 	>
-		<PanelLeftIcon class="size-[18px] md:size-4" />
-	</button>
+		<PanelLeftIcon class="size-[18px] md:size-4" strokeWidth={1.75} />
+	</Button>
 </div>

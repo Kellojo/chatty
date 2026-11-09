@@ -29,7 +29,8 @@ function stdioRow(command: string | null, args: string[]): McpServerRow {
 		url: null,
 		token_enc: null,
 		enabled: 1,
-		builtin: 0
+		builtin: 0,
+		load_mode: 'always'
 	};
 }
 

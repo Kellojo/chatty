@@ -39,80 +39,62 @@ function isErr(res: unknown): boolean {
 }
 
 describe('math server', () => {
-	it('adds, subtracts, multiplies and divides', async () => {
-		expect(resultNum(await callTool('add', { a: 2, b: 3 }))).toBe(5);
-		expect(resultNum(await callTool('subtract', { a: 2, b: 3 }))).toBe(-1);
-		expect(resultNum(await callTool('multiply', { a: 2, b: 3 }))).toBe(6);
-		expect(resultNum(await callTool('divide', { a: 7, b: 2 }))).toBe(3.5);
+	const calc = async (expression: string) => callTool('calculate', { expression });
+
+	it('evaluates arithmetic with precedence and parentheses', async () => {
+		expect(resultNum(await calc('2 + 3 * 4'))).toBe(14);
+		expect(resultNum(await calc('(2 + 3) * 4'))).toBe(20);
+		expect(resultNum(await calc('7 / 2'))).toBe(3.5);
+		expect(resultNum(await calc('10 % 3'))).toBe(1);
+		expect(resultNum(await calc('2^10'))).toBe(1024);
+		expect(resultNum(await calc('2**3**2'))).toBe(512);
+		expect(resultNum(await calc('-2^2'))).toBe(-4);
+		expect(resultNum(await calc('5!'))).toBe(120);
+		expect(resultNum(await calc('1.5e3 + .5'))).toBe(1500.5);
 	});
 
-	it('rejects division and modulo by zero', async () => {
-		expect(isErr(await callTool('divide', { a: 1, b: 0 }))).toBe(true);
-		expect(isErr(await callTool('modulo', { a: 1, b: 0 }))).toBe(true);
+	it('supports functions and constants', async () => {
+		expect(resultNum(await calc('sqrt(16) + abs(-4.5)'))).toBe(8.5);
+		expect(resultNum(await calc('round(3.14159, 2)'))).toBe(3.14);
+		expect(resultNum(await calc('floor(3.9) + ceil(3.1)'))).toBe(7);
+		expect(resultNum(await calc('log(e)'))).toBeCloseTo(1);
+		expect(resultNum(await calc('log(8, 2)'))).toBe(3);
+		expect(resultNum(await calc('gcd(12, 18, 30) + lcm(4, 6, 8)'))).toBe(30);
+		expect(resultNum(await calc('max(3, 1, 4) - min(3, 1, 4)'))).toBe(3);
+		expect(resultNum(await calc('sin(pi / 2)'))).toBe(1);
+		expect(resultNum(await calc('nCr(5, 2)'))).toBe(10);
 	});
 
-	it('computes powers, roots and absolute values', async () => {
-		expect(resultNum(await callTool('power', { base: 2, exponent: 10 }))).toBe(1024);
-		expect(resultNum(await callTool('sqrt', { value: 9 }))).toBe(3);
-		expect(resultNum(await callTool('abs', { value: -4.5 }))).toBe(4.5);
+	it('rejects invalid expressions with a readable error', async () => {
+		for (const bad of ['1 / 0', '1 % 0', '2 +', 'foo(1)', 'bar', '2 $ 3', '(1 + 2', 'sqrt(1, 2)']) {
+			const res = await calc(bad);
+			expect(isErr(res), bad).toBe(true);
+		}
+		expect(isErr(await calc('10^1000'))).toBe(true);
+		expect(resultText(await calc('foo(1)'))).toContain('unknown function');
 	});
 
-	it('rounds, floors and ceils', async () => {
-		expect(resultNum(await callTool('round', { value: 3.5 }))).toBe(4);
-		expect(resultNum(await callTool('round', { value: 3.14159, places: 2 }))).toBe(3.14);
-		expect(resultNum(await callTool('floor', { value: 3.9 }))).toBe(3);
-		expect(resultNum(await callTool('ceil', { value: 3.1 }))).toBe(4);
-	});
-
-	it('computes modulo', async () => {
-		expect(resultNum(await callTool('modulo', { a: 10, b: 3 }))).toBe(1);
-	});
-
-	it('computes logarithms and exponentials', async () => {
-		expect(resultNum(await callTool('log', { value: Math.E }))).toBeCloseTo(1);
-		expect(resultNum(await callTool('log', { value: 8, base: 2 }))).toBe(3);
-		expect(resultNum(await callTool('exp', { value: 0 }))).toBe(1);
-		expect(isErr(await callTool('log', { value: 8, base: 1 }))).toBe(true);
-	});
-
-	it('computes factorials', async () => {
-		expect(resultNum(await callTool('factorial', { value: 5 }))).toBe(120);
-		expect(resultNum(await callTool('factorial', { value: 0 }))).toBe(1);
-	});
-
-	it('computes gcd and lcm', async () => {
-		expect(resultNum(await callTool('gcd', { values: [12, 18] }))).toBe(6);
-		expect(resultNum(await callTool('gcd', { values: [12, 18, 30] }))).toBe(6);
-		expect(resultNum(await callTool('lcm', { values: [4, 6] }))).toBe(12);
-		expect(resultNum(await callTool('lcm', { values: [4, 6, 8] }))).toBe(24);
-	});
-
-	it('computes min, max and sum', async () => {
-		expect(resultNum(await callTool('min', { values: [3, 1, 4] }))).toBe(1);
-		expect(resultNum(await callTool('max', { values: [3, 1, 4] }))).toBe(4);
-		expect(resultNum(await callTool('sum', { values: [3, 1, 4] }))).toBe(8);
-	});
-
-	it('computes statistics', async () => {
-		expect(resultNum(await callTool('mean', { values: [1, 2, 3, 4] }))).toBe(2.5);
-		expect(resultNum(await callTool('median', { values: [1, 2, 3, 4] }))).toBe(2.5);
-		expect(resultNum(await callTool('median', { values: [1, 2, 3] }))).toBe(2);
-		expect(resultNum(await callTool('stdev', { values: [2, 4, 4, 4, 5, 5, 7, 9] }))).toBe(2);
-		expect(
-			resultNum(await callTool('stdev', { values: [2, 4, 4, 4, 5, 5, 7, 9], sample: true }))
-		).toBeCloseTo(2.13809, 4);
-	});
-
-	it('computes percentages both ways', async () => {
-		expect(resultNum(await callTool('percentage', { whole: 200, percent: 15 }))).toBe(30);
-		expect(resultNum(await callTool('percentage', { whole: 200, part: 30 }))).toBe(15);
-		expect(isErr(await callTool('percentage', { whole: 200 }))).toBe(true);
-		expect(isErr(await callTool('percentage', { whole: 200, percent: 15, part: 30 }))).toBe(true);
-		expect(isErr(await callTool('percentage', { whole: 0, part: 30 }))).toBe(true);
-	});
-
-	it('rejects non-finite results', async () => {
-		expect(isErr(await callTool('power', { base: 10, exponent: 1000 }))).toBe(true);
+	it('computes summary statistics', async () => {
+		const stats = JSON.parse(
+			resultText(await callTool('statistics', { values: [2, 4, 4, 4, 5, 5, 7, 9] }))
+		);
+		expect(stats).toMatchObject({
+			count: 8,
+			sum: 40,
+			mean: 5,
+			median: 4.5,
+			min: 2,
+			max: 9,
+			stdev: 2
+		});
+		const sample = JSON.parse(
+			resultText(await callTool('statistics', { values: [2, 4, 4, 4, 5, 5, 7, 9], sample: true }))
+		);
+		expect(sample.stdev).toBeCloseTo(2.138, 3);
+		const single = JSON.parse(
+			resultText(await callTool('statistics', { values: [3], sample: true }))
+		);
+		expect(single.stdev).toBeNull();
 	});
 
 	describe('unit conversion', () => {

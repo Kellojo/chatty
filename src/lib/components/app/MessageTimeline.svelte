@@ -12,7 +12,7 @@
 	import ActivityGroup from './ActivityGroup.svelte';
 	import HtmlRenderFrame from './HtmlRenderFrame.svelte';
 	import { readHtmlRender } from '$lib/html-render.js';
-	import { groupParts } from './timeline.js';
+	import { groupParts, hasVisibleContent } from './timeline.js';
 	import { messageText } from '$lib/chat-history.js';
 	import { shortcutLabel } from '$lib/state/shortcuts.js';
 	import CopyIcon from '@lucide/svelte/icons/copy';
@@ -173,225 +173,233 @@
 
 <div class={cn('mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6', className)}>
 	{#each messages as message, index (message.id)}
-		<Message
-			class={cn(
-				message.role === 'user' ? 'flex-col items-end' : 'flex-col items-start',
-				editingIndex !== -1 && index >= editingIndex && 'opacity-50 transition-opacity'
-			)}
-		>
-			{@const blocks = groupParts(message.parts)}
-			{@const messageActive = streaming && index === lastAssistantIndex}
-			{#each blocks as block, blockIndex (block.key)}
-				{@const part = block.type === 'content' ? block.item.part : null}
-				{@const partIndex = block.type === 'content' ? block.item.index : -1}
-				{#if block.type === 'activity'}
-					<ActivityGroup
-						items={block.items as never}
-						active={messageActive}
-						live={messageActive && blockIndex === blocks.length - 1}
-					/>
-				{:else if part?.type === 'text'}
-					{#if message.role === 'user'}
-						<MessageContent class="max-w-[85%] whitespace-pre-wrap">{part.text}</MessageContent>
-					{:else}
-						<Markdown class="w-full max-w-none" content={part.text} {conversationId} />
-					{/if}
-				{:else if part && conversationId && readHtmlRender(part)}
-					<HtmlRenderFrame {conversationId} {part} />
-				{:else if part?.type === 'file'}
-					{@const url = (part as { url?: string }).url ?? ''}
-					{#if part.mediaType?.startsWith('image/')}
-						{@const imgKey = `${message.id}:${partIndex}`}
-						{@const rotation = rotationFor(imgKey)}
-						<div
-							class="group relative grid max-w-full place-items-center overflow-hidden rounded-md"
-						>
-							<!-- eslint-disable svelte/no-navigation-without-resolve -->
-							<a href={url} target="_blank" rel="noopener" class="grid place-items-center">
-								<img
-									src={url}
-									alt="Attachment"
-									onload={(e) => onImgLoad(imgKey, e)}
-									style:transform={rotation ? `rotate(${rotation}deg)` : undefined}
-									class={cn('rounded-md border transition-transform', rotatedImgClass(imgKey))}
-								/>
-							</a>
-							<div
-								class="absolute right-2 bottom-2 flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
-							>
-								<button
-									type="button"
-									title="Rotate left"
-									aria-label="Rotate left"
-									onclick={() => rotate(imgKey, -90)}
-									class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
-								>
-									<RotateCcwIcon class="size-4" />
-								</button>
-								<button
-									type="button"
-									title="Rotate right"
-									aria-label="Rotate right"
-									onclick={() => rotate(imgKey, 90)}
-									class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
-								>
-									<RotateCwIcon class="size-4" />
-								</button>
-								<a
-									href={url}
-									download
-									title="Download image"
-									aria-label="Download image"
-									class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
-								>
-									<DownloadIcon class="size-4" />
-								</a>
-							</div>
-							<!-- eslint-enable svelte/no-navigation-without-resolve -->
-						</div>
-					{:else}
-						<!-- eslint-disable svelte/no-navigation-without-resolve -->
-						<a
-							href={url}
-							target="_blank"
-							rel="noopener"
-							class="flex items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent"
-						>
-							<FileIcon class="size-4" />
-							{(part as { filename?: string }).filename ?? 'Attachment'}
-						</a>
-						<!-- eslint-enable svelte/no-navigation-without-resolve -->
-					{/if}
-				{/if}
-			{/each}
-			{@const status = messageStatus(message)}
-			{#if status.status === 'failed'}
-				<div
-					class="flex w-full items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-					role="alert"
-				>
-					<TriangleAlertIcon class="mt-0.5 size-4 shrink-0" />
-					<span class="min-w-0 break-words">{status.error || 'The response failed.'}</span>
-				</div>
-			{:else if status.status === 'partial' && !messageActive}
-				<p class="flex items-center gap-1.5 text-xs text-muted-foreground">
-					<CircleSlashIcon class="size-3.5" />
-					Response stopped before it finished.
-				</p>
-			{/if}
-
-			<MessageActions class={message.role === 'user' ? 'justify-end' : ''}>
-				{#if mounted}
-					{@const ts = messageTimes?.get(message.id)}
-					{#if ts}
-						<span
-							class="text-xs text-muted-foreground tabular-nums"
-							title={formatDateTime(ts, timeFormat)}
-						>
-							{formatMessageTime(ts, timeFormat)}
-						</span>
-					{/if}
-				{/if}
-				{@const branch = status.branch}
-				{#if branch && branch.count > 1 && onswitchbranch}
-					{@const prev = branch.ids[branch.index - 1]}
-					{@const next = branch.ids[branch.index + 1]}
-					<div
-						class="flex items-center text-xs text-muted-foreground tabular-nums"
-						role="group"
-						aria-label="Message versions"
-					>
-						<button
-							title="Previous version"
-							aria-label="Previous version"
-							disabled={!prev || branchDisabled}
-							class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
-							onclick={() => prev && onswitchbranch(prev)}
-						>
-							<ChevronLeftIcon class="size-3.5" />
-						</button>
-						<span>{branch.index + 1} / {branch.count}</span>
-						<button
-							title="Next version"
-							aria-label="Next version"
-							disabled={!next || branchDisabled}
-							class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
-							onclick={() => next && onswitchbranch(next)}
-						>
-							<ChevronRightIcon class="size-3.5" />
-						</button>
-						{#if ondeletebranch}
-							<!-- Deleting removes this version and its replies for good: the first
-							     click only arms it. -->
-							{@const confirming = confirmDeleteId === message.id}
-							<button
-								title={confirming ? 'Click again to delete this version' : 'Delete this version'}
-								aria-label={confirming ? 'Confirm deleting this version' : 'Delete this version'}
-								disabled={branchDisabled}
-								class={cn(
-									'ml-0.5 flex items-center gap-1 rounded-md p-1 hover:bg-accent disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5',
-									confirming ? 'text-destructive' : 'hover:text-foreground'
-								)}
-								onclick={() => {
-									if (confirming) {
-										confirmDeleteId = null;
-										ondeletebranch(message.id);
-									} else {
-										confirmDeleteId = message.id;
-									}
-								}}
-								onblur={() => {
-									if (confirming) confirmDeleteId = null;
-								}}
-							>
-								<Trash2Icon class="size-3.5" />
-								{#if confirming}<span>Delete?</span>{/if}
-							</button>
+		{@const status = messageStatus(message)}
+		{@const messageActive = streaming && index === lastAssistantIndex}
+		<!-- A reply that hasn't produced anything yet (or only bookkeeping parts like
+		     `step-start`) renders nothing: the thinking indicator stands in for it. -->
+		{@const visible = hasVisibleContent(message.parts)}
+		{@const notice = status.status === 'failed' || (status.status === 'partial' && !messageActive)}
+		{#if visible || notice}
+			<Message
+				class={cn(
+					message.role === 'user' ? 'flex-col items-end' : 'flex-col items-start',
+					editingIndex !== -1 && index >= editingIndex && 'opacity-50 transition-opacity'
+				)}
+			>
+				{@const blocks = groupParts(message.parts)}
+				{#each blocks as block, blockIndex (block.key)}
+					{@const part = block.type === 'content' ? block.item.part : null}
+					{@const partIndex = block.type === 'content' ? block.item.index : -1}
+					{#if block.type === 'activity'}
+						<ActivityGroup
+							items={block.items as never}
+							active={messageActive}
+							live={messageActive && blockIndex === blocks.length - 1}
+						/>
+					{:else if part?.type === 'text'}
+						{#if message.role === 'user'}
+							<MessageContent class="max-w-[85%] whitespace-pre-wrap">{part.text}</MessageContent>
+						{:else}
+							<Markdown class="w-full max-w-none" content={part.text} {conversationId} />
 						{/if}
+					{:else if part && conversationId && readHtmlRender(part)}
+						<HtmlRenderFrame {conversationId} {part} />
+					{:else if part?.type === 'file'}
+						{@const url = (part as { url?: string }).url ?? ''}
+						{#if part.mediaType?.startsWith('image/')}
+							{@const imgKey = `${message.id}:${partIndex}`}
+							{@const rotation = rotationFor(imgKey)}
+							<div
+								class="group relative grid max-w-full place-items-center overflow-hidden rounded-md"
+							>
+								<!-- eslint-disable svelte/no-navigation-without-resolve -->
+								<a href={url} target="_blank" rel="noopener" class="grid place-items-center">
+									<img
+										src={url}
+										alt="Attachment"
+										onload={(e) => onImgLoad(imgKey, e)}
+										style:transform={rotation ? `rotate(${rotation}deg)` : undefined}
+										class={cn('rounded-md border transition-transform', rotatedImgClass(imgKey))}
+									/>
+								</a>
+								<div
+									class="absolute right-2 bottom-2 flex items-center gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+								>
+									<button
+										type="button"
+										title="Rotate left"
+										aria-label="Rotate left"
+										onclick={() => rotate(imgKey, -90)}
+										class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
+									>
+										<RotateCcwIcon class="size-4" />
+									</button>
+									<button
+										type="button"
+										title="Rotate right"
+										aria-label="Rotate right"
+										onclick={() => rotate(imgKey, 90)}
+										class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
+									>
+										<RotateCwIcon class="size-4" />
+									</button>
+									<a
+										href={url}
+										download
+										title="Download image"
+										aria-label="Download image"
+										class="flex size-8 items-center justify-center rounded-md border bg-background/80 text-foreground backdrop-blur-sm"
+									>
+										<DownloadIcon class="size-4" />
+									</a>
+								</div>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
+							</div>
+						{:else}
+							<!-- eslint-disable svelte/no-navigation-without-resolve -->
+							<a
+								href={url}
+								target="_blank"
+								rel="noopener"
+								class="flex items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent"
+							>
+								<FileIcon class="size-4" />
+								{(part as { filename?: string }).filename ?? 'Attachment'}
+							</a>
+							<!-- eslint-enable svelte/no-navigation-without-resolve -->
+						{/if}
+					{/if}
+				{/each}
+				{#if status.status === 'failed'}
+					<div
+						class="flex w-full items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+						role="alert"
+					>
+						<TriangleAlertIcon class="mt-0.5 size-4 shrink-0" />
+						<span class="min-w-0 break-words">{status.error || 'The response failed.'}</span>
 					</div>
+				{:else if status.status === 'partial' && !messageActive}
+					<p class="flex items-center gap-1.5 text-xs text-muted-foreground">
+						<CircleSlashIcon class="size-3.5" />
+						Response stopped before it finished.
+					</p>
 				{/if}
-				<button
-					title={index === lastAssistantIndex
-						? `Copy (${shortcutLabel('copy-last-reply')})`
-						: 'Copy'}
-					aria-label="Copy message"
-					class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-					onclick={() => copyMessage(message)}
-				>
-					<CopyIcon class="size-3.5" />
-				</button>
-				{#if message.role === 'user' && onedit && !streaming}
-					<button
-						title="Edit"
-						aria-label="Edit message"
-						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-						onclick={() => onedit(message.id, messageText(message))}
-					>
-						<PencilIcon class="size-3.5" />
-					</button>
-				{/if}
-				{#if message.role === 'assistant' && index === lastAssistantIndex && onregenerate && !streaming}
-					<button
-						title="Regenerate"
-						aria-label="Regenerate response"
-						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-						onclick={() => onregenerate(message.id)}
-					>
-						<RefreshCwIcon class="size-3.5" />
-					</button>
-				{/if}
-				{#if message.role === 'assistant' && messageUsage(message)}
-					<button
-						title="Generation info"
-						aria-label="Generation info"
-						class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-						onclick={() => (usageMessageId = message.id)}
-					>
-						<InfoIcon class="size-3.5" />
-					</button>
-				{/if}
-			</MessageActions>
-		</Message>
+
+				<MessageActions class={message.role === 'user' ? 'justify-end' : ''}>
+					{#if mounted}
+						{@const ts = messageTimes?.get(message.id)}
+						{#if ts}
+							<span
+								class="text-xs text-muted-foreground tabular-nums"
+								title={formatDateTime(ts, timeFormat)}
+							>
+								{formatMessageTime(ts, timeFormat)}
+							</span>
+						{/if}
+					{/if}
+					{@const branch = status.branch}
+					{#if branch && branch.count > 1 && onswitchbranch}
+						{@const prev = branch.ids[branch.index - 1]}
+						{@const next = branch.ids[branch.index + 1]}
+						<div
+							class="flex items-center text-xs text-muted-foreground tabular-nums"
+							role="group"
+							aria-label="Message versions"
+						>
+							<button
+								title="Previous version"
+								aria-label="Previous version"
+								disabled={!prev || branchDisabled}
+								class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
+								onclick={() => prev && onswitchbranch(prev)}
+							>
+								<ChevronLeftIcon class="size-3.5" />
+							</button>
+							<span>{branch.index + 1} / {branch.count}</span>
+							<button
+								title="Next version"
+								aria-label="Next version"
+								disabled={!next || branchDisabled}
+								class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
+								onclick={() => next && onswitchbranch(next)}
+							>
+								<ChevronRightIcon class="size-3.5" />
+							</button>
+							{#if ondeletebranch}
+								<!-- Deleting removes this version and its replies for good: the first
+							     click only arms it. -->
+								{@const confirming = confirmDeleteId === message.id}
+								<button
+									title={confirming ? 'Click again to delete this version' : 'Delete this version'}
+									aria-label={confirming ? 'Confirm deleting this version' : 'Delete this version'}
+									disabled={branchDisabled}
+									class={cn(
+										'ml-0.5 flex items-center gap-1 rounded-md p-1 hover:bg-accent disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5',
+										confirming ? 'text-destructive' : 'hover:text-foreground'
+									)}
+									onclick={() => {
+										if (confirming) {
+											confirmDeleteId = null;
+											ondeletebranch(message.id);
+										} else {
+											confirmDeleteId = message.id;
+										}
+									}}
+									onblur={() => {
+										if (confirming) confirmDeleteId = null;
+									}}
+								>
+									<Trash2Icon class="size-3.5" />
+									{#if confirming}<span>Delete?</span>{/if}
+								</button>
+							{/if}
+						</div>
+					{/if}
+					{#if visible}
+						<button
+							title={index === lastAssistantIndex
+								? `Copy (${shortcutLabel('copy-last-reply')})`
+								: 'Copy'}
+							aria-label="Copy message"
+							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+							onclick={() => copyMessage(message)}
+						>
+							<CopyIcon class="size-3.5" />
+						</button>
+					{/if}
+					{#if message.role === 'user' && onedit && !streaming}
+						<button
+							title="Edit"
+							aria-label="Edit message"
+							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+							onclick={() => onedit(message.id, messageText(message))}
+						>
+							<PencilIcon class="size-3.5" />
+						</button>
+					{/if}
+					{#if message.role === 'assistant' && index === lastAssistantIndex && onregenerate && !streaming}
+						<button
+							title="Regenerate"
+							aria-label="Regenerate response"
+							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+							onclick={() => onregenerate(message.id)}
+						>
+							<RefreshCwIcon class="size-3.5" />
+						</button>
+					{/if}
+					{#if message.role === 'assistant' && messageUsage(message)}
+						<button
+							title="Generation info"
+							aria-label="Generation info"
+							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+							onclick={() => (usageMessageId = message.id)}
+						>
+							<InfoIcon class="size-3.5" />
+						</button>
+					{/if}
+				</MessageActions>
+			</Message>
+		{/if}
 	{/each}
 
 	{#if usageMessageId}

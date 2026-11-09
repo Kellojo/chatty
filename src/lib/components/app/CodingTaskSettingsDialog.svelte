@@ -6,6 +6,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import InfoIcon from '@lucide/svelte/icons/info';
 	import type { CodingAutonomy, CodingConversation } from '$lib/coding-environments.js';
 	import { autonomyFromRuntimeMode, runtimeModeLabel } from '$lib/coding-task-details.js';
 	import { AUTONOMY_OPTIONS, CodingTaskState } from '$lib/state/coding-task.svelte.js';
@@ -95,23 +96,21 @@
 		<Dialog.Header>
 			<Dialog.Title>Model and permissions</Dialog.Title>
 			<Dialog.Description>
-				{busy
-					? 'The current run keeps its settings; the change applies from the next message.'
-					: 'Applies from the next message to the coding agent.'}
+				Choose which model works on this task and how much it may do without asking.
 			</Dialog.Description>
 		</Dialog.Header>
 
 		{#if task}
-			<div class="grid gap-4">
-				<div class="grid gap-1.5">
+			<div class="grid gap-5">
+				<div class="grid gap-2">
 					<Label>Model</Label>
 					{#if task.optionsError}
 						<p class="text-sm text-destructive">{task.optionsError}</p>
 					{:else}
-						<CodingModelSelect state={task} disabled={saving} />
+						<CodingModelSelect state={task} disabled={saving} class="w-full" />
 					{/if}
 				</div>
-				<div class="grid gap-1.5">
+				<div class="grid gap-2">
 					<Label>Permissions</Label>
 					<Select.Root
 						type="single"
@@ -127,22 +126,43 @@
 							{#each AUTONOMY_OPTIONS as a (a.value)}
 								<Select.Item value={a.value} label={a.label}>
 									<span class="flex flex-col whitespace-normal">
-										<span>{a.label}</span>
+										<span class="flex items-center gap-1.5">
+											{a.label}
+											{#if a.value === initialAutonomy}
+												<span
+													class="rounded border border-border px-1 text-[11px] font-medium text-muted-foreground"
+												>
+													Current
+												</span>
+											{/if}
+										</span>
 										<span class="text-xs text-muted-foreground">{a.hint}</span>
 									</span>
 								</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>
+					{#if selectedAutonomy}
+						<p class="text-xs text-muted-foreground">{selectedAutonomy.hint}</p>
+					{/if}
 				</div>
 			</div>
+		{/if}
+
+		{#if busy}
+			<p
+				class="flex items-start gap-2 rounded-lg border bg-muted/50 px-3 py-2 text-sm text-muted-foreground"
+			>
+				<InfoIcon class="mt-0.5 size-4 shrink-0" />
+				The task is running. It finishes with its current settings; changes apply from your next message.
+			</p>
 		{/if}
 
 		<Dialog.Footer>
 			<Button variant="outline" disabled={saving} onclick={() => (open = false)}>Cancel</Button>
 			<Button disabled={saving || (!modelChange && !autonomyChange)} onclick={save}>
 				{#if saving}<LoaderCircleIcon class="animate-spin" />{/if}
-				Save
+				{saving ? 'Saving…' : 'Save'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

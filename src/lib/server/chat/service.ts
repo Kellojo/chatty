@@ -58,6 +58,12 @@ import { estimateMessagesChars, estimateToolChars } from '../llm/promptBreakdown
 import { withAnthropicPromptCache } from '../llm/promptCache.js';
 import { resolveSkill } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
+import {
+	deferredToolsPrompt,
+	loadedToolsFromHistory,
+	supportsNativeToolSearch,
+	withToolSearch
+} from '../tools/toolSearch.js';
 import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
 import { attachmentCache } from './attachmentCache.js';
 import { maybeCompactConversation } from './compact.js';
@@ -477,7 +483,7 @@ async function prepareTurn(
 		throw new ChatRequestError(400, `The selected model is not available: ${detail}`);
 	}
 
-	const { tools, close } = await buildTools({
+	const catalog = await buildTools({
 		userId,
 		memoryEnabled: conversation.memory_enabled === 1,
 		workspaceDir: conversationWorkspace(conversation.id),
@@ -486,7 +492,7 @@ async function prepareTurn(
 			: undefined,
 		conversationId: conversation.id
 	});
-	return { conversation, agent, lastUserMessage, ref, targets: available, tools, close };
+	return { conversation, agent, lastUserMessage, ref, targets: available, catalog };
 }
 
 export async function handleChatRequest(
@@ -530,7 +536,8 @@ export async function handleChatRequest(
 		releaseStream(conversation.id, controller);
 		throw e;
 	}
-	const { agent, lastUserMessage, ref, targets, tools, close } = turn;
+	const { agent, lastUserMessage, ref, targets, catalog } = turn;
+	const { tools, close } = catalog;
 	conversation = turn.conversation;
 	if (controller.signal.aborted) {
 		// A newer request took over while the tools were being built.
@@ -552,7 +559,8 @@ export async function handleChatRequest(
 	let promptParts: ReturnType<typeof buildSystemPromptParts>;
 	let system: string;
 	let history: UIMessage[];
-	let modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
+	let promptHistory: UIMessage[];
+	let toolsSection: string;
 	// Until createUIMessageStream takes over (its onEnd releases everything), a
 	// throw here would leave the stream registered as active forever and the MCP
 	// connections open, so undo the setup by hand.
@@ -605,16 +613,12 @@ export async function handleChatRequest(
 			includeSkillsIndex: 'load_skill' in tools,
 			extraWarning: manualSkillWarning
 		});
-		system = [promptParts.base, promptParts.skills, promptParts.system]
+		toolsSection = deferredToolsPrompt(catalog);
+		system = [promptParts.base, promptParts.skills, toolsSection, promptParts.system]
 			.filter(Boolean)
 			.join('\n\n');
 		history = historyFromDb(db, conversation.id);
-		// An interrupted response can leave tool calls without results, which providers
-		// reject, so they are left out of the prompt.
-		modelMessages = await convertToModelMessages(
-			await inlineAttachmentParts(db, conversation.id, history),
-			{ ignoreIncompleteToolCalls: true }
-		);
+		promptHistory = await inlineAttachmentParts(db, conversation.id, history);
 	} catch (e) {
 		try {
 			deleteMessage(db, assistantMessageId);
@@ -629,7 +633,8 @@ export async function handleChatRequest(
 	const maxSteps =
 		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5;
 	const stopWhen = stepCountIs(maxSteps);
-	const prepareStep = answerOnLastStep(maxSteps);
+	const lastStep = answerOnLastStep(maxSteps);
+	const loadedTools = loadedToolsFromHistory(history, catalog.deferred);
 
 	let usageMeta: MessageUsage | null = null;
 
@@ -695,15 +700,35 @@ export async function handleChatRequest(
 						totalStreams: targets.length
 					});
 					// Targets can be fallbacks on other providers, so decide per target.
+					const providerType = getProvider(db, target.providerId)?.type;
+					const toolSearch = withToolSearch(catalog, {
+						native: supportsNativeToolSearch(providerType, target.modelId),
+						loaded: loadedTools
+					});
+					// An interrupted response can leave tool calls without results, which
+					// providers reject, so they are left out of the prompt.
+					const modelMessages = await convertToModelMessages(promptHistory, {
+						ignoreIncompleteToolCalls: true,
+						tools: toolSearch.historyTools
+					});
 					const prompt =
-						getProvider(db, target.providerId)?.type === 'anthropic'
-							? withAnthropicPromptCache({ system, messages: modelMessages, tools })
-							: { system, messages: modelMessages, tools };
+						providerType === 'anthropic'
+							? withAnthropicPromptCache({
+									system,
+									messages: modelMessages,
+									tools: toolSearch.tools
+								})
+							: { system, messages: modelMessages, tools: toolSearch.tools };
 					const result = streamText({
 						model,
 						...prompt,
 						stopWhen,
-						prepareStep,
+						experimental_repairToolCall: toolSearch.repairToolCall,
+						prepareStep: (options) => {
+							const activeTools = toolSearch.activeTools();
+							const base = lastStep(options);
+							return activeTools ? { ...base, activeTools } : base;
+						},
 						abortSignal: controller.signal,
 						...(conversation.temperature != null ? { temperature: conversation.temperature } : {}),
 						...(conversation.max_tokens != null
@@ -781,7 +806,7 @@ export async function handleChatRequest(
 						promptChars: {
 							system: promptParts.base.length + promptParts.system.length,
 							skills: promptParts.skills.length,
-							tools: estimateToolChars(tools),
+							tools: estimateToolChars(toolSearch.promptTools()) + toolsSection.length,
 							messages: estimateMessagesChars(history)
 						}
 					};

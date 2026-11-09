@@ -6,6 +6,7 @@
 		title,
 		titleAttr,
 		href,
+		onclick,
 		leading,
 		badges,
 		meta,
@@ -18,6 +19,9 @@
 		titleAttr?: string;
 		/** Makes the title a link to the entry's own page (an already resolved path). */
 		href?: string;
+		/** Makes the whole row a button for the entry's main action, e.g. opening its edit dialog.
+		 *  Ignored when `href` is set. */
+		onclick?: () => void;
 		leading?: Snippet;
 		/** Inline chips after the title. */
 		badges?: Snippet;
@@ -32,14 +36,14 @@
 	} = $props();
 </script>
 
-<!-- With an href the whole row is the link's click target (a stretched ::after);
-	trailing controls sit above it. -->
+<!-- With an href or onclick the whole row is the title's click target (a stretched ::after);
+	trailing controls sit above it. Other interactive content inside the row needs `relative z-10`. -->
 <li
 	class={cn(
 		'flex items-center gap-3 px-(--card-spacing)',
 		meta || children ? 'py-3' : 'py-2',
-		href &&
-			'relative hover:bg-accent/40 has-[a:focus-visible]:bg-accent/40 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-inset'
+		(href || onclick) &&
+			'relative hover:bg-accent/40 has-[[data-row-target]:focus-visible]:bg-accent/40 has-[[data-row-target]:focus-visible]:ring-2 has-[[data-row-target]:focus-visible]:ring-ring has-[[data-row-target]:focus-visible]:ring-inset'
 	)}
 >
 	{#if leading}
@@ -58,10 +62,19 @@
 				<!-- eslint-disable svelte/no-navigation-without-resolve -- callers pass resolve()d hrefs -->
 				<a
 					{href}
+					data-row-target
 					class="line-clamp-2 min-w-0 rounded-sm text-sm font-medium wrap-break-word outline-none after:absolute after:inset-0 after:content-['']"
 					title={titleAttr ?? title}>{title}</a
 				>
 				<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			{:else if onclick}
+				<button
+					type="button"
+					{onclick}
+					data-row-target
+					class="line-clamp-2 min-w-0 cursor-pointer rounded-sm text-left text-sm font-medium wrap-break-word outline-none after:absolute after:inset-0 after:content-['']"
+					title={titleAttr ?? title}>{title}</button
+				>
 			{:else}
 				<span
 					class="line-clamp-2 min-w-0 text-sm font-medium wrap-break-word"

@@ -2,54 +2,56 @@
 	import { cn } from '$lib/utils.js';
 	import LiveElapsed from './LiveElapsed.svelte';
 
-	/** "Thinking…" with bouncing dots, and a live timer when `since` is known. */
+	/** The app's `>_` mark with a "typing" cursor, a shimmering label, and a live timer when `since` is known. */
 	let { since = null, class: className }: { since?: number | null; class?: string } = $props();
 </script>
 
-<div class={cn('flex items-center gap-2 text-muted-foreground', className)}>
-	<span class="thinking-dots" aria-hidden="true">
-		<span class="thinking-dot"></span>
-		<span class="thinking-dot"></span>
-		<span class="thinking-dot"></span>
+<!-- Not a live region: it mounts with its text, which screen readers often skip. ChatView announces instead. -->
+<div class={cn('flex items-center gap-2.5 text-sm text-muted-foreground', className)}>
+	<!-- Same 20px icon slot as the activity rows, so the transition into them doesn't jump. -->
+	<span class="flex size-5 shrink-0 items-center justify-center" aria-hidden="true">
+		<svg
+			class="size-3.5"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2.25"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+		>
+			<polyline points="4 17 10 11 4 5" />
+			<line class="thinking-cursor" x1="12" x2="20" y1="19" y2="19" />
+		</svg>
 	</span>
-	<span class="text-sm">
-		Thinking…
-		{#if since !== null}<LiveElapsed {since} class="ml-0.5" />{/if}
-	</span>
+	<span class="text-shimmer font-medium">Thinking</span>
+	{#if since !== null}
+		<LiveElapsed {since} class="text-xs" />
+	{/if}
 </div>
 
 <style>
-	.thinking-dots {
-		display: inline-flex;
-		align-items: center;
-		gap: 3px;
+	/*
+	 * The underscore grows and shrinks like a cursor typing, at twice the shimmer's rate.
+	 * The dash reveals 4–8 of its 8 units, so the mark always reads as `>_`.
+	 */
+	.thinking-cursor {
+		stroke-dasharray: 8 16;
+		animation: thinking-type 1.2s ease-in-out infinite;
 	}
 
-	.thinking-dot {
-		width: 5px;
-		height: 5px;
-		border-radius: 9999px;
-		background-color: currentColor;
-		animation: thinking-bounce 1.2s ease-in-out infinite;
-	}
-
-	.thinking-dot:nth-child(2) {
-		animation-delay: 0.15s;
-	}
-
-	.thinking-dot:nth-child(3) {
-		animation-delay: 0.3s;
-	}
-
-	@keyframes thinking-bounce {
+	@keyframes thinking-type {
 		0%,
 		100% {
-			transform: translateY(0);
-			opacity: 0.4;
+			stroke-dashoffset: 4;
 		}
 		50% {
-			transform: translateY(-3px);
-			opacity: 1;
+			stroke-dashoffset: 0;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.thinking-cursor {
+			animation: none;
 		}
 	}
 </style>

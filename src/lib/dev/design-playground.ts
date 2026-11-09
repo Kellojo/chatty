@@ -378,16 +378,16 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 		mcp('fs_ls', { scope: 'workspace' }, 'src/\nREADME.md\npackage.json'),
 		mcp('fs_read', { scope: 'workspace', path: 'README.md' }, '# Chatty\n\nSelf-hosted AI chat.\n'),
 		mcp(
-			'fs_head',
-			{ scope: 'workspace', path: 'package.json', lines: 3 },
+			'fs_read',
+			{ scope: 'workspace', path: 'package.json', head: 3 },
 			'{\n\t"name": "chatty",\n\t"private": true,'
 		),
 		mcp(
-			'fs_tail',
-			{ scope: 'workspace', path: 'server.log', lines: 2 },
+			'fs_read',
+			{ scope: 'workspace', path: 'server.log', tail: 2 },
 			'GET /api/chat 200\nGET /usage 200'
 		),
-		mcp('fs_wc', { scope: 'workspace', path: 'README.md' }, '3 5 31 README.md'),
+		mcp('fs_read', { scope: 'workspace', path: 'README.md', stats: true }, '3 5 31 README.md'),
 		mcp(
 			'fs_grep',
 			{ scope: 'workspace', pattern: 'TODO' },
@@ -507,29 +507,13 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 	image: [],
 	wait: [mcp('wait', { seconds: 10 }, { waitedSeconds: 10, currentTime: '2026-11-07T16:02:21Z' })],
 	math: [
-		mcp('add', { a: 2, b: 3 }, '5'),
-		mcp('subtract', { a: 10, b: 4 }, '6'),
-		mcp('multiply', { a: 6, b: 7 }, '42'),
-		mcp('divide', { a: 1, b: 0 }, 'error: division by zero', { isError: true }),
-		mcp('power', { base: 2, exponent: 10 }, '1024'),
-		mcp('sqrt', { value: 2 }, '1.4142135623730951'),
-		mcp('abs', { value: -7 }, '7'),
-		mcp('round', { value: 3.14159, decimals: 2 }, '3.14'),
-		mcp('floor', { value: 3.9 }, '3'),
-		mcp('ceil', { value: 3.1 }, '4'),
-		mcp('modulo', { a: 17, b: 5 }, '2'),
-		mcp('log', { value: 100, base: 10 }, '2'),
-		mcp('exp', { value: 1 }, '2.718281828459045'),
-		mcp('factorial', { n: 10 }, '3628800'),
-		mcp('gcd', { a: 48, b: 18 }, '6'),
-		mcp('lcm', { a: 4, b: 6 }, '12'),
-		mcp('min', { values: [4, 2, 8] }, '2'),
-		mcp('max', { values: [4, 2, 8] }, '8'),
-		mcp('sum', { values: [4, 2, 8] }, '14'),
-		mcp('mean', { values: [4, 2, 8] }, '4.666666666666667'),
-		mcp('median', { values: [4, 2, 8] }, '4'),
-		mcp('stdev', { values: [4, 2, 8] }, '2.494438257849294'),
-		mcp('percentage', { value: 18, total: 72 }, '25'),
+		mcp('calculate', { expression: '(2^10 - 24) / sqrt(16)' }, '250'),
+		mcp('calculate', { expression: '1 / 0' }, 'error: division by zero', { isError: true }),
+		mcp(
+			'statistics',
+			{ values: [4, 2, 8] },
+			'{"count":3,"sum":14,"mean":4.666666666666667,"median":4,"min":2,"max":8,"variance":6.222222222222222,"stdev":2.494438257849294}'
+		),
 		mcp('convert_units', { value: 50, from: 'km', to: 'mile' }, '31.068559611866696'),
 		mcp(
 			'convert_many',

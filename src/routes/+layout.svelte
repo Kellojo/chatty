@@ -14,13 +14,17 @@
 <svelte:head>
 	<title>Chatty</title>
 	<link rel="icon" href={favicon} />
-	<meta name="theme-color" content="#0a0a0a" />
 	<meta name="mobile-web-app-capable" content="yes" />
 	<meta name="apple-mobile-web-app-capable" content="yes" />
 	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 	<link rel="apple-touch-icon" href="/pwa-192x192.png" />
 	{#if registerSw}<script src="/registerSW.js"></script>{/if}
 </svelte:head>
-<ModeWatcher defaultMode={data.theme} disableHeadScriptInjection />
+<!-- Browser/PWA bar colours: --background in each mode (layout.css). -->
+<ModeWatcher
+	defaultMode={data.theme}
+	disableHeadScriptInjection
+	themeColors={{ light: '#f9f8f7', dark: '#161413' }}
+/>
 {@render children()}
 <Toaster />

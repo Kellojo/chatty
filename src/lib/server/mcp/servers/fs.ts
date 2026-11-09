@@ -234,10 +234,17 @@ export function createFsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'fs_read',
 		{
-			description: 'Print a file',
-			inputSchema: { scope: SCOPE, path: z.string() }
+			description:
+				'Print a file. head/tail print only its first/last N lines; stats=true prints its line, word and byte counts instead.',
+			inputSchema: {
+				scope: SCOPE,
+				path: z.string(),
+				head: z.number().int().min(0).optional(),
+				tail: z.number().int().min(0).optional(),
+				stats: z.boolean().optional()
+			}
 		},
-		async ({ scope, path: rel }) => {
+		async ({ scope, path: rel, head, tail, stats }) => {
 			const r = await resolveIn(scope, rel);
 			if (!r.ok) return r.error;
 			let buf: Buffer;
@@ -245,76 +252,23 @@ export function createFsServer(ctx: CallerContext): McpServer {
 				buf = await fsp.readFile(r.abs);
 			} catch {
 				return err(`not a file: ${rel}`);
+			}
+			if (stats) {
+				const content = buf.toString('utf-8');
+				const lines = content === '' ? 0 : (content.match(/\n/g)?.length ?? 0);
+				const words = content.split(/\s+/).filter(Boolean).length;
+				return text(`${lines} ${words} ${buf.length} ${toPosix(rel)}`);
+			}
+			if (head !== undefined || tail !== undefined) {
+				const all = buf.toString('utf-8').split(/\r?\n/);
+				const slice =
+					head !== undefined ? all.slice(0, head) : all.slice(Math.max(0, all.length - tail!));
+				return text(cap(slice.join('\n')));
 			}
 			if (buf.length > MAX_FILE) {
 				return text(`${buf.subarray(0, MAX_FILE).toString('utf-8')}\n… truncated`);
 			}
 			return text(cap(buf.toString('utf-8')));
-		}
-	);
-
-	const headTail =
-		(tail: boolean) =>
-		async ({
-			scope,
-			path: rel,
-			lines
-		}: {
-			scope: z.infer<typeof SCOPE>;
-			path: string;
-			lines?: number;
-		}) => {
-			const r = await resolveIn(scope, rel);
-			if (!r.ok) return r.error;
-			let content: string;
-			try {
-				content = await fsp.readFile(r.abs, 'utf-8');
-			} catch {
-				return err(`not a file: ${rel}`);
-			}
-			const n = Math.max(0, Math.floor(lines ?? 40));
-			const all = content.split(/\r?\n/);
-			const slice = tail ? all.slice(Math.max(0, all.length - n)) : all.slice(0, n);
-			return text(cap(slice.join('\n')));
-		};
-
-	server.registerTool(
-		'fs_head',
-		{
-			description: 'Print the first lines of a file',
-			inputSchema: { scope: SCOPE, path: z.string(), lines: z.number().int().optional() }
-		},
-		headTail(false)
-	);
-
-	server.registerTool(
-		'fs_tail',
-		{
-			description: 'Print the last lines of a file',
-			inputSchema: { scope: SCOPE, path: z.string(), lines: z.number().int().optional() }
-		},
-		headTail(true)
-	);
-
-	server.registerTool(
-		'fs_wc',
-		{
-			description: 'Count lines, words and bytes of a file',
-			inputSchema: { scope: SCOPE, path: z.string() }
-		},
-		async ({ scope, path: rel }) => {
-			const r = await resolveIn(scope, rel);
-			if (!r.ok) return r.error;
-			let buf: Buffer;
-			try {
-				buf = await fsp.readFile(r.abs);
-			} catch {
-				return err(`not a file: ${rel}`);
-			}
-			const content = buf.toString('utf-8');
-			const lines = content === '' ? 0 : (content.match(/\n/g)?.length ?? 0);
-			const words = content.split(/\s+/).filter(Boolean).length;
-			return text(`${lines} ${words} ${buf.length} ${toPosix(rel)}`);
 		}
 	);
 

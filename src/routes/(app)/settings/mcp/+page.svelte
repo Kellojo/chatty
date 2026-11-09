@@ -27,6 +27,8 @@
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlugZapIcon from '@lucide/svelte/icons/plug-zap';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import PackageSearchIcon from '@lucide/svelte/icons/package-search';
+	import ZapIcon from '@lucide/svelte/icons/zap';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
@@ -45,9 +47,22 @@
 			disabled: testBusyId === server.id,
 			onSelect: () => runTest(server)
 		};
-		if (server.builtin) return [test];
+		const deferred = (loadModeOverride[server.id] ?? server.loadMode) === 'deferred';
+		const loadMode: RowMenuItem = deferred
+			? {
+					label: 'Always load tools',
+					icon: ZapIcon,
+					onSelect: () => setLoadMode(server, 'always')
+				}
+			: {
+					label: 'Load tools on demand',
+					icon: PackageSearchIcon,
+					onSelect: () => setLoadMode(server, 'deferred')
+				};
+		if (server.builtin) return [test, loadMode];
 		return [
 			test,
+			loadMode,
 			{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(server) },
 			'separator',
 			{ label: 'Delete', icon: Trash2Icon, destructive: true, onSelect: () => openDelete(server) }
@@ -162,6 +177,7 @@
 	let testResult = $state<TestResult | null>(null);
 
 	let enabledOverride = $state<Record<string, boolean>>({});
+	let loadModeOverride = $state<Record<string, McpServerInfo['loadMode']>>({});
 
 	async function api(path: string, method: string, body?: unknown): Promise<Response> {
 		const res = await fetch(path, {
@@ -254,6 +270,18 @@
 		}
 	}
 
+	async function setLoadMode(server: McpServerInfo, loadMode: McpServerInfo['loadMode']) {
+		loadModeOverride[server.id] = loadMode;
+		try {
+			await api(`/api/mcp-servers/${server.id}`, 'PATCH', { loadMode });
+			await invalidateAll();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to update server');
+		} finally {
+			delete loadModeOverride[server.id];
+		}
+	}
+
 	async function runTest(server: McpServerInfo) {
 		testBusyId = server.id;
 		try {
@@ -292,7 +320,7 @@
 
 <SettingsHeader
 	title="MCP servers"
-	description="Model Context Protocol servers whose tools are available in chats and agent runs."
+	description="Model Context Protocol servers whose tools are available in chats and agent runs. Tools of on-demand servers stay out of the prompt until the model searches for them, as do a few rarely used built-in tools such as creating skills."
 >
 	{#snippet actions()}
 		<Button onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
@@ -302,7 +330,11 @@
 {#snippet serverRow(server: McpServerInfo)}
 	{@const enabled = enabledOverride[server.id] ?? server.enabled}
 	{@const connection = connectionLabel(server)}
-	<SettingsListItem title={server.name} muted={!enabled}>
+	<SettingsListItem
+		title={server.name}
+		muted={!enabled}
+		onclick={server.builtin ? undefined : () => openEdit(server)}
+	>
 		{#snippet leading()}
 			{@const Icon = (server.builtin && BUILTIN_ICON[server.name]) || BlocksIcon}
 			<Icon class="size-4" />
@@ -310,6 +342,14 @@
 		{#snippet badges()}
 			{#if !server.builtin && server.transport !== 'builtin'}
 				<Badge variant="outline">{transportLabels[server.transport]}</Badge>
+			{/if}
+			{#if (loadModeOverride[server.id] ?? server.loadMode) === 'deferred'}
+				<Badge
+					variant="secondary"
+					title="Tools stay out of the prompt until the model loads them with search_tools"
+				>
+					On demand
+				</Badge>
 			{/if}
 		{/snippet}
 		{#snippet meta()}

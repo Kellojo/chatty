@@ -9,7 +9,16 @@
 	import { encodeCodingModel, type CodingTaskState } from '$lib/state/coding-task.svelte.js';
 	import type { CodingModelOption } from '$lib/coding-environments.js';
 
-	let { state: task, disabled = false }: { state: CodingTaskState; disabled?: boolean } = $props();
+	let {
+		state: task,
+		disabled = false,
+		class: triggerClass = 'w-40 sm:w-64'
+	}: {
+		state: CodingTaskState;
+		disabled?: boolean;
+		/** Sizing for the trigger; defaults to the compact toolbar width. */
+		class?: string;
+	} = $props();
 
 	const favorites = getFavoriteModels();
 
@@ -65,7 +74,7 @@
 
 <Select.Root type="single" value={task.modelValue} onValueChange={(v) => task.setModel(v)}>
 	<Select.Trigger
-		class="w-40 sm:w-64"
+		class={triggerClass}
 		disabled={disabled || empty}
 		title={task.selectedModel
 			? `${task.selectedModel.providerLabel} · ${task.selectedModel.label}`

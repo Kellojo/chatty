@@ -11,7 +11,6 @@
 	} from '$lib/components/ai/prompt-input/index.js';
 	import { PromptSuggestion } from '$lib/components/ai/prompt-suggestion/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import CodeIcon from '@lucide/svelte/icons/code';
@@ -20,7 +19,7 @@
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
-	import XIcon from '@lucide/svelte/icons/x';
+	import PendingAttachments from '$lib/components/app/PendingAttachments.svelte';
 	import ModelPicker from '$lib/components/app/ModelPicker.svelte';
 	import CodingModelSelect from '$lib/components/app/CodingModelSelect.svelte';
 	import CodingContextBar from '$lib/components/app/CodingContextBar.svelte';
@@ -31,6 +30,7 @@
 	import { decodeModelRef } from '$lib/model-ref.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
+	import { clipboardFiles } from '$lib/state/clipboard-files.js';
 	import { DEFAULT_CODING_SUGGESTIONS, DEFAULT_SUGGESTIONS } from '$lib/user-settings.js';
 	import { START_MODE_COOKIE } from '$lib/coding-environments.js';
 	import type { Conversation } from '$lib/types.js';
@@ -123,6 +123,14 @@
 	const fileDrop = createFileDrop((files) => {
 		selectedFiles = [...selectedFiles, ...files];
 	});
+
+	// Ctrl+V with a copied file or image attaches it, like dropping it would.
+	function pasteFiles(e: ClipboardEvent) {
+		const files = clipboardFiles(e.clipboardData);
+		if (files.length === 0) return;
+		e.preventDefault();
+		selectedFiles = [...selectedFiles, ...files];
+	}
 
 	function pickFiles() {
 		fileInput?.click();
@@ -225,6 +233,7 @@
 	ondragover={fileDrop.ondragover}
 	ondragleave={fileDrop.ondragleave}
 	ondrop={fileDrop.ondrop}
+	onpaste={pasteFiles}
 >
 	{#if fileDrop.dragActive}
 		<div
@@ -273,27 +282,15 @@
 		{/if}
 	</div>
 	<div class="w-full max-w-2xl">
-		{#if selectedFiles.length > 0}
-			<div class="mb-2 flex flex-wrap gap-2">
-				{#each selectedFiles as file, i (file.name + i)}
-					<Badge variant="secondary" class="flex items-center gap-1">
-						{file.name}
-						<button
-							aria-label="Remove {file.name}"
-							class="-my-1 -mr-1 rounded-full p-1 pointer-coarse:-my-2 pointer-coarse:-mr-2 pointer-coarse:p-2"
-							onclick={() => (selectedFiles = selectedFiles.filter((_, j) => j !== i))}
-						>
-							<XIcon class="size-3" />
-						</button>
-					</Badge>
-				{/each}
-			</div>
-		{/if}
 		<PromptInput
 			value={displayInput}
 			onValueChange={(v) => (input = v)}
 			onSubmit={() => startChat(displayInput)}
 		>
+			<PendingAttachments
+				files={selectedFiles}
+				onremove={(file) => (selectedFiles = selectedFiles.filter((f) => f !== file))}
+			/>
 			<PromptInputTextarea
 				placeholder={coding
 					? `Describe a task for ${codingTask.project?.title ?? 'the coding agent'}…`

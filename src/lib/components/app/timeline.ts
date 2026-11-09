@@ -38,6 +38,20 @@ export function toolName(part: PartLike): string {
 	return part.type === 'dynamic-tool' ? (part.toolName ?? 'tool') : part.type.slice(5);
 }
 
+/**
+ * Whether any part renders something: non-empty text or reasoning, a tool call
+ * (HTML pages included) or a file. Bookkeeping parts (`step-start`, sources,
+ * data) and not-yet-streamed empty text don't count.
+ */
+export function hasVisibleContent(parts: PartLike[]): boolean {
+	return parts.some((part) => {
+		if (part.type === 'text' || part.type === 'reasoning') {
+			return ((part as { text?: string }).text ?? '').trim() !== '';
+		}
+		return part.type === 'file' || isToolPart(part);
+	});
+}
+
 export function groupParts<P extends PartLike>(parts: P[]): TimelineBlock<P>[] {
 	const blocks: TimelineBlock<P>[] = [];
 	parts.forEach((part, index) => {

@@ -39,7 +39,7 @@
 
 {#if !src || failed}
 	<span
-		class="my-4 inline-block rounded bg-neutral-200 px-3 py-1 text-sm text-neutral-600 dark:bg-neutral-700 dark:text-neutral-400"
+		class="my-4 inline-block rounded bg-muted px-3 py-1 text-sm text-muted-foreground"
 		title={src ?? undefined}
 	>
 		Image not available: {alt || fileName}

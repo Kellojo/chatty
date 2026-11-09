@@ -41,6 +41,6 @@ describe('ActivityGroup', () => {
 		];
 		const screen = render(ActivityGroup, { items: liveItems, live: true, active: true });
 		await expect.element(screen.getByText('Thought for 12s')).toBeInTheDocument();
-		await expect.element(screen.getByText('Thinking…', { exact: false })).toHaveTextContent(/\d+s/);
+		await expect.element(screen.getByText(/^Thinking\s*\d+s$/)).toBeInTheDocument();
 	});
 });

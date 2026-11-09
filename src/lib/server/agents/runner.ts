@@ -21,6 +21,7 @@ import {
 import { createConversation } from '../db/repo/conversations.js';
 import { createMessage, updateMessage } from '../db/repo/messages.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
+import { getProvider } from '../db/repo/providers.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
 import { cacheTokens, computeUsageCostUsd, type PricedUsage } from '../proxy/pricing.js';
 import { publishServerEvent } from '../events/bus.js';
@@ -29,6 +30,11 @@ import { resolveModel } from '../llm/registry.js';
 import { isRetryableModelError, resolveRefTargets } from '../llm/mapped.js';
 import { resolveSkill, skillsIndexPrompt } from '../skills/scanner.js';
 import { buildTools } from '../tools/registry.js';
+import {
+	deferredToolsPrompt,
+	supportsNativeToolSearch,
+	withToolSearch
+} from '../tools/toolSearch.js';
 import { ensureAgentWorkspace } from '../workspaces.js';
 
 const log = createLogger('agents');
@@ -137,7 +143,8 @@ export async function startAgentRun(
 		});
 		throw e;
 	}
-	const { uiUserMessage, tools, close, system } = prepared;
+	const { uiUserMessage, catalog, system } = prepared;
+	const { close } = catalog;
 
 	const controller = new AbortController();
 	runControllers.set(run.id, controller);
@@ -194,11 +201,21 @@ export async function startAgentRun(
 				});
 				lastStepAt = now;
 			};
+			// A fresh run has no history, so it starts with nothing loaded.
+			const toolSearch = withToolSearch(catalog, {
+				native: supportsNativeToolSearch(getProvider(db, target.providerId)?.type, target.modelId),
+				loaded: new Set()
+			});
 			const result = streamText({
 				model,
 				system,
 				messages: modelMessages,
-				tools,
+				tools: toolSearch.tools,
+				experimental_repairToolCall: toolSearch.repairToolCall,
+				prepareStep: () => {
+					const activeTools = toolSearch.activeTools();
+					return activeTools ? { activeTools } : undefined;
+				},
 				stopWhen: stepCountIs(agent.max_steps ?? config.AGENT_MAX_STEPS),
 				maxRetries: 2,
 				abortSignal: controller.signal,
@@ -387,7 +404,7 @@ async function prepareRun(
 		status: 'complete'
 	});
 
-	const { tools, close } = await buildTools({
+	const catalog = await buildTools({
 		userId: input.userId,
 		memoryEnabled: true,
 		workspaceDir,
@@ -410,11 +427,12 @@ async function prepareRun(
 			boundSkillBodies.length > 0
 				? `\n\n## Bound skills\nThe following skills are pre-loaded for this run.\n\n${boundSkillBodies.join('\n\n')}`
 				: '';
-		const skillsIndex = 'load_skill' in tools ? skillsIndexPrompt(input.userId) : '';
-		const system = `${agent.system_prompt}${boundSection}${skillsIndex ? `\n\n${skillsIndex}` : ''}\n\n---\nYou are running autonomously as the agent "${agent.name}" (trigger: ${input.trigger}). Current time: ${new Date().toLocaleString('en-US', { timeZone: config.TZ })} (${config.TZ}). Do not ask the user questions; no one is watching live.`;
-		return { uiUserMessage, tools, close, system };
+		const skillsIndex = 'load_skill' in catalog.tools ? skillsIndexPrompt(input.userId) : '';
+		const toolsSection = deferredToolsPrompt(catalog);
+		const system = `${agent.system_prompt}${boundSection}${skillsIndex ? `\n\n${skillsIndex}` : ''}${toolsSection ? `\n\n${toolsSection}` : ''}\n\n---\nYou are running autonomously as the agent "${agent.name}" (trigger: ${input.trigger}). Current time: ${new Date().toLocaleString('en-US', { timeZone: config.TZ })} (${config.TZ}). Do not ask the user questions; no one is watching live.`;
+		return { uiUserMessage, catalog, system };
 	} catch (e) {
-		await close().catch(() => undefined);
+		await catalog.close().catch(() => undefined);
 		throw e;
 	}
 }

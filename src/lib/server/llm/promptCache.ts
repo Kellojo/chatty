@@ -39,7 +39,10 @@ export function withAnthropicPromptCache(input: {
 	}
 
 	const tools = { ...input.tools };
-	const lastToolName = Object.keys(tools).at(-1);
+	// Deferred tools (tool search) are not part of the cached prefix and cannot carry a breakpoint.
+	const lastToolName = Object.keys(tools).findLast(
+		(name) => tools[name].providerOptions?.anthropic?.deferLoading !== true
+	);
 	if (lastToolName) {
 		const tool = tools[lastToolName];
 		tools[lastToolName] = { ...tool, providerOptions: withBreakpoint(tool.providerOptions) };

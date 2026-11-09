@@ -53,6 +53,8 @@ export interface McpServerInfo {
 	hasToken: boolean;
 	enabled: boolean;
 	builtin: boolean;
+	/** 'deferred': the model loads these tools on demand via search_tools. */
+	loadMode: 'always' | 'deferred';
 }
 
 export interface Conversation {

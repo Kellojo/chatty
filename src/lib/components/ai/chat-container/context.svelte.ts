@@ -67,6 +67,21 @@ function normalizeInitialAnimation(
 	return normalizeAnimation(animation);
 }
 
+/** How long after a touch/key/wheel gesture an upward scroll counts as the user's. */
+const GESTURE_WINDOW_MS = 300;
+
+/**
+ * Whether an upward wheel over `target` scrolls `container`, rather than a
+ * nested scroller (code block, tool output) that can still scroll up itself.
+ */
+function scrollsContainer(target: EventTarget | null, container: HTMLElement): boolean {
+	for (let node = target instanceof Element ? target : null; node && node !== container; ) {
+		if (node.scrollTop > 0 && /auto|scroll/.test(getComputedStyle(node).overflowY)) return false;
+		node = node.parentElement;
+	}
+	return container.scrollTop > 0;
+}
+
 class ChatContainerContext {
 	#scrollElement: HTMLElement | null = $state(null);
 	#contentElement: HTMLElement | null = $state(null);
@@ -85,6 +100,58 @@ class ChatContainerContext {
 		};
 
 		this.#stickToBottom = new StickToBottom(this.#options);
+
+		$effect(() => {
+			const el = this.#scrollElement;
+			if (el) return this.#watchUserEscape(el);
+		});
+	}
+
+	/**
+	 * Unlock from the bottom as soon as the user scrolls up. The library only
+	 * honours wheel events targeting the scroll element itself (not the messages
+	 * under the cursor) and ignores scroll events while its follow animation runs,
+	 * so during streaming it kept yanking the view back down.
+	 */
+	#watchUserEscape(el: HTMLElement) {
+		let lastTop = el.scrollTop;
+		let gestureAt = -Infinity;
+		let pointerHeld = false;
+		const gesture = () => (gestureAt = performance.now());
+
+		const onWheel = (e: WheelEvent) => {
+			gesture();
+			if (e.deltaY < 0 && scrollsContainer(e.target, el)) this.stopScroll();
+		};
+		// Scrollbar drags: pointerdown on the scroll element itself, not its content.
+		const onPointerDown = (e: PointerEvent) => {
+			if (e.target === el) pointerHeld = true;
+		};
+		const onPointerUp = () => (pointerHeld = false);
+		const onScroll = () => {
+			const top = el.scrollTop;
+			const userDriven = pointerHeld || performance.now() - gestureAt < GESTURE_WINDOW_MS;
+			if (top < lastTop - 1 && userDriven) this.stopScroll();
+			lastTop = top;
+		};
+
+		const passive = { passive: true } as const;
+		el.addEventListener('wheel', onWheel, passive);
+		el.addEventListener('touchmove', gesture, passive);
+		el.addEventListener('keydown', gesture);
+		el.addEventListener('pointerdown', onPointerDown, passive);
+		el.addEventListener('scroll', onScroll, passive);
+		window.addEventListener('pointerup', onPointerUp, passive);
+		window.addEventListener('pointercancel', onPointerUp, passive);
+		return () => {
+			el.removeEventListener('wheel', onWheel);
+			el.removeEventListener('touchmove', gesture);
+			el.removeEventListener('keydown', gesture);
+			el.removeEventListener('pointerdown', onPointerDown);
+			el.removeEventListener('scroll', onScroll);
+			window.removeEventListener('pointerup', onPointerUp);
+			window.removeEventListener('pointercancel', onPointerUp);
+		};
 	}
 
 	get isAtBottom() {

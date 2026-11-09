@@ -293,7 +293,7 @@
 		<ul class="divide-y divide-border/60" aria-label="Coding environments">
 			{#each data.environments as env (env.id)}
 				{@const enabled = enabledOverride[env.id] ?? env.enabled}
-				<SettingsListItem title={env.name} muted={!enabled}>
+				<SettingsListItem title={env.name} muted={!enabled} onclick={() => openForm(env)}>
 					{#snippet leading()}<ServerIcon class="size-4" />{/snippet}
 					{#snippet badges()}<EnvironmentStatusBadge environment={env} />{/snippet}
 					{#snippet meta()}
@@ -303,7 +303,7 @@
 							href={env.baseUrl}
 							target="_blank"
 							rel="noopener noreferrer"
-							class="rounded-sm hover:text-foreground hover:underline hover:underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+							class="relative z-10 rounded-sm hover:text-foreground hover:underline hover:underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
 							title="Open {env.name} in T3 Code">{env.baseUrl}</a
 						>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->

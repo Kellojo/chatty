@@ -17,6 +17,7 @@ function row(overrides: Partial<McpServerRow> = {}): McpServerRow {
 		token_enc: 'enc',
 		enabled: 1,
 		builtin: 0,
+		load_mode: 'always',
 		...overrides
 	};
 }

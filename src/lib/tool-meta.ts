@@ -37,7 +37,10 @@ export interface ToolMeta {
 	detail?: string;
 }
 
+// Tools of the math server before it was merged into calculate/statistics are
+// kept so older chats still render with readable labels.
 const MATH_TOOLS = [
+	['statistics', 'Statistics'],
 	['add', 'Add'],
 	['subtract', 'Subtract'],
 	['multiply', 'Multiply'],
@@ -76,6 +79,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	read_chat: { label: 'Read chat', server: 'chat-search', kind: 'chat' },
 	fs_ls: { label: 'List files', server: 'fs', kind: 'read', detail: 'path' },
 	fs_read: { label: 'Read file', server: 'fs', kind: 'read', detail: 'path' },
+	// fs_head, fs_tail and fs_wc were merged into fs_read; kept for older chats.
 	fs_head: { label: 'Read file start', server: 'fs', kind: 'read', detail: 'path' },
 	fs_tail: { label: 'Read file end', server: 'fs', kind: 'read', detail: 'path' },
 	fs_wc: { label: 'Count words', server: 'fs', kind: 'read', detail: 'path' },
@@ -115,6 +119,8 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	edit_image: { label: 'Edit image', server: 'image', kind: 'image', detail: 'prompt' },
 	wait: { label: 'Wait', server: 'wait', kind: 'wait', detail: 'seconds' },
 	get_weather: { label: 'Get weather', server: 'weather', kind: 'weather', detail: 'location' },
+	calculate: { label: 'Calculate', server: 'math', kind: 'math', detail: 'expression' },
+	search_tools: { label: 'Search tools', server: 'tools', kind: 'search', detail: 'query' },
 	...Object.fromEntries(
 		MATH_TOOLS.map(([name, label]) => [name, { label, server: 'math', kind: 'math' as const }])
 	),

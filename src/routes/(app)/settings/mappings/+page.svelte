@@ -209,7 +209,11 @@
 		<ul class="divide-y divide-border/60" aria-label="Model mappings">
 			{#each data.mappings as mapping (mapping.id)}
 				{@const brand = mappingBrand(mapping)}
-				<SettingsListItem title={mapping.name} muted={!mapping.enabled}>
+				<SettingsListItem
+					title={mapping.name}
+					muted={!mapping.enabled}
+					onclick={() => openEdit(mapping)}
+				>
 					{#snippet leading()}
 						{#if brand}
 							<ProviderIcon {brand} class="size-4" />

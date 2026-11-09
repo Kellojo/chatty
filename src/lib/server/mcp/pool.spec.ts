@@ -29,6 +29,7 @@ function row(overrides: Partial<McpServerRow> = {}): McpServerRow {
 		token_enc: null,
 		enabled: 1,
 		builtin: 0,
+		load_mode: 'always',
 		...overrides
 	};
 }
@@ -53,6 +54,17 @@ afterEach(async () => {
 });
 
 describe('MCP client pool', () => {
+	it('remembers tool lists past idle connections until the server is changed', async () => {
+		expect(pool.cachedMcpTools(row())).toBeUndefined();
+		(await pool.acquireMcpServer(row())).release();
+		expect(pool.sweepIdleMcpClients(Date.now() + 1, 0)).toBe(1);
+		expect(Object.keys(pool.cachedMcpTools(row()) ?? {})).toEqual(['ping']);
+		// Other connection settings are a different server as far as the cache goes.
+		expect(pool.cachedMcpTools(row({ args: JSON.stringify(['-e', '0']) }))).toBeUndefined();
+		pool.invalidateMcpServer('stdio-1');
+		expect(pool.cachedMcpTools(row())).toBeUndefined();
+	}, 30_000);
+
 	it('reuses one connection across leases and closes it on shutdown', async () => {
 		const startSpy = vi.spyOn(StdioClientTransport.prototype, 'start');
 		const a = await pool.acquireMcpServer(row());

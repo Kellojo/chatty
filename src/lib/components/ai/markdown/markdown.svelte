@@ -57,6 +57,8 @@
 	let currentTheme = $derived(
 		mode.current === 'dark' ? 'github-dark-default' : 'github-light-default'
 	);
+	// Mermaid's light 'default' theme is lavender; 'neutral' matches the stone palette.
+	let mermaidConfig = $derived({ theme: mode.current === 'dark' ? 'dark' : 'neutral' } as const);
 </script>
 
 {#snippet linkSafetyModal(props: {
@@ -75,6 +77,7 @@
 		{urlTransform}
 		class="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
 		shikiTheme={currentTheme}
+		{mermaidConfig}
 		baseTheme="shadcn"
 		shikiThemes={{
 			'github-light-default': githubLightDefault,
@@ -119,17 +122,17 @@
 				base: 'group relative my-4 h-auto items-center overflow-hidden rounded-lg border border-border bg-card md:min-h-[500px]'
 			},
 			table: {
-				wrapper: 'my-4 flex flex-col gap-1 rounded-xl border border-border bg-sidebar p-1.5',
+				wrapper: 'my-4 flex flex-col gap-1 rounded-xl border border-border bg-card p-1.5',
 				toolbar:
-					'ml-auto flex w-fit items-center justify-end gap-1 rounded-md bg-sidebar/80 px-1 supports-[backdrop-filter]:bg-sidebar/70 supports-[backdrop-filter]:backdrop-blur'
+					'ml-auto flex w-fit items-center justify-end gap-1 rounded-md bg-card/80 px-1 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur'
 			},
 			code: {
-				base: 'relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-white p-2 [--sdm-bg:theme(colors.white)] dark:bg-sidebar dark:[--sdm-bg:transparent]',
+				base: 'relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-card p-2 [--sdm-bg:transparent]',
 				header: 'flex h-8 items-center justify-between pr-1 text-muted-foreground text-xs',
 				actions:
 					'pointer-events-none sticky top-2 right-1 z-10 -mt-10 flex h-8 items-center justify-end pointer-coarse:static',
 				buttons:
-					'pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-border bg-white/80 px-1.5 py-1 supports-[backdrop-filter]:bg-white/70 supports-[backdrop-filter]:backdrop-blur dark:border-sidebar dark:bg-sidebar/80 dark:supports-[backdrop-filter]:bg-sidebar/70'
+					'pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-border bg-card/80 px-1.5 py-1 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur'
 			}
 		}}
 	/>

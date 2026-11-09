@@ -32,6 +32,7 @@ const nameSchema = z
 
 const commandSchema = z.string().trim().min(1).max(1024);
 const argsSchema = z.array(z.string().max(4096)).max(100);
+const loadModeSchema = z.enum(['always', 'deferred']);
 
 export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 	z.object({
@@ -39,14 +40,16 @@ export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 		transport: z.enum(['http', 'sse']),
 		url: z.url(),
 		token: z.string().min(1).nullish(),
-		enabled: z.boolean().optional()
+		enabled: z.boolean().optional(),
+		loadMode: loadModeSchema.optional()
 	}),
 	z.object({
 		name: nameSchema,
 		transport: z.literal('stdio'),
 		command: commandSchema,
 		args: argsSchema.default([]),
-		enabled: z.boolean().optional()
+		enabled: z.boolean().optional(),
+		loadMode: loadModeSchema.optional()
 	})
 ]);
 
@@ -57,7 +60,8 @@ export const mcpServerPatchSchema = z.object({
 	token: z.string().min(1).nullable().optional(),
 	command: commandSchema.nullish(),
 	args: argsSchema.optional(),
-	enabled: z.boolean().optional()
+	enabled: z.boolean().optional(),
+	loadMode: loadModeSchema.optional()
 });
 
 export type McpServerPatchBody = z.infer<typeof mcpServerPatchSchema>;

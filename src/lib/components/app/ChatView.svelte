@@ -21,13 +21,13 @@
 	import ListEndIcon from '@lucide/svelte/icons/list-end';
 	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
 	import FileIcon from '@lucide/svelte/icons/file';
-	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import XIcon from '@lucide/svelte/icons/x';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import ChatTopbar from './ChatTopbar.svelte';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
+	import { hasVisibleContent } from './timeline.js';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import {
@@ -52,6 +52,8 @@
 	import QueuedMessages from './QueuedMessages.svelte';
 	import { parseSkillCommand, uploadAttachments } from '$lib/chat-send.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
+	import PendingAttachments from './PendingAttachments.svelte';
+	import { clipboardFiles } from '$lib/state/clipboard-files.js';
 	import MicButton from '$lib/components/app/MicButton.svelte';
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
@@ -302,12 +304,7 @@
 	const waiting = $derived(
 		remoteGenerating ||
 			chat.status === 'submitted' ||
-			(chat.status === 'streaming' &&
-				(!lastAssistant ||
-					lastAssistant.parts.length === 0 ||
-					lastAssistant.parts.every((p) =>
-						p.type === 'text' || p.type === 'reasoning' ? p.text === '' : false
-					)))
+			(chat.status === 'streaming' && (!lastAssistant || !hasVisibleContent(lastAssistant.parts)))
 	);
 
 	// When the current wait began: the coding run's own start if known, else when
@@ -324,12 +321,12 @@
 	const showJumpToLatest = $derived(scroll !== undefined && !scroll.isAtBottom);
 
 	// The log is aria-busy while a reply streams, so screen readers don't read
-	// every token; announce once when it's done instead.
+	// every token; announce when it starts and once when it's done instead.
 	let replyAnnouncement = $state('');
 	let wasStreaming = false;
 	$effect(() => {
 		const now = streaming;
-		if (now) replyAnnouncement = '';
+		if (now && !wasStreaming) replyAnnouncement = 'Thinking';
 		else if (wasStreaming && chat.status !== 'error') replyAnnouncement = 'Response complete';
 		wasStreaming = now;
 	});
@@ -930,6 +927,14 @@
 		addFiles(files);
 	});
 
+	// Ctrl+V with a copied file or image attaches it, like dropping it would.
+	function pasteFiles(e: ClipboardEvent) {
+		const files = clipboardFiles(e.clipboardData);
+		if (files.length === 0) return;
+		e.preventDefault();
+		addFiles(files);
+	}
+
 	// Navigating away destroys this view (the page uses {#key}); make sure the
 	// sidebar indicator doesn't keep spinning for a chat we're no longer showing.
 	// Also drop this view's stream connection: the reply keeps running server-side
@@ -947,80 +952,19 @@
 		};
 	});
 
-	// Object URLs for pending image previews, keyed by File; entries are
-	// added/removed alongside every selectedFiles mutation below.
-	const previewUrls = new SvelteMap<File, string>();
-	function previewUrl(file: File): string | undefined {
-		return previewUrls.get(file);
-	}
-
-	const TEXT_TYPES = new Set(['application/json', 'application/xml']);
-	const TEXT_EXT = /\.(txt|md|markdown|csv|json|xml|log|ya?ml|toml)$/i;
-	const TEXT_PREVIEW_LEN = 300;
-	function isTextFile(file: File): boolean {
-		return file.type.startsWith('text/') || TEXT_TYPES.has(file.type) || TEXT_EXT.test(file.name);
-	}
-
-	// Snippets for pending text files, read async on add; keyed by File.
-	const textPreviews = new SvelteMap<File, string>();
-	function textPreview(file: File): string | undefined {
-		return textPreviews.get(file);
-	}
-
 	function addFiles(incoming: File[]) {
 		// Each File is its own entry (and list key); adding one twice is a no-op.
 		const files = incoming.filter((f) => !selectedFiles.includes(f));
-		for (const f of files) {
-			if (f.type.startsWith('image/') && !previewUrls.has(f)) {
-				previewUrls.set(f, URL.createObjectURL(f));
-			} else if (isTextFile(f) && !textPreviews.has(f)) {
-				textPreviews.set(f, '');
-				void f
-					.text()
-					.then((t) => {
-						let snippet = t.replaceAll('\r\n', '\n').trim();
-						if (snippet.length > TEXT_PREVIEW_LEN)
-							snippet = snippet.slice(0, TEXT_PREVIEW_LEN) + '…';
-						textPreviews.set(f, snippet);
-					})
-					.catch(() => {
-						textPreviews.delete(f);
-					});
-			}
-		}
 		selectedFiles = [...selectedFiles, ...files];
 	}
 
 	function removeFile(file: File) {
-		const url = previewUrls.get(file);
-		if (url) {
-			URL.revokeObjectURL(url);
-			previewUrls.delete(file);
-		}
-		textPreviews.delete(file);
 		selectedFiles = selectedFiles.filter((f) => f !== file);
 	}
 
 	function clearFiles() {
-		for (const url of previewUrls.values()) URL.revokeObjectURL(url);
-		previewUrls.clear();
-		textPreviews.clear();
 		selectedFiles = [];
 	}
-
-	function formatBytes(bytes: number): string {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-	}
-
-	onMount(() => {
-		return () => {
-			for (const url of previewUrls.values()) URL.revokeObjectURL(url);
-			previewUrls.clear();
-			textPreviews.clear();
-		};
-	});
 
 	function pickFiles() {
 		fileInput?.click();
@@ -1042,6 +986,7 @@
 	ondragover={fileDrop.ondragover}
 	ondragleave={fileDrop.ondragleave}
 	ondrop={fileDrop.ondrop}
+	onpaste={pasteFiles}
 >
 	{#if fileDrop.dragActive}
 		<div
@@ -1138,59 +1083,6 @@
 		{:else if coding?.status === 'failed' && coding.lastError}
 			<p class="mb-2 px-1 text-sm break-words text-destructive">{coding.lastError}</p>
 		{/if}
-		{#if selectedFiles.length > 0}
-			<div class="mb-2 flex flex-wrap gap-2">
-				{#each selectedFiles as file (file)}
-					{@const snippet = textPreview(file)}
-					<div class="relative w-40">
-						{#if file.type.startsWith('image/')}
-							<img
-								src={previewUrl(file)}
-								alt={file.name}
-								class="max-h-24 w-full rounded-md border object-cover"
-							/>
-						{:else if isTextFile(file)}
-							<div
-								class="flex h-24 flex-col overflow-hidden rounded-md border bg-muted/50 p-1.5"
-								title={file.name}
-							>
-								{#if snippet}
-									<p
-										class="line-clamp-4 flex-1 text-[10px] break-all whitespace-pre-wrap text-muted-foreground"
-									>
-										{snippet}
-									</p>
-								{:else}
-									<div class="flex flex-1 items-center justify-center text-muted-foreground">
-										<FileTextIcon class="size-5" />
-									</div>
-								{/if}
-							</div>
-						{:else}
-							<div
-								class="flex h-24 flex-col items-center justify-center gap-1 rounded-md border bg-muted/50 p-1.5 text-muted-foreground"
-								title={file.name}
-							>
-								<FileIcon class="size-6" />
-								<span class="text-[10px]">{formatBytes(file.size)}</span>
-							</div>
-						{/if}
-						<div
-							class="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground"
-						>
-							{file.name}
-						</div>
-						<button
-							aria-label="Remove {file.name}"
-							class="absolute -top-1.5 -right-1.5 rounded-full bg-muted p-0.5 hover:bg-accent pointer-coarse:-top-2.5 pointer-coarse:-right-2.5 pointer-coarse:p-1.5"
-							onclick={() => removeFile(file)}
-						>
-							<XIcon class="size-3" />
-						</button>
-					</div>
-				{/each}
-			</div>
-		{/if}
 		{#if queue.length > 0}
 			<QueuedMessages
 				items={queue}
@@ -1242,6 +1134,7 @@
 			onValueChange={(v) => (input = v)}
 			onSubmit={() => send(displayInput)}
 		>
+			<PendingAttachments files={selectedFiles} onremove={removeFile} />
 			<PromptInputTextarea
 				placeholder={editing
 					? 'Edit your message…'

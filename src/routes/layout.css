@@ -8,83 +8,87 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.147 0.004 49.25);
+	--background: oklch(0.98 0.002 60);
+	--foreground: oklch(0.26 0.006 60);
 	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.147 0.004 49.25);
+	--card-foreground: oklch(0.26 0.006 60);
 	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.147 0.004 49.25);
-	--primary: oklch(0.216 0.006 56.043);
-	--primary-foreground: oklch(0.985 0.001 106.423);
-	--secondary: oklch(0.97 0.001 106.424);
-	--secondary-foreground: oklch(0.216 0.006 56.043);
-	--muted: oklch(0.97 0.001 106.424);
-	--muted-foreground: oklch(0.553 0.013 58.071);
-	--accent: oklch(0.97 0.001 106.424);
-	--accent-foreground: oklch(0.216 0.006 56.043);
-	--destructive: oklch(0.577 0.245 27.325);
+	--popover-foreground: oklch(0.26 0.006 60);
+	--primary: oklch(0.27 0.006 60);
+	--primary-foreground: oklch(0.985 0.002 60);
+	--secondary: oklch(0.945 0.003 60);
+	--secondary-foreground: oklch(0.27 0.006 60);
+	--muted: oklch(0.945 0.003 60);
+	--muted-foreground: oklch(0.5 0.012 60);
+	--accent: oklch(0.93 0.004 60);
+	--accent-foreground: oklch(0.27 0.006 60);
+	--destructive: oklch(0.54 0.225 27.3);
 	--info: oklch(0.546 0.215 262.881);
 	--info-foreground: oklch(0.488 0.243 264.376);
 	--success: oklch(0.627 0.194 149.214);
-	--success-foreground: oklch(0.523 0.13 150.069);
-	--border: oklch(0.923 0.003 48.717);
-	--input: oklch(0.923 0.003 48.717);
-	--ring: oklch(0.709 0.01 56.259);
+	--success-foreground: oklch(0.5 0.125 150.069);
+	--warning: oklch(0.666 0.179 58.318);
+	--warning-foreground: oklch(0.53 0.155 48.998);
+	--border: oklch(0.905 0.004 60);
+	--input: oklch(0.905 0.004 60);
+	--ring: oklch(0.58 0.012 60);
 	--chart-1: oklch(0.623 0.188 259.815);
 	--chart-2: oklch(0.627 0.194 149.214);
 	--chart-3: oklch(0.646 0.222 41.116);
 	--chart-4: oklch(0.6 0.118 184.704);
 	--chart-5: oklch(0.627 0.265 303.9);
-	--chart-other: oklch(0.65 0 0);
+	--chart-other: oklch(0.65 0.006 60);
 	--radius: 0.45rem;
-	--sidebar: oklch(0.985 0.001 106.423);
-	--sidebar-foreground: oklch(0.147 0.004 49.25);
-	--sidebar-primary: oklch(0.216 0.006 56.043);
-	--sidebar-primary-foreground: oklch(0.985 0.001 106.423);
-	--sidebar-accent: oklch(0.97 0.001 106.424);
-	--sidebar-accent-foreground: oklch(0.216 0.006 56.043);
-	--sidebar-border: oklch(0.923 0.003 48.717);
-	--sidebar-ring: oklch(0.709 0.01 56.259);
+	--sidebar: oklch(0.96 0.003 60);
+	--sidebar-foreground: oklch(0.26 0.006 60);
+	--sidebar-primary: oklch(0.27 0.006 60);
+	--sidebar-primary-foreground: oklch(0.985 0.002 60);
+	--sidebar-accent: oklch(0.92 0.004 60);
+	--sidebar-accent-foreground: oklch(0.27 0.006 60);
+	--sidebar-border: oklch(0.905 0.004 60);
+	--sidebar-ring: oklch(0.58 0.012 60);
 }
 
 .dark {
-	--background: oklch(0.147 0.004 49.25);
-	--foreground: oklch(0.985 0.001 106.423);
-	--card: oklch(0.216 0.006 56.043);
-	--card-foreground: oklch(0.985 0.001 106.423);
-	--popover: oklch(0.216 0.006 56.043);
-	--popover-foreground: oklch(0.985 0.001 106.423);
-	--primary: oklch(0.923 0.003 48.717);
-	--primary-foreground: oklch(0.216 0.006 56.043);
-	--secondary: oklch(0.268 0.007 34.298);
-	--secondary-foreground: oklch(0.985 0.001 106.423);
-	--muted: oklch(0.268 0.007 34.298);
-	--muted-foreground: oklch(0.709 0.01 56.259);
-	--accent: oklch(0.268 0.007 34.298);
-	--accent-foreground: oklch(0.985 0.001 106.423);
+	--background: oklch(0.195 0.004 60);
+	--foreground: oklch(0.915 0.004 60);
+	--card: oklch(0.235 0.005 60);
+	--card-foreground: oklch(0.915 0.004 60);
+	--popover: oklch(0.255 0.005 60);
+	--popover-foreground: oklch(0.915 0.004 60);
+	--primary: oklch(0.88 0.004 60);
+	--primary-foreground: oklch(0.215 0.005 60);
+	--secondary: oklch(0.265 0.005 60);
+	--secondary-foreground: oklch(0.915 0.004 60);
+	--muted: oklch(0.265 0.005 60);
+	--muted-foreground: oklch(0.7 0.01 60);
+	--accent: oklch(0.305 0.005 60);
+	--accent-foreground: oklch(0.915 0.004 60);
 	--destructive: oklch(0.704 0.191 22.216);
 	--info: oklch(0.623 0.188 259.815);
 	--info-foreground: oklch(0.708 0.155 261.343);
 	--success: oklch(0.696 0.17 162.48);
 	--success-foreground: oklch(0.765 0.177 163.223);
-	--border: oklch(1 0 0 / 10%);
-	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.553 0.013 58.071);
+	--warning: oklch(0.828 0.189 84.429);
+	--warning-foreground: oklch(0.828 0.189 84.429);
+	--border: oklch(0.915 0.004 60 / 10%);
+	--input: oklch(0.915 0.004 60 / 18%);
+	--ring: oklch(0.56 0.012 60);
 	--chart-1: oklch(0.488 0.243 264.376);
 	--chart-2: oklch(0.696 0.17 162.48);
 	--chart-3: oklch(0.769 0.188 70.08);
 	/* Purple rather than teal: teal sat too close to --chart-2 green in stacked charts. */
 	--chart-4: oklch(0.65 0.2 303);
 	--chart-5: oklch(0.645 0.246 16.439);
-	--chart-other: oklch(0.6 0 0);
-	--sidebar: oklch(0.216 0.006 56.043);
-	--sidebar-foreground: oklch(0.985 0.001 106.423);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
-	--sidebar-primary-foreground: oklch(0.985 0.001 106.423);
-	--sidebar-accent: oklch(0.268 0.007 34.298);
-	--sidebar-accent-foreground: oklch(0.985 0.001 106.423);
-	--sidebar-border: oklch(1 0 0 / 10%);
-	--sidebar-ring: oklch(0.553 0.013 58.071);
+	--chart-other: oklch(0.6 0.006 60);
+	--sidebar: oklch(0.17 0.004 60);
+	--sidebar-foreground: oklch(0.915 0.004 60);
+	--sidebar-primary: oklch(0.88 0.004 60);
+	--sidebar-primary-foreground: oklch(0.215 0.005 60);
+	--sidebar-accent: oklch(0.25 0.005 60);
+	--sidebar-accent-foreground: oklch(0.915 0.004 60);
+	--sidebar-border: oklch(0.915 0.004 60 / 10%);
+	--sidebar-ring: oklch(0.56 0.012 60);
 }
 
 @theme inline {
@@ -111,6 +115,8 @@
 	--color-info-foreground: var(--info-foreground);
 	--color-success: var(--success);
 	--color-success-foreground: var(--success-foreground);
+	--color-warning: var(--warning);
+	--color-warning-foreground: var(--warning-foreground);
 	--color-accent-foreground: var(--accent-foreground);
 	--color-accent: var(--accent);
 	--color-muted-foreground: var(--muted-foreground);
@@ -146,6 +152,57 @@
 		@apply font-sans;
 	}
 
+	/*
+	 * Tailwind 4's preflight no longer gives buttons a pointer cursor, so restore it for
+	 * everything clickable (native controls, ARIA widgets from bits-ui, labels wrapping a
+	 * toggle). `:where()` keeps specificity at zero so `cursor-*` utilities still win.
+	 */
+	:where(
+		button,
+		summary,
+		select,
+		input:is(
+			[type='checkbox'],
+			[type='radio'],
+			[type='file'],
+			[type='color'],
+			[type='range'],
+			[type='button'],
+			[type='submit'],
+			[type='reset']
+		),
+		[role='button'],
+		[role='tab'],
+		[role='switch'],
+		[role='checkbox'],
+		[role='radio'],
+		[role='option'],
+		[role='menuitem'],
+		[role='menuitemcheckbox'],
+		[role='menuitemradio'],
+		label:has(
+			input:is([type='checkbox'], [type='radio']):not(:disabled),
+			[role='switch']:not(:disabled),
+			[role='checkbox']:not(:disabled)
+		)
+	) {
+		cursor: pointer;
+	}
+	:where(button, select, input):disabled,
+	:where(
+		[role='button'],
+		[role='tab'],
+		[role='switch'],
+		[role='checkbox'],
+		[role='radio'],
+		[role='option'],
+		[role='menuitem'],
+		[role='menuitemcheckbox'],
+		[role='menuitemradio']
+	):is([aria-disabled='true'], [data-disabled]) {
+		cursor: not-allowed;
+	}
+
 	/* Thin scrollbars that appear on hover */
 	::-webkit-scrollbar {
 		width: 8px;
@@ -161,5 +218,45 @@
 	}
 	::-webkit-scrollbar-thumb:hover {
 		background: var(--foreground);
+	}
+}
+
+/*
+ * A highlight sweeping across muted text, for "in progress" labels. The wide background
+ * leaves a pause between sweeps; the colour comes from the element's own text colour.
+ */
+@utility text-shimmer {
+	background: linear-gradient(
+			90deg,
+			currentColor 0%,
+			currentColor 36%,
+			var(--color-foreground) 50%,
+			currentColor 64%,
+			currentColor 100%
+		)
+		0 0 / 400% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	-webkit-text-fill-color: transparent;
+	animation: text-shimmer 2.4s linear infinite;
+
+	@media (prefers-reduced-motion: reduce) {
+		animation: none;
+	}
+
+	/* High-contrast modes drop backgrounds, which would leave the clipped text invisible. */
+	@media (forced-colors: active) {
+		background: none;
+		-webkit-text-fill-color: currentColor;
+		animation: none;
+	}
+}
+
+@keyframes text-shimmer {
+	from {
+		background-position: 100% 0;
+	}
+	to {
+		background-position: 0% 0;
 	}
 }

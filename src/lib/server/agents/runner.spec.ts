@@ -54,7 +54,12 @@ vi.mock('../llm/registry.js', async () => {
 });
 
 vi.mock('../tools/registry.js', () => ({
-	buildTools: async () => ({ tools: {}, toolToServer: {}, close: async () => undefined })
+	buildTools: async () => ({
+		tools: {},
+		toolToServer: {},
+		deferred: new Set(),
+		close: async () => undefined
+	})
 }));
 
 const { getDb, closeDb } = await import('../db/index.js');
