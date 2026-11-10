@@ -62,7 +62,9 @@ const NEVER_DEFERRED = new Set(['load_skill', 'read_skill_reference']);
 const ON_DEMAND_BUILTIN_TOOLS: Record<string, readonly string[]> = {
 	skills: ['create_skill', 'update_skill', 'delete_skill'],
 	fs: ['fs_curl', 'fs_mkdir', 'fs_rm'],
-	memory: ['delete_concept']
+	memory: ['delete_concept'],
+	// `now` takes a timezone, which covers the common case.
+	datetime: ['get_timezone', 'format', 'convert']
 };
 
 /**
