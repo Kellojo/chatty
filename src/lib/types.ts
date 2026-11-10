@@ -107,6 +107,8 @@ export type ServerEvent =
 	| { type: 'conversation.branch_changed'; conversationId: string }
 	| { type: 'conversation.compacted'; conversationId: string }
 	| { type: 'conversation.settle_changed'; conversationIds: string[]; settled: boolean }
+	/** The conversation was moved to trash; lists should drop it. */
+	| { type: 'conversation.deleted'; conversationId: string }
 	/** A coding task's status, pending approval, branch or PR changed. */
 	| { type: 'coding.task.updated'; conversationId: string }
 	/** A coding task's agent run ended (completed, failed or interrupted). */

@@ -14,6 +14,7 @@ import {
 	listMessagesPage,
 	toPublicWithBranches
 } from '$lib/server/db/repo/messages.js';
+import { publishServerEvent } from '$lib/server/events/bus.js';
 import { archiveCodingThread } from '$lib/server/t3/tasks.js';
 import { queueThreadStatePush } from '$lib/server/t3/thread-state.js';
 import type { RequestHandler } from './$types';
@@ -84,6 +85,7 @@ export const DELETE: RequestHandler = ({ locals, params }) => {
 	if (!softDeleteConversation(db, user.id, params.id)) {
 		error(404, { message: 'Conversation not found' });
 	}
+	publishServerEvent(user.id, { type: 'conversation.deleted', conversationId: params.id });
 	// A coding task's thread leaves T3's list too (best-effort, in the background).
 	void archiveCodingThread(user.id, params.id, db);
 	return json({ ok: true });
