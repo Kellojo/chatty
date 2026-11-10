@@ -16,6 +16,7 @@
 	import { startServerEvents } from '$lib/state/events.svelte.js';
 	import { startMessageQueueRunner } from '$lib/state/message-queue-runner.js';
 	import { setSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
+	import { drawerSwipe, SETTLE_EASING } from '$lib/components/app/drawer-swipe.js';
 	import {
 		chatShortcuts,
 		isTypingTarget,
@@ -172,6 +173,45 @@
 
 	let shortcutsOpen = $state(false);
 
+	// ── phone drawer swipe: right on a chat to open, left on the drawer to close ──
+	let drawerTrack = $state<HTMLElement | null>(null);
+	/** How far open the drawer is while a finger drags it (0..1), else null. */
+	let dragProgress = $state<number | null>(null);
+	/** Duration of the settle animation after a swipe, so it keeps the finger's speed. */
+	let settleMs = $state<number | null>(null);
+	let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function isChatPage() {
+		const path = page.url.pathname;
+		return path === '/' || path.startsWith('/chat/');
+	}
+
+	function startDrawerSwipe(track: HTMLElement) {
+		return drawerSwipe(track, {
+			isOpen: () => mobileOpen,
+			width: () => window.innerWidth,
+			canStart(target, open) {
+				if (isDesktop.current || inOverlay(target)) return false;
+				if (target.closest('[data-no-swipe]')) return false;
+				return open ? !!target.closest('aside') : !!target.closest('main') && isChatPage();
+			},
+			ondrag(offset) {
+				clearTimeout(settleTimer);
+				settleMs = null;
+				dragProgress = offset / window.innerWidth;
+			},
+			onrelease({ open, durationMs }) {
+				dragProgress = null;
+				settleMs = durationMs;
+				clearTimeout(settleTimer);
+				settleTimer = setTimeout(() => (settleMs = null), durationMs + 50);
+				const focused = document.activeElement;
+				if (!open && focused instanceof HTMLElement && focused.closest('aside')) focused.blur();
+				mobileOpen = open;
+			}
+		});
+	}
+
 	async function copyLastReply(text: string) {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -255,7 +295,10 @@
 		document.addEventListener('scroll', onAnyScroll, { capture: true, passive: true });
 		const stopEvents = startServerEvents();
 		const stopQueueRunner = startMessageQueueRunner();
+		const stopDrawerSwipe = drawerTrack ? startDrawerSwipe(drawerTrack) : undefined;
 		return () => {
+			stopDrawerSwipe?.();
+			clearTimeout(settleTimer);
 			stopQueueRunner();
 			stopEvents();
 			document.removeEventListener('scroll', onAnyScroll, { capture: true });
@@ -283,9 +326,21 @@
 	collapsible sidebar next to a flexible main.
 -->
 <div class="flex h-screen overflow-hidden">
+	<!-- While a finger drags it, it follows without a transition; letting go settles it
+	     open or closed at the finger's speed (settleMs), as iOS does. -->
 	<div
-		class="fixed inset-y-0 left-0 flex w-[200%] transition-transform duration-300 ease-out md:contents"
-		style:transform={mobileOpen ? 'translateX(0)' : 'translateX(-50%)'}
+		bind:this={drawerTrack}
+		class={cn(
+			'fixed inset-y-0 left-0 flex w-[200%] md:contents',
+			dragProgress === null && 'transition-transform duration-300 ease-out'
+		)}
+		style:transform={dragProgress !== null
+			? `translate3d(calc(${dragProgress * 50}% - 50%), 0, 0)`
+			: mobileOpen
+				? 'translateX(0)'
+				: 'translateX(-50%)'}
+		style:transition-duration={settleMs !== null ? `${settleMs}ms` : undefined}
+		style:transition-timing-function={settleMs !== null ? SETTLE_EASING : undefined}
 	>
 		<div
 			class="h-full w-1/2 shrink-0 md:w-(--sidebar-width) md:overflow-hidden md:transition-[width] md:duration-200 max-md:[&>aside]:w-full"
@@ -323,9 +378,12 @@
 			overContent &&
 				'bg-background shadow-sm ring-1 ring-border hover:bg-muted dark:bg-popover dark:shadow-black/40 dark:ring-foreground/15 dark:hover:bg-accent',
 			buttonHidden && 'max-md:pointer-events-none max-md:-translate-y-16 max-md:opacity-0',
-			mobileOpen && 'max-md:hidden',
+			mobileOpen && dragProgress === null && 'max-md:hidden',
 			sidebarOpen && 'md:hidden'
 		)}
+		style={dragProgress !== null && !isDesktop.current
+			? `opacity: ${1 - Math.min(1, dragProgress * 2)}`
+			: undefined}
 		bind:ref={sidebarButton}
 		tabindex={buttonHidden && !isDesktop.current ? -1 : undefined}
 		aria-hidden={buttonHidden && !isDesktop.current ? 'true' : undefined}

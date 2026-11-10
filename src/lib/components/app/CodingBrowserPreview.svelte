@@ -543,6 +543,7 @@
 						frameSize = { width: img.naturalWidth, height: img.naturalHeight };
 					}
 				}}
+				data-no-swipe={driving ? '' : undefined}
 				onpointerdown={(e) => pointer(e, 'down')}
 				onpointerup={(e) => pointer(e, 'up')}
 				onpointermove={(e) => pointer(e, 'move')}
