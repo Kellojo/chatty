@@ -1,5 +1,7 @@
 <script lang="ts">
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import CircleMinusIcon from '@lucide/svelte/icons/circle-minus';
 	import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
 	import CircleXIcon from '@lucide/svelte/icons/circle-x';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
@@ -25,18 +27,24 @@
 			? 'Running'
 			: status === 'success'
 				? 'Succeeded'
-				: stopped
-					? 'Stopped'
-					: 'Failed'
+				: status === 'awaiting_input'
+					? 'Needs you'
+					: status === 'dismissed'
+						? 'Dismissed'
+						: stopped
+							? 'Stopped'
+							: 'Failed'
 	);
 	const tone = $derived(
-		stopped && status === 'failed'
+		(stopped && status === 'failed') || status === 'dismissed'
 			? 'bg-muted text-muted-foreground'
 			: status === 'running'
 				? 'bg-info/15 text-info-foreground'
 				: status === 'success'
 					? 'bg-success/15 text-success-foreground'
-					: 'bg-destructive/10 text-destructive'
+					: status === 'awaiting_input'
+						? 'bg-warning/15 text-warning-foreground'
+						: 'bg-destructive/10 text-destructive'
 	);
 </script>
 
@@ -45,6 +53,10 @@
 		<LoaderCircleIcon class="{size} animate-spin" aria-hidden="true" />
 	{:else if status === 'success'}
 		<CircleCheckIcon class={size} aria-hidden="true" />
+	{:else if status === 'awaiting_input'}
+		<CircleAlertIcon class={size} aria-hidden="true" />
+	{:else if status === 'dismissed'}
+		<CircleMinusIcon class={size} aria-hidden="true" />
 	{:else if stopped}
 		<CircleStopIcon class={size} aria-hidden="true" />
 	{:else}

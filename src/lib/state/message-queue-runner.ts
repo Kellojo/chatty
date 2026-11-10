@@ -58,7 +58,7 @@ export function startMessageQueueRunner(): () => void {
 	}
 
 	const offEvent = onServerEvent((event) => {
-		if (!('conversationId' in event)) return;
+		if (!('conversationId' in event) || typeof event.conversationId !== 'string') return;
 		const id = event.conversationId;
 		if (event.type === 'chat.stream.started') completed.delete(id);
 		else if (event.type === 'chat.message_completed') completed.add(id);

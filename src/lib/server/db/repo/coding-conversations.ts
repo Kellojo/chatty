@@ -25,6 +25,8 @@ export interface CodingConversationRow {
 	pr_state: CodingPullRequestState | null;
 	status: CodingTaskStatus;
 	pending_request: string | null;
+	/** JSON object: request id -> what the user answered (see recordCodingRequestAnswer). */
+	request_answers: string | null;
 	last_sequence: number | null;
 	last_error: string | null;
 	/** Settled state last agreed with the T3 thread (0/1), NULL if never compared. */
@@ -224,6 +226,38 @@ export function updateCodingConversation(
 		);
 	}
 	return getCodingConversation(db, conversationId);
+}
+
+/** At most this many answers are kept per task (the oldest go first). */
+const MAX_REQUEST_ANSWERS = 200;
+
+/** What the user answered per request id, for showing the words in the timeline. */
+export function getCodingRequestAnswers(db: Db, conversationId: string): Record<string, string> {
+	const row = db
+		.prepare('SELECT request_answers FROM coding_conversations WHERE conversation_id = ?')
+		.get(conversationId) as { request_answers: string | null } | undefined;
+	if (!row?.request_answers) return {};
+	try {
+		const parsed = JSON.parse(row.request_answers) as unknown;
+		return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
+	} catch {
+		return {};
+	}
+}
+
+/** Remembers the user's answer to a request (T3 only reports how it resolved). */
+export function recordCodingRequestAnswer(
+	db: Db,
+	conversationId: string,
+	requestId: string,
+	answer: string
+): void {
+	const answers = { ...getCodingRequestAnswers(db, conversationId), [requestId]: answer };
+	const kept = Object.entries(answers).slice(-MAX_REQUEST_ANSWERS);
+	db.prepare('UPDATE coding_conversations SET request_answers = ? WHERE conversation_id = ?').run(
+		JSON.stringify(Object.fromEntries(kept)),
+		conversationId
+	);
 }
 
 /** Tasks that may still produce output and should be followed after a restart. */

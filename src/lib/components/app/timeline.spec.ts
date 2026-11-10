@@ -179,6 +179,20 @@ describe('toolOutcome', () => {
 		expect(toolOutcome('question', { status: 'answered' })?.label).toBe('Answered');
 		expect(toolOutcome('run_command', { decision: 'accept' })).toBeNull();
 	});
+
+	it("carries the user's answer or note along", async () => {
+		const { toolOutcome } = await import('$lib/tool-meta.js');
+		expect(toolOutcome('question', { status: 'answered', answer: 'Postgres' })).toEqual({
+			label: 'Answered',
+			negative: false,
+			answer: 'Postgres'
+		});
+		expect(toolOutcome('approval', { decision: 'decline', answer: ' Only unit tests ' })).toEqual({
+			label: 'Declined',
+			negative: true,
+			answer: 'Only unit tests'
+		});
+	});
 });
 
 describe('subagentActivity', () => {

@@ -331,4 +331,39 @@ describe('respondToCodingRequest', () => {
 		await first.catch(() => {});
 		expect(follower.respond).toHaveBeenCalledTimes(1);
 	});
+
+	it('declines an approval with the typed reply as feedback', async () => {
+		coding.updateCodingConversation(db, conversationId, {
+			threadId: 't1',
+			pendingRequest: {
+				kind: 'approval',
+				requestId: 'req2',
+				title: 'Run a command?',
+				detail: null,
+				options: [
+					{ id: 'accept', label: 'Approve' },
+					{ id: 'decline', label: 'Decline' }
+				] as never,
+				allowFreeText: true,
+				createdAt: 0
+			}
+		});
+		const answered = respondToCodingRequest(
+			'u1',
+			conversationId,
+			{ requestId: 'req2', text: 'Run the unit tests only' },
+			db
+		);
+		release();
+		await answered;
+		expect(follower.respond).toHaveBeenCalledWith({
+			requestId: 'req2',
+			decision: 'decline',
+			feedback: 'Run the unit tests only'
+		});
+		// Kept for the timeline: T3 only reports that it was declined.
+		expect(coding.getCodingRequestAnswers(db, conversationId)).toEqual({
+			req2: 'Run the unit tests only'
+		});
+	});
 });

@@ -111,14 +111,17 @@ export function agentWorkspace(agentId: string, runId: string): string {
 
 /**
  * The workspace directory a conversation's tools write to: agent-run
- * conversations use their run's agent workspace, everything else its own
- * conversation workspace. Null when an agent-run conversation has no run.
+ * conversations, hidden or dispatched as chats, use their run's agent workspace
+ * (for every turn, replies included); everything else its own conversation
+ * workspace. Null when such a conversation has no run (anymore).
  */
 export function workspaceForConversation(
 	db: Db,
-	conversation: Pick<ConversationRow, 'id' | 'kind'>
+	conversation: Pick<ConversationRow, 'id' | 'kind' | 'origin'>
 ): string | null {
-	if (conversation.kind !== 'agent-run') return conversationWorkspace(conversation.id);
+	if (conversation.kind !== 'agent-run' && conversation.origin !== 'dispatch') {
+		return conversationWorkspace(conversation.id);
+	}
 	const run = getAgentRunByConversation(db, conversation.id);
 	return run ? agentWorkspace(run.agent_id, run.id) : null;
 }

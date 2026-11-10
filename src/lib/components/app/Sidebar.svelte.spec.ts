@@ -35,6 +35,8 @@ function conv(id: string, title: string, patch: Partial<Conversation> = {}): Con
 	return {
 		id,
 		kind: 'chat',
+		origin: 'user',
+		agentRun: null,
 		title,
 		mode: 'chat',
 		providerId: 'p',
@@ -62,6 +64,11 @@ const conversations: Conversation[] = [
 	}),
 	conv('needs-you', 'Migrate auth to passkeys', {
 		coding: coding({ status: 'awaiting_input' })
+	}),
+	conv('agent-asks', 'Weekly inbox triage', {
+		origin: 'dispatch',
+		agentId: 'triage',
+		agentRun: { id: 'run-1', status: 'awaiting_input' }
 	}),
 	conv('failed', 'Fix flaky e2e suite', { coding: coding({ status: 'failed' }) }),
 	conv('unread-chat', 'Recipe ideas for the weekend'),
@@ -106,6 +113,28 @@ describe('Sidebar row states', () => {
 		});
 		const row = screen.container.querySelector('[data-conversation-id="needs-you"]');
 		expect(row?.getAttribute('title')).toContain('Needs you');
+		vi.unstubAllGlobals();
+	});
+
+	it('shows an agent run waiting on a question as needing you', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('{}', { status: 404 }))
+		);
+		// The run's turn ended with the question, so no stream is open.
+		const screen = render(Sidebar, {
+			user: { name: 'Ada Lovelace', email: 'ada@example.com', image: null, role: 'user' },
+			conversations,
+			hasMore: false,
+			unreadIds,
+			settledCount: 0,
+			autoSettleDays: 14,
+			onclose: () => {},
+			onshowshortcuts: () => {}
+		});
+		const row = screen.container.querySelector('[data-conversation-id="agent-asks"]');
+		expect(row?.getAttribute('title')).toContain('Needs you');
+		expect(row?.textContent).toContain('Agent chat:');
 		vi.unstubAllGlobals();
 	});
 

@@ -43,6 +43,8 @@ export function noticeForEvent(event: ServerEvent, ctx: NoticeContext): Notice |
 	const { triggers } = ctx;
 	switch (event.type) {
 		case 'chat.message_completed': {
+			// An agent run's turn: its agent.run.* event speaks for it.
+			if (event.agentRunId) return null;
 			if (!triggers.replies) return null;
 			const c = ctx.conversation(event.conversationId);
 			// Coding tasks announce themselves with coding.thread.finished; agent runs
@@ -76,17 +78,37 @@ export function noticeForEvent(event: ServerEvent, ctx: NoticeContext): Notice |
 				conversationId: event.conversationId
 			};
 		}
+		case 'agent.run.awaiting_input': {
+			if (!triggers.needsYou) return null;
+			return {
+				kind: 'needs-you',
+				tag: `chat:${event.conversationId}`,
+				title: 'Agent',
+				body: `Needs you: ${event.question}`,
+				url: `/chat/${event.conversationId}`,
+				conversationId: event.conversationId,
+				agentId: event.agentId
+			};
+		}
 		case 'agent.run.finished': {
-			if (event.status === 'running') return null;
+			// A question raises its own notice; a dismissed one needs none.
+			if (
+				event.status === 'running' ||
+				event.status === 'awaiting_input' ||
+				event.status === 'dismissed'
+			) {
+				return null;
+			}
 			const failed = event.status === 'failed';
 			if (failed ? !triggers.failures : !triggers.agentRuns) return null;
+			const chatId = event.visible && event.conversationId ? event.conversationId : null;
 			return {
 				kind: failed ? 'failed' : 'finished',
-				tag: `agent-run:${event.runId}`,
+				tag: chatId ? `chat:${chatId}` : `agent-run:${event.runId}`,
 				title: 'Agent',
 				body: failed ? 'Agent run failed' : 'Agent run finished',
-				url: `/agents/${event.agentId}/runs/${event.runId}`,
-				conversationId: null,
+				url: chatId ? `/chat/${chatId}` : `/agents/${event.agentId}/runs/${event.runId}`,
+				conversationId: chatId,
 				agentId: event.agentId
 			};
 		}
@@ -142,8 +164,8 @@ export interface AttentionSummary {
 
 /**
  * Conversations asking to be looked at, matching the sidebar's dots: unread
- * replies and tasks waiting for input. The open conversation and settled ones
- * don't count.
+ * replies, and tasks or agent runs waiting for input. The open conversation and
+ * settled ones don't count.
  */
 export function attentionSummary(
 	conversations: readonly Conversation[],
@@ -155,7 +177,7 @@ export function attentionSummary(
 	let needsYou = false;
 	for (const c of conversations) {
 		if (c.id === currentId || c.settledAt !== null) continue;
-		if (c.coding?.status === 'awaiting_input') {
+		if (c.coding?.status === 'awaiting_input' || c.agentRun?.status === 'awaiting_input') {
 			needsYou = true;
 			count++;
 		} else if (unread.has(c.id)) {

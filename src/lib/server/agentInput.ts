@@ -2,7 +2,12 @@
 // (/api/agents) and the `agents` MCP tools so both enforce the same rules.
 import { z } from 'zod';
 import { CODING_AUTONOMY_VALUES } from '$lib/coding-environments.js';
-import { AGENT_EVENT_NAMES, type AgentTriggerConfig, type AgentTriggerType } from '$lib/types.js';
+import {
+	AGENT_CAN_ASK_VALUES,
+	AGENT_EVENT_NAMES,
+	type AgentTriggerConfig,
+	type AgentTriggerType
+} from '$lib/types.js';
 import { computeNextRunAt, isValidCron } from './agents/scheduler.js';
 import type { Db } from './db/index.js';
 import {
@@ -33,6 +38,7 @@ export const agentCreateSchema = z.object({
 	triggerType: z.enum(AGENT_TRIGGER_TYPES),
 	triggerConfig: agentTriggerConfigSchema.optional(),
 	maxSteps: z.number().int().min(1).max(100).nullable().optional(),
+	canAsk: z.enum(AGENT_CAN_ASK_VALUES).optional(),
 	enabled: z.boolean().optional()
 });
 

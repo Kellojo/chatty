@@ -15,6 +15,7 @@
 	import AppWindowIcon from '@lucide/svelte/icons/app-window';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import BotIcon from '@lucide/svelte/icons/bot';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
@@ -178,6 +179,14 @@
 
 		{#if coding}
 			<CodingTaskDetails {coding} {environmentName} />
+			<DropdownMenu.Separator />
+		{/if}
+		{#if conversation.agentId}
+			<!-- The chat runs as (or was started by) an agent: jump to its setup. -->
+			<DropdownMenu.Item onSelect={() => goto(resolve(`/agents/${conversation.agentId}`))}>
+				<BotIcon class="size-4" />
+				Open agent
+			</DropdownMenu.Item>
 			<DropdownMenu.Separator />
 		{/if}
 		<DropdownMenu.Item onSelect={openRename}>

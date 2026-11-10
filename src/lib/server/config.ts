@@ -41,6 +41,10 @@ const schema = z.object({
 	SETTINGS_MCP_WRITE: boolFromString('false'),
 	// Chats untouched for this many days are settled (hidden from the sidebar). 0 disables.
 	CONVERSATION_AUTO_SETTLE_DAYS: z.coerce.number().int().min(0).default(7),
+	// An agent's unanswered question is dismissed after this many days. 0 disables.
+	AGENT_QUESTION_TTL_DAYS: z.coerce.number().int().min(0).default(7),
+	// Settled agent-run chats the user never replied to are deleted after this many days. 0 disables.
+	AGENT_RUN_CHAT_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
 	// Lets agent fetch tools (webfetch, fs_curl) reach localhost, private LAN and
 	// link-local/metadata addresses. Off by default to prevent SSRF.
 	ALLOW_PRIVATE_NETWORK_FETCH: boolFromString('false'),

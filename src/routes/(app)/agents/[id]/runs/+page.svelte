@@ -24,12 +24,18 @@
 
 	let stopBusy = $state<string | null>(null);
 
-	// Runs of this agent starting or finishing elsewhere refresh the list.
+	// Runs of this agent starting, asking or finishing elsewhere refresh the list.
 	$effect(() => {
 		const agentId = data.agent.id;
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		const off = onServerEvent((event) => {
-			if (event.type !== 'agent.run.started' && event.type !== 'agent.run.finished') return;
+			if (
+				event.type !== 'agent.run.started' &&
+				event.type !== 'agent.run.awaiting_input' &&
+				event.type !== 'agent.run.finished'
+			) {
+				return;
+			}
 			if (event.agentId !== agentId) return;
 			if (timer) return;
 			timer = setTimeout(() => {
@@ -43,20 +49,34 @@
 		};
 	});
 
+	/** Stops a running run, or dismisses the question of one waiting for you (same endpoint). */
 	async function stopRun(run: AgentRun) {
+		const dismiss = run.status === 'awaiting_input';
 		stopBusy = run.id;
 		try {
 			const res = await fetch(`/api/agent-runs/${run.id}/stop`, { method: 'POST' });
 			if (!res.ok) {
 				const body = (await res.json().catch(() => null)) as { message?: string } | null;
-				toast.error(body?.message ?? 'Failed to stop run');
+				toast.error(
+					body?.message ?? (dismiss ? 'Failed to dismiss question' : 'Failed to stop run')
+				);
 				return;
 			}
-			toast.success('Stop requested');
+			toast.success(dismiss ? 'Question dismissed' : 'Stop requested');
 			await invalidateAll();
 		} finally {
 			stopBusy = null;
 		}
+	}
+
+	/**
+	 * Where a run's transcript lives: its chat (runs that can ask you things), the
+	 * run page, or nowhere once its chat was deleted. A run that's still going has
+	 * its run page even before a conversation is linked.
+	 */
+	function transcriptOf(run: AgentRun): 'chat' | 'run' | 'removed' {
+		const where = data.transcripts[run.id] ?? 'run';
+		return where === 'removed' && run.status === 'running' ? 'run' : where;
 	}
 
 	// Runs are grouped under day headings, so each row only needs its time.
@@ -108,24 +128,43 @@
 								</li>
 							{/if}
 							{@const error = formatRunError(run.error)}
+							{@const transcript = transcriptOf(run)}
+							{@const when = `${formatDateTime(run.startedAt, data.timeFormat)} · ${formatTimeAgo(run.startedAt)}`}
 							<li
-								class="relative flex items-center gap-3 px-(--card-spacing) py-3 hover:bg-accent/40 has-[a:focus-visible]:bg-accent/40 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-inset"
+								class="relative flex items-center gap-3 px-(--card-spacing) py-3 {transcript ===
+								'removed'
+									? ''
+									: 'hover:bg-accent/40 has-[a:focus-visible]:bg-accent/40 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-inset'}"
 							>
 								<AgentRunStatus status={run.status} stopped={isStoppedRun(run)} />
 								<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-									<a
-										href={resolve(`/agents/${data.agent.id}/runs/${run.id}`)}
-										class="text-sm font-medium outline-none after:absolute after:inset-0 after:content-['']"
-										title="{formatDateTime(run.startedAt, data.timeFormat)} · {formatTimeAgo(
-											run.startedAt
-										)}"
-									>
-										<span class="sr-only">{day}, </span>{formatTime(run.startedAt, data.timeFormat)}
-									</a>
+									{#if transcript === 'removed'}
+										<span class="text-sm font-medium" title={when}>
+											<span class="sr-only">{day}, </span>{formatTime(
+												run.startedAt,
+												data.timeFormat
+											)}
+										</span>
+									{:else}
+										<a
+											href={transcript === 'chat' && run.conversationId
+												? resolve(`/chat/${run.conversationId}`)
+												: resolve(`/agents/${data.agent.id}/runs/${run.id}`)}
+											class="text-sm font-medium outline-none after:absolute after:inset-0 after:content-['']"
+											title={when}
+										>
+											<span class="sr-only">{day}, </span>{formatTime(
+												run.startedAt,
+												data.timeFormat
+											)}
+										</a>
+									{/if}
 									<p class="truncate text-xs text-muted-foreground">
 										{RUN_TRIGGER_LABELS[run.trigger] ?? run.trigger}
 										{#if took}· took {took}{:else if run.status === 'running'}· running{/if}
 										{#if data.showUser}· by {data.users[run.userId] ?? run.userId}{/if}
+										{#if transcript === 'chat'}· in chat{/if}
+										{#if transcript === 'removed'}· Transcript removed{/if}
 									</p>
 									{#if error}
 										<p
@@ -138,7 +177,8 @@
 										</p>
 									{/if}
 								</div>
-								{#if run.status === 'running'}
+								{#if run.status === 'running' || run.status === 'awaiting_input'}
+									{@const dismiss = run.status === 'awaiting_input'}
 									<!-- Above the row link's click target. -->
 									<Button
 										variant="outline"
@@ -147,13 +187,19 @@
 										disabled={stopBusy === run.id}
 										onclick={() => stopRun(run)}
 									>
-										{stopBusy === run.id ? 'Stopping…' : 'Stop'}
+										{#if stopBusy === run.id}
+											{dismiss ? 'Dismissing…' : 'Stopping…'}
+										{:else}
+											{dismiss ? 'Dismiss' : 'Stop'}
+										{/if}
 									</Button>
 								{/if}
-								<ChevronRightIcon
-									class="size-4 shrink-0 text-muted-foreground"
-									aria-hidden="true"
-								/>
+								{#if transcript !== 'removed'}
+									<ChevronRightIcon
+										class="size-4 shrink-0 text-muted-foreground"
+										aria-hidden="true"
+									/>
+								{/if}
 							</li>
 						{/each}
 					</ul>

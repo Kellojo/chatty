@@ -108,6 +108,27 @@ export interface CodingPendingRequest {
 	options: CodingPendingOption[];
 	allowFreeText: boolean;
 	createdAt: number;
+	/** The option the asker recommends; highlighted (else the first option is). */
+	recommendedOptionId?: string;
+	/** An option that hands the decision back ("Decide yourself"): a quiet action, not a choice. */
+	deferOptionId?: string;
+}
+
+/** The decision that turns an approval down, which a typed reply goes with. */
+export function codingDeclineOption(
+	request: CodingPendingRequest
+): CodingPendingOption | undefined {
+	return request.options.find((o) => /^(decline|deny|reject|cancel|abort)/i.test(o.id));
+}
+
+/**
+ * Whether text typed in the composer answers the request: a question that
+ * takes free text, or an approval it can decline (the text goes along as the
+ * agent's feedback).
+ */
+export function acceptsTypedAnswer(request: CodingPendingRequest): boolean {
+	if (!request.allowFreeText) return false;
+	return request.kind === 'question' || codingDeclineOption(request) !== undefined;
 }
 
 export interface CodingConversation {

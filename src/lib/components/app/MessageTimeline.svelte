@@ -9,6 +9,8 @@
 	import { Message, MessageActions, MessageContent } from '$lib/components/ai/message/index.js';
 	import ActivityGroup from './ActivityGroup.svelte';
 	import HtmlRenderFrame from './HtmlRenderFrame.svelte';
+	import DispatchChip from './DispatchChip.svelte';
+	import { askUserInput, isAskUserPart } from '$lib/ask-user.js';
 	import GenerationInfoDialog from './GenerationInfoDialog.svelte';
 	import { readHtmlRender } from '$lib/html-render.js';
 	import { groupParts, hasVisibleContent } from './timeline.js';
@@ -28,7 +30,7 @@
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import type { MessageUsage, UIMessage, UIMessageMetadata } from '$lib/types.js';
+	import type { DispatchInfo, MessageUsage, UIMessage, UIMessageMetadata } from '$lib/types.js';
 
 	let {
 		messages,
@@ -42,6 +44,8 @@
 		branchDisabled = false,
 		conversationId = null as string | null,
 		editingId = null,
+		dispatch = null,
+		dispatchMessageId = null,
 		class: className
 	}: {
 		messages: UIMessage[];
@@ -59,6 +63,10 @@
 		conversationId?: string | null;
 		/** The user message being edited: it and everything after make way for the new version. */
 		editingId?: string | null;
+		/** Set when Chatty started this chat for an agent run. */
+		dispatch?: DispatchInfo | null;
+		/** The message holding that run's instructions, shown as a chip instead of a bubble. */
+		dispatchMessageId?: string | null;
 		class?: string;
 	} = $props();
 
@@ -143,14 +151,20 @@
 		     `step-start`) renders nothing: the thinking indicator stands in for it. -->
 		{@const visible = hasVisibleContent(message.parts)}
 		{@const notice = status.status === 'failed' || (status.status === 'partial' && !messageActive)}
-		{#if visible || notice}
+		{#if dispatch && message.id === dispatchMessageId}
+			<DispatchChip {dispatch} instructions={messageText(message)} {timeFormat} />
+		{:else if visible || notice}
 			<Message
+				data-message-id={message.id}
 				class={cn(
+					// Takes focus when the message rail jumps here; the bubble shows it to keyboard users.
+					'group/msg outline-none',
 					message.role === 'user' ? 'flex-col items-end' : 'flex-col items-start',
 					editingIndex !== -1 && index >= editingIndex && 'opacity-50 transition-opacity'
 				)}
 			>
 				{@const blocks = groupParts(message.parts)}
+				{@const askIndex = message.parts.findIndex(isAskUserPart)}
 				{#each blocks as block, blockIndex (block.key)}
 					{@const part = block.type === 'content' ? block.item.part : null}
 					{@const partIndex = block.type === 'content' ? block.item.index : -1}
@@ -162,9 +176,20 @@
 						/>
 					{:else if part?.type === 'text'}
 						{#if message.role === 'user'}
-							<MessageContent class="max-w-[85%] whitespace-pre-wrap">{part.text}</MessageContent>
+							<MessageContent
+								data-message-bubble
+								class="max-w-[85%] whitespace-pre-wrap group-focus-visible/msg:ring-2 group-focus-visible/msg:ring-ring"
+								>{part.text}</MessageContent
+							>
 						{:else}
 							<Markdown class="w-full max-w-none" content={part.text} {conversationId} />
+						{/if}
+					{:else if part && isAskUserPart(part)}
+						{@const ask = part.state === 'input-streaming' ? null : askUserInput(part)}
+						<!-- The question reads as the agent's words; it's answered in the
+						     composer's answer panel. One question per turn: only the first. -->
+						{#if ask && partIndex === askIndex}
+							<Markdown class="w-full max-w-none" content={ask.question} {conversationId} />
 						{/if}
 					{:else if part && conversationId && readHtmlRender(part)}
 						<HtmlRenderFrame {conversationId} {part} />

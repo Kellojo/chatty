@@ -240,6 +240,30 @@ describe('applyStreamItem', () => {
 });
 
 describe('renderRun', () => {
+	it("adds the user's stored answer to resolved requests only", () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run({ status: 'waiting' })],
+				runtimeRequests: [
+					{ id: 'q-done', kind: 'user_input', status: 'resolved', decision: 'answered' },
+					{ id: 'q-open', kind: 'user_input', status: 'pending' }
+				],
+				turnItems: [
+					{ id: 'i1', runId: 'run-1', ordinal: 1, type: 'user_input_request', requestId: 'q-done' },
+					{ id: 'i2', runId: 'run-1', ordinal: 2, type: 'user_input_request', requestId: 'q-open' }
+				]
+			})
+		);
+		const [done, open] = renderRun(state, state.runs.get('run-1')!, new Map(), {
+			'q-done': 'Postgres',
+			'q-open': 'not sent yet'
+		}).map((e) => e.part as { output?: Record<string, unknown> });
+		expect(done.output).toMatchObject({ status: 'answered', answer: 'Postgres' });
+		expect(open.output?.answer).toBeUndefined();
+	});
+
 	it('renders text, reasoning and tool items in ordinal order', () => {
 		const state = emptyThreadState();
 		applyStreamItem(

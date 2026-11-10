@@ -28,7 +28,7 @@ export function drainForShutdown(): Promise<void> {
 		// Preview streams never end on their own (heartbeats keep them open).
 		closeAllPreviewViewers();
 		await Promise.all([
-			...listActiveStreamIds().map((id) => abortStreamAndWait(id, DRAIN_TIMEOUT_MS)),
+			...listActiveStreamIds().map((id) => abortStreamAndWait(id, 'shutdown', DRAIN_TIMEOUT_MS)),
 			stopAllAgentRuns(DRAIN_TIMEOUT_MS)
 		]);
 		stopAllCodingFollowers();

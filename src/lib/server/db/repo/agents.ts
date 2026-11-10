@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentCodingTarget } from '$lib/coding-environments.js';
-import type { Agent, AgentTriggerConfig, AgentTriggerType } from '$lib/types.js';
+import type { Agent, AgentCanAsk, AgentTriggerConfig, AgentTriggerType } from '$lib/types.js';
 import type { Db } from '../index.js';
 
 export interface AgentRow {
@@ -16,6 +16,8 @@ export interface AgentRow {
 	trigger_type: string;
 	trigger_config: string;
 	max_steps: number | null;
+	/** 'never' | 'approvals' | 'any': whether runs may ask the user (and so run as visible chats). */
+	can_ask: string;
 	/** JSON AgentCodingTarget; set for coding agents. */
 	coding_target: string | null;
 	enabled: number;
@@ -39,6 +41,7 @@ export function toPublic(row: AgentRow): Agent {
 		triggerType: row.trigger_type as AgentTriggerType,
 		triggerConfig: JSON.parse(row.trigger_config) as AgentTriggerConfig,
 		maxSteps: row.max_steps,
+		canAsk: parseCanAsk(row),
 		codingTarget: parseCodingTarget(row),
 		enabled: row.enabled === 1,
 		lastRunAt: row.last_run_at,
@@ -46,6 +49,10 @@ export function toPublic(row: AgentRow): Agent {
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
+}
+
+export function parseCanAsk(row: Pick<AgentRow, 'can_ask'>): AgentCanAsk {
+	return row.can_ask === 'any' || row.can_ask === 'approvals' ? row.can_ask : 'never';
 }
 
 /** The agent's coding target, or null for a model agent. */
@@ -69,6 +76,8 @@ export interface CreateAgentInput {
 	triggerType: AgentTriggerType;
 	triggerConfig?: AgentTriggerConfig;
 	maxSteps?: number | null;
+	/** Defaults to 'any' for user agents and 'never' for built-ins. */
+	canAsk?: AgentCanAsk;
 	codingTarget?: AgentCodingTarget | null;
 	enabled?: boolean;
 	nextRunAt?: number | null;
@@ -79,9 +88,9 @@ export function createAgent(db: Db, userId: string | null, input: CreateAgentInp
 	const now = Date.now();
 	db.prepare(
 		`INSERT INTO agents (id, user_id, name, description, system_prompt, provider_id, model_id,
-		 skill_names, tool_allowlist, trigger_type, trigger_config, max_steps, coding_target, enabled,
-		 next_run_at, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 skill_names, tool_allowlist, trigger_type, trigger_config, max_steps, can_ask, coding_target,
+		 enabled, next_run_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
@@ -95,6 +104,7 @@ export function createAgent(db: Db, userId: string | null, input: CreateAgentInp
 		input.triggerType,
 		JSON.stringify(input.triggerConfig ?? {}),
 		input.maxSteps ?? null,
+		input.canAsk ?? (userId === null ? 'never' : 'any'),
 		input.codingTarget ? JSON.stringify(input.codingTarget) : null,
 		input.enabled === false ? 0 : 1,
 		input.nextRunAt ?? null,
@@ -210,7 +220,9 @@ export function toPublicWithOverrides(row: AgentRow, overrides: Map<string, bool
  * conversations updated after that user's latest finished run of the agent.
  * Tracked per user, not via the agent's single `last_run_at`, which any one
  * user's run (scheduled or manual) moves for everyone. The agent's own run
- * transcripts don't count as activity.
+ * transcripts don't count as activity, and neither do chats Chatty dispatched
+ * for any agent's runs (agent output, not user activity; counting an agent's own
+ * visible runs would re-trigger it after every run).
  */
 export function listUsersWithActivitySinceLastRun(db: Db, agentId: string): string[] {
 	return (
@@ -219,6 +231,7 @@ export function listUsersWithActivitySinceLastRun(db: Db, agentId: string): stri
 				`SELECT DISTINCT c.user_id FROM conversations c
 				 WHERE c.deleted_at IS NULL
 				   AND NOT (c.kind = 'agent-run' AND c.agent_id IS ?)
+				   AND c.origin != 'dispatch'
 				   AND c.updated_at > COALESCE(
 				       (SELECT MAX(r.ended_at) FROM agent_runs r
 				        WHERE r.agent_id = ? AND r.user_id = c.user_id), 0)
@@ -239,6 +252,7 @@ export interface UpdateAgentInput {
 	triggerType?: AgentTriggerType;
 	triggerConfig?: AgentTriggerConfig;
 	maxSteps?: number | null;
+	canAsk?: AgentCanAsk;
 	codingTarget?: AgentCodingTarget | null;
 	enabled?: boolean;
 	nextRunAt?: number | null;
@@ -251,7 +265,7 @@ export function updateAgent(db: Db, id: string, patch: UpdateAgentInput): AgentR
 	db.prepare(
 		`UPDATE agents SET name = ?, description = ?, system_prompt = ?, provider_id = ?, model_id = ?,
 		 skill_names = ?, tool_allowlist = ?, trigger_type = ?, trigger_config = ?, max_steps = ?,
-		 coding_target = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
+		 can_ask = ?, coding_target = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
 		 WHERE id = ?`
 	).run(
 		patch.name ?? existing.name,
@@ -270,6 +284,7 @@ export function updateAgent(db: Db, id: string, patch: UpdateAgentInput): AgentR
 			? JSON.stringify(patch.triggerConfig)
 			: existing.trigger_config,
 		patch.maxSteps !== undefined ? patch.maxSteps : existing.max_steps,
+		patch.canAsk ?? existing.can_ask,
 		patch.codingTarget !== undefined
 			? patch.codingTarget
 				? JSON.stringify(patch.codingTarget)

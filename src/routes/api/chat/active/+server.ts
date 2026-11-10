@@ -8,6 +8,9 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = ({ locals }) => {
 	const user = requireUser(locals);
 	const db = getDb();
-	const streams = listActiveStreams().filter((s) => getConversation(db, user.id, s.conversationId));
+	// Hidden agent runs stream through the same registry but aren't chats.
+	const streams = listActiveStreams().filter(
+		(s) => getConversation(db, user.id, s.conversationId)?.kind === 'chat'
+	);
 	return json({ conversationIds: streams.map((s) => s.conversationId), streams });
 };

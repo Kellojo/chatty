@@ -16,6 +16,18 @@ export const load: PageServerLoad = ({ locals, params }) => {
 	}
 	const showUser = agent.user_id === null && isAdmin;
 	const runs = listAgentRuns(db, agent.id, 50, showUser ? undefined : user.id).map(runToPublic);
+	// Where each run's transcript lives: a visible chat, the hidden run page, or
+	// nowhere (its chat was deleted, or purged and unlinked).
+	const transcripts: Record<string, 'chat' | 'run' | 'removed'> = {};
+	const lookup = db.prepare('SELECT origin, deleted_at FROM conversations WHERE id = ?');
+	for (const run of runs) {
+		const row = run.conversationId
+			? (lookup.get(run.conversationId) as
+					{ origin: string; deleted_at: number | null } | undefined)
+			: undefined;
+		transcripts[run.id] =
+			!row || row.deleted_at !== null ? 'removed' : row.origin === 'dispatch' ? 'chat' : 'run';
+	}
 	const users: Record<string, string> = {};
 	if (showUser) {
 		const ids = [...new Set(runs.map((r) => r.userId))];
@@ -30,6 +42,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 	return {
 		agent: toPublicWithOverrides(agent, listAgentOverrides(db, user.id)),
 		runs,
+		transcripts,
 		users,
 		showUser,
 		timeFormat: getTimeFormat(db, user.id)

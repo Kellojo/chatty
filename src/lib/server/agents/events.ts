@@ -107,6 +107,25 @@ function fromAgentRun(db: Db, payload: Record<string, unknown>): boolean {
 	return typeof conversationId === 'string' && isAgentRunConversation(db, conversationId);
 }
 
+/**
+ * No agent reacts to events from conversations that exist for agent runs:
+ * hidden run transcripts and the chats Chatty dispatches for runs (replies in
+ * them included). Otherwise an agent on `chat.*` events would trigger itself or
+ * another agent in a loop. Coding agents additionally skip coding run chats
+ * (`fromAgentRun`), which are ordinary user chats for everyone else.
+ */
+function fromRunConversation(db: Db, payload: Record<string, unknown>): boolean {
+	const conversationId = payload.conversationId;
+	if (typeof conversationId !== 'string') return false;
+	return (
+		db
+			.prepare(
+				`SELECT 1 FROM conversations WHERE id = ? AND (kind = 'agent-run' OR origin = 'dispatch')`
+			)
+			.get(conversationId) !== undefined
+	);
+}
+
 export function buildEventInstructions(
 	triggerConfig: AgentTriggerConfig,
 	occurrences: Occurrence[],
@@ -204,6 +223,7 @@ export async function emitAgentEvent(
 ): Promise<void> {
 	try {
 		const run = runFn ?? defaultRun;
+		if (fromRunConversation(db, payload)) return;
 		for (const agent of listEventAgents(db, event)) {
 			try {
 				if (!enabledFor(db, agent, userId)) continue;

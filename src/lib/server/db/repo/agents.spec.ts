@@ -159,6 +159,32 @@ describe('agents repo', () => {
 		expect(listUsersWithActivitySinceLastRun(db, agent.id)).toEqual(['u1', 'u3']);
 	});
 
+	it("listUsersWithActivitySinceLastRun ignores chats dispatched for any agent's runs", () => {
+		const agent = createAgent(db, null, {
+			name: 'mem',
+			systemPrompt: 'x',
+			triggerType: 'schedule',
+			triggerConfig: { cron: '* * * * *' }
+		});
+		const other = createAgent(db, 'u1', {
+			name: 'inbox',
+			systemPrompt: 'x',
+			triggerType: 'manual'
+		});
+		createConversation(db, 'u1', { title: 'run', origin: 'dispatch', agentId: other.id });
+		expect(listUsersWithActivitySinceLastRun(db, agent.id)).toEqual([]);
+		createConversation(db, 'u1', { title: 'mine' });
+		expect(listUsersWithActivitySinceLastRun(db, agent.id)).toEqual(['u1']);
+	});
+
+	it('defaults new user agents to asking and built-ins to never', () => {
+		const mine = createAgent(db, 'u1', { name: 'a', systemPrompt: 'x', triggerType: 'manual' });
+		const builtin = createAgent(db, null, { name: 'b', systemPrompt: 'x', triggerType: 'manual' });
+		expect(toPublic(mine).canAsk).toBe('any');
+		expect(toPublic(builtin).canAsk).toBe('never');
+		expect(toPublic(updateAgent(db, mine.id, { canAsk: 'approvals' })!).canAsk).toBe('approvals');
+	});
+
 	it('listDueScheduleAgents excludes agents with a running run', () => {
 		const past = Date.now() - 1000;
 		const agent = createAgent(db, 'u1', {

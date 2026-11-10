@@ -99,7 +99,7 @@ describe('POST /api/agent-runs/[id]/stop', () => {
 		const res = await call(POST, { user: u1, params: { id: run.id } });
 		expect(res.status).toBe(409);
 		expect(res.body).toEqual({ message: 'Run is not active on this server' });
-		expect(mockedStop).toHaveBeenCalledWith(run.id);
+		expect(mockedStop).toHaveBeenCalledWith(run.id, expect.anything());
 	});
 
 	it('returns ok when the run is stopped', async () => {
@@ -108,6 +108,6 @@ describe('POST /api/agent-runs/[id]/stop', () => {
 		const res = await call<{ ok: boolean }>(POST, { user: u1, params: { id: run.id } });
 		expect(res.status).toBe(200);
 		expect(res.body).toEqual({ ok: true });
-		expect(mockedStop).toHaveBeenCalledWith(run.id);
+		expect(mockedStop).toHaveBeenCalledWith(run.id, expect.anything());
 	});
 });

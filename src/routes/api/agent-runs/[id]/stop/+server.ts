@@ -13,10 +13,11 @@ export const POST: RequestHandler = ({ locals, params }) => {
 	if (!run || (run.user_id !== user.id && (user as { role?: string }).role !== 'admin')) {
 		error(404, { message: 'Agent run not found' });
 	}
-	if (run.status !== 'running') {
+	// A run waiting for an answer has no turn to abort: stopping it dismisses the question.
+	if (run.status !== 'running' && run.status !== 'awaiting_input') {
 		error(409, { message: 'Run is not running' });
 	}
-	if (!stopAgentRun(run.id) && !stopCodingAgentRun(run.id, db)) {
+	if (!stopAgentRun(run.id, db) && !stopCodingAgentRun(run.id, db)) {
 		error(409, { message: 'Run is not active on this server' });
 	}
 	return json({ ok: true });

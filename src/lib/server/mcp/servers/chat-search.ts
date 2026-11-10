@@ -75,7 +75,10 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 						// The since filter below runs after the search, so fetch more to filter.
 						limit: sinceMs !== null ? MAX_SEARCH_PAGE_SIZE : n
 					})
-				: listConversationsSince(db, ctx.userId, sinceMs!);
+				: // A plain "what changed since" listing is how memory extraction finds new
+					// chats; agent-run chats hold the agent's words, not the user's, so they
+					// are left out. A text query still finds them.
+					listConversationsSince(db, ctx.userId, sinceMs!, { excludeDispatched: true });
 			const filtered = sinceMs !== null ? rows.filter((r) => r.updated_at >= sinceMs) : rows;
 			return text(
 				JSON.stringify(
