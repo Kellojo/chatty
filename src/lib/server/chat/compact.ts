@@ -105,7 +105,8 @@ export function compactThreshold(
 	return config.CHAT_COMPACT_TOKENS;
 }
 
-function summaryTarget(fallback: { providerId: string; modelId: string }): {
+/** The compaction role model when one is set, otherwise `fallback`. */
+export function summaryTarget(fallback: { providerId: string; modelId: string }): {
 	providerId: string;
 	modelId: string;
 } {
