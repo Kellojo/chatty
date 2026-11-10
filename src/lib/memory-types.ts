@@ -44,3 +44,28 @@ export interface MemoryWriteEntry {
 	diff: string | null;
 	created_at: number;
 }
+
+export interface MemoryGraphNode {
+	/** `<scope>:<path>`, unique across scopes. */
+	id: string;
+	scope: MemoryScope;
+	path: string;
+	title: string;
+	type: string;
+	tags: string[];
+	/** Top-level folder, '' for memories at the bundle root, `Shared` for shared memories. */
+	folder: string;
+}
+
+export interface MemoryGraphEdge {
+	/** Node ids. */
+	source: string;
+	target: string;
+	/** `link`: one memory links to the other. `tag`: they share a tag. */
+	kind: 'link' | 'tag';
+}
+
+export interface MemoryGraph {
+	nodes: MemoryGraphNode[];
+	edges: MemoryGraphEdge[];
+}

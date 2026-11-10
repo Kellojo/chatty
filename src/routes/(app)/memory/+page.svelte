@@ -2,7 +2,6 @@
 	import { untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { SvelteSet } from 'svelte/reactivity';
-	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
@@ -10,22 +9,24 @@
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SearchIcon from '@lucide/svelte/icons/search';
-	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import ZapIcon from '@lucide/svelte/icons/zap';
+	import NetworkIcon from '@lucide/svelte/icons/network';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
-	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import EmptyState from '$lib/components/app/EmptyState.svelte';
 	import PageHeader from '$lib/components/app/PageHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
-	import { formatTimeAgo } from '$lib/datetime.js';
 	import { guardUnsavedChanges, isSaveShortcut, missingHint } from '$lib/form-guards.js';
 	import MemoryAuditEntry from '$lib/components/app/MemoryAuditEntry.svelte';
+	import MemoryGraphView from '$lib/components/app/MemoryGraph.svelte';
+	import MemoryView, { type MemoryConnection } from '$lib/components/app/MemoryView.svelte';
+	import MemoryEditForm from '$lib/components/app/MemoryEditForm.svelte';
 	import type {
 		Concept,
+		MemoryGraph,
+		MemoryGraphNode,
 		MemoryScope,
 		MemorySearchHit,
 		MemoryTreeNode,
@@ -36,6 +37,11 @@
 	let { data }: { data: PageData } = $props();
 
 	const isAdmin = $derived(data.user.role === 'admin');
+	const tabs = $derived<{ value: MemoryScope | 'map'; label: string }[]>([
+		{ value: 'user', label: 'My memory' },
+		...(isAdmin ? [{ value: 'shared' as const, label: 'Shared' }] : []),
+		{ value: 'map', label: 'Map' }
+	]);
 
 	let scope = $state<MemoryScope>('user');
 	// Initial tree comes from the load function; afterwards it is refetched client-side.
@@ -71,7 +77,86 @@
 
 	untrack(() => applyTree(data.tree));
 
+	// The map tab shows every memory you can open: your own, plus shared ones for admins.
+	// It also feeds the "Connected memories" list, so it loads up front.
+	let view = $state<'browse' | 'map'>('browse');
+	let graph = $state.raw<MemoryGraph | null>(null);
+	// Bumped per request so a slow response can't overwrite a newer one.
+	let graphToken = 0;
+	let graphFailed = $state(false);
+
+	async function refreshGraph() {
+		const token = ++graphToken;
+		try {
+			const res = await fetch('/api/memory/graph');
+			if (!res.ok) throw new Error(`Request failed (${res.status})`);
+			const next = (await res.json()) as MemoryGraph;
+			if (token === graphToken) {
+				graph = next;
+				graphFailed = false;
+			}
+		} catch {
+			// The list still works without the map.
+			if (token === graphToken) graphFailed = true;
+		}
+	}
+
+	/** Opens a memory from the map or a connection, switching scope when needed. */
+	function openNode(node: Pick<MemoryGraphNode, 'scope' | 'path'>) {
+		if (!canLeaveEditor()) return;
+		view = 'browse';
+		if (node.scope !== scope) {
+			scope = node.scope;
+			searchResults = null;
+			query = '';
+			expanded.clear();
+			void refreshTree();
+		}
+		void selectConcept(node.path);
+	}
+
+	function collectPaths(nodes: MemoryTreeNode[], out: Set<string>): Set<string> {
+		for (const node of nodes) {
+			if (node.kind === 'dir') collectPaths(node.children ?? [], out);
+			else out.add(node.path);
+		}
+		return out;
+	}
+	// Rebuilt whenever the tree changes.
+	const knownPaths = $derived(collectPaths(tree, new Set()));
+
+	// What the edit form suggests, from memories in the open scope.
+	const scopeNodes = $derived(graph ? graph.nodes.filter((n) => n.scope === scope) : []);
+	// Most-used tags first, so the tag field offers the likeliest ones on focus.
+	const tagSuggestions = $derived.by(() => {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local tally inside a derived
+		const counts = new Map<string, number>();
+		for (const tag of scopeNodes.flatMap((n) => n.tags))
+			counts.set(tag, (counts.get(tag) ?? 0) + 1);
+		return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t);
+	});
+	const typeSuggestions = $derived(
+		[...new Set(scopeNodes.map((n) => n.type).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+	);
+	const folders = $derived(
+		[
+			...new Set(
+				[...knownPaths].filter((p) => p.includes('/')).map((p) => p.slice(0, p.lastIndexOf('/')))
+			)
+		].sort((a, b) => a.localeCompare(b))
+	);
+	const linkTargets = $derived(
+		scopeNodes
+			.filter((n) => n.path !== editor.savedPath)
+			.map((n) => ({ title: n.title, path: n.path, hint: n.path.replace(/\.md$/, '') }))
+	);
+
+	$effect(() => {
+		untrack(() => void refreshGraph());
+	});
+
 	async function refreshTree() {
+		void refreshGraph();
 		treeLoading = true;
 		try {
 			const res = await fetch(`/api/memory/tree?scope=${scope}`);
@@ -82,6 +167,19 @@
 		} finally {
 			treeLoading = false;
 		}
+	}
+
+	function setTab(next: MemoryScope | 'map') {
+		if (next === 'map') {
+			view = 'map';
+			return;
+		}
+		if (view === 'map' && scope === next) {
+			view = 'browse';
+			return;
+		}
+		view = 'browse';
+		setScope(next);
 	}
 
 	function setScope(next: MemoryScope) {
@@ -158,6 +256,25 @@
 	};
 
 	let editor = $state<EditorState>({ ...emptyEditor });
+	// An open memory is shown rendered; `editing` swaps in the form. New memories start there.
+	let editing = $state(false);
+
+	const openId = $derived(editor.mode === 'edit' ? `${scope}:${editor.savedPath}` : null);
+
+	// Memories linked to or sharing a tag with the open one, links first.
+	const connections = $derived.by((): MemoryConnection[] => {
+		if (!graph || !openId) return [];
+		const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+		const out: MemoryConnection[] = [];
+		for (const kind of ['link', 'tag'] as const) {
+			for (const e of graph.edges) {
+				if (e.kind !== kind || (e.source !== openId && e.target !== openId)) continue;
+				const other = byId.get(e.source === openId ? e.target : e.source);
+				if (other) out.push({ ...other, kind });
+			}
+		}
+		return out;
+	});
 	let saveBusy = $state(false);
 	// The editor as last loaded or saved, to tell unsaved edits apart.
 	let baseline = $state<EditorState>({ ...emptyEditor });
@@ -178,13 +295,34 @@
 			.replace(/[^a-z0-9]+/g, '-')
 			.replace(/^-+|-+$/g, '')
 			.slice(0, 80);
-		editor.path = slug ? `${slug}.md` : '';
+		const folder = editor.path.includes('/')
+			? editor.path.slice(0, editor.path.lastIndexOf('/') + 1)
+			: '';
+		editor.path = slug ? `${folder}${slug}.md` : folder;
 	});
 
 	function setEditor(next: EditorState) {
 		editor = next;
 		baseline = { ...next };
 		pathEdited = false;
+		editing = next.mode === 'new';
+	}
+
+	function startEditing() {
+		if (editor.mode !== 'edit') return;
+		editing = true;
+		// Land in the content, where most edits happen.
+		requestAnimationFrame(() => document.getElementById('mem-body')?.focus());
+	}
+
+	/** Leaves the form: back to the rendered memory, or out of a new one. */
+	function stopEditing() {
+		if (!canLeaveEditor()) return;
+		if (editor.mode === 'new') clearSelection();
+		else {
+			editor = { ...baseline };
+			editing = false;
+		}
 	}
 
 	/** Asks before throwing away unsaved edits; true when it's fine to move on. */
@@ -203,21 +341,40 @@
 		)
 	);
 	const canSave = $derived(!saveBusy && !missing && (editor.mode === 'new' || dirty));
-	const saveHint = $derived(
-		missing ?? (editor.mode === 'edit' && dirty ? 'Unsaved changes' : null)
-	);
 	let formEl = $state<HTMLFormElement | null>(null);
 
 	guardUnsavedChanges(() => dirty);
 
-	function onKeydown(event: KeyboardEvent) {
-		if (editor.mode === 'none' || deleteOpen || !isSaveShortcut(event)) return;
-		event.preventDefault();
-		if (canSave) formEl?.requestSubmit();
+	function isTyping(target: EventTarget | null): boolean {
+		return (
+			target instanceof HTMLElement &&
+			(target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+		);
 	}
 
-	function discardChanges() {
-		editor = { ...baseline };
+	function onKeydown(event: KeyboardEvent) {
+		if (editor.mode === 'none' || deleteOpen || view !== 'browse') return;
+		// E edits the open memory, like most note apps.
+		if (
+			!editing &&
+			event.key.toLowerCase() === 'e' &&
+			!event.metaKey &&
+			!event.ctrlKey &&
+			!event.altKey &&
+			!isTyping(event.target)
+		) {
+			event.preventDefault();
+			startEditing();
+			return;
+		}
+		if (editing && event.key === 'Escape' && !event.defaultPrevented) {
+			event.preventDefault();
+			stopEditing();
+			return;
+		}
+		if (!editing || !isSaveShortcut(event)) return;
+		event.preventDefault();
+		if (canSave) formEl?.requestSubmit();
 	}
 
 	// Nothing to browse: no list pane at all, and one first-run panel until a memory is opened.
@@ -245,47 +402,69 @@
 		};
 	}
 
+	// Bumped per selection so a slow response can't overwrite a newer pick.
+	let selectToken = 0;
+
 	async function selectConcept(path: string) {
+		const token = ++selectToken;
 		editorLoading = true;
 		try {
-			const res = await fetch(
-				`/api/memory/concept?scope=${scope}&path=${encodeURIComponent(path)}`
-			);
-			if (!res.ok) {
-				const body = (await res.json().catch(() => null)) as { message?: string } | null;
-				throw new Error(body?.message ?? `Request failed (${res.status})`);
+			// Load the memory and its history together and swap both in at once, so the
+			// open editor stays in place instead of collapsing to a spinner and back.
+			const [conceptRes, history] = await Promise.all([
+				fetch(`/api/memory/concept?scope=${scope}&path=${encodeURIComponent(path)}`),
+				fetchWrites(path).catch((e: unknown) => {
+					toast.error(e instanceof Error ? e.message : 'Failed to load history');
+					return [];
+				})
+			]);
+			if (!conceptRes.ok) {
+				const body = (await conceptRes.json().catch(() => null)) as { message?: string } | null;
+				throw new Error(body?.message ?? `Request failed (${conceptRes.status})`);
 			}
-			const { concept } = (await res.json()) as { concept: Concept };
+			const { concept } = (await conceptRes.json()) as { concept: Concept };
+			if (token !== selectToken) return;
 			setEditor(editorFromConcept(concept));
-			loadWrites(concept.path);
+			writes = history;
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to load memory');
+			if (token === selectToken) {
+				toast.error(e instanceof Error ? e.message : 'Failed to load memory');
+			}
 		} finally {
-			editorLoading = false;
+			if (token === selectToken) editorLoading = false;
 		}
 	}
 
 	function clearSelection() {
+		selectToken++;
+		editorLoading = false;
 		setEditor({ ...emptyEditor });
 		writes = [];
 	}
 
 	function startNew() {
 		if (!canLeaveEditor()) return;
+		view = 'browse';
+		selectToken++;
+		editorLoading = false;
 		setEditor({ ...emptyEditor, mode: 'new' });
 		writes = [];
+	}
+
+	async function fetchWrites(path: string): Promise<MemoryWriteEntry[]> {
+		// Audit rows store shared concepts under a `shared/` path prefix.
+		const auditPath = scope === 'shared' ? `shared/${path}` : path;
+		const res = await fetch(
+			`/api/memory/writes?scope=${scope}&path=${encodeURIComponent(auditPath)}&limit=50`
+		);
+		if (!res.ok) throw new Error(`Request failed (${res.status})`);
+		return ((await res.json()) as { writes: MemoryWriteEntry[] }).writes;
 	}
 
 	async function loadWrites(path: string) {
 		writesLoading = true;
 		try {
-			// Audit rows store shared concepts under a `shared/` path prefix.
-			const auditPath = scope === 'shared' ? `shared/${path}` : path;
-			const res = await fetch(
-				`/api/memory/writes?scope=${scope}&path=${encodeURIComponent(auditPath)}&limit=50`
-			);
-			if (!res.ok) throw new Error(`Request failed (${res.status})`);
-			writes = ((await res.json()) as { writes: MemoryWriteEntry[] }).writes;
+			writes = await fetchWrites(path);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load history');
 		} finally {
@@ -516,29 +695,68 @@
 			{/snippet}
 		</PageHeader>
 
-		{#if isAdmin}
-			<div
-				class="-mx-4 -mb-2 flex gap-1 border-b px-4 md:mx-0 md:px-0"
-				role="group"
-				aria-label="Memory scope"
-			>
-				{#each [{ value: 'user', label: 'My memory' }, { value: 'shared', label: 'Shared' }] as const as tab (tab.value)}
-					<button
-						type="button"
-						aria-pressed={scope === tab.value}
-						class="shrink-0 border-b-2 px-3 py-2.5 text-sm whitespace-nowrap transition-colors md:py-2 {scope ===
-						tab.value
-							? 'border-foreground font-medium text-foreground'
-							: 'border-transparent text-muted-foreground hover:text-foreground'}"
-						onclick={() => setScope(tab.value)}
-					>
-						{tab.label}
-					</button>
-				{/each}
-			</div>
-		{/if}
+		<div
+			class="-mx-4 -mb-2 flex gap-1 border-b px-4 md:mx-0 md:px-0"
+			role="group"
+			aria-label="Memory view"
+		>
+			{#each tabs as tab (tab.value)}
+				{@const active =
+					tab.value === 'map' ? view === 'map' : view === 'browse' && scope === tab.value}
+				<button
+					type="button"
+					aria-pressed={active}
+					class="flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm whitespace-nowrap transition-colors md:py-2 {active
+						? 'border-foreground font-medium text-foreground'
+						: 'border-transparent text-muted-foreground hover:text-foreground'}"
+					onclick={() => setTab(tab.value)}
+				>
+					{#if tab.value === 'map'}<NetworkIcon class="size-3.5" />{/if}
+					{tab.label}
+				</button>
+			{/each}
+		</div>
 
-		{#if firstRun}
+		{#if view === 'map'}
+			<!-- Wider than the page's reading width: the map earns the space. -->
+			<section
+				class="relative h-[calc(100dvh-15rem)] min-h-[28rem] max-w-none! overflow-hidden rounded-2xl border bg-card"
+				aria-label="Memory map"
+			>
+				<div class="absolute inset-x-4 top-3 z-10 flex items-center gap-2">
+					<h2 class="shrink-0 text-sm font-medium whitespace-nowrap">Memory map</h2>
+					{#if graph}
+						<p class="hidden truncate text-xs text-muted-foreground sm:block">
+							{graph.nodes.length}
+							{graph.nodes.length === 1 ? 'memory' : 'memories'} · click to open, drag to explore
+						</p>
+					{/if}
+				</div>
+				{#if graph && graph.nodes.length > 0}
+					<MemoryGraphView {graph} selected={openId} insetTop={44} onselect={openNode} />
+				{:else if graph || graphFailed}
+					<div class="flex size-full items-center justify-center">
+						<EmptyState
+							icon={NetworkIcon}
+							title={graphFailed ? 'Couldn’t load the map' : 'Nothing to map yet'}
+							description={graphFailed
+								? 'Something went wrong loading your memories. Try again in a moment.'
+								: 'Memories show up here as they’re saved, connected by their links and tags.'}
+						>
+							{#if graphFailed}
+								<Button size="sm" variant="outline" onclick={() => void refreshGraph()}
+									>Retry</Button
+								>
+							{/if}
+						</EmptyState>
+					</div>
+				{:else}
+					<div class="flex size-full items-center justify-center" aria-busy="true">
+						<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
+					</div>
+				{/if}
+			</section>
+		{:else if firstRun}
 			<SettingsSection>
 				<EmptyState
 					icon={BrainIcon}
@@ -562,9 +780,9 @@
 			</SettingsSection>
 		{:else}
 			<div class="flex items-start gap-6">
-				<!-- Phones show the list or the open memory, not both. -->
+				<!-- Phones show the list or the open memory, not both; editing gets the full width. -->
 				<aside
-					class="w-full flex-col gap-3 md:sticky md:top-6 md:w-72 md:shrink-0 {treeEmpty
+					class="w-full flex-col gap-3 md:sticky md:top-6 md:w-72 md:shrink-0 {treeEmpty || editing
 						? 'hidden'
 						: editor.mode === 'none'
 							? 'flex'
@@ -641,9 +859,13 @@
 						{/if}
 					</div>
 				</aside>
-
 				<main
-					class="min-w-0 flex-1 flex-col gap-6 md:flex {editor.mode === 'none' ? 'hidden' : 'flex'}"
+					class="min-w-0 flex-1 flex-col gap-6 transition-opacity md:flex {editor.mode === 'none'
+						? 'hidden'
+						: 'flex'} {editorLoading && editor.mode !== 'none'
+						? 'pointer-events-none opacity-60'
+						: ''}"
+					aria-busy={editorLoading}
 				>
 					{#if editor.mode === 'none'}
 						<div
@@ -657,169 +879,68 @@
 								<Button size="sm" variant="outline" onclick={startNew}>
 									<PlusIcon class="size-4" />New memory
 								</Button>
+								<Button size="sm" variant="ghost" onclick={() => setTab('map')}>
+									<NetworkIcon class="size-4" />Open the map
+								</Button>
 							</EmptyState>
 						</div>
-					{:else if editorLoading}
-						<div class="flex min-h-80 items-center justify-center rounded-2xl border">
-							<LoaderCircleIcon class="size-5 animate-spin text-muted-foreground" />
-						</div>
-					{:else}
-						<form bind:this={formEl} onsubmit={save} class="flex flex-col gap-6">
-							<div class="flex items-center justify-between gap-3">
-								<div class="flex min-w-0 flex-col gap-0.5">
-									<Button
-										variant="ghost"
-										size="sm"
-										class="-ml-2 w-fit text-muted-foreground md:hidden"
-										onclick={() => {
-											if (canLeaveEditor()) clearSelection();
-										}}
-									>
-										<ArrowLeftIcon class="size-4" />All memories
-									</Button>
-									<h2 class="truncate text-lg font-semibold">
-										{editor.mode === 'new' ? 'New memory' : editor.title || editor.path}
-									</h2>
-									<p class="text-xs text-muted-foreground">
-										{scope === 'shared' ? 'Shared with everyone' : 'Private to you'}
-										{#if editor.mode === 'edit' && editor.timestamp}
-											· <span title={new Date(editor.timestamp).toLocaleString()}
-												>Updated {formatTimeAgo(new Date(editor.timestamp).getTime())}</span
-											>
-										{/if}
-									</p>
-								</div>
-								{#if editor.mode === 'edit'}
-									<Button
-										variant="ghost"
-										size="icon"
-										class="shrink-0 text-muted-foreground hover:text-destructive"
-										title="Delete memory"
-										aria-label="Delete memory"
-										onclick={() => (deleteOpen = true)}
-									>
-										<Trash2Icon class="size-4" />
-									</Button>
-								{/if}
-							</div>
+					{:else if !editing}
+						<MemoryView
+							path={editor.savedPath}
+							{scope}
+							title={editor.title}
+							description={editor.description}
+							type={editor.type}
+							tags={parseTags(editor.tags)}
+							body={editor.body}
+							timestamp={editor.timestamp}
+							{knownPaths}
+							{connections}
+							onback={clearSelection}
+							onedit={startEditing}
+							ondelete={() => (deleteOpen = true)}
+							onshowmap={() => setTab('map')}
+							onnavigate={(path) => openNode({ scope, path })}
+							onopenconnection={openNode}
+						/>
 
-							<SettingsSection>
-								<div class="grid gap-4 sm:grid-cols-[1fr_12rem]">
-									<div class="flex flex-col gap-2">
-										<Label for="mem-title">Title</Label>
-										<Input
-											id="mem-title"
-											bind:value={editor.title}
-											required
-											maxlength={200}
-											placeholder="e.g. Alex's coffee order"
-										/>
-									</div>
-									<div class="flex flex-col gap-2">
-										<Label for="mem-type">Type</Label>
-										<Input
-											id="mem-type"
-											bind:value={editor.type}
-											placeholder="e.g. preference"
-											maxlength={50}
-										/>
-									</div>
+						<SettingsSection
+							title="History"
+							description="Every change to this memory, by you or the AI. Restore any earlier version."
+						>
+							{#if writesLoading && writes.length === 0}
+								<div class="flex justify-center py-2">
+									<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
 								</div>
+							{:else}
 								<div class="flex flex-col gap-2">
-									<Label for="mem-description">Description</Label>
-									<Input
-										id="mem-description"
-										bind:value={editor.description}
-										maxlength={500}
-										placeholder="One line on what this memory is about"
-									/>
+									{#each writes as entry (entry.id)}
+										<MemoryAuditEntry {entry} {restoreBusy} onrestore={restore} />
+									{:else}
+										<p class="text-sm text-muted-foreground">No changes recorded yet.</p>
+									{/each}
 								</div>
-								<div class="grid gap-4 sm:grid-cols-2">
-									<div class="flex flex-col gap-2">
-										<Label for="mem-path">Path</Label>
-										<Input
-											id="mem-path"
-											bind:value={editor.path}
-											oninput={() => (pathEdited = true)}
-											required
-											placeholder="people/alex.md"
-											class="font-mono text-sm"
-											aria-describedby="mem-path-hint"
-										/>
-										<p id="mem-path-hint" class="text-xs text-muted-foreground">
-											{editor.mode === 'edit'
-												? 'Changing it moves the memory.'
-												: 'Filled in from the title. Use folders/ to group memories.'}
-										</p>
-									</div>
-									<div class="flex flex-col gap-2">
-										<Label for="mem-tags">Tags</Label>
-										<Input
-											id="mem-tags"
-											bind:value={editor.tags}
-											placeholder="people, family"
-											aria-describedby="mem-tags-hint"
-										/>
-										<p id="mem-tags-hint" class="text-xs text-muted-foreground">
-											Separate with commas.
-										</p>
-									</div>
-								</div>
-								<div class="flex flex-col gap-2 border-t border-border/60 pt-4">
-									<Label for="mem-body">Content</Label>
-									<Textarea
-										id="mem-body"
-										bind:value={editor.body}
-										placeholder="What to remember, in markdown"
-										class="min-h-[40vh] font-mono text-sm"
-									/>
-								</div>
-							</SettingsSection>
-
-							<!-- Stays in view below the tall content field. -->
-							<div
-								class="sticky bottom-0 z-10 flex justify-end gap-2 border-t bg-background/95 py-3 backdrop-blur"
-							>
-								{#if saveHint}
-									<span class="mr-auto self-center text-xs text-muted-foreground">{saveHint}</span>
-								{/if}
-								{#if editor.mode === 'new'}
-									<Button
-										variant="outline"
-										onclick={() => {
-											if (canLeaveEditor()) clearSelection();
-										}}>Cancel</Button
-									>
-								{:else if dirty}
-									<Button variant="outline" onclick={discardChanges}>Discard</Button>
-								{/if}
-								<Button type="submit" disabled={!canSave}>
-									{#if saveBusy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-									{editor.mode === 'new' ? 'Create memory' : 'Save changes'}
-								</Button>
-							</div>
-						</form>
-
-						{#if editor.mode === 'edit'}
-							<SettingsSection
-								title="History"
-								description="Every change to this memory, by you or the AI. Restore any earlier version."
-							>
-								{#if writesLoading}
-									<div class="flex justify-center py-2">
-										<LoaderCircleIcon class="size-4 animate-spin text-muted-foreground" />
-									</div>
-								{:else}
-									<div class="flex flex-col gap-2">
-										{#each writes as entry (entry.id)}
-											<MemoryAuditEntry {entry} {restoreBusy} onrestore={restore} />
-										{:else}
-											<p class="text-sm text-muted-foreground">No changes recorded yet.</p>
-										{/each}
-									</div>
-								{/if}
-							</SettingsSection>
-						{/if}
+							{/if}
+						</SettingsSection>
+					{:else}
+						<MemoryEditForm
+							bind:draft={editor}
+							savedPath={editor.savedPath}
+							bind:form={formEl}
+							mode={editor.mode === 'new' ? 'new' : 'edit'}
+							{scope}
+							{dirty}
+							{missing}
+							{canSave}
+							{saveBusy}
+							{tagSuggestions}
+							{typeSuggestions}
+							{folders}
+							{linkTargets}
+							onsubmit={save}
+							oncancel={stopEditing}
+							onfilenameedit={() => (pathEdited = true)}
+						/>
 					{/if}
 				</main>
 			</div>
