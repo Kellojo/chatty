@@ -9,6 +9,7 @@ import {
 	stepCountIs,
 	streamText,
 	uiMessageChunkSchema,
+	type ModelMessage,
 	type UIMessage,
 	type UIMessageChunk
 } from 'ai';
@@ -38,7 +39,26 @@ import {
 	getConversationAttachment,
 	linkAttachmentsToMessage
 } from '../db/repo/attachments.js';
-import { getAgent } from '../db/repo/agents.js';
+import { getAgent, parseCanAsk } from '../db/repo/agents.js';
+import { getAwaitingAgentRunByConversation, resumeAgentRun } from '../db/repo/agent-runs.js';
+import { describeError } from '../agents/errors.js';
+import {
+	completeRunTurn,
+	onRunConversationUnsettled,
+	registerRunTurn,
+	runTurnContext,
+	runTurnsClosed,
+	type RunTurnContext,
+	type TurnOutcome
+} from '../agents/run-lifecycle.js';
+import {
+	compactStepMessages,
+	compactionThreshold,
+	createRunSummarizer,
+	estimateValueTokens
+} from '../agents/stepCompaction.js';
+import { openAskUserCall } from '$lib/ask-user.js';
+import { ASK_USER_TOOL, askUserTool, withAskUserAnswers } from '../tools/askUser.js';
 import { getCodingConversation } from '../db/repo/coding-conversations.js';
 import { queueThreadStatePush } from '../t3/thread-state.js';
 import { CodingTaskError, startCodingTurn } from '../t3/tasks.js';
@@ -64,11 +84,17 @@ import {
 	supportsNativeToolSearch,
 	withToolSearch
 } from '../tools/toolSearch.js';
-import { conversationWorkspace, resolveAttachment } from '../workspaces.js';
-import { attachmentCache } from './attachmentCache.js';
-import { maybeCompactConversation } from './compact.js';
 import {
+	conversationWorkspace,
+	resolveAttachment,
+	workspaceForConversation
+} from '../workspaces.js';
+import { attachmentCache } from './attachmentCache.js';
+import { estimateTokens, maybeCompactConversation } from './compact.js';
+import {
+	abortReasonOf,
 	appendChunk,
+	type AbortReason,
 	claimStream,
 	getStreamStartedAt,
 	markDone,
@@ -450,7 +476,8 @@ async function prepareTurn(
 	db: Db,
 	userId: string,
 	initial: ConversationRow,
-	body: { message: UIMessage; branchFrom?: string }
+	body: { message: UIMessage; branchFrom?: string },
+	run: RunTurnContext | undefined
 ) {
 	const conversation = ensureModel(db, userId, initial);
 	const agent = conversation.agent_id ? getAgent(db, conversation.agent_id) : undefined;
@@ -486,54 +513,120 @@ async function prepareTurn(
 	const catalog = await buildTools({
 		userId,
 		memoryEnabled: conversation.memory_enabled === 1,
-		workspaceDir: conversationWorkspace(conversation.id),
+		workspaceDir:
+			workspaceForConversation(db, conversation) ?? conversationWorkspace(conversation.id),
 		agentAllowlist: agent?.tool_allowlist
 			? (JSON.parse(agent.tool_allowlist) as string[])
 			: undefined,
-		conversationId: conversation.id
+		author: run?.author,
+		conversationId: conversation.id,
+		agentRunId: run?.runId ?? null
 	});
+	// A run turn knows whether it may ask; in a chat the user talks to, an agent
+	// that is allowed to ask can always do so.
+	const askUser = run
+		? run.askUser
+		: !!agent && conversation.mode === 'agent' && parseCanAsk(agent) !== 'never';
+	if (askUser) {
+		// Always loaded and never filtered by the agent's allowlist: it's how the
+		// agent reaches the user, not a capability.
+		catalog.tools[ASK_USER_TOOL] = askUserTool();
+		catalog.toolToServer[ASK_USER_TOOL] = 'chatty';
+	}
 	return { conversation, agent, lastUserMessage, ref, targets: available, catalog };
 }
 
-export async function handleChatRequest(
-	userId: string,
-	body: { conversationId: string; message: UIMessage; branchFrom?: string; skill?: string }
-): Promise<Response> {
-	const db = getDb();
-	let conversation = getConversation(db, userId, body.conversationId);
-	if (!conversation) throw new ChatRequestError(404, 'Conversation not found');
-	if (conversation.kind !== 'chat') throw new ChatRequestError(400, 'Not a chat conversation');
-	if (body.message.role !== 'user') {
-		throw new ChatRequestError(400, 'Triggering message must be a user message');
-	}
-	assertValidUserParts(conversation.id, body.message);
+export interface ChatTurnRequest {
+	message: UIMessage;
+	branchFrom?: string;
+	skill?: string;
+}
 
-	// Coding tasks: the reply comes from a remote T3 Code thread, not our model loop.
-	const coding = getCodingConversation(db, conversation.id);
-	if (coding) {
-		if (body.branchFrom !== undefined) {
-			throw new ChatRequestError(400, 'Coding tasks cannot rewind their history');
-		}
-		const userMessage = upsertUserMessage(db, conversation.id, body.message);
-		afterUserMessage(db, userId, conversation, userMessage);
-		try {
-			return await startCodingTurn(userId, coding, userMessage);
-		} catch (e) {
-			if (e instanceof CodingTaskError) throw new ChatRequestError(e.status, e.message);
-			throw e;
-		}
-	}
+export interface ChatTurnOptions {
+	/** Runs the turn for this agent run (dispatched, or resumed by the runner). */
+	run?: RunTurnContext;
+}
+
+export interface ChatTurn {
+	response: Response;
+	/** Resolves once the turn has ended and been persisted (and its run settled). */
+	outcome: Promise<TurnOutcome>;
+}
+
+/**
+ * A reply to a dispatched chat whose run waits for an answer continues that
+ * run: the turn is attributed to it and settles it again when it ends. Called
+ * after the conversation was claimed, so a superseded run turn has already
+ * settled its status.
+ */
+function resumedRunTurn(
+	db: Db,
+	userId: string,
+	conversation: ConversationRow,
+	body: ChatTurnRequest
+): RunTurnContext | undefined {
+	if (conversation.origin !== 'dispatch') return undefined;
+	// Replying to a settled chat brings it back (see afterUserMessage), and with
+	// it a question that settling dismissed: the reply answers it.
+	if (conversation.settled_at !== null) onRunConversationUnsettled(db, userId, conversation.id);
+	const run = getAwaitingAgentRunByConversation(db, conversation.id);
+	if (!run || run.user_id !== userId) return undefined;
+	const agent = getAgent(db, run.agent_id);
+	if (!agent || !resumeAgentRun(db, run.id)) return undefined;
+	publishServerEvent(userId, {
+		type: 'agent.run.started',
+		agentId: agent.id,
+		runId: run.id,
+		conversationId: conversation.id
+	});
+	// An edit or regenerate rewinds the run instead of answering its question.
+	return runTurnContext(db, agent, run, {
+		resumed: body.branchFrom === undefined,
+		userTurn: true
+	});
+}
+
+/**
+ * Runs one model turn in a conversation: stores the user message, streams the
+ * reply (persisted as it goes, replayable to reconnecting clients) and settles
+ * the agent run it belongs to, if any. Throws ChatRequestError for problems with
+ * the request; once it returns, `outcome` always resolves.
+ */
+export async function runChatTurn(
+	userId: string,
+	initial: ConversationRow,
+	body: ChatTurnRequest,
+	opts: ChatTurnOptions = {}
+): Promise<ChatTurn> {
+	const db = getDb();
+	let conversation = initial;
+	// Only conversations the user sees take part in chat events (active list,
+	// notices, agent triggers); hidden agent runs report through run events.
+	const visibleChat = conversation.kind === 'chat';
 
 	// A new message takes over from a response that is still running. Its partial
 	// output has to be persisted first so that it is part of the history below.
 	// The claim is taken before any await of our own, so a concurrent request for
 	// this conversation waits for (and aborts) this one instead of racing it.
 	const controller = await claimStream(conversation.id);
+	const run = opts.run ?? resumedRunTurn(db, userId, conversation, body);
+	const releaseRun = run ? registerRunTurn(run.runId, conversation.id) : () => undefined;
+	// Shutdown may have swept the running turns before this one registered.
+	if (run && runTurnsClosed()) controller.abort('shutdown' satisfies AbortReason);
+	const describe = (e: unknown) =>
+		run ? describeError(e) : e instanceof Error ? e.message : String(e);
+	/** Ends the run of a turn that failed before its stream took over. */
+	const settleEarly = (outcome: TurnOutcome) => {
+		if (run) completeRunTurn(db, run, conversation, outcome);
+		releaseRun();
+	};
+
 	let turn: Awaited<ReturnType<typeof prepareTurn>>;
 	try {
-		turn = await prepareTurn(db, userId, conversation, body);
+		turn = await prepareTurn(db, userId, conversation, body, run);
 	} catch (e) {
 		releaseStream(conversation.id, controller);
+		settleEarly({ status: 'failed', error: describe(e), abortReason: null, openAskUser: null });
 		throw e;
 	}
 	const { agent, lastUserMessage, ref, targets, catalog } = turn;
@@ -542,14 +635,22 @@ export async function handleChatRequest(
 	if (controller.signal.aborted) {
 		// A newer request took over while the tools were being built.
 		releaseStream(conversation.id, controller);
+		settleEarly({
+			status: 'aborted',
+			error: null,
+			abortReason: abortReasonOf(controller.signal),
+			openAskUser: null
+		});
 		await close().catch(() => undefined);
 		throw new ChatRequestError(409, 'Superseded by a newer message');
 	}
-	publishServerEvent(userId, {
-		type: 'chat.stream.started',
-		conversationId: conversation.id,
-		startedAt: getStreamStartedAt(conversation.id) ?? Date.now()
-	});
+	if (visibleChat) {
+		publishServerEvent(userId, {
+			type: 'chat.stream.started',
+			conversationId: conversation.id,
+			startedAt: getStreamStartedAt(conversation.id) ?? Date.now()
+		});
+	}
 
 	// The assistant message exists from the start and is filled incrementally by
 	// consumeStreamCopy, so a reload mid-stream never sees a gap.
@@ -607,7 +708,10 @@ export async function handleChatRequest(
 			}
 		}
 		promptParts = buildSystemPromptParts(conversation, {
-			globalInstructions: getGlobalInstructions(db, userId),
+			// Hidden agent runs get neither: nobody renders widgets there, and the
+			// user's instructions would leak into what memory agents distill.
+			globalInstructions: visibleChat ? getGlobalInstructions(db, userId) : '',
+			includeWidgets: visibleChat,
 			userId,
 			boundSkillNames,
 			includeSkillsIndex: 'load_skill' in tools,
@@ -620,12 +724,13 @@ export async function handleChatRequest(
 			promptParts.widgets,
 			promptParts.skills,
 			toolsSection,
-			promptParts.system
+			promptParts.system,
+			run?.header ?? ''
 		]
 			.filter(Boolean)
 			.join('\n\n');
 		history = historyFromDb(db, conversation.id);
-		promptHistory = await inlineAttachmentParts(db, conversation.id, history);
+		promptHistory = withAskUserAnswers(await inlineAttachmentParts(db, conversation.id, history));
 	} catch (e) {
 		try {
 			deleteMessage(db, assistantMessageId);
@@ -633,7 +738,10 @@ export async function handleChatRequest(
 			// nothing to clean up if the message was never created
 		}
 		releaseStream(conversation.id, controller);
-		publishServerEvent(userId, { type: 'chat.stream.finished', conversationId: conversation.id });
+		settleEarly({ status: 'failed', error: describe(e), abortReason: null, openAskUser: null });
+		if (visibleChat) {
+			publishServerEvent(userId, { type: 'chat.stream.finished', conversationId: conversation.id });
+		}
 		await close().catch(() => undefined);
 		throw e;
 	}
@@ -644,6 +752,22 @@ export async function handleChatRequest(
 	const loadedTools = loadedToolsFromHistory(history, catalog.deferred);
 
 	let usageMeta: MessageUsage | null = null;
+	let lastProgressAt = 0;
+	/** Lets a run's page refresh while its turn streams (throttled). */
+	const reportProgress = () => {
+		if (!run) return;
+		const now = Date.now();
+		if (now - lastProgressAt < 500) return;
+		lastProgressAt = now;
+		publishServerEvent(userId, {
+			type: 'agent.run.progress',
+			agentId: run.agentId,
+			runId: run.runId
+		});
+	};
+
+	let resolveOutcome!: (outcome: TurnOutcome) => void;
+	const outcome = new Promise<TurnOutcome>((resolve) => (resolveOutcome = resolve));
 
 	const stream = createUIMessageStream<UIMessage>({
 		originalMessages: history,
@@ -678,9 +802,11 @@ export async function handleChatRequest(
 						const now = Date.now();
 						const row = createProxyRequest(db, {
 							userId,
-							source: 'chat',
+							// A run's turns count as the run's cost, replies included.
+							source: run ? 'agent' : 'chat',
 							conversationId: conversation.id,
 							messageId: assistantMessageId,
+							runId: run?.runId,
 							stepIndex: stepIndex++,
 							endpoint: 'streamText',
 							requestedModel: target.modelId,
@@ -701,6 +827,7 @@ export async function handleChatRequest(
 					};
 					log.info('LLM inference started', {
 						conversationId: conversation.id,
+						runId: run?.runId,
 						providerId: target.providerId,
 						modelId: target.modelId,
 						streamIndex: i,
@@ -726,15 +853,33 @@ export async function handleChatRequest(
 									tools: toolSearch.tools
 								})
 							: { system, messages: modelMessages, tools: toolSearch.tools };
+					const compactSteps = run
+						? stepCompactor({
+								db,
+								userId,
+								conversationId: conversation.id,
+								runId: run.runId,
+								target,
+								contextLength: priceRow?.context_length,
+								overheadTokens:
+									estimateTokens(system) + Math.ceil(estimateToolChars(toolSearch.tools) / 4),
+								abortSignal: controller.signal
+							})
+						: null;
 					const result = streamText({
 						model,
 						...prompt,
 						stopWhen,
 						experimental_repairToolCall: toolSearch.repairToolCall,
-						prepareStep: (options) => {
+						prepareStep: async (options) => {
 							const activeTools = toolSearch.activeTools();
 							const base = lastStep(options);
-							return activeTools ? { ...base, activeTools } : base;
+							const messages = compactSteps ? await compactSteps(options) : undefined;
+							return {
+								...base,
+								...(activeTools ? { activeTools } : {}),
+								...(messages ? { messages } : {})
+							};
 						},
 						abortSignal: controller.signal,
 						...(conversation.temperature != null ? { temperature: conversation.temperature } : {}),
@@ -764,7 +909,7 @@ export async function handleChatRequest(
 							}
 						},
 						onError: ({ error }) => {
-							errorText = error instanceof Error ? error.message : String(error);
+							errorText = describe(error);
 							log.error('LLM stream error', {
 								conversationId: conversation.id,
 								providerId: target.providerId,
@@ -800,6 +945,7 @@ export async function handleChatRequest(
 							buffer.length = 0;
 						}
 						writer.write(chunk);
+						reportProgress();
 					}
 					totalTokensUsed = await result.usage;
 					usageMeta = {
@@ -835,13 +981,22 @@ export async function handleChatRequest(
 					if (!contentful && i < targets.length - 1 && isRetryableModelError(e)) continue;
 					// Errors thrown outside streamText (e.g. resolving the model) never reach
 					// its onError, so record them here for onEnd's status.
-					errorText ??= e instanceof Error ? e.message : String(e);
+					errorText ??= describe(e);
 					throw e;
 				}
 			}
 			throw lastError ?? new Error('No model produced a response');
 		},
 		onEnd: async ({ responseMessage, isAborted }) => {
+			// A provider may surface an abort as an error; our abort reason wins.
+			const abortReason = abortReasonOf(controller.signal);
+			const aborted = isAborted || abortReason !== null;
+			const turnOutcome: TurnOutcome = {
+				status: aborted ? 'aborted' : errorText ? 'failed' : 'complete',
+				error: aborted ? null : errorText,
+				abortReason,
+				openAskUser: aborted || errorText ? null : openAskUserCall(responseMessage.parts)
+			};
 			try {
 				// 'partial' only ever means "still being generated", so that anything
 				// left in that state after a restart is known to be a dead response.
@@ -858,10 +1013,11 @@ export async function handleChatRequest(
 				} else {
 					deleteMessage(db, assistantMessageId);
 				}
-				if (status === 'complete') {
+				if (status === 'complete' && visibleChat) {
 					publishServerEvent(userId, {
 						type: 'chat.message_completed',
-						conversationId: conversation.id
+						conversationId: conversation.id,
+						...(run ? { agentRunId: run.runId } : {})
 					});
 				}
 				if (conversation.title === '') {
@@ -871,7 +1027,8 @@ export async function handleChatRequest(
 						() => undefined
 					);
 				}
-				if (status === 'complete') {
+				// Hidden runs are single turns: compacting them only costs a call.
+				if (status === 'complete' && visibleChat) {
 					maybeCompactConversation(conversation, userId, ref).catch(() => undefined);
 				}
 			} catch (e) {
@@ -880,20 +1037,162 @@ export async function handleChatRequest(
 					error: e instanceof Error ? e.message : String(e)
 				});
 			} finally {
+				// Settled before the stream is released: a reply waiting on this claim
+				// then sees the run's final status.
+				if (run) completeRunTurn(db, run, conversation, turnOutcome);
 				releaseStream(conversation.id, controller);
-				publishServerEvent(userId, {
-					type: 'chat.stream.finished',
-					conversationId: conversation.id
-				});
-				await close();
+				releaseRun();
+				if (visibleChat) {
+					publishServerEvent(userId, {
+						type: 'chat.stream.finished',
+						conversationId: conversation.id
+					});
+				}
+				await close().catch(() => undefined);
+				resolveOutcome(turnOutcome);
 			}
 		}
 	});
 
-	return createUIMessageStreamResponse({
+	const response = createUIMessageStreamResponse({
 		stream,
 		consumeSseStream: ({ stream: sseStream }) => {
 			void consumeStreamCopy(conversation.id, assistantMessageId, sseStream, controller);
 		}
 	});
+	return { response, outcome };
+}
+
+/**
+ * Runs a turn nobody is listening to (an agent run): drains the response
+ * itself and returns how the turn ended. Never throws.
+ */
+export async function runChatTurnHeadless(
+	userId: string,
+	conversation: ConversationRow,
+	body: ChatTurnRequest,
+	opts: ChatTurnOptions = {}
+): Promise<TurnOutcome> {
+	let turn: ChatTurn;
+	try {
+		turn = await runChatTurn(userId, conversation, body, opts);
+	} catch (e) {
+		// runChatTurn has settled the run already.
+		return {
+			status: 'failed',
+			error: opts.run ? describeError(e) : e instanceof Error ? e.message : String(e),
+			abortReason: null,
+			openAskUser: null
+		};
+	}
+	const reader = turn.response.body?.getReader();
+	if (reader) {
+		try {
+			while (!(await reader.read()).done) {
+				// draining: persistence runs off the tee'd copy of this stream
+			}
+		} catch {
+			// the turn's own error handling records failures
+		}
+	}
+	return turn.outcome;
+}
+
+/**
+ * The context-size guard for a run's long tool loops: once a step's prompt
+ * nears the model's context, older steps are folded into a summary (see
+ * stepCompaction). Returns the messages to use for the next step, if changed.
+ */
+function stepCompactor(input: {
+	db: Db;
+	userId: string;
+	conversationId: string;
+	runId: string;
+	target: { providerId: string; modelId: string };
+	contextLength: number | null | undefined;
+	overheadTokens: number;
+	abortSignal: AbortSignal;
+}) {
+	const threshold = compactionThreshold(input.contextLength);
+	if (threshold === null) return null;
+	const summarize = createRunSummarizer({
+		db: input.db,
+		userId: input.userId,
+		conversationId: input.conversationId,
+		runId: input.runId,
+		fallback: input.target,
+		abortSignal: input.abortSignal
+	});
+	return async ({
+		messages,
+		steps
+	}: {
+		messages: ModelMessage[];
+		steps: ReadonlyArray<{
+			usage: { inputTokens?: number | undefined };
+			response: { messages: unknown[] };
+		}>;
+	}): Promise<ModelMessage[] | undefined> => {
+		// The last step's measured input plus what it added is more accurate than
+		// a character estimate (it includes system, tools and images).
+		const last = steps.at(-1);
+		const measured = last?.usage.inputTokens
+			? last.usage.inputTokens + estimateValueTokens(last.response.messages)
+			: 0;
+		const promptTokens = measured || input.overheadTokens + estimateValueTokens(messages);
+		const c = await compactStepMessages({
+			messages,
+			promptTokens,
+			thresholdTokens: threshold,
+			summarize
+		});
+		if (c.stage === 'none') return undefined;
+		log.info('Agent run context compacted', {
+			runId: input.runId,
+			stage: c.stage,
+			beforeTokens: c.beforeTokens,
+			afterTokens: c.afterTokens,
+			elided: c.elided,
+			truncated: c.truncated,
+			foldedSteps: c.foldedSteps
+		});
+		return c.messages;
+	};
+}
+
+export async function handleChatRequest(
+	userId: string,
+	body: ChatTurnRequest & { conversationId: string }
+): Promise<Response> {
+	const db = getDb();
+	const conversation = getConversation(db, userId, body.conversationId);
+	if (!conversation) throw new ChatRequestError(404, 'Conversation not found');
+	if (conversation.kind !== 'chat') throw new ChatRequestError(400, 'Not a chat conversation');
+	if (body.message.role !== 'user') {
+		throw new ChatRequestError(400, 'Triggering message must be a user message');
+	}
+	assertValidUserParts(conversation.id, body.message);
+
+	// Coding tasks: the reply comes from a remote T3 Code thread, not our model loop.
+	const coding = getCodingConversation(db, conversation.id);
+	if (coding) {
+		if (body.branchFrom !== undefined) {
+			throw new ChatRequestError(400, 'Coding tasks cannot rewind their history');
+		}
+		const userMessage = upsertUserMessage(db, conversation.id, body.message);
+		afterUserMessage(db, userId, conversation, userMessage);
+		try {
+			return await startCodingTurn(userId, coding, userMessage);
+		} catch (e) {
+			if (e instanceof CodingTaskError) throw new ChatRequestError(e.status, e.message);
+			throw e;
+		}
+	}
+
+	const { response } = await runChatTurn(userId, conversation, {
+		message: body.message,
+		branchFrom: body.branchFrom,
+		skill: body.skill
+	});
+	return response;
 }

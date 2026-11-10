@@ -368,6 +368,12 @@
 					</span>
 				{:else if outcome}
 					<span class={outcome.negative ? 'text-destructive' : undefined}>{outcome.label}</span>
+					{#if outcome.answer}
+						<!-- The user's own words: answers to questions, notes on approvals. -->
+						<span class="max-w-40 truncate text-foreground/80 sm:max-w-64" title={outcome.answer}
+							>“{outcome.answer}”</span
+						>
+					{/if}
 				{:else if diffStat}
 					<DiffStat diff={diffStat} />
 				{/if}

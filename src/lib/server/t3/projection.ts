@@ -513,12 +513,22 @@ function requestDecision(state: ThreadState, requestId: unknown): string | null 
 /** Command output fetched separately (the live stream omits it). */
 export type CommandOutputs = ReadonlyMap<string, string>;
 
+/** What the user answered, per request id (Chatty keeps it; T3 only reports the outcome). */
+export type RequestAnswers = Readonly<Record<string, string>>;
+
 /** Renders one run's turn items as ordered message parts. */
 export function renderRun(
 	state: ThreadState,
 	run: Rec,
-	commandOutputs: CommandOutputs = new Map()
+	commandOutputs: CommandOutputs = new Map(),
+	answers: RequestAnswers = {}
 ): RenderedEntry[] {
+	/** A resolved request's outcome, with the user's words when known. */
+	const resolution = (requestId: unknown, key: 'decision' | 'status') => {
+		const value = requestDecision(state, requestId);
+		const answer = value ? answers[String(requestId)] : undefined;
+		return { [key]: value, ...(answer ? { answer } : {}) };
+	};
 	const entries: RenderedEntry[] = [];
 	for (const item of itemsForRun(state, String(run.id))) {
 		const id = String(item.id);
@@ -619,7 +629,7 @@ export function renderRun(
 						item,
 						'approval',
 						{ request: item.prompt ?? item.title ?? item.requestKind, reason: item.reason },
-						{ decision: requestDecision(state, item.requestId) },
+						resolution(item.requestId, 'decision'),
 						requestDecision(state, item.requestId) ? 'completed' : 'running'
 					)
 				);
@@ -630,7 +640,7 @@ export function renderRun(
 						item,
 						'question',
 						{ questions: item.questions ?? [] },
-						{ status: requestDecision(state, item.requestId) },
+						resolution(item.requestId, 'status'),
 						requestDecision(state, item.requestId) ? 'completed' : 'running'
 					)
 				);

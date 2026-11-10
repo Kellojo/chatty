@@ -13,7 +13,7 @@
 	import type { Agent, Conversation, ModelMapping, ModelsByProvider } from '$lib/types.js';
 	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
 	import type { CodingBrowserActivity } from '$lib/coding-preview.js';
-	import { canCreatePullRequest, type CodingRecoveryAction } from '$lib/coding-task-details.js';
+	import { canCreatePullRequest } from '$lib/coding-task-details.js';
 
 	let {
 		conversation,
@@ -25,7 +25,6 @@
 		codingEnvironmentName = null,
 		codingBrowserActivity = null,
 		oncreatepr,
-		onrecover,
 		codingEnvironments = [],
 		codingAgents = [],
 		handoffDisabled = false,
@@ -43,8 +42,6 @@
 		/** The coding agent's browser use in its current run. */
 		codingBrowserActivity?: CodingBrowserActivity | null;
 		oncreatepr?: () => void;
-		/** Retry or continue a failed or interrupted coding task. */
-		onrecover?: (action: CodingRecoveryAction) => void;
 		/** Where a chat can be handed off to (empty inside coding tasks). */
 		codingEnvironments?: CodingEnvironment[];
 		codingAgents?: Agent[];
@@ -132,7 +129,6 @@
 				title={displayTitle}
 				environmentName={codingEnvironmentName}
 				{oncreatepr}
-				{onrecover}
 				bind:settingsOpen={codingSettingsOpen}
 				bind:previewOpen={codingPreviewOpen}
 				browserActivity={codingBrowserActivity}

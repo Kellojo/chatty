@@ -37,6 +37,7 @@ import {
 	updateConversation,
 	type ConversationRow
 } from '../db/repo/conversations.js';
+import { onRunConversationSettled, onRunConversationUnsettled } from '../agents/run-lifecycle.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import type { T3Connection } from './client.js';
@@ -147,8 +148,13 @@ export function reconcileThreadState(
 		const local = conversation.settled_at !== null;
 		const merge = mergeValue(local, flag(row.remote_settled), remote.settled);
 		if (merge === 'adopt') {
-			if (remote.settled) settleConversation(db, userId, conversationId, 'manual');
-			else unsettleConversation(db, userId, conversationId);
+			if (remote.settled) {
+				settleConversation(db, userId, conversationId, 'manual');
+				onRunConversationSettled(db, userId, conversationId);
+			} else {
+				unsettleConversation(db, userId, conversationId);
+				onRunConversationUnsettled(db, userId, conversationId);
+			}
 			publishServerEvent(userId, {
 				type: 'conversation.settle_changed',
 				conversationIds: [conversationId],

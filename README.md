@@ -48,31 +48,33 @@ services:
 
 ## Environment variables
 
-| Variable                        | Default                | Description                                                                 |
-| ------------------------------- | ---------------------- | --------------------------------------------------------------------------- |
-| `DATABASE_PATH`                 | `./data/ai-chat.db`    | SQLite database path                                                        |
-| `MEMORY_VOLUME`                 | `./memory`             | Memory storage directory                                                    |
-| `SKILLS_VOLUME`                 | `./skills`             | Skills directory                                                            |
-| `DOCUMENTS_VOLUME`              | `./documents`          | Documents directory                                                         |
-| `WORKSPACES_VOLUME`             | `./workspaces`         | Agent workspaces directory                                                  |
-| `APP_SECRET`                    | —                      | Secret for session encryption (min 16 chars)                                |
-| `TZ`                            | `UTC`                  | Timezone                                                                    |
-| `ORIGIN`                        | —                      | Public origin URL (e.g. `https://chat.example.com`)                         |
-| `PORT`                          | `3000`                 | Server port                                                                 |
-| `ENABLE_SIGNUP`                 | `true`                 | Allow user registration                                                     |
-| `ENABLE_PASSWORD_LOGIN`         | `true`                 | Allow password login                                                        |
-| `OIDC_ONLY`                     | `false`                | Disable password login, require OIDC                                        |
-| `OIDC_ISSUER`                   | —                      | OIDC issuer URL                                                             |
-| `OIDC_CLIENT_ID`                | —                      | OIDC client ID                                                              |
-| `OIDC_CLIENT_SECRET`            | —                      | OIDC client secret                                                          |
-| `OIDC_SCOPES`                   | `openid profile email` | OIDC scopes                                                                 |
-| `AGENT_MAX_STEPS`               | `25`                   | Max steps per agent run                                                     |
-| `MAX_ATTACHMENT_SIZE_MB`        | `50`                   | Max upload size                                                             |
-| `WORKSPACE_GC_DAYS`             | `30`                   | Days before workspace cleanup                                               |
-| `SETTINGS_MCP_WRITE`            | `false`                | Allow MCP write tools                                                       |
-| `CONVERSATION_AUTO_SETTLE_DAYS` | `7`                    | Idle days before a chat is auto-settled (hidden from sidebar); `0` disables |
-| `ALLOW_PRIVATE_NETWORK_FETCH`   | `false`                | Let agent fetch tools reach localhost, LAN and metadata addresses           |
-| `AUTO_PROMOTE_FIRST_USER`       | `true`                 | First user becomes admin                                                    |
+| Variable                        | Default                | Description                                                                        |
+| ------------------------------- | ---------------------- | ---------------------------------------------------------------------------------- |
+| `DATABASE_PATH`                 | `./data/ai-chat.db`    | SQLite database path                                                               |
+| `MEMORY_VOLUME`                 | `./memory`             | Memory storage directory                                                           |
+| `SKILLS_VOLUME`                 | `./skills`             | Skills directory                                                                   |
+| `DOCUMENTS_VOLUME`              | `./documents`          | Documents directory                                                                |
+| `WORKSPACES_VOLUME`             | `./workspaces`         | Agent workspaces directory                                                         |
+| `APP_SECRET`                    | —                      | Secret for session encryption (min 16 chars)                                       |
+| `TZ`                            | `UTC`                  | Timezone                                                                           |
+| `ORIGIN`                        | —                      | Public origin URL (e.g. `https://chat.example.com`)                                |
+| `PORT`                          | `3000`                 | Server port                                                                        |
+| `ENABLE_SIGNUP`                 | `true`                 | Allow user registration                                                            |
+| `ENABLE_PASSWORD_LOGIN`         | `true`                 | Allow password login                                                               |
+| `OIDC_ONLY`                     | `false`                | Disable password login, require OIDC                                               |
+| `OIDC_ISSUER`                   | —                      | OIDC issuer URL                                                                    |
+| `OIDC_CLIENT_ID`                | —                      | OIDC client ID                                                                     |
+| `OIDC_CLIENT_SECRET`            | —                      | OIDC client secret                                                                 |
+| `OIDC_SCOPES`                   | `openid profile email` | OIDC scopes                                                                        |
+| `AGENT_MAX_STEPS`               | `25`                   | Max steps per agent run                                                            |
+| `MAX_ATTACHMENT_SIZE_MB`        | `50`                   | Max upload size                                                                    |
+| `WORKSPACE_GC_DAYS`             | `30`                   | Days before workspace cleanup                                                      |
+| `SETTINGS_MCP_WRITE`            | `false`                | Allow MCP write tools                                                              |
+| `CONVERSATION_AUTO_SETTLE_DAYS` | `7`                    | Idle days before a chat is auto-settled (hidden from sidebar); `0` disables        |
+| `AGENT_QUESTION_TTL_DAYS`       | `7`                    | Days before an agent's unanswered question is dismissed; `0` disables              |
+| `AGENT_RUN_CHAT_RETENTION_DAYS` | `30`                   | Days before settled agent-run chats you never replied to are deleted; `0` disables |
+| `ALLOW_PRIVATE_NETWORK_FETCH`   | `false`                | Let agent fetch tools reach localhost, LAN and metadata addresses                  |
+| `AUTO_PROMOTE_FIRST_USER`       | `true`                 | First user becomes admin                                                           |
 
 ## Deployment
 

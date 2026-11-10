@@ -321,6 +321,11 @@
 				case 'agent.run.started':
 				case 'agent.run.finished':
 					refreshAgentStats();
+					// Dispatched runs are chats: their row's state changes with the run.
+					if (event.conversationId) scheduleInvalidate(false);
+					break;
+				case 'agent.run.awaiting_input':
+					scheduleInvalidate(false);
 					break;
 				case 'proxy.request.started':
 				case 'proxy.request.finished':
@@ -538,8 +543,9 @@
 	function rowState(c: Conversation): RowState {
 		const status = c.coding?.status;
 		// A question or approval blocks the agent mid-run, so its reply stream is
-		// still open: the wait for you outranks "working".
-		if (status === 'awaiting_input') return 'needs-you';
+		// still open: the wait for you outranks "working". An agent run that asked
+		// a question waits the same way.
+		if (status === 'awaiting_input' || c.agentRun?.status === 'awaiting_input') return 'needs-you';
 		if (
 			activeChats.has(c.id) ||
 			serverActiveChats.has(c.id) ||
@@ -665,6 +671,10 @@
 			{#if c.coding}
 				<CodeIcon class="mt-[3px] size-3.5 shrink-0 {iconTone}" aria-hidden="true" />
 				<span class="sr-only">Coding task:</span>
+			{:else if c.origin === 'dispatch'}
+				<!-- Started by an agent run rather than by you. -->
+				<BotIcon class="mt-[3px] size-3.5 shrink-0 {iconTone}" aria-hidden="true" />
+				<span class="sr-only">Agent chat:</span>
 			{:else}
 				<MessageCircleIcon class="mt-[3px] size-3.5 shrink-0 {iconTone}" aria-hidden="true" />
 				<span class="sr-only">Chat:</span>
@@ -765,6 +775,9 @@
 			{#if c.coding}
 				<CodeIcon class="size-3.5 shrink-0" aria-hidden="true" />
 				<span class="sr-only">Coding task:</span>
+			{:else if c.origin === 'dispatch'}
+				<BotIcon class="size-3.5 shrink-0" aria-hidden="true" />
+				<span class="sr-only">Agent chat:</span>
 			{:else}
 				<MessageCircleIcon class="size-3.5 shrink-0" aria-hidden="true" />
 				<span class="sr-only">Chat:</span>

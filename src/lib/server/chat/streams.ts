@@ -21,13 +21,36 @@ interface ActiveStream {
 
 const DEFAULT_ABORT_WAIT_MS = 5000;
 
-const streams = new Map<string, ActiveStream>();
+/**
+ * Why a stream was aborted, passed as the controller's abort reason. Turns that
+ * belong to an agent run map it to the run's error; chat replies show
+ * "Response interrupted" whatever the reason.
+ */
+export type AbortReason = 'superseded' | 'stopped' | 'shutdown';
+
+/** The reason a stream was aborted with, or null when it wasn't (or by someone else). */
+export function abortReasonOf(signal: AbortSignal): AbortReason | null {
+	if (!signal.aborted) return null;
+	const reason: unknown = signal.reason;
+	return reason === 'superseded' || reason === 'stopped' || reason === 'shutdown' ? reason : null;
+}
+
+// Kept on globalThis so a dev-server hot reload of this module doesn't lose
+// streams that are still open (the sidebar would then miss their finish).
+const globalState = globalThis as {
+	__chatStreams?: {
+		streams: Map<string, ActiveStream>;
+		byController: WeakMap<AbortController, ActiveStream>;
+	};
+};
+globalState.__chatStreams ??= { streams: new Map(), byController: new WeakMap() };
+const streams = globalState.__chatStreams.streams;
 // Keyed by controller rather than conversation: a replaced stream is gone from
 // `streams` but still finishes later, and anyone waiting on it must be told.
-const byController = new WeakMap<AbortController, ActiveStream>();
+const byController = globalState.__chatStreams.byController;
 
 export function registerStream(conversationId: string, controller: AbortController): void {
-	streams.get(conversationId)?.controller.abort();
+	streams.get(conversationId)?.controller.abort('superseded' satisfies AbortReason);
 	let release = () => {};
 	const released = new Promise<void>((resolve) => (release = resolve));
 	const stream: ActiveStream = {
@@ -136,10 +159,10 @@ export function markDone(conversationId: string, owner?: AbortController): void 
 	if (stream && (!owner || stream.controller === owner)) stream.done = true;
 }
 
-export function abortStream(conversationId: string): boolean {
+export function abortStream(conversationId: string, reason: AbortReason = 'stopped'): boolean {
 	const stream = streams.get(conversationId);
 	if (!stream) return false;
-	stream.controller.abort();
+	stream.controller.abort(reason);
 	return true;
 }
 
@@ -150,11 +173,12 @@ export function abortStream(conversationId: string): boolean {
  */
 export async function abortStreamAndWait(
 	conversationId: string,
+	reason: AbortReason,
 	timeoutMs = DEFAULT_ABORT_WAIT_MS
 ): Promise<void> {
 	const stream = streams.get(conversationId);
 	if (!stream) return;
-	stream.controller.abort();
+	stream.controller.abort(reason);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<void>((resolve) => {
 		timer = setTimeout(resolve, timeoutMs);
@@ -179,7 +203,7 @@ export async function claimStream(
 	while (streams.has(conversationId)) {
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) break;
-		await abortStreamAndWait(conversationId, remaining);
+		await abortStreamAndWait(conversationId, 'superseded', remaining);
 	}
 	const controller = new AbortController();
 	registerStream(conversationId, controller);

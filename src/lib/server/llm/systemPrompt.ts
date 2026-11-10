@@ -16,6 +16,8 @@ export interface SystemPromptOptions {
 	extraWarning?: string | null;
 	// Every tool of the conversation (deferred ones too): decides which widgets are explained.
 	toolNames?: Iterable<string>;
+	// Set false where nobody renders widgets (hidden agent runs).
+	includeWidgets?: boolean;
 }
 
 /**
@@ -64,7 +66,7 @@ export function buildSystemPromptParts(
 
 	return {
 		base: conversation.system_prompt ?? BASE_PROMPT,
-		widgets: widgetsPrompt(opts.toolNames),
+		widgets: opts.includeWidgets === false ? '' : widgetsPrompt(opts.toolNames),
 		skills,
 		system
 	};

@@ -344,3 +344,35 @@ describe('event self-trigger guards', () => {
 		expect(runFn).toHaveBeenCalledTimes(10);
 	});
 });
+
+describe('agent run conversations', () => {
+	it('ignores events from chats Chatty dispatched for agent runs, replies included', async () => {
+		seedEventAgent('u1', { event: 'chat.message_completed' });
+		const dispatched = createConversation(db, 'u1', { origin: 'dispatch' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent(
+			'chat.message_completed',
+			'u1',
+			{ conversationId: dispatched.id },
+			db,
+			runFn
+		);
+		expect(runFn).not.toHaveBeenCalled();
+	});
+
+	it('ignores events from hidden agent-run transcripts', async () => {
+		seedEventAgent('u1', { event: 'chat.message_completed' });
+		const hidden = createConversation(db, 'u1', { kind: 'agent-run' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('chat.message_completed', 'u1', { conversationId: hidden.id }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+	});
+
+	it("still reacts to the user's own chats", async () => {
+		seedEventAgent('u1', { event: 'chat.message_completed' });
+		const chat = createConversation(db, 'u1');
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('chat.message_completed', 'u1', { conversationId: chat.id }, db, runFn);
+		expect(runFn).toHaveBeenCalledTimes(1);
+	});
+});

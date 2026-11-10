@@ -48,7 +48,7 @@ export function createAgentRun(db: Db, input: CreateAgentRunInput): AgentRunRow 
 export function finishAgentRun(
 	db: Db,
 	id: string,
-	status: 'success' | 'failed',
+	status: 'success' | 'failed' | 'awaiting_input' | 'dismissed',
 	error?: string | null
 ): void {
 	db.prepare('UPDATE agent_runs SET status = ?, error = ?, ended_at = ? WHERE id = ?').run(
@@ -57,6 +57,106 @@ export function finishAgentRun(
 		Date.now(),
 		id
 	);
+}
+
+/**
+ * Moves a run that waits for the user's answer back to `running` (the user
+ * replied). False when it no longer waits, e.g. it was dismissed meanwhile.
+ */
+export function resumeAgentRun(db: Db, id: string): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE agent_runs SET status = 'running', error = NULL, ended_at = NULL
+				 WHERE id = ? AND status = 'awaiting_input'`
+			)
+			.run(id).changes === 1
+	);
+}
+
+/**
+ * Marks a run whose question was left unanswered as `dismissed`. Only a run
+ * still `awaiting_input` changes; returns whether it did.
+ */
+export function dismissAgentRun(db: Db, id: string, reason: string): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE agent_runs SET status = 'dismissed', error = ?, ended_at = ?
+				 WHERE id = ? AND status = 'awaiting_input'`
+			)
+			.run(reason, Date.now(), id).changes === 1
+	);
+}
+
+/**
+ * Puts a dismissed run back to waiting for the user's answer (its chat was
+ * brought back). Only a `dismissed` run changes; returns whether it did.
+ */
+export function reopenAgentRun(db: Db, id: string): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE agent_runs SET status = 'awaiting_input', error = NULL, ended_at = ?
+				 WHERE id = ? AND status = 'dismissed'`
+			)
+			.run(Date.now(), id).changes === 1
+	);
+}
+
+/** The run of `conversationId` that waits for the user's answer, if any. */
+export function getAwaitingAgentRunByConversation(
+	db: Db,
+	conversationId: string
+): AgentRunRow | undefined {
+	return db
+		.prepare(
+			`SELECT * FROM agent_runs WHERE conversation_id = ? AND status = 'awaiting_input'
+			 ORDER BY started_at DESC LIMIT 1`
+		)
+		.get(conversationId) as AgentRunRow | undefined;
+}
+
+/**
+ * Whether the agent already has a question open for this user (other than in
+ * run `exceptRunId`): agents ask at most one question at a time.
+ */
+export function hasOpenAgentQuestion(
+	db: Db,
+	agentId: string,
+	userId: string,
+	exceptRunId?: string
+): boolean {
+	return (
+		db
+			.prepare(
+				`SELECT 1 FROM agent_runs
+				 WHERE agent_id = ? AND user_id = ? AND status = 'awaiting_input' AND id IS NOT ?
+				 LIMIT 1`
+			)
+			.get(agentId, userId, exceptRunId ?? null) !== undefined
+	);
+}
+
+/** Runs that have waited for an answer since before `cutoffMs`. */
+export function listAwaitingAgentRunsBefore(db: Db, cutoffMs: number): AgentRunRow[] {
+	return db
+		.prepare(
+			`SELECT * FROM agent_runs WHERE status = 'awaiting_input' AND COALESCE(ended_at, started_at) < ?`
+		)
+		.all(cutoffMs) as AgentRunRow[];
+}
+
+/** Conversations whose latest run waits for the user's answer (kept out of auto-settle). */
+export function listAwaitingAgentRunConversationIds(db: Db): string[] {
+	return (
+		db
+			.prepare(
+				`SELECT DISTINCT conversation_id FROM agent_runs
+				 WHERE status = 'awaiting_input' AND conversation_id IS NOT NULL`
+			)
+			.all() as { conversation_id: string }[]
+	).map((r) => r.conversation_id);
 }
 
 export function setAgentRunConversation(db: Db, id: string, conversationId: string): void {

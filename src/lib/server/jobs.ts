@@ -1,6 +1,11 @@
+import { dismissRun } from './agents/run-lifecycle.js';
 import { listActiveStreamIds } from './chat/streams.js';
 import { config } from './config.js';
 import { getDb, type Db } from './db/index.js';
+import {
+	listAwaitingAgentRunConversationIds,
+	listAwaitingAgentRunsBefore
+} from './db/repo/agent-runs.js';
 import {
 	deleteUnlinkedAttachment,
 	listAttachmentPaths,
@@ -9,7 +14,8 @@ import {
 import {
 	autoSettleConversations,
 	listSoftDeletedBefore,
-	purgeConversation
+	purgeConversation,
+	softDeleteConversation
 } from './db/repo/conversations.js';
 import { publishServerEvent } from './events/bus.js';
 import { createLogger } from './logger.js';
@@ -96,7 +102,56 @@ export async function cleanupOrphanAttachments(
 	return { unlinkedRows, orphanFiles };
 }
 
+/** Dismisses agent questions nobody answered within `days`. */
+export function expireAgentQuestions(
+	db: Db = getDb(),
+	days: number = config.AGENT_QUESTION_TTL_DAYS
+): number {
+	if (days <= 0) return 0;
+	let expired = 0;
+	for (const run of listAwaitingAgentRunsBefore(db, Date.now() - days * DAY_MS)) {
+		if (dismissRun(db, run, `Dismissed: no answer within ${days} days`)) expired++;
+	}
+	if (expired > 0) log.info(`Dismissed ${expired} unanswered agent question(s)`);
+	return expired;
+}
+
+/**
+ * Deletes (to trash) settled agent-run chats the user never replied to, after
+ * `days`: a frequent scheduled agent would otherwise fill the settled shelf.
+ */
+export function pruneAgentRunChats(
+	db: Db = getDb(),
+	days: number = config.AGENT_RUN_CHAT_RETENTION_DAYS
+): number {
+	if (days <= 0) return 0;
+	const rows = db
+		.prepare(
+			`SELECT c.id, c.user_id FROM conversations c
+			 WHERE c.origin = 'dispatch' AND c.deleted_at IS NULL AND c.pinned = 0
+			   AND c.settled_at IS NOT NULL AND c.settled_at < ?
+			   AND NOT EXISTS (
+			     SELECT 1 FROM agent_runs r
+			     WHERE r.conversation_id = c.id AND r.status IN ('running', 'awaiting_input')
+			   )
+			   AND (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.role = 'user') <= 1`
+		)
+		.all(Date.now() - days * DAY_MS) as { id: string; user_id: string }[];
+	let pruned = 0;
+	for (const row of rows) {
+		if (!softDeleteConversation(db, row.user_id, row.id)) continue;
+		publishServerEvent(row.user_id, { type: 'conversation.deleted', conversationId: row.id });
+		pruned++;
+	}
+	if (pruned > 0)
+		log.info(`Moved ${pruned} untouched agent-run chat(s) older than ${days}d to trash`);
+	return pruned;
+}
+
 export async function runDailyJobs(db: Db = getDb()): Promise<void> {
+	expireAgentQuestions(db);
+	pruneAgentRunChats(db);
+
 	const purged = purgeSoftDeletedConversations(db);
 	if (purged > 0) log.info(`Purged ${purged} soft-deleted conversation(s)`);
 
@@ -144,7 +199,9 @@ export function runAutoSettle(
 	if (days <= 0) return 0;
 	const byUser = autoSettleConversations(db, {
 		cutoffMs: Date.now() - days * DAY_MS,
-		excludeIds: listActiveStreamIds()
+		// A chat whose agent waits for an answer is only dismissed by its own
+		// expiry (expireAgentQuestions), never silently by auto-settle.
+		excludeIds: [...listActiveStreamIds(), ...listAwaitingAgentRunConversationIds(db)]
 	});
 	let total = 0;
 	for (const [userId, conversationIds] of byUser) {

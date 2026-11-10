@@ -10,12 +10,17 @@ import type {
 	CodingProjectOption,
 	CodingWorkspaceMode
 } from '$lib/coding-environments.js';
-import { repositoryName, type CodingModelRef } from '$lib/coding-environments.js';
+import {
+	codingDeclineOption,
+	repositoryName,
+	type CodingModelRef
+} from '$lib/coding-environments.js';
 import { autonomyFromRuntimeMode, CODING_RUNTIME_MODES } from '$lib/coding-task-details.js';
 import { createStreamReplayResponse } from '../chat/replay.js';
 import { decryptSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
 import {
+	recordCodingRequestAnswer,
 	createCodingConversation,
 	getCodingConversation,
 	getCodingConversationForUser,
@@ -616,18 +621,28 @@ export async function respondToCodingRequest(
 	const text = input.text?.trim() || undefined;
 	try {
 		if (pending.kind === 'approval') {
-			if (!input.optionId || !pending.options.some((o) => o.id === input.optionId)) {
+			// A typed reply without a decision says what to do instead: it declines,
+			// with the reply as the agent's feedback.
+			const decision = input.optionId ?? (text ? codingDeclineOption(pending)?.id : undefined);
+			if (!decision || !pending.options.some((o) => o.id === decision)) {
 				throw new CodingTaskError(400, 'Choose one of the offered options');
 			}
+			// Stored before sending: T3 may report the request resolved (and the
+			// timeline re-render) before the send returns. The decision itself shows
+			// as the outcome; only a note is worth keeping.
+			if (text) rememberAnswer(db, conversationId, pending.requestId, text);
 			await follower.respond({
 				requestId: pending.requestId,
-				decision: input.optionId,
+				decision,
 				feedback: text
 			});
 		} else {
 			const option = pending.options.find((o) => o.id === input.optionId);
 			const answer = text ?? option?.label;
 			if (!answer) throw new CodingTaskError(400, 'Choose an option or type an answer');
+			// Shown only once T3 reports the request resolved, so storing it first is
+			// safe even if the send fails (a retry overwrites it).
+			rememberAnswer(db, conversationId, pending.requestId, answer);
 			await follower.respond({
 				requestId: pending.requestId,
 				answers: { [pending.questionId ?? 'answer']: answer }
@@ -641,6 +656,21 @@ export async function respondToCodingRequest(
 		throw asTaskError(e, 'Could not send the answer to the coding agent');
 	}
 	void follower.follow();
+}
+
+/**
+ * Keeps the user's words for the timeline. Best-effort: failing to store them
+ * mustn't keep the answer from reaching T3.
+ */
+function rememberAnswer(db: Db, conversationId: string, requestId: string, answer: string): void {
+	try {
+		recordCodingRequestAnswer(db, conversationId, requestId, answer);
+	} catch (e) {
+		log.warn('Could not store the answer to a coding request', {
+			conversationId,
+			error: e instanceof Error ? e.message : String(e)
+		});
+	}
 }
 
 /**

@@ -71,6 +71,10 @@ export interface Conversation {
 	maxTokens: number | null;
 	pinned: boolean;
 	agentId: string | null;
+	/** 'dispatch': started by Chatty as an agent run the user can reply to. */
+	origin: ConversationOrigin;
+	/** The conversation's latest agent run, if an agent run created it. */
+	agentRun: { id: string; status: AgentRunStatus } | null;
 	settledAt: number | null;
 	settledReason: 'manual' | 'auto' | null;
 	/** Set when the conversation is a coding task run on a T3 Code server. */
@@ -78,6 +82,8 @@ export interface Conversation {
 	createdAt: number;
 	updatedAt: number;
 }
+
+export type ConversationOrigin = 'user' | 'dispatch';
 
 export const AGENT_EVENT_NAMES = [
 	'memory.changed',
@@ -93,7 +99,8 @@ export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
 
 export type ServerEvent =
 	| { type: 'chat.created'; conversationId: string }
-	| { type: 'chat.message_completed'; conversationId: string }
+	/** `agentRunId` is set when an agent run's turn produced the message (its run event notifies instead). */
+	| { type: 'chat.message_completed'; conversationId: string; agentRunId?: string }
 	| { type: 'chat.stream.started'; conversationId: string; startedAt?: number }
 	| { type: 'chat.stream.finished'; conversationId: string }
 	/** Persisted messages changed outside a live stream; an open chat should reload them. */
@@ -128,9 +135,25 @@ export type ServerEvent =
 			/** Set when an agent run made the change (lets that agent ignore its own writes). */
 			agentRunId?: string;
 	  }
-	| { type: 'agent.run.started'; agentId: string; runId: string }
+	| { type: 'agent.run.started'; agentId: string; runId: string; conversationId?: string }
 	| { type: 'agent.run.progress'; agentId: string; runId: string }
-	| { type: 'agent.run.finished'; agentId: string; runId: string; status: AgentRunStatus }
+	/** The run ended its turn with a question (`ask_user`) and waits for the user's reply. */
+	| {
+			type: 'agent.run.awaiting_input';
+			agentId: string;
+			runId: string;
+			conversationId: string;
+			question: string;
+	  }
+	| {
+			type: 'agent.run.finished';
+			agentId: string;
+			runId: string;
+			status: AgentRunStatus;
+			/** The run's conversation, and whether it is a visible (dispatched) chat. */
+			conversationId?: string;
+			visible?: boolean;
+	  }
 	| { type: 'skills.changed' }
 	| { type: 'skill.created'; name: string; scope: 'user' | 'shared' }
 	| { type: 'skill.updated'; name: string; scope: 'user' | 'shared' }
@@ -160,6 +183,8 @@ export interface Agent {
 	triggerType: AgentTriggerType;
 	triggerConfig: AgentTriggerConfig;
 	maxSteps: number | null;
+	/** Whether runs may ask the user questions; anything but 'never' makes runs visible chats. */
+	canAsk: AgentCanAsk;
 	/** Set for coding agents: each run is a T3 coding task with this target. */
 	codingTarget: AgentCodingTarget | null;
 	enabled: boolean;
@@ -171,7 +196,14 @@ export interface Agent {
 
 export type AgentRunTrigger = 'schedule' | 'http' | 'manual' | 'chat' | 'event';
 
-export type AgentRunStatus = 'running' | 'success' | 'failed';
+export const AGENT_CAN_ASK_VALUES = ['never', 'approvals', 'any'] as const;
+export type AgentCanAsk = (typeof AGENT_CAN_ASK_VALUES)[number];
+
+/**
+ * `awaiting_input`: the run asked the user a question and waits for a reply.
+ * `dismissed`: that question was left unanswered (settled, deleted, stopped or expired).
+ */
+export type AgentRunStatus = 'running' | 'success' | 'failed' | 'awaiting_input' | 'dismissed';
 
 export interface AgentRun {
 	id: string;
@@ -183,6 +215,17 @@ export interface AgentRun {
 	error: string | null;
 	startedAt: number;
 	endedAt: number | null;
+}
+
+/** What started a dispatched chat (an agent run), for its "Started by" chip. */
+export interface DispatchInfo {
+	runId: string;
+	agentId: string;
+	/** Null once the agent was deleted (its runs go with it). */
+	agentName: string | null;
+	trigger: AgentRunTrigger | null;
+	startedAt: number | null;
+	status: AgentRunStatus | null;
 }
 
 export interface ApiKey {

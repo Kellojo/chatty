@@ -4,6 +4,7 @@ import {
 	type CodingConversationSummary,
 	type CodingTaskStatus
 } from '$lib/coding-environments.js';
+import type { AgentRunStatus, ConversationOrigin } from '$lib/types.js';
 import type { Db } from '../index.js';
 
 export interface ConversationRow {
@@ -21,6 +22,7 @@ export interface ConversationRow {
 	max_tokens: number | null;
 	pinned: number;
 	agent_id: string | null;
+	origin: string;
 	last_read_at: number | null;
 	settled_at: number | null;
 	settled_reason: string | null;
@@ -35,6 +37,9 @@ export interface ConversationRow {
 	coding_diff_deletions?: number | null;
 	coding_pr_url?: string | null;
 	coding_pr_state?: string | null;
+	/** Present only on queries that join the latest agent run (see SIDEBAR_SELECT). */
+	agent_run_id?: string | null;
+	agent_run_status?: string | null;
 }
 
 export interface Conversation {
@@ -51,6 +56,8 @@ export interface Conversation {
 	maxTokens: number | null;
 	pinned: boolean;
 	agentId: string | null;
+	origin: ConversationOrigin;
+	agentRun: { id: string; status: AgentRunStatus } | null;
 	settledAt: number | null;
 	settledReason: SettledReason | null;
 	/** Set when the conversation is a coding task run on a T3 Code server. */
@@ -78,6 +85,11 @@ export function toPublic(row: ConversationRow): Conversation {
 		maxTokens: row.max_tokens,
 		pinned: row.pinned === 1,
 		agentId: row.agent_id,
+		origin: row.origin === 'dispatch' ? 'dispatch' : 'user',
+		agentRun:
+			row.agent_run_id && row.agent_run_status
+				? { id: row.agent_run_id, status: row.agent_run_status as AgentRunStatus }
+				: null,
 		settledAt: row.settled_at,
 		settledReason: row.settled_reason as SettledReason | null,
 		coding: row.coding_status
@@ -108,7 +120,13 @@ const CODING_SUMMARY_COLUMNS = `cc.project_title AS coding_project_title, cc.sta
 	cc.run_started_at AS coding_run_started_at, cc.diff_insertions AS coding_diff_insertions,
 	cc.diff_deletions AS coding_diff_deletions, cc.pr_url AS coding_pr_url, cc.pr_state AS coding_pr_state`;
 
-const SIDEBAR_SELECT = `SELECT c.*, ${CODING_SUMMARY_COLUMNS}
+/** The conversation's latest agent run (sidebar "needs you" state, run links). */
+const AGENT_RUN_COLUMNS = `(SELECT r.id FROM agent_runs r WHERE r.conversation_id = c.id
+		ORDER BY r.started_at DESC LIMIT 1) AS agent_run_id,
+	(SELECT r.status FROM agent_runs r WHERE r.conversation_id = c.id
+		ORDER BY r.started_at DESC LIMIT 1) AS agent_run_status`;
+
+const SIDEBAR_SELECT = `SELECT c.*, ${CODING_SUMMARY_COLUMNS}, ${AGENT_RUN_COLUMNS}
 	FROM conversations c
 	LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id`;
 
@@ -157,11 +175,23 @@ export function countSettledConversations(db: Db, userId: string): number {
 	).n;
 }
 
-export function listConversationsSince(db: Db, userId: string, since: number): ConversationRow[] {
+/**
+ * Chats updated since `since`. `excludeDispatched` leaves out chats Chatty
+ * started for agent runs: their content is the agent's, not the user's (memory
+ * extraction lists recent chats this way).
+ */
+export function listConversationsSince(
+	db: Db,
+	userId: string,
+	since: number,
+	opts: { excludeDispatched?: boolean } = {}
+): ConversationRow[] {
+	const dispatched = opts.excludeDispatched ? `AND c.origin != 'dispatch'` : '';
 	return db
 		.prepare(
 			`${SIDEBAR_SELECT}
 			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.updated_at >= ?
+			   ${dispatched}
 			 ORDER BY c.updated_at DESC`
 		)
 		.all(userId, since) as ConversationRow[];
@@ -180,6 +210,10 @@ export interface CreateConversationInput {
 	kind?: 'chat' | 'agent-run' | 'research';
 	title?: string;
 	agentId?: string | null;
+	/** Snapshot of an agent's prompt (dispatched runs); null uses the default prompt. */
+	systemPrompt?: string | null;
+	maxSteps?: number | null;
+	origin?: ConversationOrigin;
 }
 
 export function createConversation(
@@ -190,8 +224,9 @@ export function createConversation(
 	const id = randomUUID();
 	const now = Date.now();
 	db.prepare(
-		`INSERT INTO conversations (id, user_id, kind, title, mode, provider_id, model_id, agent_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		`INSERT INTO conversations (id, user_id, kind, title, mode, provider_id, model_id, agent_id,
+		 system_prompt, max_steps, origin, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
@@ -201,6 +236,9 @@ export function createConversation(
 		input.providerId ?? null,
 		input.modelId ?? null,
 		input.agentId ?? null,
+		input.systemPrompt ?? null,
+		input.maxSteps ?? null,
+		input.origin ?? 'user',
 		now,
 		now
 	);
@@ -491,6 +529,8 @@ export function searchConversationsSql(withFts: boolean): string {
 			 `
 		: '';
 	const ftsClause = withFts ? 'OR c.id IN (SELECT conversation_id FROM matched)' : '';
+	// No run columns: they are correlated lookups, and search must stay one FTS
+	// pass. Results then show without the agent run's "needs you" state.
 	return `${cte}SELECT c.*, ${CODING_SUMMARY_COLUMNS}
 		 FROM conversations c
 		 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id

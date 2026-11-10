@@ -25,6 +25,7 @@ import { decryptSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
 import {
 	getCodingConversation,
+	getCodingRequestAnswers,
 	updateCodingConversation
 } from '../db/repo/coding-conversations.js';
 import type { CodingEnvironmentRow } from '../db/repo/coding-environments.js';
@@ -128,7 +129,11 @@ const notFollowedError = () =>
 	new T3ClientError('This coding task is no longer connected', 'protocol');
 
 let shuttingDown = false;
-const followers = new Map<string, CodingFollower>();
+// Kept on globalThis: a dev-server hot reload of this module (or anything it
+// imports) would otherwise forget the running followers, and a second one
+// would start for the same thread while the first keeps streaming unseen.
+const globalFollowers = globalThis as { __codingFollowers?: Map<string, CodingFollower> };
+const followers = (globalFollowers.__codingFollowers ??= new Map<string, CodingFollower>());
 
 export class CodingFollower {
 	private state: ThreadState = emptyThreadState();
@@ -897,6 +902,8 @@ export class CodingFollower {
 			}
 		}
 
+		// Read once per render: answers only change when the user responds.
+		const answers = getCodingRequestAnswers(this.db, this.conversationId);
 		for (const run of runs) {
 			const runId = String(run.id);
 			if (!allDirty && !dirty.has(runId) && this.live?.runId !== runId) continue;
@@ -904,7 +911,7 @@ export class CodingFollower {
 			if (mirrored === 'created') touched = true;
 			else if (mirrored === 'removed') removedNotices = true;
 
-			const entries = renderRun(this.state, run, this.commandOutputs);
+			const entries = renderRun(this.state, run, this.commandOutputs, answers);
 			const parts = entries.map((e) => e.part);
 			const messageId =
 				this.live?.runId === runId ? this.live.messageId : this.localMessageId(replyMessageId(run));

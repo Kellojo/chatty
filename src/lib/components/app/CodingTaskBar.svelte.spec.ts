@@ -57,18 +57,6 @@ afterEach(() => {
 });
 
 describe('CodingTaskBar', () => {
-	it('offers Retry on a failed task and hands over its follow-up', async () => {
-		const onrecover = vi.fn();
-		const screen = render(CodingTaskBar, {
-			coding: task({ status: 'failed', lastError: 'Rate limited' }),
-			onrecover
-		});
-		await screen.getByRole('button', { name: /^Retry/ }).click();
-		expect(onrecover).toHaveBeenCalledWith(
-			expect.objectContaining({ kind: 'retry', prompt: expect.stringContaining('Rate limited') })
-		);
-	});
-
 	it('offers Create PR only while the agent is free', async () => {
 		const oncreatepr = vi.fn();
 		const busy = render(CodingTaskBar, { coding: task({ status: 'running' }), oncreatepr });
@@ -80,7 +68,6 @@ describe('CodingTaskBar', () => {
 		await expect
 			.element(free.getByRole('button', { name: 'Create pull request' }))
 			.toBeInTheDocument();
-		await expect.element(free.getByRole('button', { name: /^Retry/ })).not.toBeInTheDocument();
 	});
 
 	it('opens the changed files from the diff stat', async () => {

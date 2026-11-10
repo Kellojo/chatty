@@ -14,14 +14,14 @@ import {
 
 describe('abortStreamAndWait', () => {
 	it('returns immediately when nothing is running', async () => {
-		await expect(abortStreamAndWait('none')).resolves.toBeUndefined();
+		await expect(abortStreamAndWait('none', 'stopped')).resolves.toBeUndefined();
 	});
 
 	it('aborts the stream and waits until it has been released', async () => {
 		const controller = new AbortController();
 		registerStream('c1', controller);
 		let settled = false;
-		const wait = abortStreamAndWait('c1').then(() => (settled = true));
+		const wait = abortStreamAndWait('c1', 'stopped').then(() => (settled = true));
 		await new Promise((r) => setTimeout(r, 5));
 		expect(controller.signal.aborted).toBe(true);
 		expect(settled).toBe(false);
@@ -33,7 +33,7 @@ describe('abortStreamAndWait', () => {
 	it('gives up after the timeout if the stream is never released', async () => {
 		const controller = new AbortController();
 		registerStream('c2', controller);
-		await abortStreamAndWait('c2', 5);
+		await abortStreamAndWait('c2', 'stopped', 5);
 		expect(controller.signal.aborted).toBe(true);
 		releaseStream('c2', controller);
 	});
@@ -58,7 +58,7 @@ describe('stream ownership', () => {
 		const oldController = new AbortController();
 		const newController = new AbortController();
 		registerStream('c4', oldController);
-		const wait = abortStreamAndWait('c4');
+		const wait = abortStreamAndWait('c4', 'stopped');
 		registerStream('c4', newController);
 		releaseStream('c4', oldController);
 		await expect(wait).resolves.toBeUndefined();

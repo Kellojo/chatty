@@ -13,7 +13,11 @@ const { createConversation } = await import('./db/repo/conversations.js');
 const { createMessage } = await import('./db/repo/messages.js');
 const { createAttachment, getAttachment, linkAttachmentsToMessage } =
 	await import('./db/repo/attachments.js');
-const { cleanupOrphanAttachments } = await import('./jobs.js');
+const { cleanupOrphanAttachments, expireAgentQuestions, pruneAgentRunChats, runAutoSettle } =
+	await import('./jobs.js');
+const { createAgent } = await import('./db/repo/agents.js');
+const { createAgentRun, finishAgentRun, getAgentRun } = await import('./db/repo/agent-runs.js');
+const { getConversation, settleConversation } = await import('./db/repo/conversations.js');
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
@@ -118,5 +122,72 @@ describe('cleanupOrphanAttachments', () => {
 		});
 		expect(getAttachment(db, row.id)).toBeDefined();
 		expect(await exists(file)).toBe(true);
+	});
+});
+
+describe('agent run chats', () => {
+	function dispatchedRun(status: 'success' | 'awaiting_input') {
+		const db = getDb();
+		const agent = createAgent(db, 'u1', { name: 'a', systemPrompt: 'x', triggerType: 'manual' });
+		const conversation = createConversation(db, 'u1', { origin: 'dispatch', agentId: agent.id });
+		createMessage(db, {
+			conversationId: conversation.id,
+			role: 'user',
+			parts: [{ type: 'text', text: 'do it' }],
+			status: 'complete'
+		});
+		const run = createAgentRun(db, {
+			agentId: agent.id,
+			userId: 'u1',
+			trigger: 'manual',
+			conversationId: conversation.id
+		});
+		finishAgentRun(db, run.id, status);
+		return { db, conversation, run };
+	}
+
+	it('dismisses questions left unanswered past the TTL', () => {
+		const { db, run } = dispatchedRun('awaiting_input');
+		expect(expireAgentQuestions(db, 7)).toBe(0);
+		db.prepare('UPDATE agent_runs SET ended_at = ? WHERE id = ?').run(NOW - 8 * DAY, run.id);
+		expect(expireAgentQuestions(db, 7)).toBe(1);
+		expect(getAgentRun(db, run.id)!.status).toBe('dismissed');
+	});
+
+	it('never auto-settles a chat whose agent waits for an answer', () => {
+		const { db, conversation } = dispatchedRun('awaiting_input');
+		db.prepare('UPDATE conversations SET updated_at = ?, created_at = ? WHERE id = ?').run(
+			NOW - 30 * DAY,
+			NOW - 30 * DAY,
+			conversation.id
+		);
+		runAutoSettle(db, 7);
+		expect(getConversation(db, 'u1', conversation.id)!.settled_at).toBeNull();
+	});
+
+	it('trashes old settled run chats the user never replied to', () => {
+		const { db, conversation } = dispatchedRun('success');
+		settleConversation(db, 'u1', conversation.id, 'auto');
+		db.prepare('UPDATE conversations SET settled_at = ? WHERE id = ?').run(
+			NOW - 31 * DAY,
+			conversation.id
+		);
+		// One the user replied to is kept.
+		const replied = dispatchedRun('success');
+		createMessage(db, {
+			conversationId: replied.conversation.id,
+			role: 'user',
+			parts: [{ type: 'text', text: 'thanks' }],
+			status: 'complete'
+		});
+		settleConversation(db, 'u1', replied.conversation.id, 'auto');
+		db.prepare('UPDATE conversations SET settled_at = ? WHERE id = ?').run(
+			NOW - 31 * DAY,
+			replied.conversation.id
+		);
+
+		expect(pruneAgentRunChats(db, 30)).toBe(1);
+		expect(getConversation(db, 'u1', conversation.id)).toBeUndefined();
+		expect(getConversation(db, 'u1', replied.conversation.id)).toBeDefined();
 	});
 });

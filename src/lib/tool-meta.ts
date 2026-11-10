@@ -340,19 +340,26 @@ function firstQuestion(questions: unknown): string | null {
 export interface ToolOutcome {
 	label: string;
 	negative: boolean;
+	/** What the user answered or noted, when known. */
+	answer?: string;
 }
 
 /** How an approval request or question was resolved, from its recorded decision. */
 export function toolOutcome(name: string, output: unknown): ToolOutcome | null {
 	if (name !== 'approval' && name !== 'question') return null;
-	const result = output as { decision?: unknown; status?: unknown } | null | undefined;
+	const result = output as
+		{ decision?: unknown; status?: unknown; answer?: unknown } | null | undefined;
 	const value = result?.decision ?? result?.status;
 	if (typeof value !== 'string' || !value) return null;
-	if (/^accept/i.test(value)) return { label: 'Approved', negative: false };
-	if (/^(decline|deny|reject)/i.test(value)) return { label: 'Declined', negative: true };
-	if (/^cancel/i.test(value)) return { label: 'Cancelled', negative: true };
-	if (name === 'question') return { label: 'Answered', negative: false };
-	return { label: value.charAt(0).toUpperCase() + value.slice(1), negative: false };
+	const answer =
+		typeof result?.answer === 'string' && result.answer.trim() ? result.answer.trim() : undefined;
+	const outcome = (label: string, negative: boolean): ToolOutcome =>
+		answer ? { label, negative, answer } : { label, negative };
+	if (/^accept/i.test(value)) return outcome('Approved', false);
+	if (/^(decline|deny|reject)/i.test(value)) return outcome('Declined', true);
+	if (/^cancel/i.test(value)) return outcome('Cancelled', true);
+	if (name === 'question') return outcome('Answered', false);
+	return outcome(value.charAt(0).toUpperCase() + value.slice(1), false);
 }
 
 interface ToolPartLike {

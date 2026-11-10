@@ -26,13 +26,14 @@
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import type {
 		Agent,
+		AgentCanAsk,
 		AgentEventName,
 		AgentTriggerType,
 		ModelMapping,
 		ModelsByProvider,
 		ToolInfo
 	} from '$lib/types.js';
-	import { AGENT_EVENT_NAMES } from '$lib/types.js';
+	import { AGENT_CAN_ASK_VALUES, AGENT_EVENT_NAMES } from '$lib/types.js';
 
 	let {
 		agent,
@@ -104,6 +105,8 @@
 		restrictTools: agent?.toolAllowlist != null,
 		allowlist: [...(agent?.toolAllowlist ?? [])],
 		maxSteps: (agent?.maxSteps?.toString() ?? '') as string | number,
+		// New agents may ask by default; existing ones keep what they saved.
+		canAsk: (agent?.canAsk ?? 'any') as AgentCanAsk,
 		enabled: agent?.enabled ?? true
 	});
 
@@ -177,6 +180,15 @@
 		}[form.triggerType]
 	);
 
+	const CAN_ASK_OPTIONS: Record<AgentCanAsk, { label: string; description: string }> = {
+		never: { label: 'Never', description: 'Runs stay in the background.' },
+		approvals: { label: 'Only for approvals', description: 'Asks before risky actions.' },
+		any: { label: 'Any time', description: 'Asks whenever it needs your input.' }
+	};
+
+	// Coding agents ask inside their coding task, and personas don't run on their own.
+	const showCanAsk = $derived(!coding && form.triggerType !== 'persona');
+
 	const toolGroups = $derived.by(() => {
 		const groups: { server: string; tools: ToolInfo[] }[] = [];
 		for (const tool of tools) {
@@ -224,6 +236,8 @@
 									}
 								: { instructions: form.instructions.trim() },
 				maxSteps,
+				// Left out when hidden, so the server keeps (or defaults) the value.
+				canAsk: showCanAsk ? form.canAsk : undefined,
 				// Existing agents toggle from the header; sending the form copy would undo that.
 				...(agent ? {} : { enabled: form.enabled }),
 				codingTarget:
@@ -253,7 +267,9 @@
 				if (coding || savedTarget) onreset?.();
 			} else {
 				toast.success('Agent created');
-				await goto(resolve('/agents'));
+				// Reload the list: data preloaded earlier (e.g. hovering the back link)
+				// predates the new agent.
+				await goto(resolve('/agents'), { invalidateAll: true });
 			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to save agent');
@@ -534,6 +550,31 @@
 					>POST /api/agents/{agent?.id ?? '<id>'}/run</code
 				>
 			</div>
+		{/if}
+		{#if showCanAsk}
+			<SettingsRow
+				label="Can ask you questions"
+				description="{CAN_ASK_OPTIONS[form.canAsk].description}{form.canAsk === 'never'
+					? ''
+					: ' Runs appear as chats you can reply to.'}"
+				stack
+			>
+				<Select.Root type="single" bind:value={form.canAsk} disabled={readonly}>
+					<Select.Trigger
+						class="w-full sm:w-56 {readonly
+							? 'disabled:border-dashed disabled:border-border disabled:bg-transparent disabled:opacity-100 [&>svg:last-child]:hidden'
+							: ''}"
+						aria-label="Can ask you questions"
+					>
+						{CAN_ASK_OPTIONS[form.canAsk].label}
+					</Select.Trigger>
+					<Select.Content>
+						{#each AGENT_CAN_ASK_VALUES as option (option)}
+							<Select.Item value={option}>{CAN_ASK_OPTIONS[option].label}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</SettingsRow>
 		{/if}
 		<!-- Existing agents are turned on and off from the page header. -->
 		{#if !agent}

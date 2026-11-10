@@ -4,14 +4,8 @@
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
 	import AppWindowIcon from '@lucide/svelte/icons/app-window';
-	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
-	import {
-		canCreatePullRequest,
-		pullRequestNumber,
-		recoveryAction,
-		type CodingRecoveryAction
-	} from '$lib/coding-task-details.js';
+	import { canCreatePullRequest, pullRequestNumber } from '$lib/coding-task-details.js';
 	import type { CodingConversation } from '$lib/coding-environments.js';
 	import type { CodingBrowserActivity } from '$lib/coding-preview.js';
 	import { CODING_PR_STATE_STYLE, CODING_STATUS_STYLE } from '$lib/coding-status.js';
@@ -27,7 +21,6 @@
 		title = null,
 		environmentName = null,
 		oncreatepr,
-		onrecover,
 		settingsOpen = $bindable(false),
 		previewOpen = $bindable(false),
 		browserActivity = null
@@ -39,8 +32,6 @@
 		environmentName?: string | null;
 		/** Asks the agent to commit, push and open a pull request. */
 		oncreatepr?: () => void;
-		/** Sends the follow-up of a failed or interrupted task ("Retry" / "Continue"). */
-		onrecover?: (action: CodingRecoveryAction) => void;
 		/** The model/permissions dialog; bindable so the phone ⋯ menu can open it. */
 		settingsOpen?: boolean;
 		/** The browser preview; bindable so the phone ⋯ menu can open it. */
@@ -50,7 +41,6 @@
 	} = $props();
 
 	const canCreatePr = $derived(!!oncreatepr && canCreatePullRequest(coding));
-	const recovery = $derived(onrecover ? recoveryAction(coding) : null);
 
 	const status = $derived(CODING_STATUS_STYLE[coding.status] ?? CODING_STATUS_STYLE.idle);
 	/** A working task shows how long its run has been going instead of a status badge. */
@@ -142,7 +132,7 @@
 			{/if}
 		</div>
 	</div>
-	<!-- Quiet icons first, then the actions. On phones only Retry and the PR stay; settings and
+	<!-- Quiet icons first, then the actions. On phones only the PR stays; settings and
 	     the preview move into the ⋯ menu. -->
 	<div class="ml-auto flex shrink-0 items-center gap-1">
 		{#if coding.environmentId}
@@ -169,18 +159,6 @@
 				<AppWindowIcon />
 			</Button>
 		{/if}
-		{#if recovery}
-			<Button
-				variant="default"
-				size="sm"
-				title={recovery.hint}
-				aria-label="{recovery.label}: {recovery.hint}"
-				onclick={() => onrecover?.(recovery)}
-			>
-				<RotateCcwIcon />
-				<span class="hidden sm:inline">{recovery.label}</span>
-			</Button>
-		{/if}
 		{#if coding.prUrl}
 			{@const number = pullRequestNumber(coding.prUrl)}
 			{@const prState = coding.prState ? CODING_PR_STATE_STYLE[coding.prState].label : null}
@@ -200,7 +178,7 @@
 					<span class="hidden text-muted-foreground sm:inline">· {prState}</span>
 				{/if}
 			</Button>
-		{:else if canCreatePr && !recovery}
+		{:else if canCreatePr}
 			<!-- Offered only once the agent is free; a disabled button mid-run is just noise.
 			     On phones it moves into the ⋯ menu, where it can carry a readable label. -->
 			<Button

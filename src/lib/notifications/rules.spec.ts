@@ -15,6 +15,8 @@ function conv(id: string, overrides: Partial<Conversation> = {}): Conversation {
 	return {
 		id,
 		kind: 'chat',
+		origin: 'user',
+		agentRun: null,
 		title: `Chat ${id}`,
 		mode: 'chat',
 		providerId: null,
@@ -127,6 +129,69 @@ describe('noticeForEvent', () => {
 		expect(noticeForEvent(event('failed'), ctx([], { failures: false }))).toBeNull();
 	});
 
+	it('leaves replies from agent run turns to the run events', () => {
+		expect(
+			noticeForEvent(
+				{ type: 'chat.message_completed', conversationId: 'a', agentRunId: 'r1' },
+				ctx([conv('a')])
+			)
+		).toBeNull();
+	});
+
+	it('raises a needs-you notice when an agent run asks a question', () => {
+		const event = {
+			type: 'agent.run.awaiting_input',
+			agentId: 'ag',
+			runId: 'r1',
+			conversationId: 'd',
+			question: 'Which branch?'
+		} as const;
+		expect(noticeForEvent(event, ctx([]))).toEqual({
+			kind: 'needs-you',
+			tag: 'chat:d',
+			title: 'Agent',
+			body: 'Needs you: Which branch?',
+			url: '/chat/d',
+			conversationId: 'd',
+			agentId: 'ag'
+		});
+		expect(noticeForEvent(event, ctx([], { needsYou: false }))).toBeNull();
+	});
+
+	it('skips finished events for questions and dismissed runs', () => {
+		for (const status of ['awaiting_input', 'dismissed', 'running'] as const) {
+			const event = {
+				type: 'agent.run.finished',
+				agentId: 'ag',
+				runId: 'r1',
+				status,
+				conversationId: 'd',
+				visible: true
+			} as const;
+			expect(noticeForEvent(event, ctx([], { agentRuns: true }))).toBeNull();
+		}
+	});
+
+	it('points finished dispatched runs at their chat', () => {
+		const base = { type: 'agent.run.finished', agentId: 'ag', runId: 'r1' } as const;
+		expect(
+			noticeForEvent(
+				{ ...base, status: 'success', conversationId: 'd', visible: true },
+				ctx([], { agentRuns: true })
+			)
+		).toMatchObject({ kind: 'finished', url: '/chat/d', tag: 'chat:d', conversationId: 'd' });
+		expect(
+			noticeForEvent({ ...base, status: 'failed', conversationId: 'd', visible: true }, ctx([]))
+		).toMatchObject({ kind: 'failed', url: '/chat/d', tag: 'chat:d' });
+		// A background run keeps pointing at its run page.
+		expect(
+			noticeForEvent(
+				{ ...base, status: 'success', conversationId: 'h', visible: false },
+				ctx([], { agentRuns: true })
+			)
+		).toMatchObject({ url: '/agents/ag/runs/r1', tag: 'agent-run:r1', conversationId: null });
+	});
+
 	it('ignores unrelated events', () => {
 		expect(noticeForEvent({ type: 'skills.changed' }, ctx([]))).toBeNull();
 	});
@@ -164,6 +229,11 @@ describe('attentionSummary', () => {
 		});
 		expect(attentionSummary([conv('a')], ['a'], null)).toEqual({ count: 1, level: 'unread' });
 		expect(attentionSummary([conv('a')], [], null)).toEqual({ count: 0, level: 'none' });
+		const asking = conv('d', {
+			origin: 'dispatch',
+			agentRun: { id: 'r', status: 'awaiting_input' }
+		});
+		expect(attentionSummary([asking], [], null)).toEqual({ count: 1, level: 'needs-you' });
 	});
 });
 

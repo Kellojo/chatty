@@ -24,20 +24,24 @@
 	import XIcon from '@lucide/svelte/icons/x';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
+	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ChatTopbar from './ChatTopbar.svelte';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
+	import MessageNav from './MessageNav.svelte';
 	import { hasVisibleContent } from './timeline.js';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import {
 		canCreatePullRequest,
 		createPullRequestPrompt,
+		recoveryAction,
 		type CodingRecoveryAction
 	} from '$lib/coding-task-details.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
 	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
 	import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
+	import { askUserInput, askUserRequest, isAskUserPart, type AskUserPart } from '$lib/ask-user.js';
 	import { drafts } from '$lib/state/drafts.js';
 	import { registerChatShortcuts, shortcutLabel } from '$lib/state/shortcuts.js';
 	import {
@@ -62,13 +66,18 @@
 		type Agent,
 		type ChatMessage,
 		type Conversation,
+		type DispatchInfo,
 		type ModelMapping,
 		type ModelsByProvider,
 		type UIMessage,
 		type UIMessageMetadata
 	} from '$lib/types.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
-	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
+	import {
+		acceptsTypedAnswer,
+		type CodingConversation,
+		type CodingEnvironment
+	} from '$lib/coding-environments.js';
 	import { browserActivity } from '$lib/coding-preview.js';
 
 	let {
@@ -84,7 +93,8 @@
 		initiallyGenerating = false,
 		coding: initialCoding = null,
 		codingEnvironments = [],
-		codingAgents = []
+		codingAgents = [],
+		dispatch = null
 	}: {
 		conversation: Conversation;
 		/** The newest page of messages; earlier ones load on scroll. */
@@ -103,6 +113,8 @@
 		/** Targets for handing this chat off to a coding agent. */
 		codingEnvironments?: CodingEnvironment[];
 		codingAgents?: Agent[];
+		/** Set when Chatty started this chat for an agent run. */
+		dispatch?: DispatchInfo | null;
 	} = $props();
 
 	// Local edits apply immediately; reloaded page data (e.g. a task settled or
@@ -554,18 +566,90 @@
 			return;
 		}
 		if (!trimmed && selectedFiles.length === 0) return;
-		// Behind earlier queued messages unless the queue waits for the user.
-		if (streaming || sending || (queue.length > 0 && !queuePaused)) {
-			messageQueue.add(conversation.id, { text: trimmed, files: selectedFiles });
-			input = '';
-			clearFiles();
+		// While the coding task waits on the user, typed text answers it (files
+		// can't go with an answer, so a message with attachments is a new turn).
+		if (codingAnswerTarget && trimmed && selectedFiles.length === 0) {
+			if (await answerCodingRequest(codingAnswerTarget.requestId, trimmed)) input = '';
 			return;
 		}
-		messageQueue.resume(conversation.id);
-		if (await deliver(trimmed, selectedFiles)) {
+		if (await submit(trimmed, selectedFiles)) {
 			input = '';
 			clearFiles();
 		}
+	}
+
+	/** The coding task's pending request that composer text answers, if any (see send). */
+	const codingAnswerTarget = $derived(
+		coding?.pendingRequest && acceptsTypedAnswer(coding.pendingRequest)
+			? coding.pendingRequest
+			: null
+	);
+
+	/** Answers the coding task's pending question (or declines its approval) with `text`. */
+	async function answerCodingRequest(requestId: string, text: string): Promise<boolean> {
+		sending = true;
+		try {
+			const res = await fetch(`/api/coding/tasks/${encodeURIComponent(conversation.id)}/respond`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ requestId, text })
+			});
+			if (!res.ok) {
+				const data = (await res.json().catch(() => null)) as { message?: string } | null;
+				throw new Error(data?.message ?? 'Failed to send your answer');
+			}
+			void refreshCoding().catch(() => undefined);
+			return true;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to send your answer');
+			return false;
+		} finally {
+			sending = false;
+		}
+	}
+
+	/**
+	 * Sends a message, or queues it while the chat is busy: behind earlier queued
+	 * messages unless the queue waits for the user. Returns false on failure.
+	 */
+	function submit(text: string, files: File[]): Promise<boolean> {
+		if (streaming || sending || (queue.length > 0 && !queuePaused)) {
+			messageQueue.add(conversation.id, { text, files });
+			return Promise.resolve(true);
+		}
+		messageQueue.resume(conversation.id);
+		return deliver(text, files);
+	}
+
+	/**
+	 * The agent's open `ask_user` question: its turn ended on it and nothing has
+	 * been said since. Shown in the same answer panel as a coding task's questions.
+	 */
+	const agentQuestion = $derived.by(() => {
+		if (isCoding || streaming) return null;
+		const last = chat.messages.at(-1);
+		if (last?.role !== 'assistant') return null;
+		const part = last.parts.find((p) => isAskUserPart(p)) as AskUserPart | undefined;
+		if (!part || part.state !== 'input-available') return null;
+		const input = askUserInput(part);
+		return input ? askUserRequest(part.toolCallId, input) : null;
+	});
+
+	/** What waits on the user, announced once by a live region that stays mounted. */
+	const pendingAnnouncement = $derived.by(() => {
+		const pending = coding?.pendingRequest ?? agentQuestion?.request ?? null;
+		if (!pending) return { polite: '', assertive: '' };
+		const approval = pending.kind === 'approval';
+		const text = `${approval ? 'The agent needs your approval' : 'The agent has a question'}: ${pending.title}`;
+		return approval ? { polite: '', assertive: text } : { polite: text, assertive: '' };
+	});
+
+	/** Answers the agent's question: the answer is just the next message, sent like typed text. */
+	function answerQuestion(answer: { optionId?: string; text?: string }): Promise<boolean> {
+		const chosen = answer.optionId ? agentQuestion?.answers[answer.optionId] : undefined;
+		const text = (chosen ?? answer.text ?? '').trim();
+		if (!text) return Promise.resolve(false);
+		return submit(text, []);
 	}
 
 	/**
@@ -731,6 +815,25 @@
 	let editing = $state.raw<Editing | null>(null);
 	// An edit can be sent with just the attachments it kept.
 	const canSend = $derived(hasContent || (editing?.keptFiles.length ?? 0) > 0);
+	/** The next send answers a waiting agent or task rather than starting a turn. */
+	const sendAnswers = $derived(
+		!editing && (!!agentQuestion || (!!codingAnswerTarget && selectedFiles.length === 0))
+	);
+	// A failed or interrupted coding task: the empty composer's send button retries or continues it.
+	const recovery = $derived(coding && !editing && !canSend ? recoveryAction(coding) : null);
+
+	// A dispatched chat opens with the run's instructions, written by Chatty: only
+	// known to be that message once the conversation's first page is loaded.
+	const dispatchMessageId = $derived(
+		dispatch && !hasOlder ? (chat.messages.find((m) => m.role === 'user')?.id ?? null) : null
+	);
+
+	// Marks on the side rail for jumping between the user's own messages.
+	const navItems = $derived(
+		chat.messages
+			.filter((m) => m.role === 'user' && m.id !== dispatchMessageId && hasVisibleContent(m.parts))
+			.map((m) => ({ id: m.id, text: messageText(m) }))
+	);
 
 	function startEdit(messageId: string, text: string) {
 		const message = chat.messages.find((m) => m.id === messageId);
@@ -1033,7 +1136,6 @@
 		{codingEnvironmentName}
 		{codingBrowserActivity}
 		oncreatepr={isCoding ? createPullRequest : undefined}
-		onrecover={isCoding ? recoverCodingTask : undefined}
 		{codingEnvironments}
 		{codingAgents}
 		handoffDisabled={streaming || chat.messages.length === 0}
@@ -1042,41 +1144,52 @@
 	/>
 
 	<!-- Reserve the scrollbar on both sides so messages stay centred over the composer. -->
-	<ChatContainer
-		bind:context={scroll}
-		bind:ref={scrollEl}
-		aria-busy={streaming}
-		class="min-h-0 flex-1 [scrollbar-gutter:stable_both-edges]"
-	>
-		<ChatContainerContent>
-			{#if hasOlder}
-				<div bind:this={olderSentinel} class="flex justify-center px-4 pt-4">
-					<Button variant="outline" size="sm" disabled={loadingOlder} onclick={() => loadOlder()}>
-						{#if loadingOlder}
-							<LoaderIcon class="size-4 animate-spin" />
-						{/if}
-						{olderFailed ? "Couldn't load earlier messages — retry" : 'Load earlier messages'}
-					</Button>
-				</div>
-			{/if}
-			<MessageTimeline
-				messages={chat.messages}
-				{streaming}
-				{timeFormat}
-				{messageTimes}
-				conversationId={conversation.id}
-				onregenerate={isCoding ? undefined : regenerate}
-				onedit={isCoding ? undefined : startEdit}
-				onswitchbranch={isCoding ? undefined : switchBranch}
-				ondeletebranch={isCoding ? undefined : deleteBranch}
-				branchDisabled={streaming || sending || switchingBranch}
-				editingId={editing?.messageId ?? null}
-			/>
-			{#if waiting}
-				<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
-			{/if}
-		</ChatContainerContent>
-	</ChatContainer>
+	<div class="@container/chat relative flex min-h-0 flex-1 flex-col">
+		<ChatContainer
+			bind:context={scroll}
+			bind:ref={scrollEl}
+			aria-busy={streaming}
+			class="min-h-0 flex-1 [scrollbar-gutter:stable_both-edges]"
+		>
+			<ChatContainerContent>
+				{#if hasOlder}
+					<div bind:this={olderSentinel} class="flex justify-center px-4 pt-4">
+						<Button variant="outline" size="sm" disabled={loadingOlder} onclick={() => loadOlder()}>
+							{#if loadingOlder}
+								<LoaderIcon class="size-4 animate-spin" />
+							{/if}
+							{olderFailed ? "Couldn't load earlier messages — retry" : 'Load earlier messages'}
+						</Button>
+					</div>
+				{/if}
+				<MessageTimeline
+					messages={chat.messages}
+					{streaming}
+					{timeFormat}
+					{messageTimes}
+					conversationId={conversation.id}
+					onregenerate={isCoding ? undefined : regenerate}
+					onedit={isCoding ? undefined : startEdit}
+					onswitchbranch={isCoding ? undefined : switchBranch}
+					ondeletebranch={isCoding ? undefined : deleteBranch}
+					branchDisabled={streaming || sending || switchingBranch}
+					editingId={editing?.messageId ?? null}
+					{dispatch}
+					{dispatchMessageId}
+				/>
+				{#if waiting}
+					<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
+				{/if}
+			</ChatContainerContent>
+		</ChatContainer>
+		<!-- Beside the centred column, only when the chat pane (not the window) leaves room for it. -->
+		<MessageNav
+			items={navItems}
+			{scrollEl}
+			onjump={() => scroll?.stopScroll()}
+			class="hidden @4xl/chat:block"
+		/>
+	</div>
 	<div role="status" class="sr-only">{replyAnnouncement}</div>
 
 	<div class="relative mx-auto w-full max-w-3xl px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
@@ -1100,12 +1213,23 @@
 				</span>
 			</Button>
 		{/if}
+		<!-- Mounted before any request shows up, so screen readers announce it. -->
+		<span class="sr-only" aria-live="polite">{pendingAnnouncement.polite}</span>
+		<span class="sr-only" aria-live="assertive">{pendingAnnouncement.assertive}</span>
 		{#if coding?.pendingRequest}
 			{#key coding.pendingRequest.requestId}
 				<CodingPendingRequest
 					conversationId={conversation.id}
 					request={coding.pendingRequest}
 					onresponded={() => void refreshCoding().catch(() => undefined)}
+				/>
+			{/key}
+		{:else if agentQuestion}
+			{#key agentQuestion.request.requestId}
+				<CodingPendingRequest
+					conversationId={conversation.id}
+					request={agentQuestion.request}
+					onrespond={answerQuestion}
 				/>
 			{/key}
 		{:else if coding?.status === 'failed' && coding.lastError}
@@ -1167,9 +1291,13 @@
 				onkeydown={editLastOnArrowUp}
 				placeholder={editing
 					? 'Edit your message…'
-					: streaming
-						? 'Queue a follow-up message…'
-						: 'Ask anything…'}
+					: codingAnswerTarget?.kind === 'approval'
+						? 'Or decline with a note…'
+						: agentQuestion || codingAnswerTarget
+							? 'Type your answer…'
+							: streaming
+								? 'Queue a follow-up message…'
+								: 'Ask anything…'}
 			/>
 			<PromptInputActions class="justify-between">
 				<div class="flex items-center gap-1">
@@ -1188,12 +1316,24 @@
 					>
 						<SquareIcon class="size-4" />
 					</Button>
+				{:else if recovery}
+					<Button
+						size="sm"
+						disabled={sending}
+						title={recovery.hint}
+						aria-label="{recovery.label}: {recovery.hint}"
+						onclick={() => recoverCodingTask(recovery)}
+					>
+						<RotateCcwIcon class="size-4" />
+						{recovery.label}
+					</Button>
 				{:else}
-					{@const queues = (streaming || sending) && !editing}
+					<!-- A waiting task keeps its stream open, but an answer goes out right away. -->
+					{@const queues = (streaming || sending) && !editing && !sendAnswers}
 					<Button
 						size="sm"
 						disabled={!canSend}
-						aria-label={queues ? 'Queue message' : 'Send'}
+						aria-label={queues ? 'Queue message' : sendAnswers ? 'Send answer' : 'Send'}
 						title={queues ? 'Queue — sends when the reply finishes' : undefined}
 						onclick={() => send(displayInput)}
 					>

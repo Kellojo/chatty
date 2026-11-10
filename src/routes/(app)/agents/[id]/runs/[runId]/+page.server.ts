@@ -1,4 +1,4 @@
-import { error } from '@sveltejs/kit';
+import { error, redirect } from '@sveltejs/kit';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getAgent, toPublic as agentToPublic } from '$lib/server/db/repo/agents.js';
@@ -17,6 +17,15 @@ export const load: PageServerLoad = ({ locals, params }) => {
 	if (run.user_id !== user.id && !isAdmin) error(404, { message: 'Run not found' });
 	const agent = getAgent(db, run.agent_id);
 	if (!agent) error(404, { message: 'Agent not found' });
+	// A dispatched run is a chat the user can reply to: show it there.
+	if (run.conversation_id && run.user_id === user.id) {
+		const conversation = db
+			.prepare('SELECT origin, deleted_at FROM conversations WHERE id = ?')
+			.get(run.conversation_id) as { origin: string; deleted_at: number | null } | undefined;
+		if (conversation?.origin === 'dispatch' && conversation.deleted_at === null) {
+			redirect(303, `/chat/${run.conversation_id}`);
+		}
+	}
 	return {
 		agent: agentToPublic(agent),
 		run: runToPublic(run),

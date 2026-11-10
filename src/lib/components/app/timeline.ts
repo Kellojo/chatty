@@ -1,3 +1,4 @@
+import { isAskUserPart } from '$lib/ask-user.js';
 import { readHtmlRender } from '$lib/html-render.js';
 import { describeTool, toolFailed, type ToolKind } from '$lib/tool-meta.js';
 
@@ -31,6 +32,8 @@ export function isToolPart(part: PartLike): boolean {
 function isActivity(part: PartLike): boolean {
 	// A published HTML page is shown inline, like text, rather than folded away.
 	if (readHtmlRender(part)) return false;
+	// So is an agent's question for the user (answered in the composer's panel).
+	if (isAskUserPart(part)) return false;
 	return part.type === 'reasoning' || isToolPart(part);
 }
 

@@ -6,6 +6,7 @@ import {
 } from '$lib/server/db/repo/coding-conversations.js';
 import { getDb } from '$lib/server/db/index.js';
 import {
+	getAgent,
 	listAgents,
 	listPersonaAgents,
 	toPublic as agentToPublic
@@ -24,6 +25,8 @@ import {
 	toPublic as conversationToPublic
 } from '$lib/server/db/repo/conversations.js';
 import { listMessagesPage, toPublicWithBranches } from '$lib/server/db/repo/messages.js';
+import { getAgentRunByConversation } from '$lib/server/db/repo/agent-runs.js';
+import type { DispatchInfo } from '$lib/types.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import { listModelsGrouped } from '$lib/server/llm/registry.js';
 import type { PageServerLoad } from './$types';
@@ -53,11 +56,25 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		sttModel = { providerId: sttRoleModel.provider_id, modelId: sttRoleModel.model_id };
 	}
 	const coding = getCodingConversation(db, conversation.id);
+	let dispatch: DispatchInfo | null = null;
+	if (conversation.origin === 'dispatch') {
+		const run = getAgentRunByConversation(db, conversation.id);
+		const agent = run ? getAgent(db, run.agent_id) : undefined;
+		dispatch = {
+			runId: run?.id ?? '',
+			agentId: run?.agent_id ?? conversation.agent_id ?? '',
+			agentName: agent?.name ?? null,
+			trigger: (run?.trigger as DispatchInfo['trigger']) ?? null,
+			startedAt: run?.started_at ?? null,
+			status: (run?.status as DispatchInfo['status']) ?? null
+		};
+	}
 	// Older messages are fetched on demand from /api/conversations/[id]/messages.
 	const page = listMessagesPage(db, conversation.id)!;
 	return {
 		conversation: conversationToPublic(conversation),
 		coding: coding ? codingToPublic(coding) : null,
+		dispatch,
 		messages: toPublicWithBranches(db, conversation.id, page.rows),
 		hasOlderMessages: page.hasOlder,
 		groups: listModelsGrouped(),
