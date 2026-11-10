@@ -42,8 +42,13 @@ type MutableStickToBottomOptions = {
 	initial: ResolvedAnimation | false;
 };
 
+function prefersReducedMotion(): boolean {
+	return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 function normalizeAnimation(animation: ChatContainerAnimation): ResolvedAnimation {
-	if (animation === 'instant') {
+	// Following new output and "jump to latest" snap instead of gliding.
+	if (animation === 'instant' || prefersReducedMotion()) {
 		return 'instant';
 	}
 
@@ -75,7 +80,7 @@ const GESTURE_WINDOW_MS = 300;
  * nested scroller (code block, tool output) that can still scroll up itself.
  */
 function scrollsContainer(target: EventTarget | null, container: HTMLElement): boolean {
-	for (let node = target instanceof Element ? target : null; node && node !== container; ) {
+	for (let node = target instanceof Element ? target : null; node && node !== container;) {
 		if (node.scrollTop > 0 && /auto|scroll/.test(getComputedStyle(node).overflowY)) return false;
 		node = node.parentElement;
 	}

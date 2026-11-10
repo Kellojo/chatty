@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { beforeNavigate, goto } from '$app/navigation';
+	import { afterNavigate, beforeNavigate, goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
@@ -76,6 +76,12 @@
 		textarea?.focus();
 		return textarea;
 	}
+
+	// Ready to type on arrival. Desktop (fine pointer) only, so phones and
+	// tablets don't get the on-screen keyboard thrown up on every new chat.
+	afterNavigate(() => {
+		if (window.matchMedia('(pointer: fine)').matches) focusPrompt();
+	});
 
 	function useSuggestion(text: string) {
 		input = text;

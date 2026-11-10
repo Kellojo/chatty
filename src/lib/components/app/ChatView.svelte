@@ -402,6 +402,11 @@
 		untrack(() => {
 			if (pending.files.length > 0) addFiles(pending.files);
 			void send(pending.text);
+			// Just started from the new-chat page: keep typing here. Desktop (fine
+			// pointer) only, so touch devices don't get the keyboard thrown up.
+			if (window.matchMedia('(pointer: fine)').matches) {
+				void tick().then(() => composerTextarea()?.focus());
+			}
 		});
 	});
 
