@@ -9,6 +9,10 @@
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import UserAvatar from '$lib/components/app/UserAvatar.svelte';
+	import { signOutToLogin } from '$lib/auth-client.js';
+	import LogOutIcon from '@lucide/svelte/icons/log-out';
+	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { THEMES, TIME_FORMATS, type Theme, type TimeFormat } from '$lib/user-settings.js';
 	import type { PageData } from './$types';
 
@@ -76,6 +80,18 @@
 		}
 	}
 
+	const at = $derived(data.user.email.lastIndexOf('@'));
+	const emailLocal = $derived(at > 0 ? data.user.email.slice(0, at) : data.user.email);
+	const emailDomain = $derived(at > 0 ? data.user.email.slice(at) : '');
+
+	let signingOut = $state(false);
+
+	async function signOut() {
+		signingOut = true;
+		// On success the page unloads, so the button stays busy until it does.
+		if (!(await signOutToLogin())) signingOut = false;
+	}
+
 	let passwordDialogOpen = $state(false);
 	let currentPassword = $state('');
 	let newPassword = $state('');
@@ -130,6 +146,38 @@
 <svelte:head><title>Account · Settings · Chatty</title></svelte:head>
 
 <SettingsHeader title="Account" description="Personal preferences for your account." />
+
+<!-- Phones have no account row in the sidebar, so this is where they sign out. -->
+<SettingsSection title="Signed in as">
+	<div class="flex items-center justify-between gap-4">
+		<div class="flex min-w-0 items-center gap-3">
+			<UserAvatar name={data.user.name} image={data.user.image} class="size-10 text-sm" />
+			<div class="flex min-w-0 flex-col">
+				<span class="truncate text-sm font-medium">{data.user.name}</span>
+				<!-- Phones can't hover for a tooltip, so the address wraps there instead, at the @. -->
+				<span
+					class="text-sm [overflow-wrap:anywhere] text-muted-foreground sm:truncate"
+					title={data.user.email}>{emailLocal}<wbr />{emailDomain}</span
+				>
+			</div>
+		</div>
+		<Button
+			variant="outline"
+			size="sm"
+			class="shrink-0"
+			disabled={signingOut}
+			aria-busy={signingOut}
+			onclick={signOut}
+		>
+			{#if signingOut}
+				<LoaderCircleIcon class="animate-spin" />
+			{:else}
+				<LogOutIcon />
+			{/if}
+			{signingOut ? 'Signing out…' : 'Sign out'}
+		</Button>
+	</div>
+</SettingsSection>
 
 <SettingsSection title="Appearance" description="Choose how the app looks.">
 	<SettingsRow

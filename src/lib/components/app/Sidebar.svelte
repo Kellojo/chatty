@@ -38,7 +38,8 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import { authClient } from '$lib/auth-client.js';
+	import { signOutToLogin } from '$lib/auth-client.js';
+	import UserAvatar from './UserAvatar.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import { serverActiveChats } from '$lib/state/chat-status.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
@@ -180,6 +181,23 @@
 		if (settledOpen) void loadSettled(true);
 	}
 
+	/**
+	 * Drops a deleted conversation from the lists the sidebar holds itself (paged-in
+	 * rows, the settled shelf, search results); the layout data is reloaded separately.
+	 */
+	function forgetConversation(id: string) {
+		if (extraState.extra.some((c) => c.id === id)) {
+			extraState = { ...extraState, extra: extraState.extra.filter((c) => c.id !== id) };
+		}
+		if (settledItems?.some((c) => c.id === id)) {
+			settledItems = settledItems.filter((c) => c.id !== id);
+		}
+		if (searchResults?.some((c) => c.id === id)) {
+			searchResults = searchResults.filter((c) => c.id !== id);
+			if (activeResultId === id) activeResultId = null;
+		}
+	}
+
 	/** Refreshes everything that depends on settled state after a change. */
 	async function refreshSettled() {
 		if (settledOpen) void loadSettled(true);
@@ -189,6 +207,7 @@
 
 	let query = $state('');
 	let searchResults = $state<Conversation[] | null>(null);
+	let activeResultId = $state<string | null>(null);
 	let renameTarget = $state<Conversation | null>(null);
 	let renameText = $state('');
 	let deleteTarget = $state<Conversation | null>(null);
@@ -295,6 +314,10 @@
 					scheduleInvalidate();
 					void refreshSettled();
 					break;
+				case 'conversation.deleted':
+					forgetConversation(event.conversationId);
+					scheduleInvalidate(false);
+					break;
 				case 'agent.run.started':
 				case 'agent.run.finished':
 					refreshAgentStats();
@@ -326,15 +349,6 @@
 	});
 
 	const currentId = $derived(page.params.id ?? '');
-
-	const initials = $derived(
-		user.name
-			.split(/\s+/)
-			.filter(Boolean)
-			.slice(0, 2)
-			.map((part) => part[0]?.toUpperCase() ?? '')
-			.join('')
-	);
 
 	type Group = { label: string; items: Conversation[] };
 
@@ -407,8 +421,7 @@
 	}
 
 	// ↑/↓ move through the search results and Enter opens the highlighted one
-	// (or the first), while focus stays in the search box.
-	let activeResultId = $state<string | null>(null);
+	// (or the first), while focus stays in the search box (`activeResultId`, above).
 	// The highlight is only a ring, so screen readers hear which result it moved to.
 	// Results in the order they're shown (grouped by date, pinned first).
 	const shownResults = $derived(
@@ -591,6 +604,7 @@
 		deleteTarget = null;
 		const res = await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
 		if (res.ok) {
+			forgetConversation(id);
 			toast.success('Conversation deleted');
 			if (currentId === id) await goto(resolve('/'));
 			await invalidateAll();
@@ -599,9 +613,17 @@
 		}
 	}
 
-	async function signOut() {
-		await authClient.signOut();
-		goto(resolve('/login'));
+	// Phones: a tile's count sits inline after its label ("Skills 9"), muted.
+	const tileBadge = 'max-md:ml-0 max-md:gap-1 max-md:text-[11px]';
+
+	// A Workspace link: a row on desktop, a 4-up tile on phones.
+	const isCurrent = (path: string) => page.url.pathname.startsWith(path);
+	function tileClass(path: string) {
+		return `mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 ${
+			isCurrent(path)
+				? 'bg-accent text-accent-foreground'
+				: 'text-muted-foreground hover:bg-accent/50'
+		}`;
 	}
 </script>
 
@@ -1045,133 +1067,158 @@
 	</nav>
 
 	<!-- Phones: a compact 4-up row, so the drawer's room goes to conversations. -->
-	<div class="px-2 pt-2 pb-2 max-md:grid max-md:grid-cols-4 max-md:gap-1 max-md:border-t">
+	<div
+		class="px-2 pt-2 pb-2 max-md:grid max-md:grid-cols-[repeat(4,minmax(0,1fr))_auto] max-md:gap-1 max-md:border-t max-md:px-3 max-md:pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
+	>
 		<p class="px-2 pt-1 pb-1 text-xs font-medium text-muted-foreground max-md:hidden">Workspace</p>
 		<a
 			href={resolve('/agents')}
-			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm max-md:relative max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 {page.url.pathname.startsWith(
-				'/agents'
-			)
-				? 'bg-accent text-accent-foreground'
-				: 'text-muted-foreground hover:bg-accent/50'}"
+			class={tileClass('/agents')}
+			aria-current={isCurrent('/agents') ? 'page' : undefined}
 			onclick={handleNavigate}
 		>
 			<BotIcon class="size-4" />
-			Agents
-			{#if agentStats && agentStats.running > 0}
-				{@const runningLabel = `${agentStats.running} ${agentStats.running === 1 ? 'agent' : 'agents'} running`}
-				<!-- Only activity earns a badge: a bare total of built-ins read as "you have agents"
-					next to an empty Agents page. -->
-				<span
-					class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px]"
-					title={runningLabel}
-				>
-					<span class="sr-only">{runningLabel}</span>
+			<!-- Desktop: `contents` lets the count keep its right-aligned slot in the row. -->
+			<span class="flex items-baseline gap-1 md:contents">
+				Agents
+				{#if agentStats && agentStats.running > 0}
+					{@const runningLabel = `${agentStats.running} ${agentStats.running === 1 ? 'agent' : 'agents'} running`}
+					<!-- Only activity earns a badge: a bare total of built-ins read as "you have agents"
+						next to an empty Agents page. -->
 					<span
-						class="size-1.5 animate-pulse rounded-full bg-info motion-reduce:animate-none"
-						aria-hidden="true"
-					></span>
-					<span aria-hidden="true"
-						>{agentStats.running}<span class="max-md:hidden"> running</span></span
+						class="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums {tileBadge}"
+						title={runningLabel}
 					>
-				</span>
-			{/if}
+						<span class="sr-only">{runningLabel}</span>
+						<span
+							class="size-1.5 animate-pulse rounded-full bg-info motion-reduce:animate-none"
+							aria-hidden="true"
+						></span>
+						<span aria-hidden="true"
+							>{agentStats.running}<span class="ml-1 max-md:hidden">running</span></span
+						>
+					</span>
+				{/if}
+			</span>
 		</a>
 		<a
 			href={resolve('/memory')}
-			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm max-md:relative max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 {page.url.pathname.startsWith(
-				'/memory'
-			)
-				? 'bg-accent text-accent-foreground'
-				: 'text-muted-foreground hover:bg-accent/50'}"
+			class={tileClass('/memory')}
+			aria-current={isCurrent('/memory') ? 'page' : undefined}
 			onclick={handleNavigate}
 		>
 			<BrainIcon class="size-4" />
-			Memory
-			<!-- A zero is noise; the Memory page says it's empty. -->
-			{#if memoryCount}
-				<span
-					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px]"
-					title="{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}">{memoryCount}</span
-				>
-			{/if}
+			<!-- Desktop: `contents` lets the count keep its right-aligned slot in the row. -->
+			<span class="flex items-baseline gap-1 md:contents">
+				Memory
+				<!-- A zero is noise; the Memory page says it's empty. -->
+				{#if memoryCount}
+					<span
+						class="ml-auto text-xs text-muted-foreground tabular-nums {tileBadge}"
+						title="{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}"
+						>{memoryCount}<span class="sr-only">
+							{memoryCount === 1 ? 'memory' : 'memories'}</span
+						></span
+					>
+				{/if}
+			</span>
 		</a>
 		<a
 			href={resolve('/skills')}
-			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm max-md:relative max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 {page.url.pathname.startsWith(
-				'/skills'
-			)
-				? 'bg-accent text-accent-foreground'
-				: 'text-muted-foreground hover:bg-accent/50'}"
+			class={tileClass('/skills')}
+			aria-current={isCurrent('/skills') ? 'page' : undefined}
 			onclick={handleNavigate}
 		>
 			<SparklesIcon class="size-4" />
-			Skills
-			{#if skillCount !== null}
-				<span
-					class="ml-auto text-xs text-muted-foreground tabular-nums max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px] {skillCount ===
-					0
-						? 'max-md:hidden'
-						: ''}"
-					title="{skillCount} {skillCount === 1 ? 'skill' : 'skills'}">{skillCount}</span
-				>
-			{/if}
+			<!-- Desktop: `contents` lets the count keep its right-aligned slot in the row. -->
+			<span class="flex items-baseline gap-1 md:contents">
+				Skills
+				{#if skillCount !== null}
+					<span
+						class="ml-auto text-xs text-muted-foreground tabular-nums {tileBadge} {skillCount === 0
+							? 'max-md:hidden'
+							: ''}"
+						title="{skillCount} {skillCount === 1 ? 'skill' : 'skills'}"
+						>{skillCount}<span class="sr-only"> {skillCount === 1 ? 'skill' : 'skills'}</span></span
+					>
+				{/if}
+			</span>
 		</a>
 		<a
 			href={resolve('/usage')}
-			class="mb-0.5 flex items-center gap-2 rounded-md px-2 py-2 text-sm max-md:relative max-md:mb-0 max-md:flex-col max-md:gap-1 max-md:text-xs pointer-coarse:py-2.5 {page.url.pathname.startsWith(
-				'/usage'
-			)
-				? 'bg-accent text-accent-foreground'
-				: 'text-muted-foreground hover:bg-accent/50'}"
+			class={tileClass('/usage')}
+			aria-current={isCurrent('/usage') ? 'page' : undefined}
 			onclick={handleNavigate}
 		>
 			<GaugeIcon class="size-4" />
-			Usage
-			<span
-				class="ml-auto inline-flex items-center gap-3 max-md:absolute max-md:top-1 max-md:right-auto max-md:left-[calc(50%+0.625rem)] max-md:text-[10px]"
-			>
-				<!-- The subscription limit closest to its cap. -->
-				<SidebarPlanLimits />
-				{#if user.role === 'admin' && requestStats}
-					<span
-						class="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
-						title="{requestStats.total} requests all time · {requestStats.running} running"
-					>
-						{#if requestStats.running > 0}
-							<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
-						{/if}
-						<span class="pointer-coarse:hidden">{formatCount(requestStats.total)}</span>
-					</span>
-				{/if}
+			<!-- Desktop: `contents` lets the count keep its right-aligned slot in the row. -->
+			<span class="flex items-baseline gap-1 md:contents">
+				Usage
+				<span class="ml-auto inline-flex items-center gap-3 {tileBadge} max-md:gap-1">
+					<!-- The subscription limit closest to its cap. -->
+					<SidebarPlanLimits />
+					{#if user.role === 'admin' && requestStats}
+						<!-- Phones only have room for the live dot. -->
+						<span
+							class="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums {requestStats.running >
+							0
+								? ''
+								: 'max-md:hidden'}"
+							title="{requestStats.total} requests all time · {requestStats.running} running"
+						>
+							{#if requestStats.running > 0}
+								<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
+							{/if}
+							<span class="max-md:hidden pointer-coarse:hidden"
+								>{formatCount(requestStats.total)}</span
+							>
+						</span>
+					{/if}
+				</span>
+			</span>
+		</a>
+		<!-- Phones: the account row folds into this tile; Sign out lives in Settings → Account. -->
+		<a
+			href={resolve('/settings/account')}
+			class="{tileClass('/settings')} justify-center md:hidden"
+			aria-label="Settings and account ({user.name})"
+			title="Settings"
+			aria-current={isCurrent('/settings') ? 'page' : undefined}
+			onclick={handleNavigate}
+		>
+			<!-- The gear says where it leads; the avatar alone reads as a profile badge. -->
+			<span class="relative">
+				<UserAvatar
+					name={user.name}
+					image={user.image}
+					class="size-7 text-foreground ring-1 ring-border {isCurrent('/settings')
+						? 'bg-background'
+						: 'bg-muted'}"
+				/>
+				<SettingsIcon
+					class="absolute -right-1.5 -bottom-1 size-[18px] rounded-full bg-background p-[3px] text-foreground/80 ring-1 ring-border"
+					aria-hidden="true"
+				/>
 			</span>
 		</a>
 	</div>
 
 	<div
-		class="flex items-center justify-between gap-2 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+		class="flex items-center justify-between gap-2 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] max-md:hidden"
 	>
 		<div class="flex min-w-0 items-center gap-2">
-			{#if user.image}
-				<img src={user.image} alt="" class="size-7 shrink-0 rounded-full object-cover" />
-			{:else if initials}
-				<span
-					class="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground"
-				>
-					{initials}
-				</span>
-			{/if}
+			<UserAvatar name={user.name} image={user.image} />
 			<span class="min-w-0 truncate text-sm" title={user.email}>{user.name}</span>
 		</div>
-		<div class="flex shrink-0 gap-1 pointer-coarse:gap-4">
+		<div class="flex shrink-0 gap-1">
 			<Button
 				variant="ghost"
 				size="icon"
 				href={resolve('/settings')}
 				aria-label="Settings"
-				aria-current={page.url.pathname.startsWith('/settings') ? 'page' : undefined}
+				aria-current={isCurrent('/settings') ? 'page' : undefined}
 				title="Settings ({shortcutLabel('open-settings')})"
-				class={page.url.pathname.startsWith('/settings') ? 'bg-accent text-foreground' : ''}
+				class="pointer-coarse:size-11 {isCurrent('/settings') ? 'bg-accent text-foreground' : ''}"
 				onclick={handleNavigate}
 			>
 				<SettingsIcon class="size-4" />
@@ -1187,7 +1234,14 @@
 			>
 				<KeyboardIcon class="size-4" />
 			</Button>
-			<Button variant="ghost" size="icon" onclick={signOut} aria-label="Sign out" title="Sign out">
+			<Button
+				variant="ghost"
+				size="icon"
+				class="pointer-coarse:size-11"
+				onclick={signOutToLogin}
+				aria-label="Sign out"
+				title="Sign out"
+			>
 				<LogOutIcon class="size-4" />
 			</Button>
 		</div>

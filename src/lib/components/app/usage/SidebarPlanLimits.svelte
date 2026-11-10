@@ -85,9 +85,12 @@
 </script>
 
 {#if tightest}
-	<!-- Phones show just the percentage: the drawer's Workspace tiles only have room for a
-	     small corner badge, and anything wider spills past the drawer onto the page. -->
-	<span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums" {title}>
+	<!-- Phones show just a percentage after the tile's "Usage" label, so it's the share used
+	     ("Usage 7%"), not left: anything wider spills past the drawer onto the page. -->
+	<span
+		class="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums max-md:text-[11px]"
+		{title}
+	>
 		{#if tightest.brand}
 			<ProviderIcon brand={tightest.brand} class="size-3 shrink-0 max-md:hidden" />
 		{/if}
@@ -118,7 +121,10 @@
 					? 'text-amber-600 dark:text-amber-400'
 					: tightest.level === 'stale'
 						? 'line-through decoration-muted-foreground/60'
-						: ''}>{tightest.left}%</span
+						: ''}
+			><span class="max-md:hidden">{tightest.left}%</span><span class="md:hidden"
+				>{100 - tightest.left}%<span class="sr-only"> of plan used</span></span
+			></span
 		>
 	</span>
 {/if}
