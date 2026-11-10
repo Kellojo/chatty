@@ -30,6 +30,7 @@
 		noneLabel = 'Not set',
 		capability,
 		align = 'start',
+		standalone = false,
 		class: className = 'w-64'
 	}: {
 		groups: ModelsByProvider[];
@@ -49,6 +50,8 @@
 		capability?: string;
 		/** Which trigger edge the list lines up with; `end` for pickers at the right of a bar. */
 		align?: 'start' | 'end';
+		/** No visible label beside it (the chat pickers): name it "Model: …" for screen readers. */
+		standalone?: boolean;
 		class?: string;
 	} = $props();
 
@@ -203,6 +206,7 @@
 		bind:ref={trigger}
 		class={className}
 		{disabled}
+		aria-label={standalone ? `Model: ${label}` : undefined}
 		title={shortcut ? `${label} (${shortcut})` : label}
 	>
 		<span class="flex min-w-0 flex-1 items-center gap-1.5 text-left">

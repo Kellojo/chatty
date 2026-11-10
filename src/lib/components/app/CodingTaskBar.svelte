@@ -83,8 +83,9 @@
 		{/if}
 		<div class="flex min-w-0 items-center gap-2.5 text-xs leading-4 text-muted-foreground">
 			{#if coding.projectTitle}
-				<!-- Phones keep just the branch, so the row doesn't truncate into noise. The project
-				     keeps its width before the branch does: it's the more useful of the two. -->
+				<!-- Phones show neither project nor branch: both are in the ⋯ menu (the branch copies
+				     from there), leaving the line to what changes: the diff and the run state.
+				     The project keeps its width before the branch does: it's the more useful of the two. -->
 				<span
 					class="flex max-w-48 min-w-0 shrink items-center gap-1 font-medium text-foreground/80 max-sm:hidden lg:max-w-56"
 					title={environmentName
@@ -97,7 +98,7 @@
 			{/if}
 			{#if branch}
 				<span
-					class="flex min-w-0 shrink-[2] items-center gap-1"
+					class="flex min-w-0 shrink-[2] items-center gap-1 max-sm:hidden"
 					title={local
 						? `Working directly in the project checkout on ${branch}`
 						: coding.branch

@@ -58,7 +58,8 @@
 <div
 	{@attach bindScrollElement}
 	class={cn(
-		'flex overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_2rem,black_calc(100%-2rem),transparent)]',
+		// Phones get a longer top fade: their header's two-line title sits right above it.
+		'flex overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_2rem,black_calc(100%-2rem),transparent)] max-sm:[mask-image:linear-gradient(to_bottom,transparent,transparent_0.375rem,black_2.75rem,black_calc(100%-2rem),transparent)]',
 		className
 	)}
 	role="log"

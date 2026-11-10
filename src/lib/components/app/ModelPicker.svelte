@@ -49,5 +49,6 @@
 	{disabled}
 	{placeholder}
 	{align}
+	standalone
 	class={className}
 />

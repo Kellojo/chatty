@@ -5,8 +5,7 @@
 	import ConversationMenu from './ConversationMenu.svelte';
 	import HandoffDialog from './HandoffDialog.svelte';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
-	import SquarePenIcon from '@lucide/svelte/icons/square-pen';
-	import { resolve } from '$app/paths';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { getSidebarState } from './sidebar-state.svelte.js';
@@ -67,6 +66,8 @@
 	let saving = $state(false);
 
 	const sidebar = getSidebarState();
+	// Phones put the picker under the title (left), wider screens on the right.
+	const isPhone = new MediaQuery('(max-width: 639px)');
 	// Room for the floating sidebar button, only as much as it overlaps the centred
 	// column: 2.5rem (+ the column's 1rem padding) when the column touches the left
 	// edge, shrinking to nothing once the margin beside the column clears the button.
@@ -137,30 +138,40 @@
 				browserActivity={codingBrowserActivity}
 			/>
 		{:else}
-			<!-- Main info first: what this chat is, then the controls. -->
-			<h1
-				class="min-w-0 truncate text-[15px] font-semibold sm:font-medium md:text-base"
-				title={displayTitle}
+			<!-- Main info first: what this chat is, then the controls. On phones the model
+			     sits under the title as a subtitle, so the title gets the row's full width;
+			     from sm up the wrapper dissolves and the picker joins the controls on the right. -->
+			<div
+				class="flex min-w-0 flex-1 flex-col justify-center max-sm:relative max-sm:self-stretch max-sm:transition-opacity max-sm:active:opacity-60 sm:contents max-sm:pointer-fine:hover:opacity-80"
 			>
-				{displayTitle}
-			</h1>
-			{#if personaLabel}
-				<Badge variant="secondary" class="shrink-0 max-sm:hidden" title="Persona">
-					{personaLabel}
-				</Badge>
-			{/if}
-			<div class="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
-				<!-- Quiet controls so the title leads; on phones the picker shows just the model name,
-				     keeping the generic icon for mappings so "auto" still reads as a model. -->
+				<div class="flex min-w-0 items-center gap-1.5">
+					<h1
+						class="min-w-0 truncate text-[15px] leading-5 font-semibold sm:font-medium md:text-base"
+						title={displayTitle}
+					>
+						{displayTitle}
+					</h1>
+					{#if personaLabel}
+						<Badge variant="secondary" class="shrink-0 max-sm:hidden" title="Persona">
+							{personaLabel}
+						</Badge>
+					{/if}
+				</div>
+				<!-- Quiet so the title leads. On phones: a small "model ⌄" line, pulled left by
+				     its padding so the logo lines up with the title. Its invisible ::after fills
+				     the whole title block (the positioned wrapper), so tapping the title opens it too;
+				     the block dims as feedback and takes the focus ring. -->
 				<ModelPicker
 					{groups}
 					{mappings}
 					value={currentModelValue}
 					onselect={selectModel}
 					disabled={saving}
-					align="end"
-					class="w-auto max-w-32 shrink-0 bg-transparent pr-2 text-muted-foreground hover:bg-accent hover:text-foreground data-[size=default]:h-8 max-sm:max-w-20 max-sm:pr-1 sm:max-w-44 lg:max-w-56 pointer-coarse:data-[size=default]:h-10 max-sm:[&_[data-model-icon=brand]]:hidden max-sm:[&_[data-model-source]]:hidden max-sm:[&>svg:last-child]:hidden"
+					align={isPhone.current ? 'start' : 'end'}
+					class="w-auto shrink-0 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground max-sm:static max-sm:-mx-1.5 max-sm:mt-px max-sm:max-w-full max-sm:gap-0.5 max-sm:self-start max-sm:border-0 max-sm:px-1.5 max-sm:py-0 max-sm:text-xs max-sm:leading-4 max-sm:font-medium max-sm:shadow-none max-sm:after:absolute max-sm:after:-inset-x-1.5 max-sm:after:inset-y-1 max-sm:after:rounded-lg max-sm:after:content-[''] max-sm:hover:bg-transparent max-sm:focus-visible:ring-0 max-sm:focus-visible:after:ring-[3px] max-sm:focus-visible:after:ring-ring/50 max-sm:data-[size=default]:h-auto sm:ml-auto sm:max-w-44 sm:pr-2 sm:data-[size=default]:h-8 lg:max-w-56 sm:pointer-coarse:data-[size=default]:h-10 max-sm:[&_[data-model-icon=brand]>*]:size-3 max-sm:[&_[data-model-icon=generic]]:hidden max-sm:[&_[data-model-source]]:hidden max-sm:[&>svg:last-child]:size-3"
 				/>
+			</div>
+			<div class="flex shrink-0 items-center gap-0.5 sm:gap-1">
 				{#if canHandoff}
 					<Button
 						variant="ghost"
@@ -178,17 +189,6 @@
 				{/if}
 			</div>
 		{/if}
-		<!-- Phones have no sidebar on screen, so starting over shouldn't take a trip through the drawer. -->
-		<Button
-			variant="ghost"
-			size="icon"
-			href={resolve('/')}
-			class="shrink-0 text-muted-foreground hover:text-foreground md:hidden"
-			aria-label="New chat"
-			title="New chat"
-		>
-			<SquarePenIcon />
-		</Button>
 		<!-- Pulled out by the icon's inset so the dots line up with the messages' right edge. -->
 		<div class="-mr-2 flex shrink-0">
 			<ConversationMenu
