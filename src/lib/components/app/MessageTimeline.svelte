@@ -2,18 +2,18 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { SvelteMap } from 'svelte/reactivity';
-	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { formatDateTime, formatMessageTime } from '$lib/datetime.js';
-	import { formatCost, formatLatency, formatToken } from '$lib/formats.js';
 	import { cn } from '$lib/utils.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import { Markdown } from '$lib/components/ai/markdown/index.js';
 	import { Message, MessageActions, MessageContent } from '$lib/components/ai/message/index.js';
 	import ActivityGroup from './ActivityGroup.svelte';
 	import HtmlRenderFrame from './HtmlRenderFrame.svelte';
+	import GenerationInfoDialog from './GenerationInfoDialog.svelte';
 	import { readHtmlRender } from '$lib/html-render.js';
 	import { groupParts, hasVisibleContent } from './timeline.js';
 	import { messageText } from '$lib/chat-history.js';
+	import { readableErrorText } from '$lib/error-text.js';
 	import { shortcutLabel } from '$lib/state/shortcuts.js';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -28,12 +28,7 @@
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
-	import type {
-		MessageUsage,
-		PromptCharBreakdown,
-		UIMessage,
-		UIMessageMetadata
-	} from '$lib/types.js';
+	import type { MessageUsage, UIMessage, UIMessageMetadata } from '$lib/types.js';
 
 	let {
 		messages,
@@ -115,37 +110,6 @@
 	function messageUsage(message: UIMessage): MessageUsage | null {
 		const meta = message.metadata as { usage?: MessageUsage } | undefined;
 		return meta?.usage ?? null;
-	}
-
-	function tokensPerSecond(usage: MessageUsage): string {
-		if (usage.outputTokens == null || usage.latencyMs == null || usage.latencyMs <= 0) return '—';
-		return (usage.outputTokens / (usage.latencyMs / 1000)).toFixed(1);
-	}
-
-	interface PromptShare {
-		label: string;
-		color: string;
-		pct: number;
-	}
-
-	// Relative share of each prompt contributor, as a percentage of the
-	// accounted-for prompt characters (rough, character-based estimate).
-	function promptShares(usage: MessageUsage): PromptShare[] | null {
-		const chars = usage.promptChars as PromptCharBreakdown | undefined;
-		if (!chars) return null;
-		const total = chars.system + chars.skills + chars.tools + chars.messages;
-		if (total <= 0) return null;
-		const share = (label: string, color: string, value: number): PromptShare => ({
-			label,
-			color,
-			pct: Math.round((value / total) * 100)
-		});
-		return [
-			share('Messages', 'bg-chart-1', chars.messages),
-			share('Tools', 'bg-chart-2', chars.tools),
-			share('Skills', 'bg-chart-3', chars.skills),
-			share('System', 'bg-chart-4', chars.system)
-		].filter((s) => s.pct > 0);
 	}
 
 	function messageStatus(message: UIMessage): UIMessageMetadata {
@@ -276,7 +240,9 @@
 						role="alert"
 					>
 						<TriangleAlertIcon class="mt-0.5 size-4 shrink-0" />
-						<span class="min-w-0 break-words">{status.error || 'The response failed.'}</span>
+						<span class="min-w-0 break-words"
+							>{status.error ? readableErrorText(status.error) : 'The response failed.'}</span
+						>
 					</div>
 				{:else if status.status === 'partial' && !messageActive}
 					<p class="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -407,70 +373,7 @@
 		{@const usageMessage = messages.find((m) => m.id === usageMessageId)}
 		{@const usage = usageMessage ? messageUsage(usageMessage) : null}
 		{#if usage}
-			<Dialog.Root open={usageMessageId !== null} onOpenChange={handleUsageOpenChange}>
-				<Dialog.Content class="sm:max-w-xs">
-					<Dialog.Header>
-						<Dialog.Title class="truncate font-mono text-sm" title={usage.modelId}>
-							{usage.modelId}
-						</Dialog.Title>
-						<Dialog.Description class="text-xs">Generation info</Dialog.Description>
-					</Dialog.Header>
-					{#if promptShares(usage)}
-						{@const shares = promptShares(usage)!}
-						<div class="-mt-3 rounded-lg border border-border/60 bg-muted/40 px-3 py-2">
-							<div class="mb-1.5 text-[10px] tracking-wide text-muted-foreground uppercase">
-								Input share (approx.)
-							</div>
-							<div class="flex h-1.5 w-full overflow-hidden rounded-full">
-								{#each shares as s (s.label)}
-									<div class={s.color} style:width="{s.pct}%"></div>
-								{/each}
-							</div>
-							<div class="mt-1.5">
-								{#each shares as s (s.label)}
-									<div class="flex items-center justify-between py-0.5">
-										<span class="flex items-center gap-1.5 text-muted-foreground">
-											<span class="size-2 rounded-[2px] {s.color}"></span>
-											{s.label}
-										</span>
-										<span class="text-foreground tabular-nums">{s.pct}%</span>
-									</div>
-								{/each}
-							</div>
-						</div>
-					{/if}
-					<dl class="rounded-lg border border-border/60 px-3 py-2">
-						<div class="flex items-baseline justify-between py-0.5">
-							<dt class="text-muted-foreground">Cost</dt>
-							<dd class="font-medium text-foreground tabular-nums">{formatCost(usage.costUsd)}</dd>
-						</div>
-					</dl>
-					<dl class="rounded-lg border border-border/60 px-3 py-2">
-						<div class="flex items-baseline justify-between py-0.5">
-							<dt class="text-muted-foreground">Input</dt>
-							<dd class="text-foreground tabular-nums">{formatToken(usage.inputTokens)}</dd>
-						</div>
-						<div class="flex items-baseline justify-between py-0.5">
-							<dt class="text-muted-foreground">Output</dt>
-							<dd class="text-foreground tabular-nums">{formatToken(usage.outputTokens)}</dd>
-						</div>
-						<div class="flex items-baseline justify-between py-0.5">
-							<dt class="text-muted-foreground">Total</dt>
-							<dd class="text-foreground tabular-nums">{formatToken(usage.totalTokens)}</dd>
-						</div>
-					</dl>
-					<dl class="rounded-lg border border-border/60 px-3 py-2">
-						<div class="flex items-baseline justify-between py-0.5">
-							<dt class="text-muted-foreground">Latency</dt>
-							<dd class="text-foreground tabular-nums">{formatLatency(usage.latencyMs)}</dd>
-						</div>
-						<div class="flex items-baseline justify-between py-0.5">
-							<dt class="text-muted-foreground">Throughput</dt>
-							<dd class="text-foreground tabular-nums">{tokensPerSecond(usage)} tok/s</dd>
-						</div>
-					</dl>
-				</Dialog.Content>
-			</Dialog.Root>
+			<GenerationInfoDialog {usage} open onOpenChange={handleUsageOpenChange} />
 		{/if}
 	{/if}
 </div>

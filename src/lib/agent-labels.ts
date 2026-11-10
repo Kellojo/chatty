@@ -1,4 +1,5 @@
 import type { AgentEventName, AgentRunTrigger, AgentTriggerType } from './types.js';
+import { readableErrorText } from './error-text.js';
 
 /** How an agent gets started, as shown in lists and the editor. */
 export const TRIGGER_LABELS: Record<AgentTriggerType, string> = {
@@ -66,7 +67,7 @@ export function isStoppedRun(run: { status: string; error: string | null }): boo
 
 export function formatRunError(error: string | null): string | null {
 	if (!error || error === '[object Object]') return null;
-	return error;
+	return readableErrorText(error);
 }
 
 const SLUG_RE = /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/;
