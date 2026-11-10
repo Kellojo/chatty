@@ -7,7 +7,7 @@ import {
 	getAgentRun,
 	getAgentRunByConversation,
 	hasRunningAgentRun,
-	lastFinishedAgentRunAt,
+	lastSuccessfulAgentRunStartedAt,
 	listAgentRuns,
 	listRunningAgentIds,
 	toPublic
@@ -41,18 +41,21 @@ describe('agent-runs repo', () => {
 		expect(pub.status).toBe('success');
 	});
 
-	it('hasRunningAgentRun and lastFinishedAgentRunAt are per agent and user', () => {
-		expect(lastFinishedAgentRunAt(db, agentId, 'u1')).toBeNull();
+	it('hasRunningAgentRun and lastSuccessfulAgentRunStartedAt are per agent and user', () => {
+		expect(lastSuccessfulAgentRunStartedAt(db, agentId, 'u1')).toBeNull();
 		const first = createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
 		expect(hasRunningAgentRun(db, agentId, 'u1')).toBe(true);
 		expect(hasRunningAgentRun(db, agentId, 'u2')).toBe(false);
-		db.prepare("UPDATE agent_runs SET status = 'success', ended_at = 123 WHERE id = ?").run(
-			first.id
-		);
+		db.prepare(
+			"UPDATE agent_runs SET status = 'success', started_at = 100, ended_at = 123 WHERE id = ?"
+		).run(first.id);
 		expect(hasRunningAgentRun(db, agentId, 'u1')).toBe(false);
+		// Running and failed runs don't move the window.
 		createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
-		expect(lastFinishedAgentRunAt(db, agentId, 'u1')).toBe(123);
-		expect(lastFinishedAgentRunAt(db, agentId, 'u2')).toBeNull();
+		const failed = createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
+		finishAgentRun(db, failed.id, 'failed', 'boom');
+		expect(lastSuccessfulAgentRunStartedAt(db, agentId, 'u1')).toBe(100);
+		expect(lastSuccessfulAgentRunStartedAt(db, agentId, 'u2')).toBeNull();
 	});
 
 	it('finishAgentRun persists errors', () => {

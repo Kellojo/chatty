@@ -15,7 +15,7 @@ import {
 	createAgentRun,
 	finishAgentRun,
 	getAgentRun,
-	lastFinishedAgentRunAt,
+	lastSuccessfulAgentRunStartedAt,
 	type AgentRunRow
 } from '../db/repo/agent-runs.js';
 import { createConversation } from '../db/repo/conversations.js';
@@ -36,6 +36,15 @@ import {
 	withToolSearch
 } from '../tools/toolSearch.js';
 import { ensureAgentWorkspace } from '../workspaces.js';
+import { estimateTokens } from '../chat/compact.js';
+import { estimateToolChars } from '../llm/promptBreakdown.js';
+import {
+	compactStepMessages,
+	compactionThreshold,
+	createRunSummarizer,
+	estimateValueTokens
+} from './stepCompaction.js';
+import { extractionWindowNote, MEMORY_EXTRACTION_AGENT } from './builtin.js';
 
 const log = createLogger('agents');
 
@@ -206,15 +215,57 @@ export async function startAgentRun(
 				native: supportsNativeToolSearch(getProvider(db, target.providerId)?.type, target.modelId),
 				loaded: new Set()
 			});
+			const threshold = compactionThreshold(priceRow?.context_length);
+			const overheadTokens =
+				estimateTokens(system) + Math.ceil(estimateToolChars(toolSearch.tools) / 4);
+			const summarize = createRunSummarizer({
+				db,
+				userId: input.userId,
+				conversationId: conversation.id,
+				runId: run.id,
+				fallback: target,
+				abortSignal: controller.signal
+			});
 			const result = streamText({
 				model,
 				system,
 				messages: modelMessages,
 				tools: toolSearch.tools,
 				experimental_repairToolCall: toolSearch.repairToolCall,
-				prepareStep: () => {
+				prepareStep: async ({ messages, steps }) => {
 					const activeTools = toolSearch.activeTools();
-					return activeTools ? { activeTools } : undefined;
+					let compacted: typeof messages | undefined;
+					if (threshold !== null) {
+						// The last step's measured input plus what it added is more accurate
+						// than a character estimate (it includes system, tools and images).
+						const last = steps.at(-1);
+						const measured = last?.usage.inputTokens
+							? last.usage.inputTokens + estimateValueTokens(last.response.messages)
+							: 0;
+						const promptTokens = measured || overheadTokens + estimateValueTokens(messages);
+						const c = await compactStepMessages({
+							messages,
+							promptTokens,
+							thresholdTokens: threshold,
+							summarize
+						});
+						if (c.stage !== 'none') {
+							compacted = c.messages;
+							log.info('Agent run context compacted', {
+								runId: run.id,
+								stage: c.stage,
+								beforeTokens: c.beforeTokens,
+								afterTokens: c.afterTokens,
+								elided: c.elided,
+								truncated: c.truncated,
+								foldedSteps: c.foldedSteps
+							});
+						}
+					}
+					return {
+						...(activeTools ? { activeTools } : {}),
+						...(compacted ? { messages: compacted } : {})
+					};
 				},
 				stopWhen: stepCountIs(agent.max_steps ?? config.AGENT_MAX_STEPS),
 				maxRetries: 2,
@@ -385,12 +436,16 @@ async function prepareRun(
 	const workspaceDir = ensureAgentWorkspace(agent.id, run.id);
 
 	const triggerConfig = JSON.parse(agent.trigger_config) as AgentTriggerConfig;
-	const instructions =
+	const baseInstructions =
 		input.instructions ??
 		triggerConfig.instructions ??
 		(agent.user_id === null
-			? `Review conversations updated since ${new Date(lastFinishedAgentRunAt(db, agent.id, input.userId) ?? 0).toISOString()} and distill durable long-term memory from them. Use search_chats with the "since" parameter to list them, read_chat to review their contents, list_concepts/search_memory to check what already exists, then create_concept/update_concept to persist.`
+			? `Review recent conversations and distill durable long-term memory from them. Use search_chats with the "since" parameter to list them, read_chat to review their contents, list_concepts/search_memory to check what already exists, then create_concept/update_concept to persist.`
 			: `Execute your task now. Trigger: ${input.trigger}.`);
+	const instructions =
+		agent.user_id === null && agent.name === MEMORY_EXTRACTION_AGENT
+			? `${baseInstructions}\n\n${extractionWindowNote(lastSuccessfulAgentRunStartedAt(db, agent.id, input.userId))}`
+			: baseInstructions;
 	const uiUserMessage: UIMessage = {
 		id: randomUUID(),
 		role: 'user',

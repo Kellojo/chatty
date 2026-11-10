@@ -212,6 +212,9 @@ function importThreads(db: Db, env: CodingEnvironmentRow, shell: unknown): void 
 		if (!conversationId) continue; // linked meanwhile
 		imported++;
 		publishServerEvent(env.user_id, { type: 'conversation.updated', conversationId });
+		// A new thread, like a task started here: event agents (memory extraction
+		// among them) count it. Manual history imports (./history.ts) don't.
+		publishServerEvent(env.user_id, { type: 'chat.created', conversationId });
 		void ensureFollower({
 			conversationId,
 			userId: env.user_id,

@@ -73,10 +73,20 @@ export function hasRunningAgentRun(db: Db, agentId: string, userId: string): boo
 	);
 }
 
-/** When the user's latest finished run of the agent ended, or null if it never ran for them. */
-export function lastFinishedAgentRunAt(db: Db, agentId: string, userId: string): number | null {
+/**
+ * Start time of the agent's latest successful run for this user. The start (not
+ * the end) is used so activity that happened while that run was going is still
+ * covered by the next one.
+ */
+export function lastSuccessfulAgentRunStartedAt(
+	db: Db,
+	agentId: string,
+	userId: string
+): number | null {
 	const row = db
-		.prepare('SELECT MAX(ended_at) AS at FROM agent_runs WHERE agent_id = ? AND user_id = ?')
+		.prepare(
+			"SELECT MAX(started_at) AS at FROM agent_runs WHERE agent_id = ? AND user_id = ? AND status = 'success'"
+		)
 		.get(agentId, userId) as { at: number | null };
 	return row.at;
 }

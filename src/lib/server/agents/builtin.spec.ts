@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { openDatabase, type Db } from '../db/index.js';
-import { seedBuiltinAgent, seedMemoryCleanupAgent } from './builtin.js';
+import { extractionWindowNote, seedBuiltinAgent, seedMemoryCleanupAgent } from './builtin.js';
 
 let db: Db;
 
@@ -59,5 +59,16 @@ describe('builtin agent seeds', () => {
 		};
 		expect(triggerConfig.event).toBe('memory.changed');
 		expect(triggerConfig.every).toBe(5);
+	});
+});
+
+describe('extractionWindowNote', () => {
+	it('gives the exact ISO time of the last successful extraction', () => {
+		const note = extractionWindowNote(Date.UTC(2026, 10, 10, 8, 30));
+		expect(note).toContain('since = "2026-11-10T08:30:00.000Z"');
+	});
+
+	it('asks for a full review when there was no successful extraction yet', () => {
+		expect(extractionWindowNote(null)).toContain('since = 0');
 	});
 });

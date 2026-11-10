@@ -1,12 +1,26 @@
 import type { Db } from '../db/index.js';
 import { createAgent, updateAgent } from '../db/repo/agents.js';
 
+export const MEMORY_EXTRACTION_AGENT = 'memory-extraction';
+
 const EXTRACTION_TRIGGER_CONFIG = {
 	event: 'chat.created',
 	every: 5,
 	instructions:
 		'New chats have been created since the last extraction. Use search_chats with the "since" parameter to list recent conversations, read_chat to review their contents, then distill durable long-term memory from them.'
 } as const;
+
+/**
+ * Tells an extraction run exactly which window to cover: everything updated
+ * since the previous successful run started (`null` = never ran successfully).
+ */
+export function extractionWindowNote(lastSuccessAt: number | null): string {
+	if (lastSuccessAt === null) {
+		return 'There is no previous successful extraction for this user: review all of their conversations (use search_chats with since = 0).';
+	}
+	const iso = new Date(lastSuccessAt).toISOString();
+	return `The last successful extraction for this user started at ${iso}. Pass exactly since = "${iso}" to search_chats, and only extract from conversations updated at or after that time — not from memory timestamps.`;
+}
 
 export function seedBuiltinAgent(db: Db): void {
 	const existing = db

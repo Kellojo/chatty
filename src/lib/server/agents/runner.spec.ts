@@ -123,7 +123,7 @@ describe('startAgentRun', () => {
 		closeDb();
 	});
 
-	it("reviews a built-in agent's window from the user's own last run", async () => {
+	it("gives memory extraction the exact start of the user's last successful run", async () => {
 		behavior = 'ok';
 		const db = getDb();
 		seed(db);
@@ -131,26 +131,30 @@ describe('startAgentRun', () => {
 			`INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u2', 'B', 'b@c.d', 0, 0, 0, 'user')`
 		).run();
 		const agent = createAgent(db, null, {
-			name: 'memory',
+			name: 'memory-extraction',
 			systemPrompt: 'You distill.',
 			providerId: 'p1',
 			modelId: 'm1',
 			triggerType: 'schedule',
 			triggerConfig: { cron: '0 3 * * *' }
 		});
-		const u1Ended = Date.parse('2026-01-02T03:04:05.000Z');
+		const u1Started = Date.parse('2026-01-02T03:04:05.000Z');
 		const prior = createAgentRun(db, { agentId: agent.id, userId: 'u1', trigger: 'schedule' });
-		db.prepare("UPDATE agent_runs SET status = 'success', ended_at = ? WHERE id = ?").run(
-			u1Ended,
-			prior.id
+		db.prepare(
+			"UPDATE agent_runs SET status = 'success', started_at = ?, ended_at = ? WHERE id = ?"
+		).run(u1Started, u1Started + 60_000, prior.id);
+		// A later failed run, and another user's run, don't move u1's window.
+		const failed = createAgentRun(db, { agentId: agent.id, userId: 'u1', trigger: 'schedule' });
+		db.prepare("UPDATE agent_runs SET status = 'failed', started_at = ? WHERE id = ?").run(
+			Date.parse('2026-03-01T00:00:00.000Z'),
+			failed.id
 		);
-		// Another user's later run moves the agent's last_run_at, not u1's window.
 		setAgentRunTimes(db, agent.id, { lastRunAt: Date.parse('2026-06-01T00:00:00.000Z') });
 
 		const { done } = await startAgentRun({ agentId: agent.id, trigger: 'schedule', userId: 'u1' });
 		const finished = await done;
 		const [userMessage] = listMessages(db, finished.conversation_id!);
-		expect(userMessage.parts).toContain('updated since 2026-01-02T03:04:05.000Z');
+		expect(userMessage.parts).toContain('since = \\"2026-01-02T03:04:05.000Z\\"');
 		closeDb();
 	});
 
