@@ -611,10 +611,17 @@ export async function handleChatRequest(
 			userId,
 			boundSkillNames,
 			includeSkillsIndex: 'load_skill' in tools,
-			extraWarning: manualSkillWarning
+			extraWarning: manualSkillWarning,
+			toolNames: Object.keys(tools)
 		});
 		toolsSection = deferredToolsPrompt(catalog);
-		system = [promptParts.base, promptParts.skills, toolsSection, promptParts.system]
+		system = [
+			promptParts.base,
+			promptParts.widgets,
+			promptParts.skills,
+			toolsSection,
+			promptParts.system
+		]
 			.filter(Boolean)
 			.join('\n\n');
 		history = historyFromDb(db, conversation.id);
@@ -804,7 +811,8 @@ export async function handleChatRequest(
 						latencyMs: Date.now() - startedAt,
 						costUsd: computeUsageCostUsd(priceRow, totalTokensUsed),
 						promptChars: {
-							system: promptParts.base.length + promptParts.system.length,
+							system:
+								promptParts.base.length + promptParts.widgets.length + promptParts.system.length,
 							skills: promptParts.skills.length,
 							tools: estimateToolChars(toolSearch.promptTools()) + toolsSection.length,
 							messages: estimateMessagesChars(history)

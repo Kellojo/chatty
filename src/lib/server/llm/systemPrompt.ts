@@ -1,30 +1,9 @@
 import type { ConversationRow } from '../db/repo/conversations.js';
 import { resolveSkill, skillsIndexPrompt } from '../skills/scanner.js';
+import { widgetsPrompt } from './widgets.js';
 
-export const BASE_PROMPT = `You are a helpful assistant. Answer concisely and use markdown formatting.
-
-To render an interactive chart in chat, output a \`\`\`chart fenced code block containing only JSON of this shape:
-{"type":"bar"|"line"|"area"|"pie","title":"optional","labels":["Jan","Feb"],"datasets":[{"label":"optional","data":[1,2]}]}
-Use bar/line/area for one or more datasets over shared labels; use pie for a single dataset where each label is a slice. Do not add any text inside the fence besides the JSON.
-
-You can render interactive maps directly in the chat. Whenever your answer lists specific local places (restaurants, hotels, shops, landmarks, ...), you must end it with a \`\`\`map fenced code block containing only JSON of this shape:
-{"title":"optional","center":[lat,lng],"zoom":13,"markers":[{"name":"required","lat":38.7223,"lng":-9.1393,"address":"optional","phone":"optional","website":"optional","rating":4.5,"notes":"optional"}]}
-Get coordinates from an available place-search tool (e.g. Brave place search) when you used one; otherwise use well-known coordinates of established places. Never invent coordinates — omit a place rather than guess. Up to ~10 markers, best matches first. Do not add any text inside the fence besides the JSON.
-Example answer to "Good pizza spots in Lisbon?":
-
-A few well-known options:
-
-- **Cervejaria Ramiro** — a historic tasca with local favourites.
-
-\`\`\`map
-{"title":"Pizza in Lisbon","markers":[{"name":"Cervejaria Ramiro","lat":38.7151,"lng":-9.1341,"address":"Rua da Rosa 64","rating":4.4}]}
-\`\`\`
-
-When you write a file to the workspace that the user should download or open, emit a \`\`\`file fenced code block with {"name":"<display name>","path":"<relative path in workspace>"}. Only emit this for files you consider noteworthy — skip intermediate or temporary files.
-
-When you show planned meals (e.g. from a meal-planner tool such as Norish's planned-recipe tools), render them with a \`\`\`mealplan fenced code block containing only JSON: {"title":"optional","from":"YYYY-MM-DD","to":"YYYY-MM-DD","items":[...]}. Pass planned items through verbatim when a tool returned them ({date, slot, recipeName, servings, calories, …}); otherwise write {"date":"YYYY-MM-DD","slot":"Breakfast"|"Lunch"|"Dinner"|"Snack","name":"…","servings":2,"calories":450,"minutes":30}. Set from/to to the range you were asked about so empty days show.
-
-When your answer lists concerts, festivals, games, shows or other dated events, end it with a \`\`\`events fenced code block containing only JSON: {"title":"optional","events":[{"title":"required","start":"2026-11-14T20:00","end":"optional","venue":"…","city":"…","lineup":["support act"],"price":"from €49","status":"soldout"|"few"|"cancelled"|"postponed"|"free","doors":"19:00","category":"Festival","notes":"Moved to Feb 12, tickets stay valid","url":"https://tickets…"}]}. Write start/end as the local time at the venue (no offset); use a bare date when the time is unknown or for multi-day events, and set "allDay":true only for genuinely all-day events. Never invent dates, prices or ticket URLs — omit unknown fields.`;
+export const BASE_PROMPT =
+	'You are a helpful assistant. Answer concisely and use markdown formatting.';
 
 export interface SystemPromptOptions {
 	globalInstructions?: string;
@@ -35,6 +14,8 @@ export interface SystemPromptOptions {
 	includeSkillsIndex?: boolean;
 	// Appended as a final warning note (e.g. a requested skill could not be loaded).
 	extraWarning?: string | null;
+	// Every tool of the conversation (deferred ones too): decides which widgets are explained.
+	toolNames?: Iterable<string>;
 }
 
 /**
@@ -44,6 +25,8 @@ export interface SystemPromptOptions {
 export interface SystemPromptParts {
 	/** Conversation prompt (or BASE_PROMPT). */
 	base: string;
+	/** The chat widgets the model can write. Kept with a custom prompt too: the chat still renders them. */
+	widgets: string;
 	/** Bound skills + the available-skills index. */
 	skills: string;
 	/** Global instructions + per-turn note. */
@@ -79,7 +62,12 @@ export function buildSystemPromptParts(
 	const warning = opts.extraWarning ? `Note for this turn: ${opts.extraWarning}` : '';
 	const system = [extra, warning].filter(Boolean).join('\n\n');
 
-	return { base: conversation.system_prompt ?? BASE_PROMPT, skills, system };
+	return {
+		base: conversation.system_prompt ?? BASE_PROMPT,
+		widgets: widgetsPrompt(opts.toolNames),
+		skills,
+		system
+	};
 }
 
 export function buildSystemPrompt(
@@ -87,7 +75,7 @@ export function buildSystemPrompt(
 	globalInstructionsOrOpts: string | SystemPromptOptions = ''
 ): string {
 	const parts = buildSystemPromptParts(conversation, globalInstructionsOrOpts);
-	const sections = [parts.base];
+	const sections = [parts.base, parts.widgets];
 	if (parts.skills) sections.push(parts.skills);
 	if (parts.system) sections.push(parts.system);
 	return sections.join('\n\n');

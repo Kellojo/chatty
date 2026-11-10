@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ConversationRow } from '../db/repo/conversations.js';
 import { BASE_PROMPT, buildSystemPrompt } from './systemPrompt.js';
+import { widgetsPrompt } from './widgets.js';
 
-const basePrompt = BASE_PROMPT;
+// Without tool names only the always-on widgets are listed.
+const widgets = widgetsPrompt();
+const basePrompt = `${BASE_PROMPT}
+
+${widgets}`;
 
 function makeConv(overrides: Partial<ConversationRow> = {}): ConversationRow {
 	return {
@@ -27,14 +32,16 @@ function makeConv(overrides: Partial<ConversationRow> = {}): ConversationRow {
 }
 
 describe('buildSystemPrompt', () => {
-	it('returns BASE_PROMPT when conversation has no system prompt and no global instructions', () => {
+	it('returns BASE_PROMPT and the widgets when conversation has no system prompt and no global instructions', () => {
 		const conv = makeConv();
 		expect(buildSystemPrompt(conv)).toBe(basePrompt);
 	});
 
-	it('returns only the conversation system prompt when set (no global)', () => {
+	it('replaces BASE_PROMPT with the conversation system prompt but keeps the widgets', () => {
 		const conv = makeConv({ system_prompt: 'You are a pirate.' });
-		expect(buildSystemPrompt(conv)).toBe('You are a pirate.');
+		expect(buildSystemPrompt(conv)).toBe(`You are a pirate.
+
+${widgets}`);
 	});
 
 	it('appends global instructions after BASE_PROMPT', () => {
@@ -46,7 +53,7 @@ describe('buildSystemPrompt', () => {
 	it('appends global instructions after conversation prompt', () => {
 		const conv = makeConv({ system_prompt: 'You are a pirate.' });
 		const result = buildSystemPrompt(conv, 'always answer in German');
-		expect(result).toBe('You are a pirate.\n\nalways answer in German');
+		expect(result).toBe(`You are a pirate.\n\n${widgets}\n\nalways answer in German`);
 	});
 
 	it('does not append whitespace-only global instructions', () => {
