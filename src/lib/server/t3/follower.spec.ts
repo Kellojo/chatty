@@ -805,3 +805,53 @@ describe('CodingFollower agent notices', () => {
 		expect(getMessage(db, 'n2')).toBeUndefined();
 	});
 });
+
+describe('CodingFollower mirrored message order', () => {
+	const snapshot = (sequence: number, text: string | null) => ({
+		kind: 'snapshot',
+		snapshotSequence: sequence,
+		projection: {
+			thread: { id: 't1' },
+			runs: [
+				{
+					id: 'r1',
+					ordinal: 1,
+					status: 'running',
+					userMessageId: 'u1m',
+					requestedAt: '2026-11-07T10:00:00.000Z',
+					startedAt: '2026-11-07T10:00:01.000Z'
+				}
+			],
+			messages: text === null ? [] : [{ id: 'u1m', role: 'user', createdBy: 'user', text }]
+		}
+	});
+
+	it('puts the user message before the reply when following a thread that is already running', async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		const db = getDb();
+		failConnect = false;
+		await follower.follow();
+		lastConnection!.streams[0].onValue(snapshot(1, 'Fix the bug'));
+		await seconds(1);
+
+		expect(getMessage(db, 'u1m')).toMatchObject({ role: 'user', parent_id: null });
+		expect(getMessage(db, 'u1m:reply')).toMatchObject({ role: 'assistant', parent_id: 'u1m' });
+	});
+
+	it('slots a user message whose text arrives late in before its reply', async () => {
+		const { activeLeafId, getMessage } = await import('../db/repo/messages.js');
+		const db = getDb();
+		failConnect = false;
+		await follower.follow();
+		lastConnection!.streams[0].onValue(snapshot(1, null));
+		await seconds(1);
+		expect(getMessage(db, 'u1m:reply')).toMatchObject({ parent_id: null });
+
+		lastConnection!.streams[0].onValue(snapshot(2, 'Fix the bug'));
+		await seconds(1);
+
+		expect(getMessage(db, 'u1m')).toMatchObject({ role: 'user', parent_id: null });
+		expect(getMessage(db, 'u1m:reply')).toMatchObject({ parent_id: 'u1m' });
+		expect(activeLeafId(db, conversationId)).toBe('u1m:reply');
+	});
+});

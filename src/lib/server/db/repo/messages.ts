@@ -412,24 +412,57 @@ export function createMessage(db: Db, input: CreateMessageInput): MessageRow {
 			input.parentId !== undefined
 				? input.parentId
 				: (activeLeafId(db, input.conversationId) ?? null);
-		db.prepare(
-			`INSERT INTO messages (id, conversation_id, role, parts, content_text, status, error, usage_json, created_at, parent_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-		).run(
-			id,
-			input.conversationId,
-			input.role,
-			JSON.stringify(input.parts),
-			extractText(input.parts),
-			input.status ?? 'complete',
-			input.error ?? null,
-			input.usage ? JSON.stringify(input.usage) : null,
-			input.createdAt ?? Date.now(),
-			parentId
-		);
+		insertMessageRow(db, id, input, parentId);
 		setActiveLeaf(db, input.conversationId, id);
 		return getMessage(db, id)!;
 	})();
+}
+
+/**
+ * Inserts a message right before `childId` on its path: the new message takes
+ * the child's place under its parent and the child moves under it. The active
+ * branch stays as it is. Undefined when the child isn't in the conversation.
+ */
+export function insertMessageBefore(
+	db: Db,
+	childId: string,
+	input: Omit<CreateMessageInput, 'parentId'>
+): MessageRow | undefined {
+	const id = input.id ?? randomUUID();
+	return db.transaction(() => {
+		const child = getMessage(db, childId);
+		if (!child || child.conversation_id !== input.conversationId) return undefined;
+		insertMessageRow(db, id, input, child.parent_id);
+		db.prepare('UPDATE messages SET parent_id = ? WHERE id = ? AND conversation_id = ?').run(
+			id,
+			childId,
+			input.conversationId
+		);
+		return getMessage(db, id)!;
+	})();
+}
+
+function insertMessageRow(
+	db: Db,
+	id: string,
+	input: Omit<CreateMessageInput, 'parentId'>,
+	parentId: string | null
+): void {
+	db.prepare(
+		`INSERT INTO messages (id, conversation_id, role, parts, content_text, status, error, usage_json, created_at, parent_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	).run(
+		id,
+		input.conversationId,
+		input.role,
+		JSON.stringify(input.parts),
+		extractText(input.parts),
+		input.status ?? 'complete',
+		input.error ?? null,
+		input.usage ? JSON.stringify(input.usage) : null,
+		input.createdAt ?? Date.now(),
+		parentId
+	);
 }
 
 export function updateMessage(

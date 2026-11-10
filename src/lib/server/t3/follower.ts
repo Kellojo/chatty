@@ -29,7 +29,12 @@ import {
 } from '../db/repo/coding-conversations.js';
 import type { CodingEnvironmentRow } from '../db/repo/coding-environments.js';
 import { getConversation, touchConversation } from '../db/repo/conversations.js';
-import { createMessage, getMessage, updateMessage } from '../db/repo/messages.js';
+import {
+	createMessage,
+	getMessage,
+	insertMessageBefore,
+	updateMessage
+} from '../db/repo/messages.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { t3HttpGet, T3ClientError, type T3Connection, type T3Stream } from './client.js';
@@ -800,6 +805,41 @@ export class CodingFollower {
 		this.renderTimer.unref?.();
 	}
 
+	/**
+	 * Mirrors the user message of a run that was sent from T3 itself, but not
+	 * the notices the agent's runtime sends itself (they'd read as if the user
+	 * wrote them). When the run's reply is already stored (its text arrived
+	 * late), the message goes in right before the reply rather than after it.
+	 */
+	private mirrorUserMessage(run: Rec, now: number): 'created' | 'removed' | null {
+		const db = this.db;
+		const userMessageId = typeof run.userMessageId === 'string' ? run.userMessageId : null;
+		if (!userMessageId) return null;
+		const localUserMessageId = this.localMessageId(userMessageId);
+		if (isAgentNotification(this.state, userMessageId)) {
+			if (this.ownMessage(localUserMessageId)?.role !== 'user') return null;
+			// Mirrored before notices were told apart.
+			db.prepare('DELETE FROM messages WHERE id = ? AND conversation_id = ?').run(
+				localUserMessageId,
+				this.conversationId
+			);
+			return 'removed';
+		}
+		if (getMessage(db, localUserMessageId)) return null;
+		const text = messageText(this.state, userMessageId);
+		if (!text) return null;
+		const message = {
+			id: localUserMessageId,
+			conversationId: this.conversationId,
+			role: 'user' as const,
+			parts: [{ type: 'text', text }],
+			createdAt: Date.parse(String(run.requestedAt)) || now
+		};
+		const reply = this.ownMessage(this.localMessageId(replyMessageId(run)));
+		if (!reply || !insertMessageBefore(db, reply.id, message)) createMessage(db, message);
+		return 'created';
+	}
+
 	private render(): void {
 		if (!this.hasSnapshot) return;
 		const db = this.db;
@@ -848,38 +888,21 @@ export class CodingFollower {
 			!shuttingDown
 		) {
 			const replyId = this.localMessageId(replyMessageId(active));
-			if (!this.isForeignMessage(replyId)) this.openLive(replyId, null, String(active.id));
+			if (!this.isForeignMessage(replyId)) {
+				// The run's user message goes first, or the reply would precede it.
+				const mirrored = this.mirrorUserMessage(active, now);
+				if (mirrored === 'created') touched = true;
+				else if (mirrored === 'removed') removedNotices = true;
+				this.openLive(replyId, null, String(active.id));
+			}
 		}
 
 		for (const run of runs) {
 			const runId = String(run.id);
 			if (!allDirty && !dirty.has(runId) && this.live?.runId !== runId) continue;
-			const userMessageId = typeof run.userMessageId === 'string' ? run.userMessageId : null;
-			// Mirror user messages that were sent from T3 itself, but not the notices
-			// the agent's runtime sends itself (they'd read as if the user wrote them).
-			const localUserMessageId = userMessageId && this.localMessageId(userMessageId);
-			if (userMessageId && localUserMessageId && isAgentNotification(this.state, userMessageId)) {
-				if (this.ownMessage(localUserMessageId)?.role === 'user') {
-					// Mirrored before notices were told apart.
-					db.prepare('DELETE FROM messages WHERE id = ? AND conversation_id = ?').run(
-						localUserMessageId,
-						this.conversationId
-					);
-					removedNotices = true;
-				}
-			} else if (userMessageId && localUserMessageId && !getMessage(db, localUserMessageId)) {
-				const text = messageText(this.state, userMessageId);
-				if (text) {
-					createMessage(db, {
-						id: localUserMessageId,
-						conversationId: this.conversationId,
-						role: 'user',
-						parts: [{ type: 'text', text }],
-						createdAt: Date.parse(String(run.requestedAt)) || now
-					});
-					touched = true;
-				}
-			}
+			const mirrored = this.mirrorUserMessage(run, now);
+			if (mirrored === 'created') touched = true;
+			else if (mirrored === 'removed') removedNotices = true;
 
 			const entries = renderRun(this.state, run, this.commandOutputs);
 			const parts = entries.map((e) => e.part);
