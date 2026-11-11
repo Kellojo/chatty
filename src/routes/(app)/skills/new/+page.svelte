@@ -1,14 +1,13 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { toast } from 'svelte-sonner';
-	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import PageHeader from '$lib/components/app/PageHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import FormFooter from '$lib/components/app/FormFooter.svelte';
 	import { guardUnsavedChanges, isSaveShortcut, missingHint } from '$lib/form-guards.js';
 
 	let name = $state('');
@@ -156,20 +155,13 @@
 					/>
 				</SettingsSection>
 
-				<div
-					class="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 border-t bg-background/95 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur max-sm:-mx-4 max-sm:px-4 max-sm:[&>*:not(span)]:flex-1"
-				>
-					{#if missing}
-						<span class="self-center text-xs text-muted-foreground max-sm:w-full sm:mr-auto"
-							>{missing}</span
-						>
-					{/if}
-					<Button variant="outline" href={resolve('/skills')}>Cancel</Button>
-					<Button type="submit" disabled={busy || !!missing}>
-						{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-						Create skill
-					</Button>
-				</div>
+				<FormFooter
+					saveLabel="Create skill"
+					busyLabel="Creating…"
+					{busy}
+					{missing}
+					cancel={resolve('/skills')}
+				/>
 			</form>
 		</div>
 	</div>

@@ -1,13 +1,19 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import DailyStackedChart from '$lib/components/app/usage/DailyStackedChart.svelte';
 	import EnvironmentCard from '$lib/components/app/usage/EnvironmentCard.svelte';
-	import PlanLimitCard from '$lib/components/app/usage/PlanLimitCard.svelte';
+	import QuotaCard from '$lib/components/app/usage/QuotaCard.svelte';
 	import PlanLimitBar from '$lib/components/app/usage/PlanLimitBar.svelte';
-	import { formatApiValue, subscriptionColor } from '$lib/components/app/usage/usage.js';
+	import { limitHistoryKey } from '$lib/components/app/usage/burndown.js';
+	import {
+		formatApiValue,
+		subscriptionColor,
+		usageAccountsByProvider
+	} from '$lib/components/app/usage/usage.js';
 	import type { CodingUsageLimitWindow } from '$lib/coding-environments.js';
 	import { providerLabel } from '$lib/coding-environments.js';
 	import { formatCount, formatSpend, formatSpendCompact } from '$lib/formats.js';
@@ -26,6 +32,16 @@
 
 	const subs = $derived(data.subscriptions);
 	const rangeLabel = $derived(data.rangeLabel);
+	const limitRange = $derived({
+		from: data.limitRange.from ?? undefined,
+		to: data.limitRange.to ?? undefined
+	});
+	// Some limit window has no synced history yet (a fresh install or a new account).
+	// One quota card per provider; a login seen through several environments counts once.
+	const providerQuotas = $derived(usageAccountsByProvider(subs.accounts));
+	const historyPending = $derived(
+		subs.accounts.some((a) => a.windows.some((w) => !data.limitHistory[limitHistoryKey(w)]?.length))
+	);
 
 	const series = $derived(
 		subs.providers.map((p) => ({
@@ -90,17 +106,44 @@
 		</Card.Root>
 	{:else}
 		<p class="text-sm text-muted-foreground">
-			Usage included in your fixed-price plans (Claude, Codex, …), mirrored from your connected T3
-			Code coding environments. Values are shown at API list prices for comparison — you are not
-			billed per token.
+			Your fixed-price plans (Claude, Codex, …), synced from your coding environments. Dollar values
+			are API list prices for comparison; you are not billed per token.
 		</p>
+
+		<!-- Plan limits -->
+		{#if subs.accounts.length > 0}
+			<section class="flex flex-col gap-3" aria-labelledby="limits-heading">
+				<div class="flex flex-col gap-1">
+					<h2 id="limits-heading" class="text-base font-semibold">Plan limits</h2>
+					<p class="text-sm text-muted-foreground">
+						Your weekly limits, {rangeLabel}, projected through the next resets at your current
+						pace.
+						{#if historyPending}
+							History fills in with each sync.
+						{/if}
+					</p>
+				</div>
+				{#each providerQuotas as q (q.provider)}
+					<QuotaCard
+						provider={q.provider}
+						accounts={q.accounts}
+						history={data.limitHistory}
+						range={limitRange}
+						{now}
+					/>
+				{/each}
+			</section>
+		{/if}
 
 		<!-- Coding environments -->
 		<section class="flex flex-col gap-3" aria-labelledby="envs-heading">
 			<div class="flex items-center justify-between gap-2">
 				<h2 id="envs-heading" class="text-base font-semibold">Coding environments</h2>
 				<Button variant="ghost" size="sm" href={resolve('/settings/environments')}>
-					Manage environments
+					<span class="sm:hidden">Manage</span><span class="hidden sm:inline"
+						>Manage environments</span
+					>
+					<ArrowRightIcon />
 				</Button>
 			</div>
 			<div class="grid gap-3 {subs.environments.length > 1 ? 'sm:grid-cols-2 lg:grid-cols-3' : ''}">
@@ -110,23 +153,13 @@
 			</div>
 		</section>
 
-		<!-- Plan limits -->
-		{#if subs.accounts.length > 0}
-			<section class="flex flex-col gap-3" aria-labelledby="limits-heading">
-				<h2 id="limits-heading" class="text-base font-semibold">Plan limits</h2>
-				<!-- A lone account uses the full width instead of half of it. -->
-				<div class="grid gap-3 {subs.accounts.length > 1 ? 'md:grid-cols-2' : ''}">
-					{#each subs.accounts as account (account.key)}
-						<PlanLimitCard {account} {now} />
-					{/each}
-				</div>
-			</section>
-		{/if}
-
 		<!-- Usage by provider -->
 		{#if subs.providers.length > 0}
 			<section class="flex flex-col gap-3" aria-labelledby="providers-heading">
-				<h2 id="providers-heading" class="text-base font-semibold">Usage by provider</h2>
+				<div class="flex flex-col gap-1">
+					<h2 id="providers-heading" class="text-base font-semibold">Usage by provider</h2>
+					<p class="text-sm text-muted-foreground">Tokens and API value, {rangeLabel}.</p>
+				</div>
 				{#if subs.note}
 					<p class="text-sm text-muted-foreground">{subs.note}</p>
 				{/if}
@@ -136,7 +169,7 @@
 						<!-- Anchor target for the Overview's "By provider" links. -->
 						<Card.Root
 							id="provider-{p.provider}"
-							class="scroll-mt-4 rounded-2xl border-border/40 target:ring-2 target:ring-ring"
+							class="scroll-mt-4 rounded-2xl border-border/40 py-4 target:ring-2 target:ring-ring"
 						>
 							<Card.Content class="flex flex-col gap-1">
 								<span class="flex items-center gap-2 text-sm text-muted-foreground">
@@ -147,18 +180,16 @@
 									{providerLabel(p.provider)}
 								</span>
 								<!-- Same units on every card: tokens first, value second. -->
-								<span class="text-2xl font-semibold tabular-nums">
+								<span class="text-xl font-semibold tabular-nums">
 									{formatCount(p.tokens)} tokens
 								</span>
 								<span class="text-sm text-muted-foreground tabular-nums">
 									{#if p.costUsd === 0 && !p.priced}
 										Not priced — no API list price known
 									{:else}
-										{formatApiValue(p.costUsd, !p.priced)} API value · not billed
+										{formatApiValue(p.costUsd, !p.priced)} API value
 									{/if}
-								</span>
-								<span class="text-xs text-muted-foreground tabular-nums">
-									{formatCount(p.sessions)}
+									· {formatCount(p.sessions)}
 									{p.sessions === 1 ? 'session' : 'sessions'}
 								</span>
 							</Card.Content>
@@ -189,19 +220,17 @@
 					</div>
 				</div>
 				<Card.Root class="rounded-2xl border-border/40">
-					<Card.Header class="pb-3">
-						<div class="flex flex-col gap-1">
-							<Card.Description>
-								{#if metric === 'cost'}
-									{formatApiValue(subs.totalValueUsd, subs.anyUnpriced)} API value, {rangeLabel} — covered
-									by your subscriptions, not billed per token.
-								{:else}
-									Input, cached and output tokens combined.
-								{/if}
-							</Card.Description>
-						</div>
-					</Card.Header>
-					<Card.Content>
+					<Card.Content class="flex flex-col gap-4">
+						<p class="text-sm text-muted-foreground">
+							{#if metric === 'cost'}
+								<span class="font-medium text-foreground tabular-nums"
+									>{formatApiValue(subs.totalValueUsd, subs.anyUnpriced)}</span
+								>
+								API value, {rangeLabel} — covered by your subscriptions, not billed per token.
+							{:else}
+								Input, cached and output tokens combined.
+							{/if}
+						</p>
 						<DailyStackedChart
 							rows={chartRows}
 							{series}
@@ -215,16 +244,21 @@
 
 			<!-- By model -->
 			<section class="flex flex-col gap-3" aria-labelledby="models-heading">
-				<h2 id="models-heading" class="text-base font-semibold">By model</h2>
+				<div class="flex flex-col gap-1">
+					<h2 id="models-heading" class="text-base font-semibold">By model</h2>
+					<p class="text-sm text-muted-foreground">
+						{rangeLabel[0].toUpperCase() + rangeLabel.slice(1)}.
+					</p>
+				</div>
 				<Card.Root class="rounded-2xl border-border/40">
 					<Card.Content>
 						<Table.Root>
 							<Table.Header>
 								<Table.Row>
-									<Table.Head>Provider</Table.Head>
+									<Table.Head class="hidden sm:table-cell">Provider</Table.Head>
 									<Table.Head>Model</Table.Head>
 									<Table.Head class="text-right">Tokens</Table.Head>
-									<Table.Head class="text-right">Sessions</Table.Head>
+									<Table.Head class="hidden text-right sm:table-cell">Sessions</Table.Head>
 									<Table.Head class="text-right">API value</Table.Head>
 								</Table.Row>
 							</Table.Header>
@@ -232,7 +266,7 @@
 								{#each subs.providers as p (p.provider)}
 									{#each p.models as m (m.model)}
 										<Table.Row>
-											<Table.Cell>
+											<Table.Cell class="hidden sm:table-cell">
 												<span class="flex items-center gap-2 whitespace-nowrap">
 													<span
 														class="size-2 shrink-0 rounded-full"
@@ -241,13 +275,20 @@
 													{providerLabel(p.provider)}
 												</span>
 											</Table.Cell>
-											<Table.Cell class="max-w-64 truncate font-mono text-xs" title={m.model}>
-												{m.model}
+											<Table.Cell class="max-w-64 truncate font-mono text-[13px]" title={m.model}>
+												<!-- The provider column is hidden on narrow screens; its dot moves here. -->
+												<span
+													class="mr-1.5 inline-block size-2 rounded-full sm:hidden"
+													style:background-color={subscriptionColor(p.provider)}
+													aria-hidden="true"
+												></span><span class="sr-only sm:hidden"
+													>{providerLabel(p.provider)}:
+												</span>{m.model}
 											</Table.Cell>
 											<Table.Cell class="text-right tabular-nums" title={m.tokens.toLocaleString()}>
 												{formatCount(m.tokens)}
 											</Table.Cell>
-											<Table.Cell class="text-right tabular-nums"
+											<Table.Cell class="hidden text-right tabular-nums sm:table-cell"
 												>{formatCount(m.sessions)}</Table.Cell
 											>
 											<Table.Cell

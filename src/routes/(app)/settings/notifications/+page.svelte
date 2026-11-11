@@ -7,6 +7,7 @@
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
+	import PushNotificationsSection from '$lib/components/app/settings/PushNotificationsSection.svelte';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { devicePrefs, type DevicePrefs } from '$lib/notifications/prefs.svelte.js';
@@ -43,7 +44,7 @@
 	const TRIGGER_COPY: Record<keyof NotificationTriggers, { label: string; description: string }> = {
 		needsYou: {
 			label: 'Needs you',
-			description: 'A coding task is waiting for your approval or answer.'
+			description: 'A coding task or agent is waiting for your approval or answer.'
 		},
 		replies: {
 			label: 'Replies',
@@ -164,6 +165,8 @@
 		</SettingsRow>
 	{/each}
 </SettingsSection>
+
+<PushNotificationsSection />
 
 <SettingsSection title="On this device">
 	{#snippet description()}

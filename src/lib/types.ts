@@ -118,6 +118,8 @@ export type ServerEvent =
 	| { type: 'conversation.deleted'; conversationId: string }
 	/** A coding task's status, pending approval, branch or PR changed. */
 	| { type: 'coding.task.updated'; conversationId: string }
+	/** A coding task started waiting for the user's approval or answer. */
+	| { type: 'coding.task.awaiting_input'; conversationId: string }
 	/** A coding task's agent run ended (completed, failed or interrupted). */
 	| {
 			type: 'coding.thread.finished';

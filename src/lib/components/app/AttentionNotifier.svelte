@@ -9,6 +9,8 @@
 	import { onServerEvent } from '$lib/state/events.svelte.js';
 	import { devicePrefs } from '$lib/notifications/prefs.svelte.js';
 	import { listenForNotificationClicks, showDesktopNotice } from '$lib/notifications/desktop.js';
+	import { startPresenceReporter, type PresenceReporter } from '$lib/notifications/presence.js';
+	import { syncPushSubscription } from '$lib/notifications/push.js';
 	import { playTone, unlockAudioOnGesture } from '$lib/notifications/sound.js';
 	import { startTabCoordinator, type TabCoordinator } from '$lib/notifications/tabs.js';
 	import {
@@ -41,6 +43,8 @@
 	/** Repeats of the same notice within this window (e.g. reply + finished) alert once. */
 	const DEDUPE_MS = 3000;
 	const FLASH_MS = 1000;
+	/** At most this often, re-register this device for push (see resync). */
+	const PUSH_RESYNC_MS = 10 * 60_000;
 
 	const prefs = $derived(devicePrefs.current);
 	const currentId = $derived(/^\/chat\/([^/]+)/.exec(page.url.pathname)?.[1] ?? null);
@@ -52,6 +56,7 @@
 	let flashOn = $state(false);
 
 	let coordinator: TabCoordinator | null = null;
+	let presence: PresenceReporter | null = null;
 	// Plain bookkeeping, never rendered.
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity
 	const recent = new Map<string, number>();
@@ -85,6 +90,8 @@
 		if (!coordinator.isLeader()) return;
 		const focused = coordinator.anyFocused();
 		if (prefs.sound && (!focused || prefs.soundWhenFocused)) playTone(prefs.tone, prefs.volume);
+		// With push on too, the server's copy of this notice shares its tag and
+		// replaces this popup quietly (static/notification-sw.js).
 		if (prefs.desktop && !focused) {
 			const title = notice.agentId
 				? ((await agentName(notice.agentId)) ?? notice.title)
@@ -117,8 +124,26 @@
 		});
 		const offClicks = listenForNotificationClicks(navigate);
 		const offAudio = unlockAudioOnGesture();
+		presence = startPresenceReporter();
+		// Re-register on start, and again when back online or back in view, in case
+		// the first try failed (offline) while the server had dropped this device.
+		let lastSync = 0;
+		const resync = () => {
+			if (document.visibilityState !== 'visible' || Date.now() - lastSync < PUSH_RESYNC_MS) {
+				return;
+			}
+			lastSync = Date.now();
+			void syncPushSubscription().catch(() => (lastSync = 0));
+		};
+		resync();
+		window.addEventListener('online', resync);
+		document.addEventListener('visibilitychange', resync);
 
 		return () => {
+			window.removeEventListener('online', resync);
+			document.removeEventListener('visibilitychange', resync);
+			presence?.stop();
+			presence = null;
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.removeEventListener('focus', onVisibility);
 			offEvents();
@@ -133,6 +158,7 @@
 		// Let other tabs know which conversation this tab shows.
 		void page.url.pathname;
 		coordinator?.refresh();
+		presence?.refresh();
 	});
 
 	// Coding tasks report "waiting for you" only through refreshed list data.

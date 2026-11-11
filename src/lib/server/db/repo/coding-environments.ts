@@ -4,7 +4,9 @@ import type { Db } from '../index.js';
 import type {
 	CodingEnvironment,
 	CodingEnvironmentStatus,
+	CodingResetCredits,
 	CodingUsageDailyRow,
+	CodingUsageLimitSample,
 	CodingUsageLimitWindow
 } from '$lib/coding-environments.js';
 
@@ -325,6 +327,51 @@ function writeEnvironmentCheck(db: Db, id: string, result: EnvironmentCheckResul
 
 // ── usage ────────────────────────────────────────────────────────────────
 
+/** Replaces an environment's stored extra resets with a fresh snapshot. */
+export function replaceResetCredits(
+	db: Db,
+	environmentId: string,
+	credits: Omit<CodingResetCredits, 'environmentId'>[]
+): void {
+	const insert = db.prepare(
+		`INSERT OR REPLACE INTO coding_usage_reset_credits
+		   (environment_id, account_id, available_count, next_expires_at, checked_at)
+		 VALUES (?, ?, ?, ?, ?)`
+	);
+	db.transaction(() => {
+		db.prepare('DELETE FROM coding_usage_reset_credits WHERE environment_id = ?').run(
+			environmentId
+		);
+		for (const c of credits) {
+			insert.run(environmentId, c.accountId, c.availableCount, c.nextExpiresAt, c.checkedAt);
+		}
+	})();
+}
+
+/** Extra resets of all of a user's environments. */
+export function listResetCredits(db: Db, userId: string): CodingResetCredits[] {
+	const rows = db
+		.prepare(
+			`SELECT c.* FROM coding_usage_reset_credits c
+			 JOIN coding_environments e ON e.id = c.environment_id
+			 WHERE e.user_id = ?`
+		)
+		.all(userId) as {
+		environment_id: string;
+		account_id: string;
+		available_count: number;
+		next_expires_at: number | null;
+		checked_at: number;
+	}[];
+	return rows.map((r) => ({
+		environmentId: r.environment_id,
+		accountId: r.account_id,
+		availableCount: r.available_count,
+		nextExpiresAt: r.next_expires_at,
+		checkedAt: r.checked_at
+	}));
+}
+
 /** Replaces every stored limit window for an environment with a fresh snapshot. */
 export function replaceUsageLimits(
 	db: Db,
@@ -448,6 +495,67 @@ export function listUsageLimits(db: Db, userId: string): CodingUsageLimitWindow[
 		usedPercent: r.used_percent,
 		resetsAt: r.resets_at,
 		checkedAt: r.checked_at
+	}));
+}
+
+/** How long plan-limit samples are kept: the longest preset range (90 days) plus slack. */
+export const USAGE_LIMIT_SAMPLE_RETENTION_MS = 92 * 86_400_000;
+
+/**
+ * Appends one history sample per window (keyed by its `checkedAt`, so a repeated
+ * snapshot is stored once) and prunes the environment's samples past retention.
+ */
+export function recordUsageLimitSamples(
+	db: Db,
+	environmentId: string,
+	windows: Omit<CodingUsageLimitWindow, 'environmentId'>[],
+	now = Date.now()
+): void {
+	const insert = db.prepare(
+		`INSERT OR IGNORE INTO coding_usage_limit_samples
+		   (environment_id, account_id, window_id, sampled_at, used_percent, resets_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`
+	);
+	db.transaction(() => {
+		for (const w of windows) {
+			insert.run(environmentId, w.accountId, w.windowId, w.checkedAt, w.usedPercent, w.resetsAt);
+		}
+		db.prepare(
+			'DELETE FROM coding_usage_limit_samples WHERE environment_id = ? AND sampled_at < ?'
+		).run(environmentId, now - USAGE_LIMIT_SAMPLE_RETENTION_MS);
+	})();
+}
+
+/** Plan-limit samples of all of a user's environments in `[since, until]`, oldest first. */
+export function listUsageLimitSamples(
+	db: Db,
+	userId: string,
+	since: number,
+	until = Number.MAX_SAFE_INTEGER
+): CodingUsageLimitSample[] {
+	const rows = db
+		.prepare(
+			`SELECT s.environment_id, s.account_id, s.window_id, s.sampled_at, s.used_percent, s.resets_at
+			 FROM coding_usage_limit_samples s
+			 JOIN coding_environments e ON e.id = s.environment_id
+			 WHERE e.user_id = ? AND s.sampled_at >= ? AND s.sampled_at <= ?
+			 ORDER BY s.sampled_at`
+		)
+		.all(userId, since, until) as {
+		environment_id: string;
+		account_id: string;
+		window_id: string;
+		sampled_at: number;
+		used_percent: number;
+		resets_at: number | null;
+	}[];
+	return rows.map((r) => ({
+		environmentId: r.environment_id,
+		accountId: r.account_id,
+		windowId: r.window_id,
+		sampledAt: r.sampled_at,
+		usedPercent: r.used_percent,
+		resetsAt: r.resets_at
 	}));
 }
 

@@ -141,7 +141,8 @@ describe('mostUsedWindow', () => {
 		accountEmail: null,
 		accountPlan: null,
 		checkedAt: now,
-		windows
+		windows,
+		resetCredits: null
 	});
 
 	it('skips windows whose reset time has passed (their percentage is stale)', () => {

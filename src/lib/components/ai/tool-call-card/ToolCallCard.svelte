@@ -15,6 +15,8 @@
 	import { formatElapsed } from '$lib/formats.js';
 	import { now } from '$lib/state/now.svelte.js';
 	import DiffStat from '$lib/components/app/DiffStat.svelte';
+	import { AGENT_RUN_TOOLS } from '$lib/agent-run-tool.js';
+	import AgentRunRow from './AgentRunRow.svelte';
 	import ToolIcon from './ToolIcon.svelte';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
@@ -243,199 +245,206 @@
 	const labelled = $derived(showInput && hasResult);
 </script>
 
-<div class={cn('w-full min-w-0 text-sm', className)}>
-	{#if subagent}
-		<button
-			type="button"
-			class={cn(
-				'group/tool flex w-full min-w-0 items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
-				hasBody
-					? 'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
-					: 'cursor-default'
-			)}
-			aria-expanded={hasBody ? open : undefined}
-			disabled={!hasBody}
-			onclick={() => (open = !open)}
-		>
-			<span class="flex h-5 w-5 shrink-0 items-center justify-center">
-				{#if phase === 'running'}
-					<Loader2Icon class="size-4 animate-spin text-info" />
-				{:else if phase === 'done'}
-					<CircleCheckIcon class="size-4 text-success" />
-				{:else if phase === 'failed'}
-					<TriangleAlertIcon class="size-4 text-destructive" />
-				{:else}
-					<CircleSlashIcon class="size-4 text-muted-foreground" />
-				{/if}
-			</span>
-			<span class="flex min-w-0 flex-1 flex-col">
-				<span class="flex min-w-0 items-center gap-1.5">
-					{#if brand}
-						<ProviderIcon {brand} class="size-3.5 shrink-0" />
+{#if AGENT_RUN_TOOLS.has(name)}
+	<AgentRunRow {part} {name} {active} />
+{:else}
+	<div class={cn('w-full min-w-0 text-sm', className)}>
+		{#if subagent}
+			<button
+				type="button"
+				class={cn(
+					'group/tool flex w-full min-w-0 items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
+					hasBody
+						? 'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
+						: 'cursor-default'
+				)}
+				aria-expanded={hasBody ? open : undefined}
+				disabled={!hasBody}
+				onclick={() => (open = !open)}
+			>
+				<span class="flex h-5 w-5 shrink-0 items-center justify-center">
+					{#if phase === 'running'}
+						<Loader2Icon class="size-4 animate-spin text-info" />
+					{:else if phase === 'done'}
+						<CircleCheckIcon class="size-4 text-success" />
+					{:else if phase === 'failed'}
+						<TriangleAlertIcon class="size-4 text-destructive" />
+					{:else}
+						<CircleSlashIcon class="size-4 text-muted-foreground" />
 					{/if}
-					<span class="truncate font-medium text-foreground/90" title={display.detail ?? undefined}>
-						{display.detail ?? display.label}
-					</span>
 				</span>
-				{#if activity}
-					<span
-						class={cn(
-							'truncate text-xs',
-							phase === 'running' ? 'text-info-foreground' : 'text-muted-foreground',
-							phase === 'failed' && 'text-destructive/80'
-						)}
-						title={activity}>{activity}</span
-					>
-				{/if}
-			</span>
-			<span
-				class={cn(
-					'flex h-5 shrink-0 items-center gap-1.5 pl-2 text-xs',
-					phase === 'running' && 'text-info-foreground',
-					phase === 'done' && 'text-success-foreground',
-					phase === 'failed' && 'text-destructive',
-					phase === 'stopped' && 'text-muted-foreground'
-				)}
-			>
-				{PHASE_LABEL[phase]}
-				{#if subagentDuration}
-					<span
-						class="text-muted-foreground tabular-nums"
-						title={phase === 'running'
-							? `Running for ${subagentDuration}`
-							: `Took ${subagentDuration}`}>· {subagentDuration}</span
-					>
-				{/if}
-				<ChevronRightIcon
-					aria-hidden="true"
-					class={cn(
-						'size-3.5 text-muted-foreground transition',
-						hasBody
-							? 'opacity-50 group-hover/tool:opacity-100 group-focus-visible/tool:opacity-100'
-							: 'invisible',
-						open && 'rotate-90 opacity-100'
-					)}
-				/>
-			</span>
-		</button>
-	{:else}
-		<button
-			type="button"
-			class={cn(
-				'group/tool flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-left transition-colors pointer-coarse:py-2',
-				hasBody
-					? 'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
-					: 'cursor-default'
-			)}
-			aria-expanded={hasBody ? open : undefined}
-			disabled={!hasBody}
-			onclick={() => (open = !open)}
-		>
-			<span
-				class={cn(
-					'flex size-5 shrink-0 items-center justify-center text-muted-foreground',
-					failed && 'text-destructive'
-				)}
-			>
-				{#if running}
-					<Loader2Icon class="size-3.5 animate-spin" />
-				{:else if interrupted}
-					<!-- The message footer explains the stop; the row only marks which call it hit. -->
-					<CircleSlashIcon class="size-3.5" aria-hidden="true" />
-					<span class="sr-only">Stopped</span>
-				{:else if failed}
-					<TriangleAlertIcon class="size-3.5" />
-				{:else}
-					<ToolIcon kind={display.kind} class="size-3.5" />
-				{/if}
-			</span>
-			<span class="shrink-0 font-medium text-foreground/90">{display.label}</span>
-			{#if detail}
+				<span class="flex min-w-0 flex-1 flex-col">
+					<span class="flex min-w-0 items-center gap-1.5">
+						{#if brand}
+							<ProviderIcon {brand} class="size-3.5 shrink-0" />
+						{/if}
+						<span
+							class="truncate font-medium text-foreground/90"
+							title={display.detail ?? undefined}
+						>
+							{display.detail ?? display.label}
+						</span>
+					</span>
+					{#if activity}
+						<span
+							class={cn(
+								'truncate text-xs',
+								phase === 'running' ? 'text-info-foreground' : 'text-muted-foreground',
+								phase === 'failed' && 'text-destructive/80'
+							)}
+							title={activity}>{activity}</span
+						>
+					{/if}
+				</span>
 				<span
 					class={cn(
-						'min-w-0 truncate text-xs',
-						// The icon and "Failed" already say it went wrong; the excerpt stays readable grey.
-						'text-muted-foreground',
-						!display.prose && display.detail && 'font-mono'
+						'flex h-5 shrink-0 items-center gap-1.5 pl-2 text-xs',
+						phase === 'running' && 'text-info-foreground',
+						phase === 'done' && 'text-success-foreground',
+						phase === 'failed' && 'text-destructive',
+						phase === 'stopped' && 'text-muted-foreground'
 					)}
-					title={detail}>{detail}</span
 				>
-			{/if}
-			<span class="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-xs text-muted-foreground">
-				{#if failed && display.kind !== 'error'}
-					<span class="text-destructive">
-						{typeof exitCode === 'number' && exitCode !== 0 ? `Exit ${exitCode}` : 'Failed'}
-					</span>
-				{:else if outcome}
-					<span class={outcome.negative ? 'text-destructive' : undefined}>{outcome.label}</span>
-					{#if outcome.answer}
-						<!-- The user's own words: answers to questions, notes on approvals. -->
-						<span class="max-w-40 truncate text-foreground/80 sm:max-w-64" title={outcome.answer}
-							>“{outcome.answer}”</span
+					{PHASE_LABEL[phase]}
+					{#if subagentDuration}
+						<span
+							class="text-muted-foreground tabular-nums"
+							title={phase === 'running'
+								? `Running for ${subagentDuration}`
+								: `Took ${subagentDuration}`}>· {subagentDuration}</span
 						>
 					{/if}
-				{:else if diffStat}
-					<DiffStat diff={diffStat} />
-				{/if}
-				<ChevronRightIcon
-					aria-hidden="true"
-					class={cn(
-						'size-3.5 transition',
-						hasBody
-							? 'opacity-50 group-hover/tool:opacity-100 group-focus-visible/tool:opacity-100'
-							: 'invisible',
-						open && 'rotate-90 opacity-100'
-					)}
-				/>
-			</span>
-		</button>
-	{/if}
-	{#if open && hasBody}
-		<div class="mt-1 mb-2 ml-1 flex flex-col gap-2 sm:ml-9">
-			{#if showInput}
-				<div>
-					{#if labelled}
-						<p class="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-							{subagent ? 'Task' : 'Input'}
-						</p>
-					{/if}
-					<pre
-						class="max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">{inputBody}</pre>
-				</div>
-			{/if}
-			{#if running && !resultBody}
-				<p class="text-xs text-muted-foreground">Running…</p>
-			{/if}
-			{#if resultBody}
-				<div>
-					{#if labelled}
-						<p class="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-							{failed ? 'Error' : subagent ? 'Result' : 'Output'}
-						</p>
-					{/if}
-					<pre
-						{@attach (node) => {
-							void showFull;
-							scrollToEnd(node);
-						}}
+					<ChevronRightIcon
+						aria-hidden="true"
 						class={cn(
-							'max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
-							failed && 'border-destructive/30 text-destructive'
-						)}>{resultBody}</pre>
-					{#if resultTruncated}
-						<button
-							type="button"
-							class="mt-1 rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-							aria-pressed={showFull}
-							onclick={() => (showFull = !showFull)}
-						>
-							{showFull
-								? 'Show less'
-								: `Show full output (${resultText.length.toLocaleString()} chars)`}
-						</button>
+							'size-3.5 text-muted-foreground transition',
+							hasBody
+								? 'opacity-50 group-hover/tool:opacity-100 group-focus-visible/tool:opacity-100'
+								: 'invisible',
+							open && 'rotate-90 opacity-100'
+						)}
+					/>
+				</span>
+			</button>
+		{:else}
+			<button
+				type="button"
+				class={cn(
+					'group/tool flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1 text-left transition-colors pointer-coarse:py-2',
+					hasBody
+						? 'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
+						: 'cursor-default'
+				)}
+				aria-expanded={hasBody ? open : undefined}
+				disabled={!hasBody}
+				onclick={() => (open = !open)}
+			>
+				<span
+					class={cn(
+						'flex size-5 shrink-0 items-center justify-center text-muted-foreground',
+						failed && 'text-destructive'
+					)}
+				>
+					{#if running}
+						<Loader2Icon class="size-3.5 animate-spin" />
+					{:else if interrupted}
+						<!-- The message footer explains the stop; the row only marks which call it hit. -->
+						<CircleSlashIcon class="size-3.5" aria-hidden="true" />
+						<span class="sr-only">Stopped</span>
+					{:else if failed}
+						<TriangleAlertIcon class="size-3.5" />
+					{:else}
+						<ToolIcon kind={display.kind} class="size-3.5" />
 					{/if}
-				</div>
-			{/if}
-		</div>
-	{/if}
-</div>
+				</span>
+				<span class="shrink-0 font-medium text-foreground/90">{display.label}</span>
+				{#if detail}
+					<span
+						class={cn(
+							'min-w-0 truncate text-xs',
+							// The icon and "Failed" already say it went wrong; the excerpt stays readable grey.
+							'text-muted-foreground',
+							!display.prose && display.detail && 'font-mono'
+						)}
+						title={detail}>{detail}</span
+					>
+				{/if}
+				<span class="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-xs text-muted-foreground">
+					{#if failed && display.kind !== 'error'}
+						<span class="text-destructive">
+							{typeof exitCode === 'number' && exitCode !== 0 ? `Exit ${exitCode}` : 'Failed'}
+						</span>
+					{:else if outcome}
+						<span class={outcome.negative ? 'text-destructive' : undefined}>{outcome.label}</span>
+						{#if outcome.answer}
+							<!-- The user's own words: answers to questions, notes on approvals. -->
+							<span class="max-w-40 truncate text-foreground/80 sm:max-w-64" title={outcome.answer}
+								>“{outcome.answer}”</span
+							>
+						{/if}
+					{:else if diffStat}
+						<DiffStat diff={diffStat} />
+					{/if}
+					<ChevronRightIcon
+						aria-hidden="true"
+						class={cn(
+							'size-3.5 transition',
+							hasBody
+								? 'opacity-50 group-hover/tool:opacity-100 group-focus-visible/tool:opacity-100'
+								: 'invisible',
+							open && 'rotate-90 opacity-100'
+						)}
+					/>
+				</span>
+			</button>
+		{/if}
+		{#if open && hasBody}
+			<div class="mt-1 mb-2 ml-1 flex flex-col gap-2 sm:ml-9">
+				{#if showInput}
+					<div>
+						{#if labelled}
+							<p class="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+								{subagent ? 'Task' : 'Input'}
+							</p>
+						{/if}
+						<pre
+							class="max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">{inputBody}</pre>
+					</div>
+				{/if}
+				{#if running && !resultBody}
+					<p class="text-xs text-muted-foreground">Running…</p>
+				{/if}
+				{#if resultBody}
+					<div>
+						{#if labelled}
+							<p class="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+								{failed ? 'Error' : subagent ? 'Result' : 'Output'}
+							</p>
+						{/if}
+						<pre
+							{@attach (node) => {
+								void showFull;
+								scrollToEnd(node);
+							}}
+							class={cn(
+								'max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
+								failed && 'border-destructive/30 text-destructive'
+							)}>{resultBody}</pre>
+						{#if resultTruncated}
+							<button
+								type="button"
+								class="mt-1 rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+								aria-pressed={showFull}
+								onclick={() => (showFull = !showFull)}
+							>
+								{showFull
+									? 'Show less'
+									: `Show full output (${resultText.length.toLocaleString()} chars)`}
+							</button>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
+{/if}

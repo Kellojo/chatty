@@ -17,6 +17,7 @@
 	import EnabledSwitch from '$lib/components/app/EnabledSwitch.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import ToolMultiSelect from '$lib/components/app/ToolMultiSelect.svelte';
+	import FormFooter from '$lib/components/app/FormFooter.svelte';
 	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
 	import { skillSourceLabel } from '$lib/skill-labels.js';
 	import { guardUnsavedChanges, isSaveShortcut, missingHint } from '$lib/form-guards.js';
@@ -324,22 +325,14 @@
 				</SettingsSection>
 
 				{#if data.canEdit}
-					<div
-						class="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 border-t bg-background/95 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur max-sm:-mx-4 max-sm:px-4 max-sm:[&>*:not(span)]:flex-1"
-					>
-						{#if missing ?? dirty}
-							<span class="self-center text-xs text-muted-foreground max-sm:w-full sm:mr-auto"
-								>{missing ?? 'Unsaved changes'}</span
-							>
-						{/if}
-						{#if dirty}
-							<Button variant="outline" onclick={discardChanges}>Discard</Button>
-						{/if}
-						<Button type="submit" disabled={!canSave}>
-							{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-							Save changes
-						</Button>
-					</div>
+					<FormFooter
+						saveLabel="Save changes"
+						{canSave}
+						{busy}
+						{missing}
+						{dirty}
+						ondiscard={discardChanges}
+					/>
 				{/if}
 			</form>
 

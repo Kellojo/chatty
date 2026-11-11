@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayInZone, parseUsageLimits, parseUsageSummary } from './usage.js';
+import { dayInZone, parseResetCredits, parseUsageLimits, parseUsageSummary } from './usage.js';
 import { describeFailureCause } from './client.js';
 
 describe('parseUsageLimits', () => {
@@ -62,6 +62,41 @@ describe('parseUsageLimits', () => {
 	it('returns nothing for unexpected payloads', () => {
 		expect(parseUsageLimits(null)).toEqual([]);
 		expect(parseUsageLimits({ providers: 'nope' })).toEqual([]);
+	});
+});
+
+describe('parseResetCredits', () => {
+	it("reads each account's extra resets and skips accounts without them", () => {
+		const config = {
+			providers: [
+				{
+					instanceId: 'codex-main',
+					usageLimits: {
+						checkedAt: '2026-11-11T10:00:00Z',
+						windows: [],
+						resetCredits: {
+							availableCount: 2,
+							nextExpiresAt: '2026-11-20T18:00:00Z',
+							nextCreditId: 'c1'
+						}
+					}
+				},
+				{
+					instanceId: 'claude-main',
+					usageLimits: { checkedAt: '2026-11-11T10:00:00Z', windows: [] }
+				},
+				{ instanceId: 'broken', usageLimits: { resetCredits: { availableCount: 'two' } } }
+			]
+		};
+		expect(parseResetCredits(config, 0)).toEqual([
+			{
+				accountId: 'codex-main',
+				availableCount: 2,
+				nextExpiresAt: Date.parse('2026-11-20T18:00:00Z'),
+				checkedAt: Date.parse('2026-11-11T10:00:00Z')
+			}
+		]);
+		expect(parseResetCredits(null)).toEqual([]);
 	});
 });
 

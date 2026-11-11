@@ -91,6 +91,7 @@ import {
 } from '../workspaces.js';
 import { attachmentCache } from './attachmentCache.js';
 import { estimateTokens, maybeCompactConversation } from './compact.js';
+import { effectiveContextLength } from '../llm/lmstudio.js';
 import {
 	abortReasonOf,
 	appendChunk,
@@ -860,7 +861,7 @@ export async function runChatTurn(
 								conversationId: conversation.id,
 								runId: run.runId,
 								target,
-								contextLength: priceRow?.context_length,
+								contextLength: () => effectiveContextLength(target),
 								overheadTokens:
 									estimateTokens(system) + Math.ceil(estimateToolChars(toolSearch.tools) / 4),
 								abortSignal: controller.signal
@@ -1109,12 +1110,12 @@ function stepCompactor(input: {
 	conversationId: string;
 	runId: string;
 	target: { providerId: string; modelId: string };
-	contextLength: number | null | undefined;
+	/** Asked per step: an LM Studio model's loaded context can change mid-run. */
+	contextLength: () => Promise<number | null>;
 	overheadTokens: number;
 	abortSignal: AbortSignal;
 }) {
-	const threshold = compactionThreshold(input.contextLength);
-	if (threshold === null) return null;
+	if (compactionThreshold(null) === null) return null;
 	const summarize = createRunSummarizer({
 		db: input.db,
 		userId: input.userId,
@@ -1140,6 +1141,8 @@ function stepCompactor(input: {
 			? last.usage.inputTokens + estimateValueTokens(last.response.messages)
 			: 0;
 		const promptTokens = measured || input.overheadTokens + estimateValueTokens(messages);
+		const threshold = compactionThreshold(await input.contextLength());
+		if (threshold === null) return undefined;
 		const c = await compactStepMessages({
 			messages,
 			promptTokens,

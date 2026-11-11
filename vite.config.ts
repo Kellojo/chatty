@@ -49,8 +49,10 @@ export default defineConfig(({ mode }) => {
 				adapter: adapter()
 			}),
 			SvelteKitPWA({
-				registerType: 'autoUpdate',
-				injectRegister: 'script',
+				// A new version waits until the user reloads from the update toast
+				// (src/lib/pwa-update.ts), so a deploy never reloads mid-reply.
+				registerType: 'prompt',
+				injectRegister: false,
 				manifest: {
 					name: 'Chatty',
 					short_name: 'Chatty',
@@ -59,6 +61,19 @@ export default defineConfig(({ mode }) => {
 					background_color: '#0e0d0c',
 					display: 'standalone',
 					start_url: '/',
+					// Share text/links from other apps into a new chat (read by the
+					// new-chat page, src/routes/(app)/+page.svelte).
+					share_target: {
+						action: '/',
+						method: 'GET',
+						params: { title: 'share_title', text: 'share_text', url: 'share_url' }
+					},
+					// Long-press / right-click menu on the app icon.
+					shortcuts: [
+						{ name: 'New chat', short_name: 'Chat', url: '/?mode=chat' },
+						{ name: 'New coding task', short_name: 'Coding', url: '/?mode=coding' },
+						{ name: 'Agents', short_name: 'Agents', url: '/agents' }
+					],
 					icons: [
 						{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
 						{ src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png' },
@@ -73,6 +88,9 @@ export default defineConfig(({ mode }) => {
 				workbox: {
 					// Serve the precached app shell for navigations when offline.
 					navigateFallback: '/',
+					// Server endpoints that are navigated to (OAuth callbacks, file
+					// downloads) must reach the server, not get the cached shell.
+					navigateFallbackDenylist: [/^\/api\//],
 					// Notification click handling (see static/notification-sw.js).
 					importScripts: ['/notification-sw.js'],
 					// HTML/data payloads can exceed the default 2 MiB precache limit.

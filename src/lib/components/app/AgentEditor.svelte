@@ -2,7 +2,6 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
-	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
@@ -12,13 +11,14 @@
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import CodeXmlIcon from '@lucide/svelte/icons/code-xml';
-	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { EVENT_LABELS, TRIGGER_LABELS } from '$lib/agent-labels.js';
 	import { guardUnsavedChanges, isSaveShortcut, missingHint } from '$lib/form-guards.js';
 	import ModelSelect from '$lib/components/app/ModelSelect.svelte';
 	import CodingContextBar from '$lib/components/app/CodingContextBar.svelte';
 	import CodingModelSelect from '$lib/components/app/CodingModelSelect.svelte';
 	import CronScheduleInput from '$lib/components/app/CronScheduleInput.svelte';
+	import ToolAllowlist from '$lib/components/app/ToolAllowlist.svelte';
+	import FormFooter from '$lib/components/app/FormFooter.svelte';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { untrack } from 'svelte';
 	import { CodingTaskState } from '$lib/state/coding-task.svelte.js';
@@ -189,19 +189,8 @@
 	// Coding agents ask inside their coding task, and personas don't run on their own.
 	const showCanAsk = $derived(!coding && form.triggerType !== 'persona');
 
-	const toolGroups = $derived.by(() => {
-		const groups: { server: string; tools: ToolInfo[] }[] = [];
-		for (const tool of tools) {
-			const group = groups.find((g) => g.server === tool.server);
-			if (group) group.tools.push(tool);
-			else groups.push({ server: tool.server, tools: [tool] });
-		}
-		return groups;
-	});
-
-	function toggleTool(name: string, checked: boolean) {
-		form.allowlist = checked ? [...form.allowlist, name] : form.allowlist.filter((n) => n !== name);
-	}
+	const availableToolNames = $derived(new Set(tools.map((t) => t.name)));
+	const allowedToolCount = $derived(form.allowlist.filter((n) => availableToolNames.has(n)).length);
 
 	async function save() {
 		// `missing` already explains anything invalid next to the disabled button.
@@ -225,7 +214,10 @@
 				triggerType: form.triggerType,
 				triggerConfig:
 					form.triggerType === 'schedule'
-						? { cron: form.cron.trim() }
+						? {
+								cron: form.cron.trim(),
+								...(form.instructions.trim() ? { instructions: form.instructions.trim() } : {})
+							}
 						: form.triggerType === 'persona'
 							? {}
 							: form.triggerType === 'event'
@@ -315,7 +307,7 @@
 		title="Basics"
 		description={coding
 			? 'Name, description and the task every run starts with.'
-			: 'Name, description and the instructions the agent follows.'}
+			: 'What you see about the agent, and what it is told.'}
 	>
 		<div class="flex flex-col gap-2">
 			<Label for="agent-name">Name</Label>
@@ -343,8 +335,12 @@
 					id="agent-description"
 					bind:value={form.description}
 					maxlength={500}
+					aria-describedby="agent-description-hint"
 					placeholder="What this agent does"
 				/>
+				<p id="agent-description-hint" class="text-sm text-muted-foreground">
+					Shown in the agent list and to other agents. The agent itself never sees it.
+				</p>
 			{/if}
 		</div>
 		<div class="flex flex-col gap-2">
@@ -355,20 +351,46 @@
 				id="agent-system-prompt"
 				bind:value={form.systemPrompt}
 				rows={8}
+				maxlength={20000}
 				{readonly}
 				required
-				class="font-mono text-sm {readonly ? '' : 'min-h-40'}"
+				aria-describedby="agent-system-prompt-hint"
+				class="text-sm {readonly ? '' : 'min-h-40'}"
 				placeholder={coding
 					? 'Update outdated dependencies, run the tests and open a pull request.'
-					: 'You are…'}
+					: 'You are a concise research assistant. Cite sources and keep answers short.'}
 			/>
-			{#if coding}
-				<p class="text-sm text-muted-foreground">
-					Sent to the coding agent as the first message of every run, followed by the run's
-					instructions.
-				</p>
-			{/if}
+			<p id="agent-system-prompt-hint" class="text-sm text-muted-foreground">
+				{coding
+					? "Sent to the coding agent as the first message of every run, followed by the run's instructions."
+					: form.triggerType === 'persona'
+						? 'Standing rules: who it is and how it behaves in every chat.'
+						: 'Standing rules: who it is and how it behaves, in every run and chat. Put the job itself in Run instructions.'}
+			</p>
 		</div>
+		{#if form.triggerType !== 'persona'}
+			<div class="flex flex-col gap-2">
+				<Label for="agent-instructions">
+					Run instructions <span class="font-normal text-muted-foreground">(optional)</span>
+				</Label>
+				<Textarea
+					id="agent-instructions"
+					bind:value={form.instructions}
+					rows={3}
+					maxlength={4000}
+					{readonly}
+					aria-describedby="agent-instructions-hint"
+					placeholder={coding
+						? 'e.g. Only touch the frontend packages this time.'
+						: 'e.g. Summarise what changed since the last run.'}
+				/>
+				<p id="agent-instructions-hint" class="text-sm text-muted-foreground">
+					{coding
+						? 'Added after the task in each run.'
+						: `The task for each run, sent as its first message. When empty, the agent is just told “Execute your task now. Trigger: ${form.triggerType}.”`}
+				</p>
+			</div>
+		{/if}
 	</SettingsSection>
 
 	{#if coding}
@@ -406,7 +428,10 @@
 			{/if}
 		</SettingsSection>
 	{:else}
-		<SettingsSection title="Model">
+		<SettingsSection
+			title="Model"
+			description="What the agent thinks with, and how long a run may go."
+		>
 			{#if readonly}
 				<!-- Read-only values stack like the Basics fields. -->
 				<div class="flex flex-col gap-2">
@@ -435,9 +460,7 @@
 			<SettingsRow
 				label="Max steps"
 				for="agent-max-steps"
-				description={readonly
-					? 'Tool calls per run before the agent stops.'
-					: 'Tool calls per run before the agent stops.'}
+				description="Tool calls per run before the agent stops."
 				stack
 			>
 				{#if readonly}
@@ -520,18 +543,6 @@
 				/>
 			</SettingsRow>
 		{/if}
-		{#if form.triggerType !== 'persona' && form.triggerType !== 'schedule'}
-			<div class="flex flex-col gap-2 border-t border-border/60 pt-4">
-				<Label for="agent-instructions">Run instructions</Label>
-				<Textarea
-					id="agent-instructions"
-					bind:value={form.instructions}
-					rows={4}
-					{readonly}
-					placeholder="Instructions sent to the agent on each run"
-				/>
-			</div>
-		{/if}
 		{#if form.triggerType === 'http'}
 			<div class="flex flex-col gap-2 border-t border-border/60 pt-4 text-sm text-muted-foreground">
 				<p>
@@ -576,12 +587,13 @@
 				</Select.Root>
 			</SettingsRow>
 		{/if}
-		<!-- Existing agents are turned on and off from the page header. -->
-		{#if !agent}
+		<!-- Existing agents are turned on and off from the page header; only
+			automatic triggers care about it. -->
+		{#if !agent && (form.triggerType === 'schedule' || form.triggerType === 'event')}
 			<SettingsRow
 				label="Enabled"
 				for="agent-enabled"
-				description="Disabled agents never start on their own."
+				description="Turn off to set it up now and start the runs later."
 			>
 				<Switch
 					id="agent-enabled"
@@ -593,13 +605,13 @@
 	</SettingsSection>
 
 	{#if !coding}
-		<SettingsSection title="Tools">
+		<SettingsSection title="Tools" description="What the agent can use, and what it can change.">
 			<SettingsRow
 				label="Restrict tools"
 				for="restrict-tools"
 				description={form.restrictTools
-					? `${form.allowlist.length} of ${tools.length} tools allowed.`
-					: 'The agent can use every available tool.'}
+					? `${allowedToolCount} of ${tools.length} allowed. Tools added later stay off until you tick them.`
+					: 'The agent can use every tool, including ones from servers you add later.'}
 			>
 				<Switch
 					id="restrict-tools"
@@ -609,69 +621,24 @@
 				/>
 			</SettingsRow>
 			{#if form.restrictTools}
-				<div class="flex flex-col gap-4 border-t border-border/60 pt-4">
-					{#each toolGroups as group (group.server)}
-						<fieldset class="flex flex-col gap-1">
-							<legend class="pb-1 text-xs font-medium text-muted-foreground">
-								{group.server || 'Other'}
-							</legend>
-							<div class="grid gap-1 sm:grid-cols-2">
-								{#each group.tools as tool (tool.name)}
-									<label
-										class="flex items-start gap-2.5 rounded-lg px-2 py-1.5 text-sm hover:bg-accent/50"
-									>
-										<input
-											type="checkbox"
-											class="mt-0.5 size-4 shrink-0 accent-primary"
-											checked={form.allowlist.includes(tool.name)}
-											disabled={readonly}
-											onchange={(e) => toggleTool(tool.name, e.currentTarget.checked)}
-										/>
-										<span class="min-w-0">
-											<span class="block truncate font-mono text-xs font-medium">{tool.name}</span>
-											{#if tool.description}
-												<span
-													class="line-clamp-2 text-xs text-muted-foreground"
-													title={tool.description}>{tool.description}</span
-												>
-											{/if}
-										</span>
-									</label>
-								{/each}
-							</div>
-						</fieldset>
-					{:else}
-						<p class="text-sm text-muted-foreground">No tools available.</p>
-					{/each}
+				<div class="border-t border-border/60 pt-4">
+					<ToolAllowlist {tools} bind:value={form.allowlist} disabled={readonly} />
 				</div>
 			{/if}
 		</SettingsSection>
 	{/if}
 
 	{#if !readonly}
-		<!-- A full-width footer strip: the box shadows paint its background and top border out to the
-			scroll area's edges (and down over the page's bottom padding) without adding overflow, and
-			the clip-path keeps them from bleeding upward over the form. It stays in flow, so the last
-			section always scrolls clear of it. -->
-		<div
-			class="sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 bg-background/95 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_100vmax_0_100vmax_color-mix(in_oklab,var(--background)_95%,transparent),0_-1px_0_100vmax_var(--border)] backdrop-blur [clip-path:inset(-1px_-100vmax_-100vmax)] max-sm:[&>*:not(span)]:flex-1"
-		>
-			{#if missing || (agent && dirty)}
-				<span class="self-center text-xs text-muted-foreground max-sm:w-full sm:mr-auto"
-					>{missing ?? 'Unsaved changes'}</span
-				>
-			{/if}
-			{#if agent}
-				{#if dirty}
-					<Button variant="outline" onclick={discardChanges}>Discard</Button>
-				{/if}
-			{:else}
-				<Button variant="outline" href={resolve('/agents')}>Cancel</Button>
-			{/if}
-			<Button onclick={save} disabled={!canSave}>
-				{#if busy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-				{agent ? 'Save changes' : 'Create agent'}
-			</Button>
-		</div>
+		<FormFooter
+			saveLabel={agent ? 'Save changes' : 'Create agent'}
+			busyLabel={agent ? 'Saving…' : 'Creating…'}
+			{canSave}
+			{busy}
+			{missing}
+			dirty={!!agent && dirty}
+			onsave={save}
+			ondiscard={agent ? discardChanges : undefined}
+			cancel={agent ? undefined : resolve('/agents')}
+		/>
 	{/if}
 </div>

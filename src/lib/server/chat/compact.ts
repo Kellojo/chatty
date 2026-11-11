@@ -5,9 +5,10 @@ import { createSummary, unsummarizedMessages } from '../db/repo/conversation-sum
 import type { ConversationRow } from '../db/repo/conversations.js';
 import { listMessages, type MessageRow } from '../db/repo/messages.js';
 import { estimateMessagesChars } from '../llm/promptBreakdown.js';
-import { findModel, findRoleModel, type ModelRow } from '../db/repo/models.js';
+import { findModel, findRoleModel } from '../db/repo/models.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
 import { publishServerEvent } from '../events/bus.js';
+import { effectiveContextLength } from '../llm/lmstudio.js';
 import { resolveModel } from '../llm/registry.js';
 import { resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
@@ -93,13 +94,13 @@ export function messageTranscript(m: MessageRow): string {
 
 export function compactThreshold(
 	conversation: ConversationRow,
-	model: ModelRow | undefined,
+	contextLength: number | null | undefined,
 	keepMessages: number
 ): number | null {
 	if (config.CHAT_COMPACT_TOKENS === 0) return null;
 	const reserve = conversation.max_tokens ?? RESPONSE_RESERVE_TOKENS;
-	if (model?.context_length && model.context_length > 0) {
-		const budget = Math.floor((model.context_length - reserve) * SAFETY_MARGIN);
+	if (contextLength && contextLength > 0) {
+		const budget = Math.floor((contextLength - reserve) * SAFETY_MARGIN);
 		return Math.max(budget, MIN_THRESHOLD_TOKENS, keepMessages * 400);
 	}
 	return config.CHAT_COMPACT_TOKENS;
@@ -138,8 +139,7 @@ export async function maybeCompactConversation(
 			? Math.max(config.CHAT_COMPACT_KEEP_MESSAGES, 20)
 			: config.CHAT_COMPACT_KEEP_MESSAGES;
 
-	const model = findModel(db, fallbackRef.providerId, fallbackRef.modelId);
-	const threshold = compactThreshold(conversation, model, keep);
+	const threshold = compactThreshold(conversation, await effectiveContextLength(fallbackRef), keep);
 	if (threshold === null) return;
 
 	// 'partial' is a response still being generated; dead ones are settled at

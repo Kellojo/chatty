@@ -50,6 +50,17 @@ const schema = z.object({
 	ALLOW_PRIVATE_NETWORK_FETCH: boolFromString('false'),
 	PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 	ORIGIN: z.string().url().optional(),
+	// Web Push (VAPID). Without keys, a pair is generated once and stored in the
+	// database. The subject is the contact push services (Apple in particular)
+	// require: a `mailto:` address or an `https://` URL, never localhost.
+	VAPID_PUBLIC_KEY: z.string().min(1).optional(),
+	VAPID_PRIVATE_KEY: z.string().min(1).optional(),
+	VAPID_SUBJECT: z
+		.string()
+		.regex(/^(mailto:.+@.+|https:\/\/.+)$/, {
+			message: 'must be a mailto: address or https:// URL'
+		})
+		.optional(),
 	APP_SECRET: z.string().min(16).optional()
 });
 
@@ -66,6 +77,9 @@ function load(): Config {
 		if (!c.OIDC_ISSUER || !c.OIDC_CLIENT_ID || !c.OIDC_CLIENT_SECRET) {
 			throw new Error('OIDC_ONLY=true requires OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET');
 		}
+	}
+	if (!!c.VAPID_PUBLIC_KEY !== !!c.VAPID_PRIVATE_KEY) {
+		throw new Error('VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be set together');
 	}
 	return c;
 }

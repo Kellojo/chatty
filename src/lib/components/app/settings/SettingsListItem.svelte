@@ -29,7 +29,7 @@
 		meta?: Snippet;
 		/** Switch and actions menu on the right. */
 		trailing?: Snippet;
-		/** Dim the row's icon, e.g. for a disabled entry (its switch shows the state). */
+		/** Dim the row's icon and title, e.g. for a disabled entry (its switch shows the state). */
 		muted?: boolean;
 		/** Extra content under the meta line. */
 		children?: Snippet;
@@ -57,7 +57,12 @@
 		</div>
 	{/if}
 	<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-		<div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+		<div
+			class={cn(
+				'flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1',
+				muted && 'text-muted-foreground'
+			)}
+		>
 			{#if href}
 				<!-- eslint-disable svelte/no-navigation-without-resolve -- callers pass resolve()d hrefs -->
 				<a

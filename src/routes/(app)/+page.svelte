@@ -33,6 +33,7 @@
 	import { clipboardFiles } from '$lib/state/clipboard-files.js';
 	import { DEFAULT_CODING_SUGGESTIONS, DEFAULT_SUGGESTIONS } from '$lib/user-settings.js';
 	import { START_MODE_COOKIE } from '$lib/coding-environments.js';
+	import { sharedDraft } from '$lib/share-target.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { PageData } from './$types';
 
@@ -124,6 +125,24 @@
 			toast.error('Conversation not found');
 			goto(resolve('/'), { replaceState: true });
 		}
+	});
+
+	// App icon shortcuts (`?mode=`) and shares from other apps (share target),
+	// both from the manifest in vite.config.ts. Applied once, then dropped from
+	// the URL so a reload doesn't repeat them.
+	$effect(() => {
+		const params = page.url.searchParams;
+		const startMode = params.get('mode');
+		const shared = sharedDraft(params);
+		if (startMode === null && shared === null) return;
+		untrack(() => {
+			if (startMode === 'chat' || startMode === 'coding') setMode(startMode);
+			if (shared !== null) {
+				setMode('chat');
+				if (shared) useSuggestion(shared);
+			}
+		});
+		goto(resolve('/'), { replaceState: true, keepFocus: true, noScroll: true });
 	});
 
 	const fileDrop = createFileDrop((files) => {

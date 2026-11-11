@@ -86,16 +86,16 @@ describe('compactThreshold', () => {
 		vi.resetModules();
 	});
 
-	it('uses model context length when available', () => {
+	it('uses the context length when known', () => {
 		const conv = { max_tokens: null } as import('../db/repo/conversations.js').ConversationRow;
-		const model = { context_length: 100000 } as import('../db/repo/models.js').ModelRow;
+		const model = 100000;
 		// (100000 - 4096) * 0.85 = 81518
 		expect(compact.compactThreshold(conv, model, 10)).toBe(81518);
 	});
 
 	it('respects max_tokens reserve', () => {
 		const conv = { max_tokens: 10000 } as import('../db/repo/conversations.js').ConversationRow;
-		const model = { context_length: 100000 } as import('../db/repo/models.js').ModelRow;
+		const model = 100000;
 		// (100000 - 10000) * 0.85 = 76500
 		expect(compact.compactThreshold(conv, model, 10)).toBe(76500);
 	});
@@ -103,18 +103,12 @@ describe('compactThreshold', () => {
 	it('falls back to the env constant without context length', () => {
 		const conv = { max_tokens: null } as import('../db/repo/conversations.js').ConversationRow;
 		expect(compact.compactThreshold(conv, undefined, 10)).toBe(1000);
-		expect(
-			compact.compactThreshold(
-				conv,
-				{ context_length: null } as import('../db/repo/models.js').ModelRow,
-				10
-			)
-		).toBe(1000);
+		expect(compact.compactThreshold(conv, null, 10)).toBe(1000);
 	});
 
 	it('clamps to a floor so tiny windows still work', () => {
 		const conv = { max_tokens: null } as import('../db/repo/conversations.js').ConversationRow;
-		const model = { context_length: 4000 } as import('../db/repo/models.js').ModelRow;
+		const model = 4000;
 		expect(compact.compactThreshold(conv, model, 10)).toBe(4000);
 	});
 });

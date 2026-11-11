@@ -9,6 +9,7 @@ import {
 	hasRunningAgentRun,
 	lastSuccessfulAgentRunStartedAt,
 	listAgentRuns,
+	listLatestAgentRuns,
 	listRunningAgentIds,
 	toPublic
 } from './agent-runs.js';
@@ -115,6 +116,24 @@ describe('agent-runs repo', () => {
 		createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
 		createAgentRun(db, { agentId, userId: 'u1', trigger: 'schedule' });
 		expect(listRunningAgentIds(db, [agentId])).toEqual([agentId]);
+	});
+
+	it('listLatestAgentRuns returns the newest run per agent for the user', () => {
+		db.prepare(
+			`INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role) VALUES ('u2', 'd@e.f', 'D', 0, 0, 0, 'user')`
+		).run();
+		const other = createAgent(db, 'u1', { name: 'b', systemPrompt: 'x', triggerType: 'manual' }).id;
+		const idle = createAgent(db, 'u1', { name: 'c', systemPrompt: 'x', triggerType: 'manual' }).id;
+		const old = createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
+		const newest = createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
+		db.prepare('UPDATE agent_runs SET started_at = 100 WHERE id = ?').run(old.id);
+		db.prepare('UPDATE agent_runs SET started_at = 200 WHERE id = ?').run(newest.id);
+		const theirs = createAgentRun(db, { agentId, userId: 'u2', trigger: 'manual' });
+		db.prepare('UPDATE agent_runs SET started_at = 300 WHERE id = ?').run(theirs.id);
+		const otherRun = createAgentRun(db, { agentId: other, userId: 'u1', trigger: 'manual' });
+		const latest = listLatestAgentRuns(db, [agentId, other, idle], 'u1');
+		expect(latest.map((r) => r.id).sort()).toEqual([newest.id, otherRun.id].sort());
+		expect(listLatestAgentRuns(db, [], 'u1')).toEqual([]);
 	});
 
 	it('failRunningAgentRuns marks only running rows', () => {

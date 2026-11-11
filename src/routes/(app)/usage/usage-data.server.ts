@@ -4,9 +4,12 @@ import { config } from '$lib/server/config.js';
 import type { Db } from '$lib/server/db/index.js';
 import {
 	listCodingEnvironments,
+	listResetCredits,
 	listUsageDaily,
+	listUsageLimitSamples,
 	listUsageLimits,
-	toPublic
+	toPublic,
+	USAGE_LIMIT_SAMPLE_RETENTION_MS
 } from '$lib/server/db/repo/coding-environments.js';
 import {
 	proxyRequestFirstStartedAt,
@@ -27,6 +30,7 @@ import {
 	type SubscriptionUsage,
 	type UsagePeriod
 } from '$lib/components/app/usage/usage.js';
+import { limitHistoryKey, type LimitHistorySample } from '$lib/components/app/usage/burndown.js';
 import type { PaygProviderWithCache, PaygUsageWithCache } from '$lib/usage-cache-types.js';
 
 const DAY_MS = 86_400_000;
@@ -199,7 +203,11 @@ export function loadSubscriptionUsage(
 	const envNames = new Map(environments.map((e) => [e.id, e.name]));
 
 	// ── limit windows, grouped per provider account ──
-	const accounts = groupUsageAccounts(listUsageLimits(db, userId), envNames);
+	const accounts = groupUsageAccounts(
+		listUsageLimits(db, userId),
+		envNames,
+		listResetCredits(db, userId)
+	);
 
 	// ── daily token/cost buckets ──
 	// Subscription usage only exists as whole days: 24h shows today's bucket, "all time" starts
@@ -296,6 +304,54 @@ export function loadSubscriptionUsage(
 		anyUnpriced: sorted.some((p) => !p.priced),
 		note
 	};
+}
+
+/** Most points one limit chart draws; longer histories are thinned to about this many. */
+const MAX_LIMIT_POINTS = 600;
+
+/**
+ * Evenly thins readings to about `MAX_LIMIT_POINTS`, always keeping the first and last
+ * reading of every window so resets land where they happened.
+ */
+export function thinLimitHistory(samples: LimitHistorySample[]): LimitHistorySample[] {
+	if (samples.length <= MAX_LIMIT_POINTS) return samples;
+	const gap = (samples.at(-1)!.at - samples[0].at) / MAX_LIMIT_POINTS;
+	const out = [samples[0]];
+	for (let i = 1; i < samples.length; i++) {
+		const s = samples[i];
+		const next = samples[i + 1];
+		const last = out.at(-1)!;
+		if (
+			!next ||
+			next.resetsAt !== s.resetsAt ||
+			s.resetsAt !== last.resetsAt ||
+			s.at - last.at >= gap
+		)
+			out.push(s);
+	}
+	return out;
+}
+
+/**
+ * Synced readings of each plan-limit window inside the selected range, keyed by
+ * `limitHistoryKey`, oldest first and thinned for drawing.
+ */
+export function loadLimitHistory(
+	db: Db,
+	userId: string,
+	window: Pick<UsageWindow, 'fromMs' | 'toMs' | 'now'>
+): Record<string, LimitHistorySample[]> {
+	const since = Math.max(window.fromMs ?? 0, window.now - USAGE_LIMIT_SAMPLE_RETENTION_MS);
+	const history: Record<string, LimitHistorySample[]> = {};
+	for (const s of listUsageLimitSamples(db, userId, since, window.toMs)) {
+		(history[limitHistoryKey(s)] ??= []).push({
+			at: s.sampledAt,
+			used: s.usedPercent,
+			resetsAt: s.resetsAt
+		});
+	}
+	for (const key of Object.keys(history)) history[key] = thinLimitHistory(history[key]);
+	return history;
 }
 
 /** Actual spend through Chatty's configured providers (billed per token). */

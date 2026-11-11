@@ -51,9 +51,15 @@ export function formatRunDuration(run: {
 	endedAt: number | null;
 }): string | null {
 	if (!run.endedAt) return null;
-	const seconds = (run.endedAt - run.startedAt) / 1000;
+	return formatDurationMs(run.endedAt - run.startedAt);
+}
+
+/** 4200 → "4.2s", 192000 → "3m 12s". */
+export function formatDurationMs(ms: number): string {
+	const seconds = ms / 1000;
 	if (seconds < 60) return `${seconds.toFixed(1)}s`;
-	return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+	const total = Math.round(seconds);
+	return `${Math.floor(total / 60)}m ${total % 60}s`;
 }
 
 /**

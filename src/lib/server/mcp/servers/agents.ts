@@ -6,7 +6,11 @@ import {
 	prepareAgentCreate,
 	prepareAgentUpdate
 } from '../../agentInput.js';
+import { runsAsChats } from '../../agents/run-lifecycle.js';
+import { describeRunResult, RUN_WAIT_MAX_MS, waitForRunToSettle } from '../../agents/run-result.js';
+import { startAgentRun } from '../../agents/runner.js';
 import { getDb, type Db } from '../../db/index.js';
+import { getAgentRun, getRunningAgentRun, type AgentRunRow } from '../../db/repo/agent-runs.js';
 import {
 	createAgent,
 	deleteAgent,
@@ -18,6 +22,7 @@ import {
 } from '../../db/repo/agents.js';
 import { findModel } from '../../db/repo/models.js';
 import { createLogger } from '../../logger.js';
+import { MAX_LAUNCH_PROMPT } from '../../t3/tasks.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
 
@@ -32,6 +37,20 @@ const CARD_HINT =
 	'To show the agent as a card with Open and Run buttons, reply with a ```agent fenced code block containing the result JSON (systemPrompt may be left out).';
 
 /** The public agent plus its model's display name, which the ```agent card shows. */
+/** A run as start_agent / get_agent_run return it (the chat's agent run row reads this). */
+function runResult(db: Db, run: AgentRunRow, agent: AgentRow) {
+	return text(
+		JSON.stringify(
+			describeRunResult(
+				db,
+				run,
+				{ id: agent.id, name: agent.name },
+				{ visible: runsAsChats(agent) }
+			)
+		)
+	);
+}
+
 function agentResult(db: Db, row: AgentRow) {
 	const agent = toPublic(row);
 	const model =
@@ -181,6 +200,111 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 			deleteAgent(db, agentId);
 			log.info('delete_agent', { userId: ctx.userId, agentId });
 			return text(`deleted agent ${agentId}`);
+		}
+	);
+
+	server.registerTool(
+		'start_agent',
+		{
+			description:
+				"Start a run of an agent owned by the current user. By default the run works in the background and this returns right away. With wait: true it returns once the run has finished (or asks the user a question), with the agent's reply as `result`; the chat shows the run live meanwhile. Optional instructions replace the agent's saved instructions for this run. Coding agents always run their saved task.",
+			inputSchema: {
+				agentId: z.string(),
+				instructions: z
+					.string()
+					.max(MAX_LAUNCH_PROMPT)
+					.optional()
+					.describe('What the agent should do this run; defaults to its saved instructions'),
+				wait: z
+					.boolean()
+					.optional()
+					.describe(
+						`Wait for the run to finish and return its result (up to ${RUN_WAIT_MAX_MS / 60_000} minutes). Use it when you need the result to answer the user.`
+					)
+			}
+		},
+		async ({ agentId, instructions, wait }, extra) => {
+			const db = getDb();
+			const agent = getAgent(db, agentId);
+			if (!agent || (agent.user_id !== ctx.userId && agent.user_id !== null)) {
+				log.warn('start_agent not found', { userId: ctx.userId, agentId });
+				return err('agent not found');
+			}
+			if (agent.user_id === null) {
+				log.warn('start_agent builtin attempt', { userId: ctx.userId, agentId });
+				return err('built-in agents run on their own schedule and cannot be started here');
+			}
+			const task = instructions?.trim() || undefined;
+			// Free-form instructions would let a chat model direct arbitrary work
+			// in the user's repositories, as for API keys.
+			if (agent.coding_target && task) {
+				return err('coding agents run their saved task; instructions are not accepted');
+			}
+			// An agent starting itself would chain runs without end.
+			if (ctx.agentRunId && getAgentRun(db, ctx.agentRunId)?.agent_id === agentId) {
+				log.warn('start_agent self start', { userId: ctx.userId, agentId });
+				return err('an agent cannot start itself');
+			}
+			const running = getRunningAgentRun(db, agentId, ctx.userId);
+			if (running) {
+				// The run id lets the model wait on it, and the chat link to it.
+				return err(
+					`agent is already running (run ${running.id}); call get_agent_run with this runId and wait: true to wait for it`
+				);
+			}
+			try {
+				const { run, done } = await startAgentRun({
+					agentId,
+					trigger: 'manual',
+					userId: ctx.userId,
+					instructions: task
+				});
+				done.catch(() => undefined);
+				log.info('start_agent', { userId: ctx.userId, agentId, runId: run.id, wait: !!wait });
+				const settled = wait
+					? await waitForRunToSettle(db, run, {
+							timeoutMs: RUN_WAIT_MAX_MS,
+							signal: extra.signal
+						})
+					: run;
+				return runResult(db, settled, agent);
+			} catch (e) {
+				const message = e instanceof Error ? e.message : 'failed to start agent run';
+				log.warn('start_agent failed', { userId: ctx.userId, agentId, error: message });
+				return err(message);
+			}
+		}
+	);
+
+	server.registerTool(
+		'get_agent_run',
+		{
+			description:
+				"Get an agent run's status and, once it has finished, the agent's reply as `result`. With wait: true it returns once a running run has finished (or asks the user a question).",
+			inputSchema: {
+				runId: z.string(),
+				wait: z
+					.boolean()
+					.optional()
+					.describe(
+						`Wait for a running run to finish (up to ${RUN_WAIT_MAX_MS / 60_000} minutes) before returning`
+					)
+			}
+		},
+		async ({ runId, wait }, extra) => {
+			const db = getDb();
+			const run = getAgentRun(db, runId);
+			const agent = run ? getAgent(db, run.agent_id) : undefined;
+			if (!run || !agent || run.user_id !== ctx.userId) {
+				log.warn('get_agent_run not found', { userId: ctx.userId, runId });
+				return err('agent run not found');
+			}
+			const settled =
+				wait && run.status === 'running'
+					? await waitForRunToSettle(db, run, { timeoutMs: RUN_WAIT_MAX_MS, signal: extra.signal })
+					: run;
+			log.info('get_agent_run', { userId: ctx.userId, runId, status: settled.status });
+			return runResult(db, settled, agent);
 		}
 	);
 

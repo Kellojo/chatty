@@ -14,13 +14,12 @@
 	import { untrack } from 'svelte';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import FolderIcon from '@lucide/svelte/icons/folder';
-	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
-	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import MarkdownEditor, { type LinkTarget } from './MarkdownEditor.svelte';
 	import TagInput from './TagInput.svelte';
 	import SuggestInput from './SuggestInput.svelte';
+	import FormFooter from './FormFooter.svelte';
 	import { markMemoryLinksRelative } from '$lib/memory-links.js';
 
 	let {
@@ -66,10 +65,6 @@
 	const uid = $props.id();
 	// An edit would move the file; only meaningful once there's a saved location.
 	const moved = $derived(mode === 'edit' && !!savedPath && draft.path !== savedPath);
-	let mod = $state('Ctrl');
-	$effect(() => {
-		if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) mod = '⌘';
-	});
 
 	const tags = $derived(
 		draft.tags
@@ -240,28 +235,14 @@
 	/>
 
 	<!-- Stays in view below the tall content field. -->
-	<div
-		class="sticky bottom-0 z-20 -mx-1 flex items-center gap-2 border-t bg-background/95 px-1 py-3 backdrop-blur"
-	>
-		<p class="mr-auto flex min-w-0 items-center text-xs text-muted-foreground">
-			<!-- Only the status is announced, not the static shortcut hint. -->
-			<span class="flex items-center gap-2" aria-live="polite">
-				{#if missing}
-					{missing}
-				{:else if dirty}
-					<span class="size-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden="true"></span>
-					Unsaved changes
-				{/if}
-			</span>
-			<span class="hidden truncate md:inline">
-				{#if missing || dirty}<span class="mx-1.5" aria-hidden="true">·</span>{/if}{mod}+S to save ·
-				Esc to cancel
-			</span>
-		</p>
-		<Button variant="ghost" onclick={oncancel}>Cancel</Button>
-		<Button type="submit" disabled={!canSave} title="Save ({mod}+S)">
-			{#if saveBusy}<LoaderCircleIcon class="size-4 animate-spin" />{/if}
-			{mode === 'new' ? 'Create memory' : 'Save changes'}
-		</Button>
-	</div>
+	<FormFooter
+		saveLabel={mode === 'new' ? 'Create memory' : 'Save changes'}
+		busyLabel={mode === 'new' ? 'Creating…' : 'Saving…'}
+		{canSave}
+		busy={saveBusy}
+		{missing}
+		dirty={mode === 'edit' && dirty}
+		cancel={oncancel}
+		escHint
+	/>
 </form>

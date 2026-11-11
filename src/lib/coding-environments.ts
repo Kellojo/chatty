@@ -36,6 +36,26 @@ export interface CodingUsageLimitWindow {
 	checkedAt: number;
 }
 
+/** Extra resets a provider account can redeem to refill its limits early. */
+export interface CodingResetCredits {
+	environmentId: string;
+	accountId: string;
+	availableCount: number;
+	/** When the soonest-expiring credit lapses; null if the server doesn't say. */
+	nextExpiresAt: number | null;
+	checkedAt: number;
+}
+
+/** One synced reading of a plan-limit window, for its burn-down history. */
+export interface CodingUsageLimitSample {
+	environmentId: string;
+	accountId: string;
+	windowId: string;
+	sampledAt: number;
+	usedPercent: number;
+	resetsAt: number | null;
+}
+
 export interface CodingUsageDailyRow {
 	environmentId: string;
 	day: string;
