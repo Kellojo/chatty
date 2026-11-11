@@ -32,6 +32,18 @@ export function formatTimeAgo(timestamp: number, now = Date.now()): string {
 	return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(timestamp);
 }
 
+/** How long until `timestamp`, e.g. "in 5m", "in 18h", "in 3d" ("soon" when it's due). */
+export function formatTimeUntil(timestamp: number, now = Date.now()): string {
+	const minutes = Math.round((timestamp - now) / 60_000);
+	if (minutes < 1) return 'soon';
+	if (minutes < 60) return `in ${minutes}m`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 24) return `in ${hours}h`;
+	const days = Math.round(hours / 24);
+	if (days < 30) return `in ${days}d`;
+	return `on ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(timestamp)}`;
+}
+
 export function formatMessageTime(timestamp: number, format: TimeFormat, now = new Date()): string {
 	const date = new Date(timestamp);
 	const sameDay =

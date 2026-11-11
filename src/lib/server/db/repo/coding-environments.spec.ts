@@ -124,6 +124,23 @@ describe('coding environments repo', () => {
 		});
 	});
 
+	it('replaces extra resets per environment and lists them per user', () => {
+		const row = repo.createCodingEnvironment(db, 'u1', {
+			name: 'a',
+			baseUrl: 'http://a',
+			token: 't'
+		});
+		const credit = { accountId: 'codex', availableCount: 2, nextExpiresAt: 50, checkedAt: 1 };
+		repo.replaceResetCredits(db, row.id, [credit]);
+		repo.replaceResetCredits(db, row.id, [{ ...credit, availableCount: 1 }]);
+		expect(repo.listResetCredits(db, 'u1')).toEqual([
+			{ environmentId: row.id, ...credit, availableCount: 1 }
+		]);
+		expect(repo.listResetCredits(db, 'u2')).toEqual([]);
+		repo.replaceResetCredits(db, row.id, []);
+		expect(repo.listResetCredits(db, 'u1')).toEqual([]);
+	});
+
 	it('replaces limit windows and lists them per user', () => {
 		const row = repo.createCodingEnvironment(db, 'u1', {
 			name: 'a',
@@ -139,6 +156,27 @@ describe('coding environments repo', () => {
 		expect(limits).toHaveLength(1);
 		expect(limits[0]).toMatchObject({ environmentId: row.id, usedPercent: 55 });
 		expect(repo.listUsageLimits(db, 'u2')).toEqual([]);
+	});
+
+	it('records limit samples once per reading and prunes old ones', () => {
+		const row = repo.createCodingEnvironment(db, 'u1', {
+			name: 'a',
+			baseUrl: 'http://a',
+			token: 't'
+		});
+		const now = 100 * 86_400_000;
+		const old = now - repo.USAGE_LIMIT_SAMPLE_RETENTION_MS - 1;
+		repo.recordUsageLimitSamples(db, row.id, [limit({ checkedAt: old })], old);
+		repo.recordUsageLimitSamples(db, row.id, [limit({ checkedAt: now - 10 })], now);
+		repo.recordUsageLimitSamples(db, row.id, [limit({ checkedAt: now - 10 })], now);
+		repo.recordUsageLimitSamples(db, row.id, [limit({ checkedAt: now, usedPercent: 55 })], now);
+		const samples = repo.listUsageLimitSamples(db, 'u1', 0);
+		expect(samples.map((s) => [s.sampledAt, s.usedPercent])).toEqual([
+			[now - 10, 40],
+			[now, 55]
+		]);
+		expect(repo.listUsageLimitSamples(db, 'u1', now)).toHaveLength(1);
+		expect(repo.listUsageLimitSamples(db, 'u2', 0)).toEqual([]);
 	});
 
 	it('replaces daily buckets within the synced range and sums duplicates', () => {

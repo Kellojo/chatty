@@ -49,9 +49,12 @@
 			bottom: 20
 		};
 	});
-	// ~6 short labels, anchored on the last day so "today" is always labelled.
+	// Up to ~6 short labels (fewer on narrow screens, ~64px each), anchored on the last
+	// day so "today" is always labelled.
+	let width = $state(0);
 	const ticks = $derived.by(() => {
-		const step = Math.max(1, Math.ceil(rows.length / 6));
+		const maxLabels = width > 0 ? Math.max(2, Math.min(6, Math.floor(width / 64))) : 6;
+		const step = Math.max(1, Math.ceil(rows.length / maxLabels));
 		return rows.filter((_, i) => (rows.length - 1 - i) % step === 0).map((row) => String(row.day));
 	});
 </script>
@@ -59,38 +62,40 @@
 {#if isEmpty}
 	<p class="py-3 text-sm text-muted-foreground">{emptyText}</p>
 {:else}
-	<Chart.Container {config} class={cn('w-full', className)}>
-		<BarChart
-			data={rows}
-			x="day"
-			{series}
-			seriesLayout="stack"
-			legend={false}
-			rule={false}
-			{padding}
-			props={{
-				// No outline: with the default 1px stroke, zero-value days drew stubs that read as data.
-				bars: { strokeWidth: 0 },
-				xAxis: { ticks, format: (d: string) => formatDayShort(d) },
-				yAxis: { format: (v: number) => formatAxis(v) }
-			}}
-		>
-			{#snippet tooltip()}
-				<Chart.Tooltip labelFormatter={(d: string) => formatDayLong(d)}>
-					{#snippet formatter({ value, name, item })}
-						<div class="flex w-full items-center gap-2">
-							<span class="size-2.5 shrink-0 rounded-[2px]" style:background-color={item.color}
-							></span>
-							<span class="flex-1 text-muted-foreground">{name}</span>
-							<span class="font-mono font-medium text-foreground tabular-nums">
-								{valueFormat(Number(value))}
-							</span>
-						</div>
-					{/snippet}
-				</Chart.Tooltip>
-			{/snippet}
-		</BarChart>
-	</Chart.Container>
+	<div bind:clientWidth={width}>
+		<Chart.Container {config} class={cn('w-full', className)}>
+			<BarChart
+				data={rows}
+				x="day"
+				{series}
+				seriesLayout="stack"
+				legend={false}
+				rule={false}
+				{padding}
+				props={{
+					// No outline: with the default 1px stroke, zero-value days drew stubs that read as data.
+					bars: { strokeWidth: 0 },
+					xAxis: { ticks, format: (d: string) => formatDayShort(d) },
+					yAxis: { format: (v: number) => formatAxis(v) }
+				}}
+			>
+				{#snippet tooltip()}
+					<Chart.Tooltip labelFormatter={(d: string) => formatDayLong(d)}>
+						{#snippet formatter({ value, name, item })}
+							<div class="flex w-full items-center gap-2">
+								<span class="size-2.5 shrink-0 rounded-[2px]" style:background-color={item.color}
+								></span>
+								<span class="flex-1 text-muted-foreground">{name}</span>
+								<span class="font-mono font-medium text-foreground tabular-nums">
+									{valueFormat(Number(value))}
+								</span>
+							</div>
+						{/snippet}
+					</Chart.Tooltip>
+				{/snippet}
+			</BarChart>
+		</Chart.Container>
+	</div>
 	<!-- Own legend: the chart's built-in one is a single centred row that clips long
 	     model ids on narrow screens; this one wraps. -->
 	{#if series.length >= 2}

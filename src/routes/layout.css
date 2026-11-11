@@ -260,3 +260,16 @@
 		background-position: 0% 0;
 	}
 }
+
+/*
+ * Paints an element's strip out to its scroll area's side edges, for full-width bars inside a
+ * padded column: the box shadows carry the background and a top border sideways without adding
+ * overflow, and the clip-path keeps them off whatever sits above and below.
+ */
+@utility bleed-x-bar {
+	background-color: var(--background);
+	box-shadow:
+		0 0 0 100vmax var(--background),
+		0 -1px 0 100vmax var(--border);
+	clip-path: inset(-1px -100vmax 0);
+}

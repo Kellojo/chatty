@@ -1,7 +1,11 @@
 // Client-safe types and helpers shared by the Usage pages (Overview, Requests,
 // Subscriptions) and their server loads.
 
-import type { CodingEnvironment, CodingUsageLimitWindow } from '$lib/coding-environments.js';
+import type {
+	CodingEnvironment,
+	CodingResetCredits,
+	CodingUsageLimitWindow
+} from '$lib/coding-environments.js';
 import { formatCost, formatSpend } from '$lib/formats.js';
 
 // ── period ───────────────────────────────────────────────────────────────
@@ -208,6 +212,8 @@ export interface UsageAccount {
 	accountPlan: string | null;
 	checkedAt: number;
 	windows: CodingUsageLimitWindow[];
+	/** Extra resets the account can redeem; null when the server reports none. */
+	resetCredits: { availableCount: number; nextExpiresAt: number | null } | null;
 }
 
 /** Subscription usage per provider, priced at API list prices (not billed). */
@@ -341,8 +347,10 @@ export function remainingPercent(window: CodingUsageLimitWindow): number {
 /** Limit windows grouped per provider account of each environment, in input order. */
 export function groupUsageAccounts(
 	windows: CodingUsageLimitWindow[],
-	environmentNames: ReadonlyMap<string, string>
+	environmentNames: ReadonlyMap<string, string>,
+	resetCredits: CodingResetCredits[] = []
 ): UsageAccount[] {
+	const credits = new Map(resetCredits.map((c) => [`${c.environmentId}:${c.accountId}`, c]));
 	const accounts = new Map<string, UsageAccount>();
 	for (const w of windows) {
 		const key = `${w.environmentId}:${w.accountId}`;
@@ -357,7 +365,13 @@ export function groupUsageAccounts(
 				accountEmail: w.accountEmail,
 				accountPlan: w.accountPlan,
 				checkedAt: w.checkedAt,
-				windows: []
+				windows: [],
+				resetCredits: credits.has(key)
+					? {
+							availableCount: credits.get(key)!.availableCount,
+							nextExpiresAt: credits.get(key)!.nextExpiresAt
+						}
+					: null
 			};
 			accounts.set(key, account);
 		}
@@ -396,6 +410,17 @@ export function distinctUsageAccounts(accounts: UsageAccount[]): UsageAccount[] 
 		if (!seen || account.checkedAt > seen.checkedAt) latest.set(loginKey(account), account);
 	}
 	return accounts.filter((a) => latest.get(loginKey(a)) === a);
+}
+
+/** Accounts per provider (in first-seen order), each login once across environments. */
+export function usageAccountsByProvider(
+	accounts: UsageAccount[]
+): { provider: string; accounts: UsageAccount[] }[] {
+	const groups = new Map<string, UsageAccount[]>();
+	for (const a of distinctUsageAccounts(accounts)) {
+		groups.set(a.provider, [...(groups.get(a.provider) ?? []), a]);
+	}
+	return [...groups].map(([provider, list]) => ({ provider, accounts: list }));
 }
 
 /** The plan-limit window closest to its cap, across all accounts (expired windows skipped). */

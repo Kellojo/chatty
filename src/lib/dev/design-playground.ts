@@ -472,7 +472,53 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 			{ id: 'a-2', name: 'daily-digest' }
 		),
 		mcp('update_agent', { agentId: 'a-2', enabled: false }, { id: 'a-2', enabled: false }),
-		mcp('delete_agent', { agentId: 'a-2' }, 'deleted agent a-2')
+		mcp('delete_agent', { agentId: 'a-2' }, 'deleted agent a-2'),
+		mcp(
+			'start_agent',
+			{ agentId: 'a-1', wait: true },
+			{
+				run: {
+					id: 'r-1',
+					agentId: 'a-1',
+					userId: 'u-1',
+					trigger: 'manual',
+					status: 'success',
+					conversationId: 'c-1',
+					error: null,
+					startedAt: 1_760_000_000_000,
+					endedAt: 1_760_000_083_000
+				},
+				agent: { id: 'a-1', name: 'Meal Planner' },
+				runPath: '/agents/a-1/runs/r-1',
+				chatPath: null,
+				result: '## This week’s dinners\n\n- **Mon:** Lemon chickpea pasta\n- **Tue:** Miso salmon',
+				question: null,
+				note: 'The run finished. Summarise its result for the user.'
+			}
+		),
+		mcp(
+			'get_agent_run',
+			{ runId: 'r-2' },
+			{
+				run: {
+					id: 'r-2',
+					agentId: 'a-1',
+					userId: 'u-1',
+					trigger: 'manual',
+					status: 'awaiting_input',
+					conversationId: 'c-2',
+					error: null,
+					startedAt: 1_760_000_000_000,
+					endedAt: 1_760_000_031_000
+				},
+				agent: { id: 'a-1', name: 'Meal Planner' },
+				runPath: '/agents/a-1/runs/r-2',
+				chatPath: '/chat/c-2',
+				result: null,
+				question: 'Should I plan a vegetarian week?',
+				note: "The agent stopped to ask the user a question. Relay it; the user answers in the run's chat (chatPath)."
+			}
+		)
 	],
 	skills: [
 		mcp(

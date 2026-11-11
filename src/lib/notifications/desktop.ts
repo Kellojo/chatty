@@ -33,7 +33,8 @@ export async function showDesktopNotice(
 		tag: notice.tag,
 		icon: '/pwa-192x192.png',
 		badge: '/pwa-192x192.png',
-		data: { url: notice.url }
+		// shownAt lets a push of the same notice replace this one without alerting again.
+		data: { url: notice.url, shownAt: Date.now() }
 	};
 	const registration = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
 	if (registration?.active) {

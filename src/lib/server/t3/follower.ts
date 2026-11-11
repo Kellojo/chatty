@@ -1122,6 +1122,12 @@ export class CodingFollower {
 				(summary.status === 'idle' ||
 					summary.status === 'failed' ||
 					summary.status === 'interrupted');
+			if (summary.status === 'awaiting_input') {
+				publishServerEvent(this.userId, {
+					type: 'coding.task.awaiting_input',
+					conversationId: this.conversationId
+				});
+			}
 			if (ended) {
 				publishServerEvent(this.userId, {
 					type: 'coding.thread.finished',

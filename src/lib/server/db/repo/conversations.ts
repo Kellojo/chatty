@@ -197,6 +197,17 @@ export function listConversationsSince(
 		.all(userId, since) as ConversationRow[];
 }
 
+/** One conversation with the coding-task and agent-run summary the sidebar shows. */
+export function getSidebarConversation(
+	db: Db,
+	userId: string,
+	id: string
+): ConversationRow | undefined {
+	return db
+		.prepare(`${SIDEBAR_SELECT} WHERE c.id = ? AND c.user_id = ? AND c.deleted_at IS NULL`)
+		.get(id, userId) as ConversationRow | undefined;
+}
+
 export function getConversation(db: Db, userId: string, id: string): ConversationRow | undefined {
 	return db
 		.prepare('SELECT * FROM conversations WHERE id = ? AND user_id = ? AND deleted_at IS NULL')

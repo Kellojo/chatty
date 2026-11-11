@@ -6,6 +6,7 @@ import {
 	listAwaitingAgentRunConversationIds,
 	listAwaitingAgentRunsBefore
 } from './db/repo/agent-runs.js';
+import { deleteStalePushSubscriptions } from './db/repo/push-subscriptions.js';
 import {
 	deleteUnlinkedAttachment,
 	listAttachmentPaths,
@@ -154,6 +155,9 @@ export async function runDailyJobs(db: Db = getDb()): Promise<void> {
 
 	const purged = purgeSoftDeletedConversations(db);
 	if (purged > 0) log.info(`Purged ${purged} soft-deleted conversation(s)`);
+
+	const stalePush = deleteStalePushSubscriptions(db);
+	if (stalePush > 0) log.info(`Removed ${stalePush} push subscription(s) of ended sessions`);
 
 	const agentRemoved = gcAgentWorkspaces(config.WORKSPACE_GC_DAYS);
 	for (const name of agentRemoved) {

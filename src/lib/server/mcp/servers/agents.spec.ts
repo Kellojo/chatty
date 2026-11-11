@@ -1,12 +1,20 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
 
+const startAgentRun = vi.fn();
+vi.doMock('../../agents/runner.js', () => ({ startAgentRun }));
+
 const { createAgentsServer } = await import('./agents.js');
 const { getDb } = await import('../../db/index.js');
 const { createAgent } = await import('../../db/repo/agents.js');
+const { createAgentRun, finishAgentRun } = await import('../../db/repo/agent-runs.js');
+const { createConversation } = await import('../../db/repo/conversations.js');
+const { createMessage } = await import('../../db/repo/messages.js');
+const { publishServerEvent } = await import('../../events/bus.js');
+const { waitForRunToSettle } = await import('../../agents/run-result.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
 
@@ -42,9 +50,13 @@ beforeAll(() => {
 	}).id;
 });
 
-async function callTool(name: string, args: Record<string, unknown>) {
+async function callTool(
+	name: string,
+	args: Record<string, unknown>,
+	callerCtx: Parameters<typeof createAgentsServer>[0] = ctx
+) {
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const server = createAgentsServer(ctx);
+	const server = createAgentsServer(callerCtx);
 	await server.connect(serverTransport);
 	const client = await createMCPClient({ transport: clientTransport, maxRetries: 0 });
 	try {
@@ -348,6 +360,222 @@ describe('delete_agent', () => {
 	it("rejects deleting another user's agent", async () => {
 		const res = await callTool('delete_agent', { agentId: otherId });
 		expect(isErr(res)).toBe(true);
+	});
+});
+
+describe('start_agent', () => {
+	function fakeRun(agentId: string, status = 'running') {
+		const db = getDb();
+		const run = createAgentRun(db, { agentId, userId: 'u1', trigger: 'manual' });
+		db.prepare('UPDATE agent_runs SET status = ? WHERE id = ?').run(status, run.id);
+		return { ...run, status };
+	}
+
+	beforeEach(() => {
+		startAgentRun.mockReset();
+		startAgentRun.mockImplementation(async (input: { agentId: string }) => {
+			const run = fakeRun(input.agentId, 'success');
+			return { run: { ...run, status: 'running' }, done: Promise.resolve(run) };
+		});
+	});
+
+	function newAgent(extra: Record<string, unknown> = {}) {
+		return createAgent(getDb(), 'u1', {
+			name: 'runnable',
+			systemPrompt: 'x',
+			triggerType: 'manual',
+			...extra
+		}).id;
+	}
+
+	it('starts an own agent with instructions and returns the run', async () => {
+		const id = newAgent();
+		const res = await callTool('start_agent', { agentId: id, instructions: '  sort my inbox ' });
+		expect(isErr(res)).toBe(false);
+		expect(startAgentRun).toHaveBeenCalledWith({
+			agentId: id,
+			trigger: 'manual',
+			userId: 'u1',
+			instructions: 'sort my inbox'
+		});
+		const body = JSON.parse(resultText(res)) as {
+			run: { agentId: string; status: string; id: string };
+			runPath: string;
+		};
+		expect(body.run.agentId).toBe(id);
+		expect(body.run.status).toBe('running');
+		expect(body.runPath).toBe(`/agents/${id}/runs/${body.run.id}`);
+	});
+
+	it("rejects built-in and other users' agents", async () => {
+		const builtin = await callTool('start_agent', { agentId: builtinId });
+		expect(isErr(builtin)).toBe(true);
+		expect(resultText(builtin)).toContain('built-in agents');
+		const other = await callTool('start_agent', { agentId: otherId });
+		expect(isErr(other)).toBe(true);
+		expect(resultText(other)).toContain('agent not found');
+		expect(startAgentRun).not.toHaveBeenCalled();
+	});
+
+	it('rejects an agent that is already running', async () => {
+		const id = newAgent();
+		fakeRun(id, 'running');
+		const res = await callTool('start_agent', { agentId: id });
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('already running');
+		expect(startAgentRun).not.toHaveBeenCalled();
+	});
+
+	it('does not let an agent run start its own agent', async () => {
+		const id = newAgent();
+		const run = fakeRun(id, 'success');
+		const res = await callTool('start_agent', { agentId: id }, { ...ctx, agentRunId: run.id });
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('cannot start itself');
+	});
+
+	it('starts coding agents only with their saved task', async () => {
+		const id = newAgent({
+			codingTarget: {
+				environmentId: 'e',
+				projectId: 'p',
+				projectTitle: 'P',
+				providerInstanceId: 'codex',
+				model: 'm',
+				autonomy: 'supervised',
+				workspaceMode: 'local',
+				baseBranch: null
+			}
+		});
+		const withTask = await callTool('start_agent', { agentId: id, instructions: 'rm -rf' });
+		expect(isErr(withTask)).toBe(true);
+		expect(resultText(withTask)).toContain('saved task');
+		const saved = await callTool('start_agent', { agentId: id });
+		expect(isErr(saved)).toBe(false);
+		expect(startAgentRun).toHaveBeenCalledTimes(1);
+	});
+
+	it('names the agent and links the run without waiting', async () => {
+		const id = newAgent();
+		const body = JSON.parse(resultText(await callTool('start_agent', { agentId: id })));
+		expect(body.agent).toEqual({ id, name: 'runnable' });
+		expect(body.run.status).toBe('running');
+		expect(body.result).toBeNull();
+		expect(body.note).toContain('get_agent_run');
+	});
+
+	describe('with wait', () => {
+		/** A run that is still going, with a conversation for its reply. */
+		function liveRun(agentId: string) {
+			const db = getDb();
+			const conversation = createConversation(db, 'u1', { kind: 'agent-run', agentId });
+			const ref: { id: string } = { id: '' };
+			startAgentRun.mockImplementationOnce(async () => {
+				const run = createAgentRun(db, {
+					agentId,
+					userId: 'u1',
+					trigger: 'manual',
+					conversationId: conversation.id
+				});
+				ref.id = run.id;
+				return { run, done: Promise.resolve(run) };
+			});
+			return { run: ref, conversationId: conversation.id };
+		}
+
+		function finish(
+			runId: string,
+			agentId: string,
+			conversationId: string,
+			parts: unknown[],
+			status: 'success' | 'awaiting_input' = 'success'
+		) {
+			const db = getDb();
+			createMessage(db, { conversationId, role: 'assistant', parts });
+			finishAgentRun(db, runId, status, null);
+			publishServerEvent('u1', { type: 'agent.run.finished', agentId, runId, status });
+		}
+
+		it('returns once the run has finished, with its reply', async () => {
+			const id = newAgent();
+			const { run, conversationId } = liveRun(id);
+			const pending = callTool('start_agent', { agentId: id, wait: true });
+			// The call blocks until the run settles.
+			await new Promise((r) => setTimeout(r, 20));
+			finish(run.id, id, conversationId, [
+				{ type: 'reasoning', text: 'hidden' },
+				{ type: 'text', text: 'Planned 5 dinners.' }
+			]);
+			const body = JSON.parse(resultText(await pending));
+			expect(body.run.status).toBe('success');
+			expect(body.result).toBe('Planned 5 dinners.');
+			expect(body.question).toBeNull();
+		});
+
+		it('hands back the question a run stopped on, with the chat to answer it in', async () => {
+			const id = newAgent({ canAsk: 'any' });
+			const { run, conversationId } = liveRun(id);
+			const pending = callTool('start_agent', { agentId: id, wait: true });
+			await new Promise((r) => setTimeout(r, 20));
+			finish(
+				run.id,
+				id,
+				conversationId,
+				[
+					{
+						type: 'tool-ask_user',
+						toolCallId: 'q1',
+						state: 'input-available',
+						input: { question: 'Vegetarian this week?', kind: 'confirm' }
+					}
+				],
+				'awaiting_input'
+			);
+			const body = JSON.parse(resultText(await pending));
+			expect(body.run.status).toBe('awaiting_input');
+			expect(body.question).toBe('Vegetarian this week?');
+			expect(body.chatPath).toBe(`/chat/${conversationId}`);
+		});
+
+		it('returns a run that already finished without waiting', async () => {
+			const res = await callTool('start_agent', { agentId: newAgent(), wait: true });
+			expect(JSON.parse(resultText(res)).run.status).toBe('success');
+		});
+	});
+
+	it('reports a start failure as a tool error', async () => {
+		startAgentRun.mockRejectedValueOnce(new Error('Agent has no model configured'));
+		const res = await callTool('start_agent', { agentId: newAgent() });
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('no model configured');
+	});
+});
+
+describe('get_agent_run', () => {
+	it("returns an own run, not another user's", async () => {
+		const db = getDb();
+		const run = createAgentRun(db, { agentId: ownId, userId: 'u1', trigger: 'manual' });
+		const own = await callTool('get_agent_run', { runId: run.id });
+		expect(isErr(own)).toBe(false);
+		expect(JSON.parse(resultText(own)).run.id).toBe(run.id);
+
+		const theirs = createAgentRun(db, { agentId: otherId, userId: 'u2', trigger: 'manual' });
+		const res = await callTool('get_agent_run', { runId: theirs.id });
+		expect(isErr(res)).toBe(true);
+		expect(resultText(res)).toContain('agent run not found');
+	});
+});
+
+describe('waitForRunToSettle', () => {
+	it('gives up after the timeout and when the call is aborted', async () => {
+		const db = getDb();
+		const run = createAgentRun(db, { agentId: ownId, userId: 'u1', trigger: 'manual' });
+		expect((await waitForRunToSettle(db, run, { timeoutMs: 10 })).status).toBe('running');
+
+		const controller = new AbortController();
+		const pending = waitForRunToSettle(db, run, { timeoutMs: 60_000, signal: controller.signal });
+		controller.abort();
+		expect((await pending).status).toBe('running');
 	});
 });
 

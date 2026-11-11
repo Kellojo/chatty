@@ -222,7 +222,7 @@
 	</SettingsRow>
 {/if}
 
-{#if summary || mode === 'custom'}
+{#if (summary && mode !== 'daily') || mode === 'custom'}
 	<p class="text-sm text-muted-foreground">
 		{#if summary}
 			Runs: <span class="text-foreground">{summary}</span>

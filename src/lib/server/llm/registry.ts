@@ -1,6 +1,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { ImageModel, LanguageModel } from 'ai';
+import { fetchLmStudioModels, isLmStudioProvider } from './lmstudio.js';
 import { createOpenRouterImageModel } from './openrouterImage.js';
 import { decryptSecret } from '../crypto.js';
 import { getDb } from '../db/index.js';
@@ -270,12 +271,27 @@ async function fetchOpenAICompatibleModels(
 	});
 }
 
-export function fetchProviderModels(providerId: string): Promise<FetchedModel[]> {
+export async function fetchProviderModels(providerId: string): Promise<FetchedModel[]> {
 	const db = getDb();
 	const provider = getProvider(db, providerId);
 	if (!provider) throw new ModelUnavailableError(`Provider ${providerId} not found`);
 	const apiKey = provider.api_key_enc ? decryptSecret(provider.api_key_enc) : undefined;
-	return provider.type === 'anthropic'
-		? fetchAnthropicModels(provider, apiKey)
-		: fetchOpenAICompatibleModels(provider, apiKey);
+	if (provider.type === 'anthropic') return fetchAnthropicModels(provider, apiKey);
+	const fetched = await fetchOpenAICompatibleModels(provider, apiKey);
+	return isLmStudioProvider(provider) ? withLmStudioContext(provider, fetched) : fetched;
+}
+
+/**
+ * LM Studio's OpenAI /models carries no context sizes. Its native API does: the
+ * loaded context is kept; the trained maximum is not, as a model is usually
+ * loaded with far less and compacting against the maximum would come too late.
+ */
+async function withLmStudioContext(
+	provider: ProviderRow,
+	fetched: FetchedModel[]
+): Promise<FetchedModel[]> {
+	const native = await fetchLmStudioModels(provider);
+	if (!native) return fetched;
+	const loaded = new Map(native.map((m) => [m.id, m.loadedContextLength]));
+	return fetched.map((m) => ({ ...m, contextLength: m.contextLength ?? loaded.get(m.id) ?? null }));
 }

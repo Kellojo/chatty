@@ -69,6 +69,27 @@ const MATH_TOOLS = [
 	['list_units', 'List units']
 ] as const;
 
+/** Readable names for the bundled MCP servers; user-added servers keep their own name. */
+const SERVER_LABELS: Record<string, string> = {
+	webfetch: 'Web',
+	datetime: 'Date & time',
+	'chat-search': 'Chat search',
+	fs: 'Files',
+	settings: 'Settings',
+	memory: 'Memory',
+	agents: 'Agents',
+	skills: 'Skills',
+	'code-exec': 'Code',
+	image: 'Images',
+	wait: 'Wait',
+	math: 'Math',
+	weather: 'Weather'
+};
+
+export function serverLabel(server: string): string {
+	return SERVER_LABELS[server] ?? server;
+}
+
 export const TOOL_META: Record<string, ToolMeta> = {
 	fetch: { label: 'Fetch URL', server: 'webfetch', kind: 'web', detail: 'url' },
 	now: { label: 'Current time', server: 'datetime', kind: 'time' },
@@ -104,6 +125,8 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	create_agent: { label: 'Create agent', server: 'agents', kind: 'agent', detail: 'name' },
 	update_agent: { label: 'Update agent', server: 'agents', kind: 'agent', detail: 'agentId' },
 	delete_agent: { label: 'Delete agent', server: 'agents', kind: 'agent', detail: 'agentId' },
+	start_agent: { label: 'Start agent', server: 'agents', kind: 'agent', detail: 'agentId' },
+	get_agent_run: { label: 'Check agent run', server: 'agents', kind: 'agent', detail: 'runId' },
 	load_skill: { label: 'Load skill', server: 'skills', kind: 'skill', detail: 'name' },
 	read_skill_reference: {
 		label: 'Read skill reference',

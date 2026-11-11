@@ -163,6 +163,19 @@ export function setAgentRunConversation(db: Db, id: string, conversationId: stri
 	db.prepare('UPDATE agent_runs SET conversation_id = ? WHERE id = ?').run(conversationId, id);
 }
 
+/** The user's newest still-running run of the agent, if any. */
+export function getRunningAgentRun(
+	db: Db,
+	agentId: string,
+	userId: string
+): AgentRunRow | undefined {
+	return db
+		.prepare(
+			"SELECT * FROM agent_runs WHERE agent_id = ? AND user_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1"
+		)
+		.get(agentId, userId) as AgentRunRow | undefined;
+}
+
 export function hasRunningAgentRun(db: Db, agentId: string, userId: string): boolean {
 	return (
 		db
@@ -225,6 +238,20 @@ export function listRunningAgentIds(db: Db, agentIds: string[]): string[] {
 			)
 			.all(...agentIds) as { agent_id: string }[]
 	).map((r) => r.agent_id);
+}
+
+/** Each agent's most recent run for `userId` (agents without runs are left out). */
+export function listLatestAgentRuns(db: Db, agentIds: string[], userId: string): AgentRunRow[] {
+	if (agentIds.length === 0) return [];
+	const placeholders = agentIds.map(() => '?').join(', ');
+	return db
+		.prepare(
+			`SELECT * FROM (
+				SELECT *, ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY started_at DESC, rowid DESC) AS rn
+				FROM agent_runs WHERE user_id = ? AND agent_id IN (${placeholders})
+			) WHERE rn = 1`
+		)
+		.all(userId, ...agentIds) as AgentRunRow[];
 }
 
 /** The run still waiting on its coding task in `conversationId`, if any. */

@@ -4,6 +4,7 @@
 // Unknown fields and variants are ignored; malformed entries are skipped.
 
 import type {
+	CodingResetCredits,
 	CodingUsageDailyRow,
 	CodingUsageLimitWindow,
 	UsageWindowKind
@@ -12,6 +13,7 @@ import { providerLabel } from '$lib/coding-environments.js';
 
 type LimitRow = Omit<CodingUsageLimitWindow, 'environmentId'>;
 type DailyRow = Omit<CodingUsageDailyRow, 'environmentId'>;
+type CreditRow = Omit<CodingResetCredits, 'environmentId'>;
 
 const WINDOW_KINDS = new Set<UsageWindowKind>(['session', 'weekly', 'monthly', 'other']);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -77,6 +79,34 @@ export function parseUsageLimits(config: unknown, now = Date.now()): LimitRow[] 
 				checkedAt
 			});
 		}
+	}
+	return rows;
+}
+
+/**
+ * Extracts each provider account's extra resets (`usageLimits.resetCredits`) from a
+ * `ServerConfig` payload. Accounts without the field are left out.
+ */
+export function parseResetCredits(config: unknown, now = Date.now()): CreditRow[] {
+	const providers = obj(config)?.providers;
+	if (!Array.isArray(providers)) return [];
+	const rows: CreditRow[] = [];
+	const seen = new Set<string>();
+	for (const entry of providers) {
+		const provider = obj(entry);
+		const limits = obj(provider?.usageLimits);
+		const credits = obj(limits?.resetCredits);
+		const accountId = str(provider?.instanceId);
+		const count = credits?.availableCount;
+		if (!credits || !accountId || seen.has(accountId)) continue;
+		if (typeof count !== 'number' || !Number.isFinite(count)) continue;
+		seen.add(accountId);
+		rows.push({
+			accountId,
+			availableCount: Math.max(0, Math.round(count)),
+			nextExpiresAt: time(credits.nextExpiresAt),
+			checkedAt: time(limits?.checkedAt) ?? now
+		});
 	}
 	return rows;
 }

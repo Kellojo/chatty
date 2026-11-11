@@ -7,6 +7,8 @@ import {
 	getCodingEnvironment,
 	listEnabledCodingEnvironments,
 	recordEnvironmentCheck,
+	recordUsageLimitSamples,
+	replaceResetCredits,
 	replaceUsageDaily,
 	replaceUsageLimits,
 	type CodingEnvironmentRow
@@ -21,7 +23,7 @@ import { stopFollowersForEnvironment } from './follower.js';
 import { withT3Connection } from './pool.js';
 import { resumeCodingTasks } from './tasks.js';
 import { refreshShellWatchers, startThreadSync, stopThreadSync } from './thread-sync.js';
-import { dayInZone, parseUsageLimits, parseUsageSummary } from './usage.js';
+import { dayInZone, parseResetCredits, parseUsageLimits, parseUsageSummary } from './usage.js';
 
 const log = createLogger('t3-sync');
 
@@ -52,6 +54,7 @@ async function runSync(db: Db, env: CodingEnvironmentRow): Promise<void> {
 	await withT3Connection(env, async (connection) => {
 		const serverConfig = await connection.call('server.getConfig', {});
 		const limits = parseUsageLimits(serverConfig);
+		const credits = parseResetCredits(serverConfig);
 
 		const now = Date.now();
 		const untilDay = dayInZone(now, config.TZ);
@@ -67,6 +70,8 @@ async function runSync(db: Db, env: CodingEnvironmentRow): Promise<void> {
 
 		db.transaction(() => {
 			replaceUsageLimits(db, env.id, limits);
+			recordUsageLimitSamples(db, env.id, limits, now);
+			replaceResetCredits(db, env.id, credits);
 			replaceUsageDaily(
 				db,
 				env.id,

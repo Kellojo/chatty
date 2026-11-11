@@ -13,6 +13,7 @@ import { failRunningProxyRequests } from '$lib/server/db/repo/proxy-requests.js'
 import { startDailyJobs, startHourlyJobs } from '$lib/server/jobs.js';
 import { createLogger } from '$lib/server/logger.js';
 import { reconcileMemoryFts } from '$lib/server/memory/fts.js';
+import { startPushDispatcher } from '$lib/server/push/dispatcher.js';
 import { registerShutdownHandlers } from '$lib/server/shutdown.js';
 import { seedDefaultSkills } from '$lib/server/skills/defaults.js';
 import { startCodingEnvironmentSync } from '$lib/server/t3/sync.js';
@@ -55,6 +56,7 @@ if (!building) {
 	}, 0);
 	seedDefaultSkills();
 	startAgentEventDispatcher();
+	startPushDispatcher();
 	startAgentScheduler(getDb());
 	startDailyJobs(getDb());
 	startHourlyJobs(getDb());
