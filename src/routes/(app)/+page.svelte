@@ -251,7 +251,7 @@
 </script>
 
 <div
-	class="relative flex flex-1 flex-col items-center justify-start gap-8 p-6 pt-[18vh] sm:pt-[22vh]"
+	class="relative flex flex-1 flex-col items-center justify-center gap-8 p-6"
 	role="region"
 	aria-label="New chat"
 	ondragenter={fileDrop.ondragenter}

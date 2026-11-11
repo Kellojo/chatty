@@ -6,7 +6,7 @@
 </script>
 
 <main
-	class="auth-bg flex min-h-dvh flex-col items-center justify-start bg-background px-4 pt-[12dvh] pb-10 sm:px-6 sm:pt-[14dvh]"
+	class="auth-bg flex min-h-dvh flex-col items-center justify-center bg-background px-4 py-10 sm:px-6"
 >
 	<div class="flex w-full max-w-sm flex-col items-center gap-8">
 		<a
