@@ -8,6 +8,7 @@
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import KeyboardIcon from '@lucide/svelte/icons/keyboard';
+	import Link2Icon from '@lucide/svelte/icons/link-2';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import RouteIcon from '@lucide/svelte/icons/route';
@@ -92,6 +93,13 @@
 			href: '/settings/environments',
 			label: 'Coding environments',
 			icon: ServerIcon,
+			adminOnly: false,
+			group: 'Integrations'
+		},
+		{
+			href: '/settings/connections',
+			label: 'Connected apps',
+			icon: Link2Icon,
 			adminOnly: false,
 			group: 'Integrations'
 		},

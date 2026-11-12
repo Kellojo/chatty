@@ -2,8 +2,9 @@ import { createMCPClient, type MCPClient, type MCPTransport } from '@ai-sdk/mcp'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { decryptSecret } from '../crypto.js';
-import type { Db } from '../db/index.js';
+import { getDb, type Db } from '../db/index.js';
 import { getMcpServer, parseMcpArgs, type McpServerRow } from '../db/repo/mcp-servers.js';
+import { connectionAuthProvider, toSignInError } from './oauth.js';
 import { BUILTIN_SERVERS } from './servers/index.js';
 import type { CallerContext } from './types.js';
 
@@ -73,10 +74,24 @@ async function openServer(row: McpServerRow, ctx: CallerContext): Promise<Server
 	}
 	if (row.transport === 'stdio') return connectStdio(row);
 	if (!row.url) throw new Error(`MCP server ${row.name} has no url configured`);
+	const type = row.transport === 'sse' ? 'sse' : 'http';
+	if (row.auth === 'oauth') {
+		// The caller's own access token; refreshed by the transport when it expires.
+		const authProvider = connectionAuthProvider(getDb(), row, ctx.userId);
+		try {
+			const client = await createMCPClient({
+				transport: { type, url: row.url, authProvider },
+				maxRetries: 2
+			});
+			return { client, close: () => client.close() };
+		} catch (e) {
+			throw toSignInError(e, row);
+		}
+	}
 	const headers: Record<string, string> = {};
 	if (row.token_enc) headers.authorization = `Bearer ${decryptSecret(row.token_enc)}`;
 	const client = await createMCPClient({
-		transport: { type: row.transport === 'sse' ? 'sse' : 'http', url: row.url, headers },
+		transport: { type, url: row.url, headers },
 		maxRetries: 2
 	});
 	return { client, close: () => client.close() };
@@ -134,11 +149,16 @@ const TEST_CTX: CallerContext = {
 	documentsDir: ''
 };
 
-export async function testConnection(db: Db, serverId: string): Promise<TestConnectionResult> {
+/** Connects once and lists the tools; OAuth servers are tested with `userId`'s sign-in. */
+export async function testConnection(
+	db: Db,
+	serverId: string,
+	userId?: string
+): Promise<TestConnectionResult> {
 	const row = getMcpServer(db, serverId);
 	if (!row) return { ok: false, tools: [], error: 'Server not found' };
 	try {
-		const conn = await connectServer(row, TEST_CTX);
+		const conn = await connectServer(row, userId ? { ...TEST_CTX, userId } : TEST_CTX);
 		try {
 			const tools = await withTimeout(
 				conn.client.tools(),

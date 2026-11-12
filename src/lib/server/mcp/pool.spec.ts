@@ -30,6 +30,11 @@ function row(overrides: Partial<McpServerRow> = {}): McpServerRow {
 		enabled: 1,
 		builtin: 0,
 		load_mode: 'always',
+		auth: 'token',
+		oauth_client_id: null,
+		oauth_client_secret_enc: null,
+		oauth_scope: null,
+		oauth_client_info_enc: null,
 		...overrides
 	};
 }

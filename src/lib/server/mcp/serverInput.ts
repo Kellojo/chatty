@@ -33,6 +33,10 @@ const nameSchema = z
 const commandSchema = z.string().trim().min(1).max(1024);
 const argsSchema = z.array(z.string().max(4096)).max(100);
 const loadModeSchema = z.enum(['always', 'deferred']);
+const authSchema = z.enum(['token', 'oauth']);
+const oauthClientIdSchema = z.string().trim().min(1).max(2048);
+const oauthClientSecretSchema = z.string().min(1).max(4096);
+const oauthScopeSchema = z.string().trim().min(1).max(1024);
 
 export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 	z.object({
@@ -40,6 +44,10 @@ export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 		transport: z.enum(['http', 'sse']),
 		url: z.url(),
 		token: z.string().min(1).nullish(),
+		auth: authSchema.optional(),
+		oauthClientId: oauthClientIdSchema.nullish(),
+		oauthClientSecret: oauthClientSecretSchema.nullish(),
+		oauthScope: oauthScopeSchema.nullish(),
 		enabled: z.boolean().optional(),
 		loadMode: loadModeSchema.optional()
 	}),
@@ -58,6 +66,10 @@ export const mcpServerPatchSchema = z.object({
 	transport: z.enum(['http', 'sse', 'stdio']).optional(),
 	url: z.url().nullish(),
 	token: z.string().min(1).nullable().optional(),
+	auth: authSchema.optional(),
+	oauthClientId: oauthClientIdSchema.nullable().optional(),
+	oauthClientSecret: oauthClientSecretSchema.nullable().optional(),
+	oauthScope: oauthScopeSchema.nullable().optional(),
 	command: commandSchema.nullish(),
 	args: argsSchema.optional(),
 	enabled: z.boolean().optional(),
@@ -79,6 +91,9 @@ export function resolveMcpServerPatch(
 	patch: McpServerPatchBody
 ): McpServerPatchResult {
 	const { transport: patchTransport, url, token, command, args, ...rest } = patch;
+	if (rest.auth === 'oauth' && (patchTransport ?? existing.transport) === 'stdio') {
+		return { ok: false, error: 'OAuth needs an HTTP or SSE server' };
+	}
 	const touchesConnection = [patchTransport, url, token, command, args].some(
 		(v) => v !== undefined
 	);
@@ -94,7 +109,19 @@ export function resolveMcpServerPatch(
 		const nextArgs = args ?? (existing.transport === 'stdio' ? parseMcpArgs(existing.args) : []);
 		return {
 			ok: true,
-			value: { ...rest, transport, command: nextCommand, args: nextArgs, url: null, token: null }
+			value: {
+				...rest,
+				transport,
+				command: nextCommand,
+				args: nextArgs,
+				url: null,
+				token: null,
+				// stdio has no HTTP authentication.
+				auth: 'token',
+				oauthClientId: null,
+				oauthClientSecret: null,
+				oauthScope: null
+			}
 		};
 	}
 

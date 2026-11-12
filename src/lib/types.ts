@@ -55,6 +55,20 @@ export interface McpServerInfo {
 	builtin: boolean;
 	/** 'deferred': the model loads these tools on demand via search_tools. */
 	loadMode: 'always' | 'deferred';
+	/** 'oauth': every user signs in to the server themselves (Settings → Connected apps). */
+	auth: 'token' | 'oauth';
+	/** OAuth: a client registered by hand; null registers Chatty automatically. */
+	oauthClientId: string | null;
+	hasOauthClientSecret: boolean;
+	oauthScope: string | null;
+}
+
+/** An OAuth MCP server as the signed-in user sees it on Settings → Connected apps. */
+export interface McpConnectionInfo {
+	id: string;
+	name: string;
+	url: string;
+	connected: boolean;
 }
 
 export interface Conversation {

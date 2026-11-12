@@ -9,6 +9,9 @@
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
+	import { resolve } from '$app/paths';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import CopyButton from '$lib/components/app/settings/CopyValue.svelte';
 	import BlocksIcon from '@lucide/svelte/icons/blocks';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import ClockIcon from '@lucide/svelte/icons/clock';
@@ -83,11 +86,91 @@
 		stdio: 'stdio (local command)'
 	};
 
+	type AuthMode = 'token' | 'oauth';
+	/** Authentication settings of a remote (http/sse) server form. */
+	interface AuthForm {
+		mode: AuthMode;
+		token: string;
+		clientId: string;
+		clientSecret: string;
+		scope: string;
+		/** Use a client registered by hand (the disclosure is open) instead of automatic registration. */
+		manual: boolean;
+	}
+	const emptyAuth = (): AuthForm => ({
+		mode: 'token',
+		token: '',
+		clientId: '',
+		clientSecret: '',
+		scope: '',
+		manual: false
+	});
+	const authLabels: Record<AuthMode, string> = {
+		token: 'Token (or none)',
+		oauth: 'OAuth (each user signs in)'
+	};
+
+	let addAuth = $state<AuthForm>(emptyAuth());
+	let editAuth = $state<AuthForm>(emptyAuth());
+
+	/** Request fields for a form's authentication; `editing` keeps stored secrets left empty. */
+	function authBody(form: AuthForm, editing: boolean): Record<string, unknown> {
+		if (form.mode === 'token') {
+			return {
+				auth: 'token',
+				...(editing ? (form.token ? { token: form.token } : {}) : { token: form.token || null })
+			};
+		}
+		// A closed disclosure means automatic registration: drop any hand-registered client.
+		if (!form.manual) {
+			return {
+				auth: 'oauth',
+				token: null,
+				oauthClientId: null,
+				oauthClientSecret: null,
+				oauthScope: null
+			};
+		}
+		return {
+			auth: 'oauth',
+			token: null,
+			oauthClientId: form.clientId.trim() || null,
+			oauthScope: form.scope.trim() || null,
+			...(form.clientSecret
+				? { oauthClientSecret: form.clientSecret }
+				: editing
+					? {}
+					: { oauthClientSecret: null })
+		};
+	}
+
+	/**
+	 * Marks a scroll area while more content sits below the visible part, so it can fade
+	 * out at the bottom as a hint to scroll.
+	 */
+	function fadeWhenScrollable(el: HTMLElement) {
+		const update = () => {
+			const more = el.scrollHeight - el.scrollTop - el.clientHeight > 4;
+			el.toggleAttribute('data-more-below', more);
+		};
+		update();
+		const observer = new ResizeObserver(update);
+		observer.observe(el);
+		for (const child of el.children) observer.observe(child);
+		const mutations = new MutationObserver(update);
+		mutations.observe(el, { childList: true, subtree: true, attributes: true });
+		el.addEventListener('scroll', update, { passive: true });
+		return () => {
+			observer.disconnect();
+			mutations.disconnect();
+			el.removeEventListener('scroll', update);
+		};
+	}
+
 	let addOpen = $state(false);
 	let addName = $state('');
 	let addTransport = $state<ConfigurableTransport>('http');
 	let addUrl = $state('');
-	let addToken = $state('');
 	let addCommand = $state('');
 	let addArgs = $state('');
 	let addBusy = $state(false);
@@ -97,7 +180,6 @@
 	let editName = $state('');
 	let editTransport = $state<ConfigurableTransport>('http');
 	let editUrl = $state('');
-	let editToken = $state('');
 	let editCommand = $state('');
 	let editArgs = $state('');
 	let editBusy = $state(false);
@@ -196,7 +278,7 @@
 		addName = '';
 		addTransport = 'http';
 		addUrl = '';
-		addToken = '';
+		addAuth = emptyAuth();
 		addCommand = '';
 		addArgs = '';
 	}
@@ -213,7 +295,7 @@
 			await api('/api/mcp-servers', 'POST', {
 				name: addName,
 				...connectionBody(addTransport, addUrl, addCommand, addArgs),
-				...(addTransport === 'stdio' ? {} : { token: addToken || null })
+				...(addTransport === 'stdio' ? {} : authBody(addAuth, false))
 			});
 			toast.success(`Server "${addName}" added`);
 			addOpen = false;
@@ -232,7 +314,14 @@
 		editTransport =
 			server.transport === 'sse' || server.transport === 'stdio' ? server.transport : 'http';
 		editUrl = server.url ?? '';
-		editToken = '';
+		editAuth = {
+			mode: server.auth,
+			token: '',
+			clientId: server.oauthClientId ?? '',
+			clientSecret: '',
+			scope: server.oauthScope ?? '',
+			manual: !!server.oauthClientId
+		};
 		editCommand = server.command ?? '';
 		editArgs = server.args.join('\n');
 		editOpen = true;
@@ -246,7 +335,7 @@
 			await api(`/api/mcp-servers/${editId}`, 'PATCH', {
 				name: editName,
 				...connectionBody(editTransport, editUrl, editCommand, editArgs),
-				...(editToken && editTransport !== 'stdio' ? { token: editToken } : {})
+				...(editTransport === 'stdio' ? {} : authBody(editAuth, true))
 			});
 			toast.success('Server updated');
 			editOpen = false;
@@ -327,6 +416,110 @@
 	{/snippet}
 </SettingsHeader>
 
+{#snippet authFields(form: AuthForm, id: string, editing: boolean)}
+	{@const server = editing ? data.servers.find((s) => s.id === editId) : undefined}
+	<div class="flex min-w-0 flex-col gap-2">
+		<Label for="{id}-auth">Authentication</Label>
+		<Select.Root type="single" bind:value={form.mode}>
+			<Select.Trigger id="{id}-auth" class="w-full">{authLabels[form.mode]}</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="token">{authLabels.token}</Select.Item>
+				<Select.Item value="oauth">{authLabels.oauth}</Select.Item>
+			</Select.Content>
+		</Select.Root>
+		{#if form.mode === 'oauth'}
+			<p class="text-xs text-muted-foreground">
+				Each user connects their own account under
+				<a class="underline underline-offset-2" href={resolve('/settings/connections')}
+					>Connected apps</a
+				>.
+			</p>
+		{/if}
+	</div>
+	{#if form.mode === 'token'}
+		<div class="flex flex-col gap-2">
+			<Label for="{id}-token">Token{editing ? '' : ' (optional)'}</Label>
+			<Input
+				id="{id}-token"
+				type="password"
+				bind:value={form.token}
+				autocomplete="off"
+				placeholder={editing && server?.hasToken
+					? 'Leave empty to keep the current token'
+					: 'Sent as a Bearer token'}
+			/>
+		</div>
+	{:else}
+		{#if !form.manual}
+			<div class="flex min-w-0 flex-col gap-3 rounded-2xl border p-4 text-xs">
+				<div class="flex flex-col gap-0.5">
+					<p class="text-sm font-medium text-foreground">Registering Chatty with your provider</p>
+					<p class="text-muted-foreground">
+						Most providers need nothing. Otherwise, add Chatty with these values.
+					</p>
+				</div>
+				<CopyButton label="Chatty’s client ID" value={data.oauth.clientMetadataUrl} />
+				<CopyButton label="Redirect URL" value={data.oauth.redirectUrl} />
+			</div>
+		{/if}
+		<details class="group min-w-0" bind:open={form.manual}>
+			<summary
+				class="flex w-fit cursor-pointer list-none items-start gap-1.5 rounded-md py-1 text-sm font-medium text-foreground/80 outline-none group-open:text-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden"
+			>
+				<ChevronRightIcon
+					class="mt-0.5 size-4 shrink-0 transition-transform group-open:rotate-90"
+				/>
+				<span class="flex flex-col gap-0.5">
+					Use a client registered by hand
+					<!-- Only the summary of a closed <details> shows, so the hint lives in here. -->
+					<span class="text-xs font-normal text-muted-foreground group-open:hidden">
+						For providers that don’t support automatic registration
+					</span>
+				</span>
+			</summary>
+			<div class="mt-3 flex flex-col gap-4">
+				<div class="flex min-w-0 flex-col gap-3 rounded-2xl border p-4 text-xs">
+					<p class="text-muted-foreground">
+						Register Chatty with your provider using this redirect URL.
+					</p>
+					<CopyButton label="Redirect URL" value={data.oauth.redirectUrl} />
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="{id}-client-id">Client ID from your provider</Label>
+					<Input
+						id="{id}-client-id"
+						bind:value={form.clientId}
+						autocomplete="off"
+						required={form.manual}
+						placeholder="From your provider’s app registration"
+					/>
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="{id}-client-secret">Client secret (optional)</Label>
+					<Input
+						id="{id}-client-secret"
+						type="password"
+						bind:value={form.clientSecret}
+						autocomplete="off"
+						placeholder={editing && server?.hasOauthClientSecret
+							? 'Leave empty to keep the current secret'
+							: 'Only for confidential clients'}
+					/>
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="{id}-scope">Scopes (optional)</Label>
+					<Input
+						id="{id}-scope"
+						bind:value={form.scope}
+						autocomplete="off"
+						placeholder="Default: what the server advertises"
+					/>
+				</div>
+			</div>
+		</details>
+	{/if}
+{/snippet}
+
 {#snippet serverRow(server: McpServerInfo)}
 	{@const enabled = enabledOverride[server.id] ?? server.enabled}
 	{@const connection = connectionLabel(server)}
@@ -342,6 +535,11 @@
 		{#snippet badges()}
 			{#if !server.builtin && server.transport !== 'builtin'}
 				<Badge variant="outline">{transportLabels[server.transport]}</Badge>
+			{/if}
+			{#if server.auth === 'oauth'}
+				<Badge variant="secondary" title="Each user signs in under Settings → Connected apps">
+					OAuth
+				</Badge>
 			{/if}
 			{#if (loadModeOverride[server.id] ?? server.loadMode) === 'deferred'}
 				<Badge
@@ -419,56 +617,67 @@
 {/if}
 
 <Dialog.Root bind:open={addOpen}>
-	<Dialog.Content>
+	<!-- Tall with OAuth settings: scroll inside rather than off screen. -->
+	<Dialog.Content class="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)]">
 		<Dialog.Header>
 			<Dialog.Title>Add server</Dialog.Title>
-			<Dialog.Description>
-				Connect a remote MCP server over HTTP or SSE (tokens are encrypted at rest), or run a local
-				command over stdio.
+			<Dialog.Description class="text-pretty">
+				Connect a remote server over HTTP or SSE, or run a local command.
 			</Dialog.Description>
 		</Dialog.Header>
-		<form onsubmit={submitAdd} class="flex flex-col gap-4">
-			<div class="flex flex-col gap-2">
-				<Label for="add-name">Name</Label>
-				<Input id="add-name" bind:value={addName} required maxlength={64} placeholder="my-server" />
-			</div>
-			<div class="flex flex-col gap-2">
-				<Label>Transport</Label>
-				<Select.Root type="single" bind:value={addTransport}>
-					<Select.Trigger class="w-full">{transportLabels[addTransport]}</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="http">{transportLabels.http}</Select.Item>
-						<Select.Item value="sse">{transportLabels.sse}</Select.Item>
-						<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
-					</Select.Content>
-				</Select.Root>
-			</div>
-			{#if addTransport === 'stdio'}
+		<form onsubmit={submitAdd} class="flex min-h-0 min-w-0 flex-col gap-6">
+			<!-- Only the fields scroll; the title and buttons stay put. -->
+			<div
+				{@attach fadeWhenScrollable}
+				class="-mx-6 -my-1 flex min-h-0 flex-col gap-4 overflow-y-auto px-6 py-1 data-more-below:[mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)]"
+			>
 				<div class="flex flex-col gap-2">
-					<Label for="add-command">Command</Label>
-					<Input id="add-command" bind:value={addCommand} required placeholder="npx" />
-				</div>
-				<div class="flex flex-col gap-2">
-					<Label for="add-args">Arguments (one per line)</Label>
-					<Textarea id="add-args" bind:value={addArgs} rows={3} placeholder={argsPlaceholder} />
-				</div>
-				<p class="text-xs text-muted-foreground">{stdioHint}</p>
-			{:else}
-				<div class="flex flex-col gap-2">
-					<Label for="add-url">URL</Label>
+					<Label for="add-name">Name</Label>
 					<Input
-						id="add-url"
-						type="url"
-						bind:value={addUrl}
+						id="add-name"
+						bind:value={addName}
 						required
-						placeholder="https://example.com/mcp"
+						maxlength={64}
+						placeholder="my-server"
 					/>
 				</div>
 				<div class="flex flex-col gap-2">
-					<Label for="add-token">Token (optional)</Label>
-					<Input id="add-token" type="password" bind:value={addToken} autocomplete="off" />
+					<Label for="add-transport">Transport</Label>
+					<Select.Root type="single" bind:value={addTransport}>
+						<Select.Trigger id="add-transport" class="w-full"
+							>{transportLabels[addTransport]}</Select.Trigger
+						>
+						<Select.Content>
+							<Select.Item value="http">{transportLabels.http}</Select.Item>
+							<Select.Item value="sse">{transportLabels.sse}</Select.Item>
+							<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
+						</Select.Content>
+					</Select.Root>
 				</div>
-			{/if}
+				{#if addTransport === 'stdio'}
+					<div class="flex flex-col gap-2">
+						<Label for="add-command">Command</Label>
+						<Input id="add-command" bind:value={addCommand} required placeholder="npx" />
+					</div>
+					<div class="flex flex-col gap-2">
+						<Label for="add-args">Arguments (one per line)</Label>
+						<Textarea id="add-args" bind:value={addArgs} rows={3} placeholder={argsPlaceholder} />
+					</div>
+					<p class="text-xs text-muted-foreground">{stdioHint}</p>
+				{:else}
+					<div class="flex flex-col gap-2">
+						<Label for="add-url">URL</Label>
+						<Input
+							id="add-url"
+							type="url"
+							bind:value={addUrl}
+							required
+							placeholder="https://example.com/mcp"
+						/>
+					</div>
+					{@render authFields(addAuth, 'add', false)}
+				{/if}
+			</div>
 			<Dialog.Footer>
 				<Dialog.Close>
 					{#snippet child({ props })}
@@ -482,54 +691,56 @@
 </Dialog.Root>
 
 <Dialog.Root bind:open={editOpen}>
-	<Dialog.Content>
+	<!-- Tall with OAuth settings: scroll inside rather than off screen. -->
+	<Dialog.Content class="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)]">
 		<Dialog.Header>
 			<Dialog.Title>Edit {data.servers.find((s) => s.id === editId)?.name ?? 'server'}</Dialog.Title
 			>
-			<Dialog.Description>Update the connection details for this MCP server.</Dialog.Description>
+			<Dialog.Description class="text-pretty"
+				>Update the connection details for this MCP server.</Dialog.Description
+			>
 		</Dialog.Header>
-		<form onsubmit={submitEdit} class="flex flex-col gap-4">
-			<div class="flex flex-col gap-2">
-				<Label for="edit-name">Name</Label>
-				<Input id="edit-name" bind:value={editName} required maxlength={64} />
+		<form onsubmit={submitEdit} class="flex min-h-0 min-w-0 flex-col gap-6">
+			<!-- Only the fields scroll; the title and buttons stay put. -->
+			<div
+				{@attach fadeWhenScrollable}
+				class="-mx-6 -my-1 flex min-h-0 flex-col gap-4 overflow-y-auto px-6 py-1 data-more-below:[mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)]"
+			>
+				<div class="flex flex-col gap-2">
+					<Label for="edit-name">Name</Label>
+					<Input id="edit-name" bind:value={editName} required maxlength={64} />
+				</div>
+				<div class="flex flex-col gap-2">
+					<Label for="edit-transport">Transport</Label>
+					<Select.Root type="single" bind:value={editTransport}>
+						<Select.Trigger id="edit-transport" class="w-full"
+							>{transportLabels[editTransport]}</Select.Trigger
+						>
+						<Select.Content>
+							<Select.Item value="http">{transportLabels.http}</Select.Item>
+							<Select.Item value="sse">{transportLabels.sse}</Select.Item>
+							<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
+						</Select.Content>
+					</Select.Root>
+				</div>
+				{#if editTransport === 'stdio'}
+					<div class="flex flex-col gap-2">
+						<Label for="edit-command">Command</Label>
+						<Input id="edit-command" bind:value={editCommand} required />
+					</div>
+					<div class="flex flex-col gap-2">
+						<Label for="edit-args">Arguments (one per line)</Label>
+						<Textarea id="edit-args" bind:value={editArgs} rows={3} />
+					</div>
+					<p class="text-xs text-muted-foreground">{stdioHint}</p>
+				{:else}
+					<div class="flex flex-col gap-2">
+						<Label for="edit-url">URL</Label>
+						<Input id="edit-url" type="url" bind:value={editUrl} required />
+					</div>
+					{@render authFields(editAuth, 'edit', true)}
+				{/if}
 			</div>
-			<div class="flex flex-col gap-2">
-				<Label>Transport</Label>
-				<Select.Root type="single" bind:value={editTransport}>
-					<Select.Trigger class="w-full">{transportLabels[editTransport]}</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="http">{transportLabels.http}</Select.Item>
-						<Select.Item value="sse">{transportLabels.sse}</Select.Item>
-						<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
-					</Select.Content>
-				</Select.Root>
-			</div>
-			{#if editTransport === 'stdio'}
-				<div class="flex flex-col gap-2">
-					<Label for="edit-command">Command</Label>
-					<Input id="edit-command" bind:value={editCommand} required />
-				</div>
-				<div class="flex flex-col gap-2">
-					<Label for="edit-args">Arguments (one per line)</Label>
-					<Textarea id="edit-args" bind:value={editArgs} rows={3} />
-				</div>
-				<p class="text-xs text-muted-foreground">{stdioHint}</p>
-			{:else}
-				<div class="flex flex-col gap-2">
-					<Label for="edit-url">URL</Label>
-					<Input id="edit-url" type="url" bind:value={editUrl} required />
-				</div>
-				<div class="flex flex-col gap-2">
-					<Label for="edit-token">Token</Label>
-					<Input
-						id="edit-token"
-						type="password"
-						bind:value={editToken}
-						autocomplete="off"
-						placeholder="Leave empty to keep the current token"
-					/>
-				</div>
-			{/if}
 			<Dialog.Footer>
 				<Dialog.Close>
 					{#snippet child({ props })}

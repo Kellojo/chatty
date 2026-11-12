@@ -6,6 +6,7 @@ import { getDb } from '../db/index.js';
 import { listEnabledMcpServers, type McpServerRow } from '../db/repo/mcp-servers.js';
 import { createLogger } from '../logger.js';
 import { connectServer, MCP_LIST_TIMEOUT_MS, withTimeout } from '../mcp/clientManager.js';
+import { McpSignInRequiredError } from '../mcp/oauth.js';
 import { acquireMcpServer, cachedMcpTools, type McpLease } from '../mcp/pool.js';
 import type { CallerContext } from '../mcp/types.js';
 import { pickDeferredTools, SEARCH_TOOLS_NAME, type ToolCatalog } from './toolSearch.js';
@@ -47,12 +48,16 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 	const toolToServer: Record<string, string> = {};
 	const closers: Array<() => Promise<void>> = [];
 	const results = await Promise.allSettled(
-		rows.map((row) => (row.transport === 'builtin' ? openBuiltin(row, ctx) : openPooled(row)))
+		rows.map((row) =>
+			row.transport === 'builtin' ? openBuiltin(row, ctx) : openPooled(row, ctx.userId)
+		)
 	);
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i];
 		const result = results[i];
 		if (result.status === 'rejected') {
+			// Not signed in to an OAuth server is a normal state for a user, not a fault.
+			if (result.reason instanceof McpSignInRequiredError) continue;
 			log.warn(`MCP server ${row.name} unavailable:`, {
 				error: result.reason instanceof Error ? result.reason.message : String(result.reason)
 			});
@@ -125,12 +130,13 @@ const CONNECTION_ERROR =
 /**
  * External servers come from the shared pool; the lease is returned when the
  * turn ends. Once a server's tool list is known, a turn offers those tools
- * without connecting, and connects on the first call of one of them.
+ * without connecting, and connects on the first call of one of them. OAuth
+ * servers are pooled per user, since they act as the signed-in user.
  */
-async function openPooled(row: McpServerRow): Promise<OpenedServer> {
-	const cached = cachedMcpTools(row);
+async function openPooled(row: McpServerRow, userId: string): Promise<OpenedServer> {
+	const cached = cachedMcpTools(row, userId);
 	if (!cached) {
-		const lease = await acquireMcpServer(row);
+		const lease = await acquireMcpServer(row, userId);
 		return {
 			tools: lease.tools,
 			close: async () => lease.release(),
@@ -141,7 +147,7 @@ async function openPooled(row: McpServerRow): Promise<OpenedServer> {
 	}
 	let pending: Promise<McpLease> | null = null;
 	const lease = () => {
-		pending ??= acquireMcpServer(row).catch((e: unknown) => {
+		pending ??= acquireMcpServer(row, userId).catch((e: unknown) => {
 			pending = null;
 			throw e;
 		});
