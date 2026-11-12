@@ -6,20 +6,23 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
 	import { tick } from 'svelte';
 	import { repositoryName } from '$lib/coding-environments.js';
 	import GithubIcon from './GithubIcon.svelte';
+	import FolderPathInput, { folderName } from './FolderPathInput.svelte';
+	import type { NewProjectMode } from './new-project.js';
 
 	let {
 		open = $bindable(false),
-		mode = $bindable<'empty' | 'clone'>('clone'),
+		mode = $bindable<NewProjectMode>('clone'),
 		environmentId,
 		environmentName,
 		oncreated
 	}: {
 		open?: boolean;
-		mode?: 'empty' | 'clone';
+		mode?: NewProjectMode;
 		environmentId: string;
 		environmentName: string;
 		oncreated: (projectId: string) => void;
@@ -27,21 +30,51 @@
 
 	let title = $state('');
 	let repository = $state('');
+	let folderPath = $state('');
 	let titleEdited = $state(false);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 
-	// Suggest the project name from the repository until the user types their own.
-	const suggestedTitle = $derived(repositoryName(repository) ?? '');
-	const effectiveTitle = $derived(mode === 'clone' && !titleEdited ? suggestedTitle : title);
-	const canSubmit = $derived(
-		!busy && effectiveTitle.trim().length > 0 && (mode === 'empty' || repository.trim().length > 0)
+	// Suggest the project name from the repository or folder until the user types their own.
+	const suggestedTitle = $derived(
+		mode === 'clone'
+			? (repositoryName(repository) ?? '')
+			: mode === 'folder'
+				? folderName(folderPath)
+				: ''
 	);
+	const effectiveTitle = $derived(mode !== 'empty' && !titleEdited ? suggestedTitle : title);
+	const sourceGiven = $derived(
+		mode === 'clone'
+			? repository.trim().length > 0
+			: mode === 'folder'
+				? folderPath.trim().length > 0
+				: true
+	);
+	const canSubmit = $derived(!busy && effectiveTitle.trim().length > 0 && sourceGiven);
+
+	const FIELD_IDS: Record<NewProjectMode, string> = {
+		clone: 'project-repository',
+		folder: 'project-folder',
+		empty: 'project-title'
+	};
+	const SUCCESS_VERB: Record<NewProjectMode, string> = {
+		clone: 'Cloned',
+		folder: 'Added',
+		empty: 'Created'
+	};
+	const SUBMIT_LABEL: Record<NewProjectMode, [idle: string, busy: string]> = {
+		clone: ['Clone project', 'Cloning…'],
+		folder: ['Add project', 'Adding…'],
+		empty: ['Create project', 'Creating…']
+	};
 
 	$effect(() => {
 		if (open) {
 			title = '';
 			repository = '';
+			// Start in the home folder so its folders are suggested right away.
+			folderPath = '~/';
 			titleEdited = false;
 			error = null;
 		}
@@ -49,7 +82,12 @@
 
 	async function focusField() {
 		await tick();
-		document.getElementById(mode === 'clone' ? 'project-repository' : 'project-title')?.focus();
+		const field = document.getElementById(FIELD_IDS[mode]);
+		field?.focus();
+		// Caret after the prefilled path, ready to type the rest.
+		if (field instanceof HTMLInputElement) {
+			field.setSelectionRange(field.value.length, field.value.length);
+		}
 	}
 
 	async function submit(e: SubmitEvent) {
@@ -64,7 +102,8 @@
 				body: JSON.stringify({
 					environmentId,
 					title: effectiveTitle.trim(),
-					...(mode === 'clone' ? { repository: repository.trim() } : {})
+					...(mode === 'clone' ? { repository: repository.trim() } : {}),
+					...(mode === 'folder' ? { path: folderPath.trim() } : {})
 				})
 			});
 			const body = (await res.json().catch(() => null)) as {
@@ -76,10 +115,7 @@
 				throw new Error(body?.message ?? 'Could not create the project');
 			}
 			if (body.warning) toast.warning(body.warning);
-			else
-				toast.success(
-					mode === 'clone' ? `Cloned ${body.project.title}` : `Created ${body.project.title}`
-				);
+			else toast.success(`${SUCCESS_VERB[mode]} ${body.project.title}`);
 			open = false;
 			oncreated(body.project.id);
 		} catch (err) {
@@ -130,7 +166,7 @@
 			<Tabs.Root
 				value={mode}
 				onValueChange={(v) => {
-					mode = v as 'empty' | 'clone';
+					mode = v as NewProjectMode;
 					error = null;
 					focusField();
 				}}
@@ -138,11 +174,15 @@
 				<Tabs.List class="w-full">
 					<Tabs.Trigger value="clone" disabled={busy}>
 						<GithubIcon class="size-4" />
-						Clone repository
+						Clone
+					</Tabs.Trigger>
+					<Tabs.Trigger value="folder" disabled={busy}>
+						<FolderOpenIcon class="size-4" />
+						Open folder
 					</Tabs.Trigger>
 					<Tabs.Trigger value="empty" disabled={busy}>
 						<FolderPlusIcon class="size-4" />
-						New empty project
+						New empty
 					</Tabs.Trigger>
 				</Tabs.List>
 			</Tabs.Root>
@@ -178,6 +218,30 @@
 				</div>
 
 				<div
+					class={['grid content-start gap-5', mode !== 'folder' && 'invisible']}
+					inert={mode !== 'folder'}
+				>
+					<div class="grid gap-2">
+						<Label for="project-folder">Folder</Label>
+						<FolderPathInput
+							id="project-folder"
+							bind:value={folderPath}
+							{environmentId}
+							disabled={busy}
+							active={open && mode === 'folder'}
+						/>
+						<p class="text-xs text-muted-foreground">
+							A folder on {environmentName}. Pick one from the list or type a path; Tab completes.
+						</p>
+					</div>
+					{@render nameField(
+						'project-folder-title',
+						titleEdited ? title : suggestedTitle,
+						'Filled in from the folder'
+					)}
+				</div>
+
+				<div
 					class={['grid content-start gap-2', mode !== 'empty' && 'invisible']}
 					inert={mode !== 'empty'}
 				>
@@ -201,9 +265,9 @@
 				<Button type="submit" disabled={!canSubmit}>
 					{#if busy}
 						<LoaderCircleIcon class="size-4 animate-spin" />
-						{mode === 'clone' ? 'Cloning…' : 'Creating…'}
+						{SUBMIT_LABEL[mode][1]}
 					{:else}
-						{mode === 'clone' ? 'Clone project' : 'Create project'}
+						{SUBMIT_LABEL[mode][0]}
 					{/if}
 				</Button>
 			</Dialog.Footer>

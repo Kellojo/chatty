@@ -26,6 +26,9 @@ export interface ConversationRow {
 	last_read_at: number | null;
 	settled_at: number | null;
 	settled_reason: string | null;
+	snoozed_at: number | null;
+	snoozed_until: number | null;
+	woke_at: number | null;
 	created_at: number;
 	updated_at: number;
 	deleted_at: number | null;
@@ -60,6 +63,10 @@ export interface Conversation {
 	agentRun: { id: string; status: AgentRunStatus } | null;
 	settledAt: number | null;
 	settledReason: SettledReason | null;
+	/** Hidden from the active list until then (ms); null when not snoozed. */
+	snoozedUntil: number | null;
+	/** When a snooze last ended; the list sorts it like activity then. */
+	wokeAt: number | null;
 	/** Set when the conversation is a coding task run on a T3 Code server. */
 	coding: ConversationCodingSummary | null;
 	createdAt: number;
@@ -92,6 +99,8 @@ export function toPublic(row: ConversationRow): Conversation {
 				: null,
 		settledAt: row.settled_at,
 		settledReason: row.settled_reason as SettledReason | null,
+		snoozedUntil: row.snoozed_until,
+		wokeAt: row.woke_at,
 		coding: row.coding_status
 			? {
 					projectTitle: row.coding_project_title ?? '',
@@ -130,10 +139,22 @@ const SIDEBAR_SELECT = `SELECT c.*, ${CODING_SUMMARY_COLUMNS}, ${AGENT_RUN_COLUM
 	FROM conversations c
 	LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id`;
 
+/**
+ * A snooze still hides the chat (bind `now`). A coding task that waits for an
+ * answer shows anyway, as a pending question breaks through a snooze on T3.
+ * Needs the `cc` join.
+ */
+const SNOOZED_WHERE = `(c.snoozed_until IS NOT NULL AND c.snoozed_until > ?
+	AND (cc.status IS NULL OR cc.status != 'awaiting_input'))`;
+
+/** Newest activity first, where a snooze ending counts as activity. */
+const ACTIVITY_ORDER = `MAX(c.updated_at, COALESCE(c.woke_at, 0)) DESC`;
+
+/** Active chats: neither settled nor snoozed. */
 export function listConversations(
 	db: Db,
 	userId: string,
-	opts: { offset?: number; limit?: number } = {}
+	opts: { offset?: number; limit?: number; now?: number } = {}
 ): ConversationRow[] {
 	const limit = opts.limit ?? CONVERSATIONS_PAGE_SIZE;
 	const offset = opts.offset ?? 0;
@@ -141,10 +162,28 @@ export function listConversations(
 		.prepare(
 			`${SIDEBAR_SELECT}
 			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.settled_at IS NULL
-			 ORDER BY c.pinned DESC, c.updated_at DESC
+			   AND NOT ${SNOOZED_WHERE}
+			 ORDER BY c.pinned DESC, ${ACTIVITY_ORDER}
 			 LIMIT ? OFFSET ?`
 		)
-		.all(userId, limit, offset) as ConversationRow[];
+		.all(userId, opts.now ?? Date.now(), limit, offset) as ConversationRow[];
+}
+
+/** Chats a snooze still hides, the soonest to wake first. */
+export function listSnoozedConversations(
+	db: Db,
+	userId: string,
+	opts: { limit?: number; now?: number } = {}
+): ConversationRow[] {
+	return db
+		.prepare(
+			`${SIDEBAR_SELECT}
+			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.settled_at IS NULL
+			   AND ${SNOOZED_WHERE}
+			 ORDER BY c.snoozed_until ASC
+			 LIMIT ?`
+		)
+		.all(userId, opts.now ?? Date.now(), opts.limit ?? 200) as ConversationRow[];
 }
 
 export function listSettledConversations(
@@ -339,22 +378,84 @@ export function purgeConversation(db: Db, id: string): void {
 export function togglePin(db: Db, userId: string, id: string): ConversationRow | undefined {
 	const existing = getConversation(db, userId, id);
 	if (!existing) return undefined;
-	db.prepare('UPDATE conversations SET pinned = ? WHERE id = ?').run(
-		existing.pinned === 1 ? 0 : 1,
-		id
-	);
+	setConversationPinned(db, userId, id, existing.pinned !== 1);
 	return getConversation(db, userId, id);
 }
 
+/** Pinning ends a snooze: a pinned chat is one you keep in view. */
 export function setConversationPinned(db: Db, userId: string, id: string, pinned: boolean): void {
-	db.prepare('UPDATE conversations SET pinned = ? WHERE id = ? AND user_id = ?').run(
+	const unsnooze = pinned ? ', snoozed_at = NULL, snoozed_until = NULL' : '';
+	db.prepare(`UPDATE conversations SET pinned = ?${unsnooze} WHERE id = ? AND user_id = ?`).run(
 		pinned ? 1 : 0,
 		id,
 		userId
 	);
 }
 
-/** Hides a conversation from the default sidebar list. Settling also unpins. */
+/**
+ * Hides a conversation from the active list until `until` (ms). Snoozing
+ * unpins it (pinned chats stay in view); settled conversations can't be snoozed.
+ */
+export function snoozeConversation(
+	db: Db,
+	userId: string,
+	id: string,
+	until: number,
+	now = Date.now()
+): ConversationRow | undefined {
+	db.prepare(
+		`UPDATE conversations SET snoozed_at = ?, snoozed_until = ?, pinned = 0
+		 WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND settled_at IS NULL`
+	).run(now, until, id, userId);
+	return getConversation(db, userId, id);
+}
+
+/**
+ * Ends a conversation's snooze early. It comes back as if it had just woken,
+ * so it sorts to the top. Returns whether it was snoozed.
+ */
+export function unsnoozeConversation(
+	db: Db,
+	userId: string,
+	id: string,
+	now = Date.now()
+): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE conversations SET snoozed_at = NULL, snoozed_until = NULL, woke_at = ?
+				 WHERE id = ? AND user_id = ? AND snoozed_until IS NOT NULL`
+			)
+			.run(now, id, userId).changes > 0
+	);
+}
+
+/**
+ * Ends every snooze that is due (at `now` or earlier), stamping `woke_at` with
+ * the time it was due. Returns the woken ids per user.
+ */
+export function wakeDueSnoozes(db: Db, now = Date.now()): Map<string, string[]> {
+	const due = db
+		.prepare(
+			`SELECT id, user_id, snoozed_until FROM conversations
+			 WHERE snoozed_until IS NOT NULL AND snoozed_until <= ?`
+		)
+		.all(now) as { id: string; user_id: string; snoozed_until: number }[];
+	const wake = db.prepare(
+		`UPDATE conversations SET snoozed_at = NULL, snoozed_until = NULL, woke_at = ?
+		 WHERE id = ? AND snoozed_until = ?`
+	);
+	const byUser = new Map<string, string[]>();
+	db.transaction(() => {
+		for (const c of due) {
+			if (wake.run(c.snoozed_until, c.id, c.snoozed_until).changes === 0) continue;
+			byUser.set(c.user_id, [...(byUser.get(c.user_id) ?? []), c.id]);
+		}
+	})();
+	return byUser;
+}
+
+/** Hides a conversation from the default sidebar list. Settling also unpins and unsnoozes. */
 export function settleConversation(
 	db: Db,
 	userId: string,
@@ -362,7 +463,8 @@ export function settleConversation(
 	reason: SettledReason = 'manual'
 ): ConversationRow | undefined {
 	db.prepare(
-		`UPDATE conversations SET settled_at = ?, settled_reason = ?, pinned = 0
+		`UPDATE conversations SET settled_at = ?, settled_reason = ?, pinned = 0,
+		 snoozed_at = NULL, snoozed_until = NULL
 		 WHERE id = ? AND user_id = ? AND deleted_at IS NULL`
 	).run(Date.now(), reason, id, userId);
 	return getConversation(db, userId, id);
@@ -385,8 +487,9 @@ export function unsettleConversation(
 }
 
 /**
- * Settles non-pinned chats nobody has looked at since `cutoffMs` (last look =
- * latest of read, update and creation time). Returns the settled ids per user.
+ * Settles non-pinned, non-snoozed chats nobody has looked at since `cutoffMs`
+ * (last look = latest of read, update, creation and wake time). Returns the
+ * settled ids per user.
  */
 export function autoSettleConversations(
 	db: Db,
@@ -397,7 +500,8 @@ export function autoSettleConversations(
 		.prepare(
 			`SELECT id, user_id FROM conversations
 			 WHERE kind = 'chat' AND deleted_at IS NULL AND settled_at IS NULL AND pinned = 0
-			   AND MAX(COALESCE(last_read_at, 0), updated_at, created_at) < ?`
+			   AND snoozed_until IS NULL
+			   AND MAX(COALESCE(last_read_at, 0), updated_at, created_at, COALESCE(woke_at, 0)) < ?`
 		)
 		.all(opts.cutoffMs) as { id: string; user_id: string }[];
 	const settle = db.prepare(
@@ -547,7 +651,7 @@ export function searchConversationsSql(withFts: boolean): string {
 		 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
 		 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
 		   AND (c.title LIKE ? ESCAPE '!' OR cc.project_title LIKE ? ESCAPE '!' ${ftsClause})
-		 ORDER BY c.pinned DESC, c.updated_at DESC
+		 ORDER BY c.pinned DESC, ${ACTIVITY_ORDER}
 		 LIMIT ? OFFSET ?`;
 }
 

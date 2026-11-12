@@ -6,6 +6,38 @@ import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 
+// Files other apps may share into Chatty: the composer's attachment types
+// (its file picker's `accept`). Android matches shares by MIME type.
+const SHAREABLE_FILES = [
+	'image/*',
+	'application/pdf',
+	'text/*',
+	'application/json',
+	'application/xml',
+	'application/zip',
+	'application/msword',
+	'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+	'application/vnd.ms-excel',
+	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+	'application/vnd.ms-powerpoint',
+	'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+	'.md',
+	'.csv',
+	'.json'
+];
+
+// Files the desktop app offers to open ("Open with Chatty"). Kept to documents
+// you'd ask about; registering every image or text type would crowd the menu.
+const OPENABLE_FILES: Record<string, string[]> = {
+	'application/pdf': ['.pdf'],
+	'text/markdown': ['.md', '.markdown'],
+	'text/plain': ['.txt', '.log'],
+	'text/csv': ['.csv'],
+	'application/json': ['.json'],
+	'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx']
+};
+
 export default defineConfig(({ mode }) => {
 	if (mode !== 'test' && existsSync('.env')) process.loadEnvFile();
 
@@ -60,14 +92,27 @@ export default defineConfig(({ mode }) => {
 					theme_color: '#0e0d0c',
 					background_color: '#0e0d0c',
 					display: 'standalone',
+					// Installed on desktop, the app draws into the title bar (the window
+					// controls float over it); see --safe-top in src/routes/layout.css.
+					display_override: ['window-controls-overlay'],
 					start_url: '/',
-					// Share text/links from other apps into a new chat (read by the
-					// new-chat page, src/routes/(app)/+page.svelte).
+					// Share text, links and files from other apps into a new chat. The
+					// service worker takes the POST (static/share-target-sw.js) and hands
+					// it to the new-chat page, src/routes/(app)/+page.svelte.
 					share_target: {
-						action: '/',
-						method: 'GET',
-						params: { title: 'share_title', text: 'share_text', url: 'share_url' }
+						action: '/share-target',
+						method: 'POST',
+						enctype: 'multipart/form-data',
+						params: {
+							title: 'share_title',
+							text: 'share_text',
+							url: 'share_url',
+							files: [{ name: 'files', accept: SHAREABLE_FILES }]
+						}
 					},
+					// Desktop "Open with Chatty": the new-chat page attaches the files it is
+					// launched with (window.launchQueue).
+					file_handlers: [{ action: '/', accept: OPENABLE_FILES }],
 					// Long-press / right-click menu on the app icon.
 					shortcuts: [
 						{ name: 'New chat', short_name: 'Chat', url: '/?mode=chat' },
@@ -92,7 +137,8 @@ export default defineConfig(({ mode }) => {
 					// downloads) must reach the server, not get the cached shell.
 					navigateFallbackDenylist: [/^\/api\//],
 					// Notification click handling (see static/notification-sw.js).
-					importScripts: ['/notification-sw.js'],
+					// Shares from other apps (see static/share-target-sw.js).
+					importScripts: ['/notification-sw.js', '/share-target-sw.js'],
 					// HTML/data payloads can exceed the default 2 MiB precache limit.
 					maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
 					runtimeCaching: [

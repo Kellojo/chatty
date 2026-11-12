@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { afterNavigate, beforeNavigate, goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -33,7 +33,9 @@
 	import { clipboardFiles } from '$lib/state/clipboard-files.js';
 	import { DEFAULT_CODING_SUGGESTIONS, DEFAULT_SUGGESTIONS } from '$lib/user-settings.js';
 	import { START_MODE_COOKIE } from '$lib/coding-environments.js';
-	import { sharedDraft } from '$lib/share-target.js';
+	import { sharedDraft, takeSharedFiles } from '$lib/share-target.js';
+	import { onLaunchFiles } from '$lib/launch-files.js';
+	import ScreenshotButton from '$lib/components/app/ScreenshotButton.svelte';
 	import type { Conversation } from '$lib/types.js';
 	import type { PageData } from './$types';
 
@@ -134,6 +136,7 @@
 		const params = page.url.searchParams;
 		const startMode = params.get('mode');
 		const shared = sharedDraft(params);
+		const withFiles = params.has('share_files');
 		if (startMode === null && shared === null) return;
 		untrack(() => {
 			if (startMode === 'chat' || startMode === 'coding') setMode(startMode);
@@ -142,8 +145,25 @@
 				if (shared) useSuggestion(shared);
 			}
 		});
+		if (withFiles) {
+			takeSharedFiles()
+				.then((files) => {
+					if (files.length > 0) addIncomingFiles(files);
+					else toast.error('The shared files could not be attached');
+				})
+				.catch(() => toast.error('The shared files could not be attached'));
+		}
 		goto(resolve('/'), { replaceState: true, keepFocus: true, noScroll: true });
 	});
+
+	/** Files from outside (a share, "Open with Chatty"): attached to a new chat. */
+	function addIncomingFiles(files: File[]) {
+		setMode('chat');
+		selectedFiles = [...selectedFiles, ...files];
+		focusPrompt();
+	}
+
+	onMount(() => onLaunchFiles(addIncomingFiles));
 
 	const fileDrop = createFileDrop((files) => {
 		selectedFiles = [...selectedFiles, ...files];
@@ -342,6 +362,7 @@
 							<PaperclipIcon class="size-4" />
 						</Button>
 					{/if}
+					<ScreenshotButton onfile={(file) => (selectedFiles = [...selectedFiles, file])} />
 					<MicButton {speech} />
 				</div>
 				<Button

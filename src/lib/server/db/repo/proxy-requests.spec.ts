@@ -63,7 +63,6 @@ describe('proxy-requests repo', () => {
 			modelId: 'm1',
 			fallbackIndex: 0,
 			stream: false,
-			compression: null,
 			source: 'proxy',
 			conversationId: null,
 			runId: null,
@@ -161,19 +160,6 @@ describe('proxy-requests repo', () => {
 		expect(proxyRequestStats(db, { source: 'chat' }).total).toBe(1);
 	});
 
-	it('stores compression metadata as JSON', () => {
-		const row = logRequest('u1', 'fast');
-		finalizeProxyRequest(db, row.id, {
-			status: 'complete',
-			compression: {
-				caveman: { level: 'full', estSaved: 42 }
-			}
-		});
-		expect(toPublic(getProxyRequest(db, row.id)!).compression).toEqual({
-			caveman: { level: 'full', estSaved: 42 }
-		});
-	});
-
 	it('lists with filters and pagination totals', () => {
 		logRequest('u1', 'fast');
 		logRequest('u1', 'smart', true);
@@ -200,8 +186,7 @@ describe('proxy-requests repo', () => {
 			latencyMs: 100,
 			inputTokens: 10,
 			outputTokens: 20,
-			costUsd: 0.001,
-			compression: { caveman: { level: 'lite', estSaved: 5 } }
+			costUsd: 0.001
 		});
 		const b = logRequest('u1', 'smart');
 		finalizeProxyRequest(db, b.id, {
@@ -224,8 +209,7 @@ describe('proxy-requests repo', () => {
 			cacheWriteTokens: 0,
 			costUsd: 0.001,
 			pricedRequests: 1,
-			distinctModels: 2,
-			cavemanSaved: 5
+			distinctModels: 2
 		});
 
 		const u1 = proxyRequestStats(db, { userId: 'u1' });

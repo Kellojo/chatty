@@ -17,6 +17,7 @@
 	import { startMessageQueueRunner } from '$lib/state/message-queue-runner.js';
 	import { setSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
 	import { drawerSwipe, SETTLE_EASING } from '$lib/components/app/drawer-swipe.js';
+	import { haptic, preloadHaptics } from '$lib/haptics.svelte.js';
 	import {
 		chatShortcuts,
 		isTypingTarget,
@@ -207,6 +208,7 @@
 				settleTimer = setTimeout(() => (settleMs = null), durationMs + 50);
 				const focused = document.activeElement;
 				if (!open && focused instanceof HTMLElement && focused.closest('aside')) focused.blur();
+				if (open !== mobileOpen) haptic('light');
 				mobileOpen = open;
 			}
 		});
@@ -292,6 +294,7 @@
 	}
 
 	onMount(() => {
+		preloadHaptics();
 		document.addEventListener('scroll', onAnyScroll, { capture: true, passive: true });
 		const stopEvents = startServerEvents();
 		const stopQueueRunner = startMessageQueueRunner();
@@ -325,13 +328,21 @@
 	Desktop: the wrappers dissolve (display: contents) into an in-flow,
 	collapsible sidebar next to a flexible main.
 -->
-<div class="flex h-screen overflow-hidden">
+<!-- Starts below the title bar strip of the installed desktop app (--titlebar-height,
+     zero elsewhere); the strip above the sidebar takes the sidebar's colour. -->
+<div
+	class="fixed top-0 left-0 h-(--titlebar-height) w-(--sidebar-width) bg-muted/30 transition-[width] duration-200 max-md:hidden"
+	class:border-r={sidebarOpen}
+	style:--sidebar-width={sidebarOpen ? '288px' : '0px'}
+	aria-hidden="true"
+></div>
+<div class="flex h-screen overflow-hidden pt-(--titlebar-height)">
 	<!-- While a finger drags it, it follows without a transition; letting go settles it
 	     open or closed at the finger's speed (settleMs), as iOS does. -->
 	<div
 		bind:this={drawerTrack}
 		class={cn(
-			'fixed inset-y-0 left-0 flex w-[200%] md:contents',
+			'fixed top-(--titlebar-height) bottom-0 left-0 flex w-[200%] md:contents',
 			dragProgress === null && 'transition-transform duration-300 ease-out'
 		)}
 		style:transform={dragProgress !== null
@@ -351,6 +362,7 @@
 				conversations={data.conversations}
 				hasMore={data.hasMoreConversations}
 				unreadIds={data.unreadIds}
+				snoozed={data.snoozed}
 				settledCount={data.settledCount}
 				autoSettleDays={data.autoSettleDays}
 				bind:closeButton={sidebarCloseButton}
@@ -361,7 +373,8 @@
 			/>
 		</div>
 		<div class="h-full w-1/2 shrink-0 md:contents">
-			<main class="relative flex h-full min-w-0 flex-col md:flex-1">
+			<!-- Every page starts below a phone's status bar / notch (zero elsewhere). -->
+			<main class="relative flex h-full min-w-0 flex-col pt-[env(safe-area-inset-top)] md:flex-1">
 				{@render children()}
 			</main>
 		</div>
@@ -374,7 +387,7 @@
 		class={cn(
 			// Sits centred in the first row of every page: the 48px chat header on phones,
 			// 56px on wider screens. Page titles (PageHeader) line up with it.
-			'fixed top-[calc(0.25rem+env(safe-area-inset-top))] left-[calc(0.375rem+env(safe-area-inset-left))] z-20 size-10 duration-200 md:top-[calc(0.75rem+env(safe-area-inset-top))] md:left-[calc(1rem+env(safe-area-inset-left))] md:size-8 md:pointer-coarse:top-[calc(0.5rem+env(safe-area-inset-top))] md:pointer-coarse:left-[calc(0.5rem+env(safe-area-inset-left))] md:pointer-coarse:size-10',
+			'fixed top-[calc(0.25rem+var(--app-top))] left-[calc(0.375rem+env(safe-area-inset-left))] z-20 size-10 duration-200 md:top-[calc(0.75rem+var(--app-top))] md:left-[calc(1rem+env(safe-area-inset-left))] md:size-8 md:pointer-coarse:top-[calc(0.5rem+var(--app-top))] md:pointer-coarse:left-[calc(0.5rem+env(safe-area-inset-left))] md:pointer-coarse:size-10',
 			overContent &&
 				'bg-background shadow-sm ring-1 ring-border hover:bg-muted dark:bg-popover dark:shadow-black/40 dark:ring-foreground/15 dark:hover:bg-accent',
 			buttonHidden && 'max-md:pointer-events-none max-md:-translate-y-16 max-md:opacity-0',

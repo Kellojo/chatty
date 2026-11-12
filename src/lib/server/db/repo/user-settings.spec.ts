@@ -36,6 +36,13 @@ describe('user-settings repo', () => {
 				codingFinished: true,
 				failures: true,
 				agentRuns: false
+			},
+			pushTriggers: {
+				replies: true,
+				needsYou: true,
+				codingFinished: true,
+				failures: true,
+				agentRuns: false
 			}
 		});
 		expect(repo.getTheme(db, 'u1')).toBe('system');
@@ -57,6 +64,23 @@ describe('user-settings repo', () => {
 			failures: true,
 			agentRuns: false
 		});
+	});
+
+	it('push triggers follow the tab triggers until set themselves', () => {
+		repo.setUserSetting(db, 'u1', 'notificationTriggers', { replies: false, agentRuns: true });
+		expect(repo.getPushTriggers(db, 'u1')).toMatchObject({ replies: false, agentRuns: true });
+		repo.setUserSetting(db, 'u1', 'pushTriggers', { replies: true });
+		expect(repo.getPushTriggers(db, 'u1')).toMatchObject({ replies: true, agentRuns: true });
+		expect(repo.getNotificationTriggers(db, 'u1').replies).toBe(false);
+	});
+
+	it('keeps push triggers put when a tab trigger changes', () => {
+		repo.updateNotificationTriggers(db, 'u1', { replies: false });
+		expect(repo.getNotificationTriggers(db, 'u1').replies).toBe(false);
+		expect(repo.getPushTriggers(db, 'u1').replies).toBe(true);
+		repo.updatePushTriggers(db, 'u1', { agentRuns: true });
+		repo.updateNotificationTriggers(db, 'u1', { agentRuns: false, replies: true });
+		expect(repo.getPushTriggers(db, 'u1')).toMatchObject({ replies: true, agentRuns: true });
 	});
 
 	it('round-trips sidebarOpen per user', () => {

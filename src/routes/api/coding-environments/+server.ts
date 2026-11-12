@@ -11,7 +11,7 @@ import {
 import { T3ClientError } from '$lib/server/t3/client.js';
 import {
 	environmentCreateSchema,
-	probeRemoteEnvironmentId,
+	identifyEnvironment,
 	rejectDuplicateEnvironment,
 	resolveEnvironmentConnection
 } from '$lib/server/t3/input.js';
@@ -40,7 +40,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	checkLimit();
 	const baseUrl = parsed.data.baseUrl.baseUrl;
 	rejectDuplicateEnvironment(db, user.id, { baseUrl });
-	const remoteEnvironmentId = await probeRemoteEnvironmentId(baseUrl);
+	const remoteEnvironmentId = await identifyEnvironment(baseUrl);
 	rejectDuplicateEnvironment(db, user.id, { baseUrl, remoteEnvironmentId });
 	let connection: Awaited<ReturnType<typeof resolveEnvironmentConnection>>;
 	try {

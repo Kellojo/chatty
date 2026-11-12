@@ -2,6 +2,7 @@
 	// Turns Web Push on or off for this device and sends a test through the
 	// server, so you can check it reaches a closed app or a locked phone.
 	import { onMount } from 'svelte';
+	import { invalidateAll } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import SendIcon from '@lucide/svelte/icons/send';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -18,12 +19,23 @@
 		type PushSupport
 	} from '$lib/notifications/push.js';
 
+	let {
+		enabled = $bindable(false),
+		ready = $bindable(false),
+		unavailable = $bindable(false)
+	}: {
+		/** Push is on for this device (bindable, so the page can mention it). */
+		enabled?: boolean;
+		/** The state above has been read; false until then. */
+		ready?: boolean;
+		/** Push can't be turned on here (unsupported, needs install or HTTPS, or blocked). */
+		unavailable?: boolean;
+	} = $props();
+
 	let support = $state<PushSupport>('supported');
-	let enabled = $state(false);
 	let blocked = $state(false);
 	let busy = $state(false);
 	let testing = $state(false);
-	let ready = $state(false);
 
 	async function refresh() {
 		support = pushSupport();
@@ -51,10 +63,13 @@
 			if (next) {
 				await enablePush();
 				enabled = true;
+				// The page counts devices with push; let it see this one.
+				void invalidateAll();
 				toast.success('Push is on for this device.');
 			} else {
 				await disablePush();
 				enabled = false;
+				void invalidateAll();
 			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Could not change push');
@@ -90,14 +105,16 @@
 		if (blocked) {
 			return 'Notifications are blocked for this site. Allow them in your browser or system settings, then come back.';
 		}
-		return "Notify this device even when Chatty is closed or the phone is locked. Stops if you're signed out here, or don't open Chatty on this device for a week.";
+		return "Stops if you sign out here, or don't open Chatty on this device for a week.";
 	});
-	const unavailable = $derived(support !== 'supported' || blocked);
+	$effect(() => {
+		unavailable = support !== 'supported' || blocked;
+	});
 </script>
 
 <SettingsSection
 	title="Push notifications"
-	description="Sent by the server, so they arrive while Chatty is closed. Held back while you're using Chatty on any device."
+	description="Reaches this device while Chatty is closed or you've been idle for a couple of minutes. While you're active in Chatty it waits, and it's dropped if you open that chat first."
 >
 	{#snippet action()}
 		{#if enabled}

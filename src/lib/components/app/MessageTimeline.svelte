@@ -17,7 +17,9 @@
 	import { messageText } from '$lib/chat-history.js';
 	import { readableErrorText } from '$lib/error-text.js';
 	import { shortcutLabel } from '$lib/state/shortcuts.js';
+	import { canShare, shareText } from '$lib/web-share.js';
 	import CopyIcon from '@lucide/svelte/icons/copy';
+	import ShareIcon from '@lucide/svelte/icons/share';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import InfoIcon from '@lucide/svelte/icons/info';
@@ -71,8 +73,11 @@
 	} = $props();
 
 	let mounted = $state(false);
+	/** Detected after mount so the server markup and hydration agree. */
+	let shareable = $state(false);
 	onMount(() => {
 		mounted = true;
+		shareable = canShare();
 	});
 
 	let usageMessageId = $state<string | null>(null);
@@ -357,6 +362,16 @@
 							onclick={() => copyMessage(message)}
 						>
 							<CopyIcon class="size-3.5" />
+						</button>
+					{/if}
+					{#if visible && shareable && message.role === 'assistant' && !messageActive}
+						<button
+							title="Share"
+							aria-label="Share message"
+							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+							onclick={() => shareText({ text: messageText(message) })}
+						>
+							<ShareIcon class="size-3.5" />
 						</button>
 					{/if}
 					{#if message.role === 'user' && onedit && !streaming}

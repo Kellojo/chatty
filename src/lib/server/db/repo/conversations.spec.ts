@@ -11,11 +11,15 @@ import {
 	markConversationRead,
 	searchConversations,
 	searchConversationsSql,
+	listSnoozedConversations,
 	settleConversation,
+	snoozeConversation,
 	softDeleteConversation,
 	togglePin,
 	unsettleConversation,
-	updateConversation
+	unsnoozeConversation,
+	updateConversation,
+	wakeDueSnoozes
 } from './conversations.js';
 import { activateBranch, createMessage } from './messages.js';
 
@@ -318,5 +322,71 @@ describe('settling conversations', () => {
 		const hits = searchConversations(db, 'u1', 'quarterly');
 		expect(hits.map((h) => h.id)).toEqual([c.id]);
 		expect(hits[0].settled_at).not.toBeNull();
+	});
+
+	describe('snooze', () => {
+		const HOUR = 60 * 60 * 1000;
+
+		it('hides a snoozed chat from the active list until it wakes, and unpins it', () => {
+			const now = Date.now();
+			const a = createConversation(db, 'u1', { title: 'a' });
+			const b = createConversation(db, 'u1', { title: 'b' });
+			togglePin(db, 'u1', a.id);
+			const row = snoozeConversation(db, 'u1', a.id, now + HOUR, now)!;
+			expect(row.pinned).toBe(0);
+			expect(row.snoozed_at).toBe(now);
+			expect(listConversations(db, 'u1', { now }).map((c) => c.id)).toEqual([b.id]);
+			expect(listSnoozedConversations(db, 'u1', { now }).map((c) => c.id)).toEqual([a.id]);
+			// Past its time it shows again even before the waker runs.
+			expect(listConversations(db, 'u1', { now: now + 2 * HOUR }).map((c) => c.id)).toContain(a.id);
+			expect(listSnoozedConversations(db, 'u1', { now: now + 2 * HOUR })).toEqual([]);
+		});
+
+		it('wakes due snoozes, sorting them as activity at their wake time', () => {
+			const now = Date.now();
+			const a = createConversation(db, 'u1', { title: 'a' });
+			const b = createConversation(db, 'u1', { title: 'b' });
+			const c = createConversation(db, 'u2', { title: 'c' });
+			db.prepare('UPDATE conversations SET updated_at = ?').run(now - DAY);
+			db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now - HOUR, b.id);
+			snoozeConversation(db, 'u1', a.id, now - 1000, now - DAY);
+			snoozeConversation(db, 'u2', c.id, now + HOUR, now);
+			const woken = wakeDueSnoozes(db, now);
+			expect([...woken]).toEqual([['u1', [a.id]]]);
+			const row = getConversation(db, 'u1', a.id)!;
+			expect(row.snoozed_until).toBeNull();
+			expect(row.woke_at).toBe(now - 1000);
+			expect(listConversations(db, 'u1', { now }).map((r) => r.id)).toEqual([a.id, b.id]);
+			expect(getConversation(db, 'u2', c.id)!.snoozed_until).toBe(now + HOUR);
+		});
+
+		it('ends early on unsnooze, pin and settle', () => {
+			const now = Date.now();
+			const c = createConversation(db, 'u1');
+			snoozeConversation(db, 'u1', c.id, now + HOUR, now);
+			expect(unsnoozeConversation(db, 'u1', c.id, now + 5)).toBe(true);
+			expect(getConversation(db, 'u1', c.id)!.woke_at).toBe(now + 5);
+			expect(unsnoozeConversation(db, 'u1', c.id)).toBe(false);
+
+			snoozeConversation(db, 'u1', c.id, now + HOUR, now);
+			togglePin(db, 'u1', c.id);
+			expect(getConversation(db, 'u1', c.id)!.snoozed_until).toBeNull();
+
+			snoozeConversation(db, 'u1', c.id, now + HOUR, now);
+			settleConversation(db, 'u1', c.id);
+			expect(getConversation(db, 'u1', c.id)!.snoozed_until).toBeNull();
+		});
+
+		it('refuses to snooze a settled chat, and does not auto-settle a snoozed one', () => {
+			const now = Date.now();
+			const settled = createConversation(db, 'u1');
+			settleConversation(db, 'u1', settled.id);
+			expect(snoozeConversation(db, 'u1', settled.id, now + HOUR)!.snoozed_until).toBeNull();
+
+			const snoozed = createConversation(db, 'u1');
+			age(snoozed.id, now - 10 * DAY);
+			snoozeConversation(db, 'u1', snoozed.id, now + 30 * DAY, now - 10 * DAY);
+			expect(autoSettleConversations(db, { cutoffMs: now - 7 * DAY }).size).toBe(0);
+		});
 	});
 });

@@ -50,6 +50,8 @@ function conv(id: string, title: string, patch: Partial<Conversation> = {}): Con
 		agentId: null,
 		settledAt: null,
 		settledReason: null,
+		snoozedUntil: null,
+		wokeAt: null,
 		coding: null,
 		createdAt: now,
 		updatedAt: now,

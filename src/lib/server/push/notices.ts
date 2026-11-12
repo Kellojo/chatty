@@ -1,12 +1,12 @@
 // Server-side twin of the open tab's notice decisions: the same rules
-// ($lib/notifications/rules.ts) and the user's triggers decide what is pushed,
-// so a push says exactly what the tab would have shown.
+// ($lib/notifications/rules.ts) decide what is pushed, with the user's push
+// triggers, so a push says exactly what the tab would have shown.
 import { needsYouNotice, noticeForEvent, type Notice } from '$lib/notifications/rules.js';
 import type { ServerEvent } from '$lib/types.js';
 import type { Db } from '../db/index.js';
 import { getAgent } from '../db/repo/agents.js';
 import { getSidebarConversation, toPublic } from '../db/repo/conversations.js';
-import { getNotificationTriggers } from '../db/repo/user-settings.js';
+import { getPushTriggers } from '../db/repo/user-settings.js';
 
 /** What the service worker receives; kept small (push payloads cap near 4 KB). */
 export interface PushPayload {
@@ -27,7 +27,7 @@ function clip(text: string, max: number): string {
 }
 
 export function noticeForPush(db: Db, userId: string, event: ServerEvent): Notice | null {
-	const triggers = getNotificationTriggers(db, userId);
+	const triggers = getPushTriggers(db, userId);
 	const conversation = (id: string) => {
 		const row = getSidebarConversation(db, userId, id);
 		return row ? toPublic(row) : undefined;

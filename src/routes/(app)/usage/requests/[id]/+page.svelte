@@ -205,39 +205,5 @@
 				</dl>
 			</Card.Content>
 		</Card.Root>
-
-		{#if request.compression}
-			<Card.Root class="lg:col-span-2">
-				<Card.Header>
-					<Card.Title>Compression</Card.Title>
-				</Card.Header>
-				<Card.Content>
-					<dl
-						class="grid grid-cols-1 gap-x-4 gap-y-0.5 text-sm sm:grid-cols-[auto_1fr] sm:gap-y-2 max-sm:[&>dt:not(:first-child)]:mt-3"
-					>
-						{#if request.compression.caveman}
-							<dt class="text-muted-foreground">Caveman level</dt>
-							<dd>{request.compression.caveman.level}</dd>
-							<dt class="text-muted-foreground">Caveman saved (est.)</dt>
-							<dd>
-								{#if request.compression.caveman.estSaved !== null}
-									{formatCount(request.compression.caveman.estSaved)} tokens
-								{:else}
-									—
-								{/if}
-							</dd>
-							{#if request.compression.caveman.overhead !== undefined}
-								<dt class="text-muted-foreground">Caveman overhead</dt>
-								<dd>{formatCount(request.compression.caveman.overhead)} input tokens</dd>
-							{/if}
-							{#if request.compression.caveman.basis}
-								<dt class="text-muted-foreground">Caveman estimate basis</dt>
-								<dd>{request.compression.caveman.basis}</dd>
-							{/if}
-						{/if}
-					</dl>
-				</Card.Content>
-			</Card.Root>
-		{/if}
 	</div>
 </div>

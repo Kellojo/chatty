@@ -667,7 +667,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 *:max-w-4xl md:p-6">
+	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
 		<PageHeader
 			title="Memory"
 			icon={BrainIcon}
@@ -720,7 +720,7 @@
 		{#if view === 'map'}
 			<!-- Wider than the page's reading width: the map earns the space. -->
 			<section
-				class="relative h-[calc(100dvh-15rem)] min-h-[28rem] max-w-none! overflow-hidden rounded-2xl border bg-card"
+				class="relative h-[calc(100dvh-15rem)] min-h-[28rem] overflow-hidden rounded-2xl border bg-card"
 				aria-label="Memory map"
 			>
 				<div class="absolute inset-x-4 top-3 z-10 flex items-center gap-2">

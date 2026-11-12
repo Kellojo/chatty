@@ -17,16 +17,29 @@ vi.mock('$lib/server/llm/registry.js', async () => {
 		doStream: async (options) => {
 			capturedOptions = options;
 			if (behavior === 'always-error') throw errWithStatus(500);
+			// The AI SDK rejects responses that ignore a forced tool choice, so honour it.
+			const forcedTool = options.toolChoice?.type === 'tool' ? options.toolChoice.toolName : null;
 			return {
 				stream: simulateReadableStream({
 					chunks: [
-						{ type: 'text-start', id: 't1' },
-						{ type: 'text-delta', id: 't1', delta: 'Hi ' },
-						{ type: 'text-delta', id: 't1', delta: 'there' },
-						{ type: 'text-end', id: 't1' },
+						...(forcedTool
+							? [
+									{
+										type: 'tool-call',
+										toolCallId: 'c1',
+										toolName: forcedTool,
+										input: '{}'
+									} as const
+								]
+							: ([
+									{ type: 'text-start', id: 't1' },
+									{ type: 'text-delta', id: 't1', delta: 'Hi ' },
+									{ type: 'text-delta', id: 't1', delta: 'there' },
+									{ type: 'text-end', id: 't1' }
+								] as const)),
 						{
 							type: 'finish',
-							finishReason: 'stop',
+							finishReason: forcedTool ? 'tool-calls' : 'stop',
 							usage: {
 								inputTokens: {
 									total: 1,

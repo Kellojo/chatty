@@ -19,19 +19,28 @@
 
 	/**
 	 * On open, bits-ui scrolls the selected item into view once the list is
-	 * positioned. When that item isn't a favourite (e.g. a mapping target being
-	 * edited) the jump hides this section, so undo that first scroll.
+	 * positioned, and realigns on every resize while it settles. When that item
+	 * isn't a favourite (e.g. a mapping target being edited) the jump hides this
+	 * section, so undo those scrolls until the user scrolls or navigates by
+	 * keyboard themselves (or the list has settled).
 	 */
 	const keepInView: Attachment<HTMLElement> = (node) => {
 		const scroller = node.closest<HTMLElement>('[data-select-viewport]');
 		if (!scroller) return;
 		const reset = () => (scroller.scrollTop = 0);
-		scroller.addEventListener('scroll', reset, { once: true });
-		const timer = setTimeout(() => scroller.removeEventListener('scroll', reset), 400);
-		return () => {
+		const stop = () => {
 			clearTimeout(timer);
 			scroller.removeEventListener('scroll', reset);
+			scroller.removeEventListener('wheel', stop);
+			scroller.removeEventListener('touchmove', stop);
+			window.removeEventListener('keydown', stop, true);
 		};
+		scroller.addEventListener('scroll', reset);
+		scroller.addEventListener('wheel', stop, { passive: true });
+		scroller.addEventListener('touchmove', stop, { passive: true });
+		window.addEventListener('keydown', stop, true);
+		const timer = setTimeout(stop, 400);
+		return stop;
 	};
 </script>
 

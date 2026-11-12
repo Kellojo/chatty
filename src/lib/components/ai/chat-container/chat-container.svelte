@@ -30,9 +30,15 @@
 	const chatContext = setChatContainerContext();
 	context = chatContext;
 
+	// The server renders the log scrolled to the top; keep it hidden until it has
+	// been moved to the bottom, so a reload doesn't flash the start of the chat.
+	let positioned = $state(false);
+
 	function bindScrollElement(node: HTMLDivElement) {
 		ref = node;
 		chatContext.setScrollElement(node);
+		if (initial !== false) node.scrollTop = node.scrollHeight;
+		positioned = true;
 
 		return () => {
 			ref = null;
@@ -59,6 +65,7 @@
 	{@attach bindScrollElement}
 	class={cn(
 		// Phones get a longer top fade: their header's two-line title sits right above it.
+		!positioned && 'invisible',
 		'flex overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_2rem,black_calc(100%-2rem),transparent)] max-sm:[mask-image:linear-gradient(to_bottom,transparent,transparent_0.375rem,black_2.75rem,black_calc(100%-2rem),transparent)]',
 		className
 	)}

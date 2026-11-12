@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { Switch as SwitchPrimitive } from 'bits-ui';
 	import { cn, type WithoutChildrenOrChild } from '$lib/utils.js';
+	import { haptic } from '$lib/haptics.svelte.js';
 
 	let {
 		ref = $bindable(null),
 		class: className,
 		checked = $bindable(false),
 		size = 'default',
+		onCheckedChange,
 		...restProps
 	}: WithoutChildrenOrChild<SwitchPrimitive.RootProps> & {
 		size?: 'sm' | 'default';
@@ -16,6 +18,10 @@
 <SwitchPrimitive.Root
 	bind:ref
 	bind:checked
+	onCheckedChange={(value) => {
+		haptic('selection');
+		onCheckedChange?.(value);
+	}}
 	data-slot="switch"
 	data-size={size}
 	class={cn(

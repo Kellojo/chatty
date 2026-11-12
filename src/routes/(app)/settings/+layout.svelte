@@ -15,6 +15,7 @@
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
+	import UsersIcon from '@lucide/svelte/icons/users';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -107,13 +108,20 @@
 			icon: KeyRoundIcon,
 			adminOnly: false,
 			group: 'Integrations'
+		},
+		{
+			href: '/settings/users',
+			label: 'Users',
+			icon: UsersIcon,
+			adminOnly: true,
+			group: 'Admin'
 		}
 	] as const;
 
 	const isAdmin = $derived(data.user.role === 'admin');
 	const visibleSections = $derived(sections.filter((section) => !section.adminOnly || isAdmin));
 	const visibleGroups = $derived(
-		(['You', 'Models', 'Integrations'] as const)
+		(['You', 'Models', 'Integrations', 'Admin'] as const)
 			.map((name) => ({ name, items: visibleSections.filter((section) => section.group === name) }))
 			.filter((group) => group.items.length > 0)
 	);
@@ -136,7 +144,7 @@
 		>
 			{#each visibleSections as section, i (section.href)}
 				{#if i > 0 && section.group !== visibleSections[i - 1].group}
-					<!-- Group break (You / Models / Integrations), as in the desktop sidebar. -->
+					<!-- Group break (You / Models / Integrations / Admin), as in the desktop sidebar. -->
 					<span class="my-2.5 w-px shrink-0 bg-border" aria-hidden="true"></span>
 				{/if}
 				<a

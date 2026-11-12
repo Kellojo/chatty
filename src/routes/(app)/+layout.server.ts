@@ -6,6 +6,7 @@ import {
 	CONVERSATIONS_PAGE_SIZE,
 	countSettledConversations,
 	listConversations,
+	listSnoozedConversations,
 	listUnreadChatIds,
 	toPublic
 } from '$lib/server/db/repo/conversations.js';
@@ -20,6 +21,7 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 	const rows = listConversations(db, locals.user.id, { limit: CONVERSATIONS_PAGE_SIZE + 1 });
 	return {
 		user: {
+			id: locals.user.id,
 			name: locals.user.name,
 			email: locals.user.email,
 			image: locals.user.image ?? null,
@@ -27,6 +29,7 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 		},
 		conversations: rows.slice(0, CONVERSATIONS_PAGE_SIZE).map(toPublic),
 		hasMoreConversations: rows.length > CONVERSATIONS_PAGE_SIZE,
+		snoozed: listSnoozedConversations(db, locals.user.id).map(toPublic),
 		settledCount: countSettledConversations(db, locals.user.id),
 		autoSettleDays: config.CONVERSATION_AUTO_SETTLE_DAYS,
 		unreadIds: listUnreadChatIds(db, locals.user.id),

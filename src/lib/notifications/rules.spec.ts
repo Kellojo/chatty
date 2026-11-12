@@ -30,6 +30,8 @@ function conv(id: string, overrides: Partial<Conversation> = {}): Conversation {
 		agentId: null,
 		settledAt: null,
 		settledReason: null,
+		snoozedUntil: null,
+		wokeAt: null,
 		coding: null,
 		createdAt: 0,
 		updatedAt: 0,

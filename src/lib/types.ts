@@ -77,6 +77,10 @@ export interface Conversation {
 	agentRun: { id: string; status: AgentRunStatus } | null;
 	settledAt: number | null;
 	settledReason: 'manual' | 'auto' | null;
+	/** Hidden from the active list until then (ms); null when not snoozed. */
+	snoozedUntil: number | null;
+	/** When a snooze last ended; the list sorts it like activity then. */
+	wokeAt: number | null;
 	/** Set when the conversation is a coding task run on a T3 Code server. */
 	coding: CodingConversationSummary | null;
 	createdAt: number;
@@ -114,6 +118,7 @@ export type ServerEvent =
 	| { type: 'conversation.branch_changed'; conversationId: string }
 	| { type: 'conversation.compacted'; conversationId: string }
 	| { type: 'conversation.settle_changed'; conversationIds: string[]; settled: boolean }
+	| { type: 'conversation.snooze_changed'; conversationIds: string[]; snoozed: boolean }
 	/** The conversation was moved to trash; lists should drop it. */
 	| { type: 'conversation.deleted'; conversationId: string }
 	/** A coding task's status, pending approval, branch or PR changed. */
@@ -258,15 +263,6 @@ export type RequestSource = 'proxy' | 'chat' | 'agent';
 
 export type RequestPurpose = 'completion' | 'title' | 'compaction';
 
-export interface ProxyCompression {
-	caveman?: {
-		level: string;
-		estSaved: number | null;
-		overhead?: number;
-		basis?: 'baseline' | 'ratio';
-	} | null;
-}
-
 export interface ProxyRequest {
 	id: string;
 	userId: string;
@@ -288,7 +284,6 @@ export interface ProxyRequest {
 	costUsd: number | null;
 	stream: boolean;
 	error: string | null;
-	compression: ProxyCompression | null;
 	source: RequestSource;
 	conversationId: string | null;
 	runId: string | null;
@@ -367,4 +362,22 @@ export function chatMessageToUIMessage(message: ChatMessage): UIMessage {
 		parts: message.parts as UIMessage['parts'],
 		metadata: Object.keys(metadata).length > 0 ? metadata : undefined
 	};
+}
+
+export type UserRole = 'admin' | 'user';
+
+/** A user account as listed in the admin user-management settings. */
+export interface AdminUser {
+	id: string;
+	name: string;
+	email: string;
+	image: string | null;
+	role: UserRole;
+	createdAt: number;
+	/** Most recent session activity; null if they've never signed in. */
+	lastActiveAt: number | null;
+	/** better-auth provider ids they can sign in with, e.g. `credential`, `oidc`. */
+	signInMethods: string[];
+	/** Whether they can sign in with an email and password. */
+	hasPassword: boolean;
 }

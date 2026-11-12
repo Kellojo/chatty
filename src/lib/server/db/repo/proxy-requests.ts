@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type {
-	ProxyCompression,
 	ProxyRequest,
 	ProxyRequestStatus,
 	RequestPurpose,
@@ -30,7 +29,6 @@ export interface ProxyRequestRow {
 	cost_usd: number | null;
 	stream: number;
 	error: string | null;
-	compression: string | null;
 	source: string;
 	conversation_id: string | null;
 	run_id: string | null;
@@ -61,7 +59,6 @@ export function toPublic(row: ProxyRequestRow): ProxyRequest {
 		costUsd: row.cost_usd,
 		stream: row.stream === 1,
 		error: row.error,
-		compression: row.compression ? (JSON.parse(row.compression) as ProxyCompression) : null,
 		source: row.source as ProxyRequest['source'],
 		conversationId: row.conversation_id,
 		runId: row.run_id,
@@ -123,14 +120,13 @@ export interface FinalizeProxyRequestInput {
 	cacheWriteTokens?: number | null;
 	costUsd?: number | null;
 	error?: string | null;
-	compression?: ProxyCompression | null;
 }
 
 export function finalizeProxyRequest(db: Db, id: string, patch: FinalizeProxyRequestInput): void {
 	db.prepare(
 		`UPDATE proxy_requests SET status = ?, http_status = ?, latency_ms = ?, mapping_id = ?,
 		 provider_id = ?, model_id = ?, fallback_index = ?, input_tokens = ?, output_tokens = ?,
-		 cache_read_tokens = ?, cache_write_tokens = ?, cost_usd = ?, error = ?, compression = ?
+		 cache_read_tokens = ?, cache_write_tokens = ?, cost_usd = ?, error = ?
 		 WHERE id = ?`
 	).run(
 		patch.status,
@@ -146,7 +142,6 @@ export function finalizeProxyRequest(db: Db, id: string, patch: FinalizeProxyReq
 		patch.cacheWriteTokens ?? null,
 		patch.costUsd ?? null,
 		patch.error ?? null,
-		patch.compression ? JSON.stringify(patch.compression) : null,
 		id
 	);
 	const row = db.prepare('SELECT user_id FROM proxy_requests WHERE id = ?').get(id) as
@@ -260,7 +255,6 @@ export interface ProxyRequestStats {
 	/** Requests that reported a cost (possibly 0). */
 	pricedRequests: number;
 	distinctModels: number;
-	cavemanSaved: number;
 }
 
 export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): ProxyRequestStats {
@@ -277,8 +271,7 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 				COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
 				COALESCE(SUM(cost_usd), 0) AS cost_usd,
 				COUNT(cost_usd) AS priced_requests,
-				COUNT(DISTINCT requested_model) AS distinct_models,
-			COALESCE(SUM(CAST(json_extract(compression, '$.caveman.estSaved') AS INTEGER)), 0) AS caveman_saved
+				COUNT(DISTINCT requested_model) AS distinct_models
 		 FROM proxy_requests ${where}`
 		)
 		.get(...args) as {
@@ -293,7 +286,6 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 		cost_usd: number;
 		priced_requests: number;
 		distinct_models: number;
-		caveman_saved: number;
 	};
 	return {
 		total: row.total,
@@ -306,8 +298,7 @@ export function proxyRequestStats(db: Db, filters: ProxyRequestFilters = {}): Pr
 		cacheWriteTokens: row.cache_write_tokens,
 		costUsd: row.cost_usd,
 		pricedRequests: row.priced_requests,
-		distinctModels: row.distinct_models,
-		cavemanSaved: row.caveman_saved
+		distinctModels: row.distinct_models
 	};
 }
 

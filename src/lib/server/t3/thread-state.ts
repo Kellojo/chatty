@@ -1,10 +1,14 @@
 // Two-way sync of a coding task's conversation state with its T3 Code thread:
-// title (rename), pinned, settled and read state.
+// title (rename), pinned, settled, snoozed and read state.
 //
-// Title, pinned and settled use a three-way merge: `coding_conversations.remote_*`
+// Title, pinned, settled and snoozed use a three-way merge: `coding_conversations.remote_*`
 // hold the value both sides last agreed on, so whichever side moved since then
 // wins (T3 when both did). A push that fails leaves the agreed value unchanged,
 // so the next reconcile retries it.
+//
+// A snooze compares its end time, counted as 0 once it has passed on either
+// side: T3 keeps `snoozedUntil` after it ends while Chatty clears it, and a
+// snooze running out on its own is no change to sync.
 //
 // Read state compares "last looked at" times instead: Chatty's `last_read_at`
 // and T3's `lastVisitedAt`, where T3 counts a thread unread while its latest
@@ -33,7 +37,9 @@ import {
 	setConversationPinned,
 	setConversationReadAt,
 	settleConversation,
+	snoozeConversation,
 	unsettleConversation,
+	unsnoozeConversation,
 	updateConversation,
 	type ConversationRow
 } from '../db/repo/conversations.js';
@@ -76,7 +82,14 @@ export interface RemoteThreadState {
 	title: string | null;
 	pinned: boolean | null;
 	settled: boolean | null;
+	/** `snoozedUntil` in ms, 0 when not snoozed. */
+	snoozedUntil: number | null;
 	read: RemoteReadState | null;
+}
+
+/** A snooze end that is still ahead of `now`, else 0 (not snoozed). */
+export function activeSnooze(until: number | null, now: number): number {
+	return until !== null && until > now ? until : 0;
 }
 
 /** Settled state of a T3 thread record, or null if the record doesn't say. */
@@ -98,9 +111,10 @@ export function remoteThreadState(
 	runs?: { completedAt: number | null; running: boolean }
 ): RemoteThreadState {
 	const t = rec(thread);
-	if (!t) return { title: null, pinned: null, settled: null, read: null };
+	if (!t) return { title: null, pinned: null, settled: null, snoozedUntil: null, read: null };
 	const title = threadTitle(t.title);
 	const pinned = 'pinnedAt' in t ? t.pinnedAt !== null && t.pinnedAt !== undefined : null;
+	const snoozedUntil = 'snoozedUntil' in t ? (time(t.snoozedUntil) ?? 0) : null;
 	let read: RemoteReadState | null = null;
 	if ('lastVisitedAt' in t) {
 		read = {
@@ -109,7 +123,7 @@ export function remoteThreadState(
 			running: runs ? runs.running : typeof t.activeRunId === 'string' && t.activeRunId !== ''
 		};
 	}
-	return { title, pinned, settled: threadSettled(t), read };
+	return { title, pinned, settled: threadSettled(t), snoozedUntil, read };
 }
 
 /**
@@ -176,6 +190,29 @@ export function reconcileThreadState(
 		if (merge === 'push') push = true;
 	}
 
+	if (remote.snoozedUntil !== null) {
+		// After settled and pinned: adopting either can end the local snooze.
+		conversation = getConversation(db, userId, conversationId)!;
+		const now = Date.now();
+		const remoteUntil = activeSnooze(remote.snoozedUntil, now);
+		const merge = mergeValue(
+			activeSnooze(conversation.snoozed_until, now),
+			row.remote_snoozed_until === null ? null : activeSnooze(row.remote_snoozed_until, now),
+			remoteUntil
+		);
+		if (merge === 'adopt') {
+			if (remoteUntil > 0) snoozeConversation(db, userId, conversationId, remoteUntil, now);
+			else unsnoozeConversation(db, userId, conversationId, now);
+			publishServerEvent(userId, {
+				type: 'conversation.snooze_changed',
+				conversationIds: [conversationId],
+				snoozed: remoteUntil > 0
+			});
+		}
+		if (merge === 'adopt' || merge === 'agree') patch.remoteSnoozedUntil = remoteUntil;
+		if (merge === 'push') push = true;
+	}
+
 	if (remote.title !== null) {
 		// Compared capped like T3's value, so a long local title isn't "changed" by
 		// T3 holding its first MAX_THREAD_TITLE_CHARS.
@@ -239,6 +276,26 @@ function pendingCommands(
 		commands.push({
 			command: { type: pinned ? 'thread.pin' : 'thread.unpin', ...base() },
 			agreed: { remotePinned: pinned }
+		});
+	}
+
+	const now = Date.now();
+	const snoozedUntil = activeSnooze(conversation.snoozed_until, now);
+	const agreedSnooze =
+		row.remote_snoozed_until === null ? null : activeSnooze(row.remote_snoozed_until, now);
+	// Settling or pinning ends a snooze on T3 by itself, so no unsnooze is sent
+	// after one (the next reconcile records it).
+	const endedByOther = settled || pinned;
+	if (
+		(agreedSnooze === null ? snoozedUntil > 0 : agreedSnooze !== snoozedUntil) &&
+		(snoozedUntil > 0 || !endedByOther)
+	) {
+		commands.push({
+			command:
+				snoozedUntil > 0
+					? { type: 'thread.snooze', ...base(), snoozedUntil: new Date(snoozedUntil).toISOString() }
+					: { type: 'thread.unsnooze', ...base(), reason: 'user' },
+			agreed: { remoteSnoozedUntil: snoozedUntil }
 		});
 	}
 

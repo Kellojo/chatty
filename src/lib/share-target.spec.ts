@@ -27,4 +27,8 @@ describe('sharedDraft', () => {
 	it('gives an empty draft for an empty share', () => {
 		expect(draft('share_text=')).toBe('');
 	});
+
+	it('gives an empty draft for a share of only files', () => {
+		expect(draft('share_files=2')).toBe('');
+	});
 });

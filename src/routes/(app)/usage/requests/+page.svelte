@@ -950,12 +950,6 @@
 								)}
 							</dd>
 						</div>
-						{#if data.stats.cavemanSaved > 0}
-							<div class="flex flex-col gap-0.5">
-								<dt class="text-xs text-muted-foreground">Tokens saved by prompt compression</dt>
-								<dd class="font-medium tabular-nums">{formatCount(data.stats.cavemanSaved)}</dd>
-							</div>
-						{/if}
 					</dl>
 				</Card.Content>
 			</Card.Root>

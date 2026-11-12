@@ -110,6 +110,30 @@ class ChatContainerContext {
 			const el = this.#scrollElement;
 			if (el) return this.#watchUserEscape(el);
 		});
+
+		$effect(() => {
+			const el = this.#scrollElement;
+			if (el) return this.#keepPinnedOnViewportResize(el);
+		});
+	}
+
+	/**
+	 * The library only follows the content growing. When the log itself gets
+	 * shorter (the composer grows, the window shrinks), the newest lines would
+	 * slip out of view, so snap back to the bottom while locked there.
+	 */
+	#keepPinnedOnViewportResize(el: HTMLElement) {
+		let lastHeight = el.clientHeight;
+		const observer = new ResizeObserver(() => {
+			const height = el.clientHeight;
+			const shrank = height < lastHeight;
+			lastHeight = height;
+			if (shrank && this.#stickToBottom.isAtBottom && !this.#stickToBottom.escapedFromLock) {
+				el.scrollTop = el.scrollHeight;
+			}
+		});
+		observer.observe(el);
+		return () => observer.disconnect();
 	}
 
 	/**

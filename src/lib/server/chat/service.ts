@@ -20,6 +20,7 @@ import {
 	setConversationTitle,
 	touchConversation,
 	unsettleConversation,
+	unsnoozeConversation,
 	updateConversation,
 	type ConversationRow
 } from '../db/repo/conversations.js';
@@ -402,7 +403,7 @@ async function consumeStreamCopy(
 	}
 }
 
-/** Bookkeeping after a user message is stored: un-settle, provisional title, bump. */
+/** Bookkeeping after a user message is stored: un-settle, wake, provisional title, bump. */
 function afterUserMessage(
 	db: Db,
 	userId: string,
@@ -415,6 +416,15 @@ function afterUserMessage(
 			type: 'conversation.settle_changed',
 			conversationIds: [conversation.id],
 			settled: false
+		});
+		queueThreadStatePush(db, userId, [conversation.id]);
+	}
+	// Writing in a snoozed chat means you're back on it.
+	if (unsnoozeConversation(db, userId, conversation.id)) {
+		publishServerEvent(userId, {
+			type: 'conversation.snooze_changed',
+			conversationIds: [conversation.id],
+			snoozed: false
 		});
 		queueThreadStatePush(db, userId, [conversation.id]);
 	}

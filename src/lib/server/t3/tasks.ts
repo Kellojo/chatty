@@ -212,16 +212,64 @@ const CLONE_TIMEOUT_MS = 10 * 60_000;
 /** `owner/repo` (GitHub shorthand) rather than a full clone URL. */
 const isRepoShorthand = (source: string) => /^[\w.-]+\/[\w.-]+$/.test(source);
 
+export interface CodingFolderEntry {
+	name: string;
+	path: string;
+}
+
+/**
+ * Folder suggestions on the environment for a partially typed path (`~/co`,
+ * `/srv/`). Same lookup as T3's own "add project" path field: folders in the
+ * parent of the typed path whose name starts with its last segment.
+ * A path that can't be read yet (still being typed) gives no suggestions.
+ */
+export async function browseCodingFolders(
+	userId: string,
+	environmentId: string,
+	partialPath: string,
+	db: Db = getDb()
+): Promise<{ parentPath: string | null; entries: CodingFolderEntry[] }> {
+	const env = requireEnvironment(db, userId, environmentId);
+	try {
+		const result = rec(
+			await withConnection(env, (conn) => conn.call('filesystem.browse', { partialPath }))
+		);
+		const entries = Array.isArray(result?.entries) ? result.entries : [];
+		return {
+			parentPath: str(result?.parentPath),
+			entries: entries
+				.map(rec)
+				.filter((e): e is Rec => e !== null && !!str(e.name) && !!str(e.fullPath))
+				.map((e) => ({ name: String(e.name), path: String(e.fullPath) }))
+		};
+	} catch (e) {
+		if (e instanceof T3ClientError && e.kind === 'remote') return { parentPath: null, entries: [] };
+		throw asTaskError(e, 'Could not list folders on the coding environment');
+	}
+}
+
+/** Path equality across separators, trailing slashes and (on Windows-style paths) case. */
+function samePath(a: string, b: string): boolean {
+	const norm = (p: string) => {
+		const trimmed = p.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+		return /^[a-z]:\//i.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+	};
+	return norm(a) === norm(b);
+}
+
 export interface CreateCodingProjectInput {
 	environmentId: string;
 	title: string;
-	/** Clone source (`owner/repo` or a git URL). Omitted: a new, empty project. */
+	/** Clone source (`owner/repo` or a git URL). */
 	repository?: string;
+	/** Existing folder on the environment to add as is. */
+	path?: string;
 }
 
 /**
  * Creates a project on the environment: a fresh git repository named after
- * `title`, or a clone of `repository` into the user's T3 project folder.
+ * `title`, a clone of `repository` into the user's T3 project folder, or an
+ * existing folder at `path`.
  */
 export async function createCodingProject(
 	userId: string,
@@ -230,6 +278,7 @@ export async function createCodingProject(
 ): Promise<{ project: { id: string; title: string }; warning: string | null }> {
 	const env = requireEnvironment(db, userId, input.environmentId);
 	try {
+		if (input.path) return await addExistingFolder(env, input.title, input.path);
 		if (!input.repository) {
 			const result = rec(
 				await withConnection(env, (conn) => conn.call('projects.createNew', { name: input.title }))
@@ -287,6 +336,65 @@ export async function createCodingProject(
 	}
 }
 
+/**
+ * Registers an existing folder as a project. T3's `projects.mutate` reports
+ * every failure as a bare "Failed to mutate project.", so the likely mistakes
+ * (missing folder, folder already a project) are checked first.
+ */
+async function addExistingFolder(
+	env: CodingEnvironmentRow,
+	title: string,
+	rawPath: string
+): Promise<{ project: { id: string; title: string }; warning: null }> {
+	const path = rawPath.trim();
+	return await withConnection(env, async (conn) => {
+		// Browsing "<path>/" resolves `~` and relative bits to the absolute
+		// folder, and fails when it doesn't exist or isn't a folder.
+		let workspaceRoot: string | null;
+		try {
+			const listed = rec(
+				await conn.call('filesystem.browse', { partialPath: `${path.replace(/[\\/]+$/, '')}/` })
+			);
+			workspaceRoot = str(listed?.parentPath);
+		} catch (e) {
+			if (e instanceof T3ClientError && e.kind === 'remote') {
+				throw new CodingTaskError(400, `No folder at ${path} on ${env.name}`);
+			}
+			throw e;
+		}
+		if (!workspaceRoot)
+			throw new CodingTaskError(502, 'The environment did not resolve the folder');
+
+		const existing = (await listRemoteProjects(env)).find(
+			(p) => p.workspaceRoot && samePath(p.workspaceRoot, workspaceRoot)
+		);
+		if (existing) {
+			throw new CodingTaskError(409, `This folder is already the project “${existing.title}”`);
+		}
+
+		const projectId = randomUUID();
+		try {
+			await conn.call('projects.mutate', {
+				type: 'project.create',
+				commandId: randomUUID(),
+				projectId,
+				title,
+				workspaceRoot
+			});
+		} catch (e) {
+			if (e instanceof T3ClientError && e.kind === 'remote') {
+				// Most often the folder belongs to an archived project, which the list above hides.
+				throw new CodingTaskError(
+					409,
+					`${env.name} would not add this folder. Is it an archived project in T3 Code?`
+				);
+			}
+			throw e;
+		}
+		return { project: { id: projectId, title }, warning: null };
+	});
+}
+
 export interface CreateCodingTaskInput {
 	environmentId: string;
 	projectId: string;
@@ -315,9 +423,28 @@ export async function resolveCodingTarget(
 	}
 	if (!project) throw new CodingTaskError(404, 'Project not found on this environment');
 	if (input.workspaceMode === 'worktree' && !project.isGitRepo) {
-		throw new CodingTaskError(400, 'Worktrees need a git repository; use the project checkout');
+		// T3 fills in `repositoryIdentity` a moment after a project is added, so a
+		// brand-new project looks like it has no git yet. Ask git before refusing.
+		if (!(await isGitWorkspace(env, project.workspaceRoot))) {
+			throw new CodingTaskError(400, 'Worktrees need a git repository; use the project checkout');
+		}
+		project = { ...project, isGitRepo: true };
 	}
 	return { env, project };
+}
+
+async function isGitWorkspace(env: CodingEnvironmentRow, cwd: string | null): Promise<boolean> {
+	if (!cwd) return false;
+	try {
+		const result = rec(
+			await withConnection(env, (conn) =>
+				conn.call('vcs.listRefs', { cwd, refKind: 'local', limit: 1 })
+			)
+		);
+		return result?.isRepo === true;
+	} catch (e) {
+		throw asTaskError(e, 'Could not reach the coding environment');
+	}
 }
 
 /**

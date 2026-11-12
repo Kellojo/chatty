@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import {
-	getNotificationTriggers,
+	updateNotificationTriggers,
+	updatePushTriggers,
 	getUserSettings,
 	setUserSetting,
 	deleteUserSetting
@@ -24,6 +25,16 @@ export const GET: RequestHandler = ({ locals }) => {
 
 const suggestionList = z.array(z.string().trim().min(1).max(200)).max(MAX_SUGGESTIONS);
 
+const triggerPatch = z
+	.object({
+		replies: z.boolean(),
+		needsYou: z.boolean(),
+		codingFinished: z.boolean(),
+		failures: z.boolean(),
+		agentRuns: z.boolean()
+	})
+	.partial();
+
 const putSchema = z
 	.object({
 		theme: z.enum(THEMES).optional(),
@@ -36,16 +47,8 @@ const putSchema = z
 			.array(z.string().min(3).max(500).includes('/'))
 			.max(MAX_FAVORITE_MODELS)
 			.optional(),
-		notificationTriggers: z
-			.object({
-				replies: z.boolean(),
-				needsYou: z.boolean(),
-				codingFinished: z.boolean(),
-				failures: z.boolean(),
-				agentRuns: z.boolean()
-			})
-			.partial()
-			.optional()
+		notificationTriggers: triggerPatch.optional(),
+		pushTriggers: triggerPatch.optional()
 	})
 	.refine(
 		(data) =>
@@ -56,7 +59,8 @@ const putSchema = z
 			data.timeFormat !== undefined ||
 			data.sidebarOpen !== undefined ||
 			data.favoriteModels !== undefined ||
-			data.notificationTriggers !== undefined,
+			data.notificationTriggers !== undefined ||
+			data.pushTriggers !== undefined,
 		{ message: 'Nothing to update' }
 	);
 
@@ -76,10 +80,10 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 		setUserSetting(db, user.id, 'favoriteModels', [...new Set(parsed.data.favoriteModels)]);
 	}
 	if (parsed.data.notificationTriggers !== undefined) {
-		setUserSetting(db, user.id, 'notificationTriggers', {
-			...getNotificationTriggers(db, user.id),
-			...parsed.data.notificationTriggers
-		});
+		updateNotificationTriggers(db, user.id, parsed.data.notificationTriggers);
+	}
+	if (parsed.data.pushTriggers !== undefined) {
+		updatePushTriggers(db, user.id, parsed.data.pushTriggers);
 	}
 	if (parsed.data.suggestions !== undefined) {
 		setUserSetting(db, user.id, 'suggestions', parsed.data.suggestions);

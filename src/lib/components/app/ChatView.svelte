@@ -58,7 +58,9 @@
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
 	import PendingAttachments from './PendingAttachments.svelte';
 	import { clipboardFiles } from '$lib/state/clipboard-files.js';
+	import { haptic } from '$lib/haptics.svelte.js';
 	import MicButton from '$lib/components/app/MicButton.svelte';
+	import ScreenshotButton from '$lib/components/app/ScreenshotButton.svelte';
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import {
@@ -341,6 +343,15 @@
 	const hasContent = $derived(displayInput.trim().length > 0 || selectedFiles.length > 0);
 
 	let scroll = $state<ChatContainerContext>();
+	// Only new output glides into view. Everything else that resizes the log —
+	// code highlighting, diagrams, images and widgets settling after a reload, or
+	// a replayed stream catching up — snaps, so the view doesn't creep down.
+	let settled = $state(false);
+	onMount(() => {
+		const timer = setTimeout(() => (settled = true), 1000);
+		return () => clearTimeout(timer);
+	});
+	const followAnimation = $derived(streaming && settled ? 'smooth' : 'instant');
 	const showJumpToLatest = $derived(scroll !== undefined && !scroll.isAtBottom);
 
 	// The log is aria-busy while a reply streams, so screen readers don't read
@@ -554,6 +565,7 @@
 		speech.stop();
 		speech.reset();
 		const trimmed = text.trim();
+		if (trimmed || selectedFiles.length > 0 || editing?.keptFiles.length) haptic('light');
 		if (editing) {
 			if (!trimmed && selectedFiles.length === 0 && editing.keptFiles.length === 0) return;
 			// An edit starts a new branch from the edited message, so it never waits in the queue.
@@ -1148,6 +1160,7 @@
 		<ChatContainer
 			bind:context={scroll}
 			bind:ref={scrollEl}
+			resize={followAnimation}
 			aria-busy={streaming}
 			class="min-h-0 flex-1 [scrollbar-gutter:stable_both-edges]"
 		>
@@ -1199,7 +1212,7 @@
 				size="icon"
 				class="absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 rounded-full bg-background shadow-md hover:bg-muted dark:bg-background dark:hover:bg-muted"
 				title="Jump to latest"
-				onclick={() => scroll?.scrollToBottom()}
+				onclick={() => scroll?.scrollToBottom({ animation: 'smooth' })}
 			>
 				<ArrowDownIcon class="size-4" />
 				{#if streaming}
@@ -1304,6 +1317,7 @@
 					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 						<PaperclipIcon class="size-4" />
 					</Button>
+					<ScreenshotButton onfile={(file) => addFiles([file])} />
 					<MicButton {speech} />
 				</div>
 				{#if streaming && !canSend}

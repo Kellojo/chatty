@@ -121,7 +121,7 @@
 </script>
 
 <!-- Same centred column as the messages, so the header reads as part of the chat. -->
-<header class="shrink-0 pt-[env(safe-area-inset-top)] {sidebarOffset}">
+<header class="shrink-0 {sidebarOffset}">
 	<div class="mx-auto flex h-12 w-full max-w-3xl items-center gap-1 px-4 md:h-14">
 		{#if coding}
 			<CodingTaskBar

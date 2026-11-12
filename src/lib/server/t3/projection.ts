@@ -523,20 +523,59 @@ export function renderRun(
 	commandOutputs: CommandOutputs = new Map(),
 	answers: RequestAnswers = {}
 ): RenderedEntry[] {
+	return renderRunSegments(state, run, commandOutputs, answers).flatMap((s) => s.entries);
+}
+
+/**
+ * The part of a run that answers one user message. A message sent while the
+ * run was active is added to it (T3 steers the agent with it) rather than
+ * starting a run of its own, so the agent's work after it answers that message.
+ */
+export interface RunSegment {
+	/** The message this part answers: the run's own, or one added mid-run (null: none). */
+	userMessageId: string | null;
+	/** The added message's turn item; null for the run's first segment. */
+	item: Rec | null;
+	entries: RenderedEntry[];
+}
+
+/** Renders a run's turn items, split at each user message added to it mid-run. */
+export function renderRunSegments(
+	state: ThreadState,
+	run: Rec,
+	commandOutputs: CommandOutputs = new Map(),
+	answers: RequestAnswers = {}
+): RunSegment[] {
+	const runId = String(run.id);
+	const runUserMessageId = str(run.userMessageId);
 	/** A resolved request's outcome, with the user's words when known. */
 	const resolution = (requestId: unknown, key: 'decision' | 'status') => {
 		const value = requestDecision(state, requestId);
 		const answer = value ? answers[String(requestId)] : undefined;
 		return { [key]: value, ...(answer ? { answer } : {}) };
 	};
-	const entries: RenderedEntry[] = [];
-	for (const item of itemsForRun(state, String(run.id))) {
+	const segments: RunSegment[] = [{ userMessageId: runUserMessageId, item: null, entries: [] }];
+	let entries = segments[0].entries;
+	for (const item of itemsForRun(state, runId)) {
 		const id = String(item.id);
 		const type = str(item.type) ?? '';
 		const status = str(item.status) ?? 'running';
 		const final = DONE_ITEM.has(status);
 		switch (type) {
-			case 'user_message':
+			case 'user_message': {
+				const messageId = str(item.messageId);
+				if (
+					messageId &&
+					messageId !== runUserMessageId &&
+					!isAgentNotification(state, messageId) &&
+					!segments.some((s) => s.userMessageId === messageId)
+				) {
+					const segment: RunSegment = { userMessageId: messageId, item, entries: [] };
+					segments.push(segment);
+					entries = segment.entries;
+				}
+				break;
+			}
 			case 'system_notice':
 				break;
 			case 'assistant_message': {
@@ -753,7 +792,10 @@ export function renderRun(
 				}
 		}
 	}
-	return limitRunEntries(String(run.id), entries);
+	return segments.map((segment, i) => ({
+		...segment,
+		entries: limitRunEntries(i === 0 ? runId : `${runId}:${i}`, segment.entries)
+	}));
 }
 
 /**

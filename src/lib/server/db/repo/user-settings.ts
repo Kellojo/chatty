@@ -81,10 +81,9 @@ export function getFavoriteModels(db: Db, userId: string): string[] {
 	return [...new Set(value.filter((v): v is string => typeof v === 'string' && v.includes('/')))];
 }
 
-/** Stored triggers merged over the defaults, so new trigger keys default sensibly. */
-export function getNotificationTriggers(db: Db, userId: string): NotificationTriggers {
-	const value = getUserSetting<unknown>(db, userId, 'notificationTriggers');
-	const triggers = { ...DEFAULT_USER_SETTINGS.notificationTriggers };
+/** Stored trigger flags merged over `base`, so new trigger keys default sensibly. */
+function readTriggers(value: unknown, base: NotificationTriggers): NotificationTriggers {
+	const triggers = { ...base };
 	if (value && typeof value === 'object') {
 		for (const key of NOTIFICATION_TRIGGER_KEYS) {
 			const v = (value as Record<string, unknown>)[key];
@@ -92,6 +91,48 @@ export function getNotificationTriggers(db: Db, userId: string): NotificationTri
 		}
 	}
 	return triggers;
+}
+
+/** What an open tab alerts about. */
+export function getNotificationTriggers(db: Db, userId: string): NotificationTriggers {
+	return readTriggers(
+		getUserSetting<unknown>(db, userId, 'notificationTriggers'),
+		DEFAULT_USER_SETTINGS.notificationTriggers
+	);
+}
+
+/** What is pushed. Keys never set follow the tab's choice, which predates per-channel triggers. */
+export function getPushTriggers(db: Db, userId: string): NotificationTriggers {
+	return readTriggers(
+		getUserSetting<unknown>(db, userId, 'pushTriggers'),
+		getNotificationTriggers(db, userId)
+	);
+}
+
+/** Changes some tab triggers. Push triggers that still follow them are pinned first. */
+export function updateNotificationTriggers(
+	db: Db,
+	userId: string,
+	patch: Partial<NotificationTriggers>
+): void {
+	db.transaction(() => {
+		if (getUserSetting(db, userId, 'pushTriggers') === undefined) {
+			setUserSetting(db, userId, 'pushTriggers', getPushTriggers(db, userId));
+		}
+		setUserSetting(db, userId, 'notificationTriggers', {
+			...getNotificationTriggers(db, userId),
+			...patch
+		});
+	})();
+}
+
+/** Changes some push triggers. */
+export function updatePushTriggers(
+	db: Db,
+	userId: string,
+	patch: Partial<NotificationTriggers>
+): void {
+	setUserSetting(db, userId, 'pushTriggers', { ...getPushTriggers(db, userId), ...patch });
 }
 
 export function getUserSettings(db: Db, userId: string): UserSettings {
@@ -103,6 +144,7 @@ export function getUserSettings(db: Db, userId: string): UserSettings {
 		timeFormat: getTimeFormat(db, userId),
 		sidebarOpen: getSidebarOpen(db, userId),
 		favoriteModels: getFavoriteModels(db, userId),
-		notificationTriggers: getNotificationTriggers(db, userId)
+		notificationTriggers: getNotificationTriggers(db, userId),
+		pushTriggers: getPushTriggers(db, userId)
 	};
 }

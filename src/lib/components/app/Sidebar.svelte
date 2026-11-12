@@ -54,12 +54,17 @@
 	import CodingRunTimer from './CodingRunTimer.svelte';
 	import PullRequestIcon from './PullRequestIcon.svelte';
 	import SidebarPlanLimits from './usage/SidebarPlanLimits.svelte';
+	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
+	import SnoozeDialog from './SnoozeDialog.svelte';
+	import AlarmClockIcon from '@lucide/svelte/icons/alarm-clock';
+	import { formatSnoozeTime, isSnoozed } from '$lib/snooze.js';
 
 	let {
 		user,
 		conversations,
 		hasMore,
 		unreadIds,
+		snoozed = [],
 		settledCount,
 		autoSettleDays,
 		onclose,
@@ -72,6 +77,8 @@
 		conversations: Conversation[];
 		hasMore: boolean;
 		unreadIds: string[];
+		/** Snoozed chats, soonest to wake first; listed in their own group below the dated ones. */
+		snoozed?: Conversation[];
 		settledCount: number;
 		autoSettleDays: number;
 		onclose: () => void;
@@ -171,6 +178,19 @@
 		}
 	}
 
+	// Snoozed chats come with the layout data, so their shelf only remembers whether it's open.
+	const SNOOZED_OPEN_KEY = 'chatty.sidebar.snoozedOpen';
+	let snoozedOpen = $state(false);
+
+	function toggleSnoozedShelf() {
+		snoozedOpen = !snoozedOpen;
+		try {
+			localStorage.setItem(SNOOZED_OPEN_KEY, snoozedOpen ? '1' : '0');
+		} catch {
+			// storage unavailable; the shelf just won't remember its state
+		}
+	}
+
 	function toggleSettledShelf() {
 		settledOpen = !settledOpen;
 		try {
@@ -211,6 +231,8 @@
 	let renameTarget = $state<Conversation | null>(null);
 	let renameText = $state('');
 	let deleteTarget = $state<Conversation | null>(null);
+	/** The chat the custom snooze time dialog is open for. */
+	let snoozeTarget = $state<Conversation | null>(null);
 	let agentStats = $state<{ running: number; total: number } | null>(null);
 	let memoryCount = $state<number | null>(null);
 	let skillCount = $state<number | null>(null);
@@ -275,6 +297,11 @@
 			settledOpen = false;
 		}
 		if (settledOpen) void loadSettled(true);
+		try {
+			snoozedOpen = localStorage.getItem(SNOOZED_OPEN_KEY) === '1';
+		} catch {
+			snoozedOpen = false;
+		}
 		refreshAgentStats();
 		refreshMemoryCount();
 		refreshSkillCount();
@@ -313,6 +340,10 @@
 				case 'conversation.settle_changed':
 					scheduleInvalidate();
 					void refreshSettled();
+					break;
+				case 'conversation.snooze_changed':
+					scheduleInvalidate();
+					if (searchResults) void search();
 					break;
 				case 'conversation.deleted':
 					forgetConversation(event.conversationId);
@@ -369,15 +400,22 @@
 			{ label: 'Older', items: [] }
 		];
 		for (const c of items) {
+			// A snooze ending counts as activity: the chat comes back at the top.
+			const at = Math.max(c.updatedAt, c.wokeAt ?? 0);
 			if (c.pinned) groups[0].items.push(c);
-			else if (c.updatedAt >= startOfDay) groups[1].items.push(c);
-			else if (c.updatedAt >= startOfDay - day) groups[2].items.push(c);
-			else if (c.updatedAt >= startOfDay - 7 * day) groups[3].items.push(c);
+			else if (at >= startOfDay) groups[1].items.push(c);
+			else if (at >= startOfDay - day) groups[2].items.push(c);
+			else if (at >= startOfDay - 7 * day) groups[3].items.push(c);
 			else groups[4].items.push(c);
 		}
 		return groups.filter((g) => g.items.length > 0);
 	}
 
+	// A page loaded after the layout data may already hold a chat that woke since.
+	const shownSnoozed = $derived.by(() => {
+		const active = new Set(allConversations.map((c) => c.id));
+		return snoozed.filter((c) => !active.has(c.id));
+	});
 	const visibleGroups = $derived(groupByDate(searchResults ?? allConversations));
 
 	// Flattened into one keyed list (group headers + rows) so `animate:flip`
@@ -560,7 +598,12 @@
 	}
 
 	function rowTitle(c: Conversation, state: RowState): string {
-		const title = c.settledAt !== null ? settledTitle(c) : displayTitle(c);
+		const title =
+			c.settledAt !== null
+				? settledTitle(c)
+				: isSnoozed(c)
+					? `${displayTitle(c)}\nSnoozed until ${formatSnoozeTime(c.snoozedUntil!)}`
+					: displayTitle(c);
 		const details = [
 			c.coding ? 'Coding task' : null,
 			c.coding ? c.coding.projectTitle : chatSource(c),
@@ -634,7 +677,9 @@
 </script>
 
 {#snippet row(c: Conversation)}
-	{@const settled = c.settledAt !== null}
+	{@const snoozedUntil = isSnoozed(c) ? c.snoozedUntil : null}
+	<!-- Snoozed rows are put away for now, like settled ones: quiet until they wake. -->
+	{@const settled = c.settledAt !== null || snoozedUntil !== null}
 	{@const state = rowState(c)}
 	{@const attention =
 		!settled && (state === 'needs-you' || state === 'failed' || state === 'unread')}
@@ -691,7 +736,7 @@
 							: ''}">{displayTitle(c)}</span
 				>
 				<!-- Nothing to say (a chat with no model on record and no status): one line. -->
-				{#if source || status || c.coding?.pullRequest}
+				{#if source || status || snoozedUntil || c.coding?.pullRequest}
 					<span class="flex min-w-0 items-center gap-1 text-xs leading-4 text-muted-foreground">
 						<span class="sr-only">,</span>
 						{#if status && leads}
@@ -724,6 +769,15 @@
 							</span>
 							{#if source}<span class="shrink-0" aria-hidden="true">·</span>{/if}
 						{/if}
+						{#if snoozedUntil}
+							<!-- When it comes back leads: that's what a snoozed row is about. -->
+							<span class="inline-flex shrink-0 items-center gap-1">
+								<AlarmClockIcon class="size-3" strokeWidth={2.5} aria-hidden="true" />
+								<span class="sr-only">Snoozed until</span>
+								{formatSnoozeTime(snoozedUntil)}
+							</span>
+							{#if source}<span class="shrink-0" aria-hidden="true">·</span>{/if}
+						{/if}
 						{#if source}<span class="truncate">{source}</span>{/if}
 						{#if status && !leads}
 							{#if source}<span class="shrink-0" aria-hidden="true">·</span>{/if}
@@ -748,7 +802,7 @@
 		{#if searchResults && settled}
 			<span
 				class="mt-2 mr-1 shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground group-hover:hidden"
-				>Settled</span
+				>{snoozedUntil !== null ? 'Snoozed' : 'Settled'}</span
 			>
 		{/if}
 		{@render rowActions(c, state, 'mt-1.5 pointer-coarse:mt-0.5')}
@@ -812,6 +866,34 @@
 	</div>
 {/snippet}
 
+<!-- A shelf below the dated groups: a hairline, then a header that reads like theirs. -->
+{#snippet shelfHeader(
+	label: string,
+	count: number,
+	open: boolean,
+	controls: string,
+	ontoggle: () => void
+)}
+	<div class="mx-2 mt-3 border-t" aria-hidden="true"></div>
+	<button
+		type="button"
+		class="group/shelf mt-2 mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground outline-none hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:py-2"
+		aria-expanded={open}
+		aria-controls={controls}
+		onclick={ontoggle}
+	>
+		{label}
+		<span class="font-normal tabular-nums">{count}</span>
+		<span class="sr-only">conversations</span>
+		<ChevronRightIcon
+			class="ml-auto size-3.5 opacity-60 transition-transform group-hover/shelf:opacity-100 motion-reduce:transition-none {open
+				? 'rotate-90'
+				: ''}"
+			aria-hidden="true"
+		/>
+	</button>
+{/snippet}
+
 {#snippet rowActions(c: Conversation, state: RowState, offset: string)}
 	{@const settled = c.settledAt !== null}
 	<span
@@ -866,6 +948,11 @@
 						{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
 					</DropdownMenu.Item>
 				{/if}
+				<SnoozeMenuItems
+					conversation={c}
+					onchanged={() => invalidateAll()}
+					oncustom={() => (snoozeTarget = c)}
+				/>
 				{#if state !== 'working' && state !== 'needs-you' && c.id !== currentId}
 					{@const read = state === 'idle'}
 					<DropdownMenu.Item onSelect={() => void setRead(c, !read)}>
@@ -890,8 +977,13 @@
 	</span>
 {/snippet}
 
-<!-- Phones: clip, so nothing pokes out of the closed drawer onto the page. -->
-<aside class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30 max-md:overflow-hidden">
+<!-- Phones: clip, so nothing pokes out of the closed drawer onto the page. The drawer also
+     gets an opaque (pre-mixed) tint there: iOS colours the translucent status bar from a
+     solid background at the top and falls back to a soft fade over a see-through one,
+     which washed out the header. -->
+<aside
+	class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30 max-md:overflow-hidden max-md:bg-[color-mix(in_oklab,var(--muted)_30%,var(--background))]"
+>
 	<div
 		class="flex items-center justify-between gap-2 p-3 pt-[calc(0.75rem+env(safe-area-inset-top))] max-md:pt-[calc(0.25rem+env(safe-area-inset-top))]"
 	>
@@ -989,7 +1081,7 @@
 			<p class="px-2 pt-4 text-sm text-muted-foreground">
 				{searchResults
 					? 'No matches.'
-					: settledCount > 0
+					: settledCount > 0 || shownSnoozed.length > 0
 						? 'No active conversations.'
 						: 'No conversations yet.'}
 			</p>
@@ -1001,26 +1093,35 @@
 				{/if}
 			</div>
 		{/if}
+		{#if !searchResults && shownSnoozed.length > 0}
+			{@render shelfHeader(
+				'Snoozed',
+				shownSnoozed.length,
+				snoozedOpen,
+				'snoozed-shelf',
+				toggleSnoozedShelf
+			)}
+			<div id="snoozed-shelf">
+				{#if snoozedOpen}
+					{#each shownSnoozed as c (c.id)}
+						<div
+							animate:flip={{ duration: flipDuration, easing: cubicOut }}
+							transition:fade={{ duration: fadeDuration }}
+						>
+							{@render row(c)}
+						</div>
+					{/each}
+				{/if}
+			</div>
+		{/if}
 		{#if !searchResults && (settledCount > 0 || (settledItems?.length ?? 0) > 0)}
-			<!-- A shelf below the dated groups: a hairline, then a header that reads like theirs. -->
-			<div class="mx-2 mt-3 border-t" aria-hidden="true"></div>
-			<button
-				type="button"
-				class="group/shelf mt-2 mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground outline-none hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:py-2"
-				aria-expanded={settledOpen}
-				aria-controls="settled-shelf"
-				onclick={toggleSettledShelf}
-			>
-				Settled
-				<span class="font-normal tabular-nums">{settledCount}</span>
-				<span class="sr-only">conversations</span>
-				<ChevronRightIcon
-					class="ml-auto size-3.5 opacity-60 transition-transform group-hover/shelf:opacity-100 motion-reduce:transition-none {settledOpen
-						? 'rotate-90'
-						: ''}"
-					aria-hidden="true"
-				/>
-			</button>
+			{@render shelfHeader(
+				'Settled',
+				settledCount,
+				settledOpen,
+				'settled-shelf',
+				toggleSettledShelf
+			)}
 			<!-- Announces what the spinner and error line show. -->
 			<p class="sr-only" aria-live="polite">
 				{settledAnnouncement}
@@ -1274,6 +1375,12 @@
 		</form>
 	</Dialog.Content>
 </Dialog.Root>
+
+<SnoozeDialog
+	conversation={snoozeTarget}
+	onclose={() => (snoozeTarget = null)}
+	onchanged={() => invalidateAll()}
+/>
 
 <Dialog.Root open={deleteTarget !== null} onOpenChange={(open) => !open && (deleteTarget = null)}>
 	<Dialog.Content>

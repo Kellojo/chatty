@@ -77,7 +77,7 @@ beforeEach(() => {
 	coding.updateCodingConversation(db, conversationId, { threadId: 't1' });
 });
 
-const none: Remote = { title: null, pinned: null, settled: null, read: null };
+const none: Remote = { title: null, pinned: null, settled: null, snoozedUntil: null, read: null };
 const reconcile = (remote: Partial<Remote>) =>
 	reconcileThreadState(db, 'u1', conversationId, { ...none, ...remote });
 const local = () => conversations.getConversation(db, 'u1', conversationId)!;
@@ -102,6 +102,7 @@ describe('remoteThreadState', () => {
 				title: ' Fix it ',
 				pinnedAt: '2026-11-07T10:00:00Z',
 				settledAt: null,
+				snoozedUntil: '2026-11-08T09:00:00Z',
 				lastVisitedAt: null,
 				latestRunCompletedAt: '2026-11-07T11:00:00Z',
 				activeRunId: null
@@ -110,6 +111,7 @@ describe('remoteThreadState', () => {
 			title: 'Fix it',
 			pinned: true,
 			settled: false,
+			snoozedUntil: Date.parse('2026-11-08T09:00:00Z'),
 			read: { visitedAt: 0, completedAt: Date.parse('2026-11-07T11:00:00Z'), running: false }
 		});
 	});
@@ -235,6 +237,44 @@ describe('pinned', () => {
 	});
 });
 
+describe('snoozed', () => {
+	const later = () => Date.now() + 60 * 60 * 1000;
+
+	it('adopts a snooze and a wake on T3', () => {
+		reconcile({ snoozedUntil: 0 });
+		const until = later();
+		expect(reconcile({ snoozedUntil: until })).toBe(false);
+		expect(local().snoozed_until).toBe(until);
+		expect(agreed().remote_snoozed_until).toBe(until);
+		expect(publishServerEvent).toHaveBeenLastCalledWith('u1', {
+			type: 'conversation.snooze_changed',
+			conversationIds: [conversationId],
+			snoozed: true
+		});
+		reconcile({ snoozedUntil: 0 });
+		expect(local().snoozed_until).toBeNull();
+		expect(local().woke_at).not.toBeNull();
+	});
+
+	it('asks to push a local snooze', () => {
+		reconcile({ snoozedUntil: 0 });
+		conversations.snoozeConversation(db, 'u1', conversationId, later());
+		expect(reconcile({ snoozedUntil: 0 })).toBe(true);
+		expect(local().snoozed_until).not.toBeNull();
+	});
+
+	it('treats a snooze that ran out as no snooze on either side', () => {
+		const past = Date.now() - 1000;
+		reconcile({ snoozedUntil: 0 });
+		coding.updateCodingConversation(db, conversationId, { remoteSnoozedUntil: past });
+		// T3 still reports the old end time; Chatty already woke it.
+		publishServerEvent.mockClear();
+		expect(reconcile({ snoozedUntil: past })).toBe(false);
+		expect(publishServerEvent).not.toHaveBeenCalled();
+		expect(local().woke_at).toBeNull();
+	});
+});
+
 describe('read state', () => {
 	const reply = (createdAt: number) =>
 		createMessage(db, { conversationId, role: 'assistant', parts: [], createdAt });
@@ -319,5 +359,32 @@ describe('pushThreadState', () => {
 		expect(dispatched.map((c) => c.type)).toEqual(['thread.settle', 'thread.metadata.update']);
 		expect(dispatched[1]).toMatchObject({ title: 'Renamed' });
 		expect(agreed().remote_title).toBe('Renamed');
+	});
+
+	it('sends a snooze with its end time, and an unsnooze when woken early', async () => {
+		coding.updateCodingConversation(db, conversationId, { remoteSnoozedUntil: 0 });
+		const until = Date.now() + 60 * 60 * 1000;
+		conversations.snoozeConversation(db, 'u1', conversationId, until);
+		await pushThreadState(db, 'u1', [conversationId]);
+		expect(dispatched).toEqual([
+			expect.objectContaining({
+				type: 'thread.snooze',
+				snoozedUntil: new Date(until).toISOString()
+			})
+		]);
+		expect(agreed().remote_snoozed_until).toBe(until);
+		conversations.unsnoozeConversation(db, 'u1', conversationId);
+		await pushThreadState(db, 'u1', [conversationId]);
+		expect(dispatched.map((c) => c.type)).toEqual(['thread.snooze', 'thread.unsnooze']);
+		expect(agreed().remote_snoozed_until).toBe(0);
+	});
+
+	it('sends no unsnooze after a settle, which ends the snooze on T3 itself', async () => {
+		const until = Date.now() + 60 * 60 * 1000;
+		coding.updateCodingConversation(db, conversationId, { remoteSnoozedUntil: until });
+		conversations.snoozeConversation(db, 'u1', conversationId, until);
+		conversations.settleConversation(db, 'u1', conversationId, 'manual');
+		await pushThreadState(db, 'u1', [conversationId]);
+		expect(dispatched.map((c) => c.type)).toEqual(['thread.settle']);
 	});
 });

@@ -282,7 +282,7 @@
 {/snippet}
 
 <div class="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
-	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 *:max-w-4xl md:p-6">
+	<div class="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
 		<PageHeader
 			title="Skills"
 			icon={SparklesIcon}

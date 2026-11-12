@@ -16,7 +16,8 @@ import {
 	autoSettleConversations,
 	listSoftDeletedBefore,
 	purgeConversation,
-	softDeleteConversation
+	softDeleteConversation,
+	wakeDueSnoozes
 } from './db/repo/conversations.js';
 import { publishServerEvent } from './events/bus.js';
 import { createLogger } from './logger.js';
@@ -240,4 +241,44 @@ export function startHourlyJobs(db: Db = getDb()): void {
 	if (hourlyTimer) return;
 	hourlyTimer = setInterval(run, 60 * 60 * 1000);
 	hourlyTimer.unref?.();
+}
+
+/** Brings back snoozed chats whose time has come. Returns how many woke. */
+export function runSnoozeWake(db: Db = getDb(), now = Date.now()): number {
+	let total = 0;
+	for (const [userId, conversationIds] of wakeDueSnoozes(db, now)) {
+		total += conversationIds.length;
+		publishServerEvent(userId, {
+			type: 'conversation.snooze_changed',
+			conversationIds,
+			snoozed: false
+		});
+	}
+	return total;
+}
+
+/** How often due snoozes are checked: a chat wakes at most this late. */
+const SNOOZE_WAKE_INTERVAL_MS = 30 * 1000;
+
+let snoozeTimer: ReturnType<typeof setInterval> | null = null;
+
+export function stopSnoozeWaker(): void {
+	if (snoozeTimer) clearInterval(snoozeTimer);
+	snoozeTimer = null;
+}
+
+export function startSnoozeWaker(db: Db = getDb()): void {
+	const run = () => {
+		try {
+			runSnoozeWake(db);
+		} catch (e) {
+			log.error('Waking snoozed chats failed', {
+				error: e instanceof Error ? e.message : String(e)
+			});
+		}
+	};
+	run();
+	if (snoozeTimer) return;
+	snoozeTimer = setInterval(run, SNOOZE_WAKE_INTERVAL_MS);
+	snoozeTimer.unref?.();
 }

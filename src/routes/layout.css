@@ -91,6 +91,41 @@
 	--sidebar-ring: oklch(0.56 0.006 60);
 }
 
+/*
+ * Installed desktop app with the title bar hidden (manifest `display_override:
+ * window-controls-overlay`): the page reaches the top of the window and the
+ * OS window controls float over it. --titlebar-height reserves that strip (the
+ * app layouts pad below it, and the strip drags the window); --app-top is where
+ * fixed UI starts, below the strip or a phone's notch. Both follow the user
+ * switching the overlay off again from the window's chevron.
+ */
+:root {
+	--titlebar-height: 0px;
+	--app-top: env(safe-area-inset-top, 0px);
+}
+
+@media (display-mode: window-controls-overlay) {
+	:root {
+		--titlebar-height: env(titlebar-area-height, 0px);
+		--app-top: var(--titlebar-height);
+	}
+
+	/* Overlays reaching into the strip stay clickable instead of dragging the window. */
+	[role='dialog'],
+	[role='alertdialog'],
+	[role='menu'],
+	[role='listbox'],
+	[data-sonner-toaster] {
+		-webkit-app-region: no-drag;
+		app-region: no-drag;
+	}
+}
+
+@utility app-region-drag {
+	-webkit-app-region: drag;
+	app-region: drag;
+}
+
 @theme inline {
 	--font-sans: 'Inter Variable', sans-serif;
 	--color-sidebar-ring: var(--sidebar-ring);

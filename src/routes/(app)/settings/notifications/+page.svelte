@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -23,14 +23,32 @@
 		playTone,
 		type SoundTone
 	} from '$lib/notifications/sound.js';
-	import { NOTIFICATION_TRIGGER_KEYS, type NotificationTriggers } from '$lib/user-settings.js';
+	import type { NotificationTriggers } from '$lib/user-settings.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
 
 	const prefs = $derived(devicePrefs.current);
 	let permission = $state<DesktopPermission>('default');
-	let triggerBusy = $state(false);
+	/** Values shown ahead of a save, by `channel:key`; dropped once saved or failed. */
+	let pending = $state<Record<string, boolean>>({});
+	let pushOnHere = $state(false);
+	let pushReady = $state(false);
+	let pushUnavailable = $state(false);
+	/**
+	 * Whether `data.pushDeviceCount` includes this device: what it had when the
+	 * count was loaded. The push section reloads the count after each toggle.
+	 */
+	let countedHere = $state(false);
+	$effect(() => {
+		void data.pushDeviceCount;
+		if (pushReady) countedHere = untrack(() => pushOnHere);
+	});
+	const pushOnElsewhere = $derived(data.pushDeviceCount - (countedHere ? 1 : 0) > 0);
+	/** No device gets push, so the Push column has no effect for now. */
+	const pushNowhere = $derived(pushReady && !pushOnHere && !pushOnElsewhere);
+	/** Latest save per switch; only that one may clear its pending value. */
+	const saveSeq: Record<string, number> = {};
 
 	onMount(() => {
 		devicePrefs.load();
@@ -69,24 +87,47 @@
 		'codingFinished',
 		'failures',
 		'agentRuns'
-	] as const satisfies typeof NOTIFICATION_TRIGGER_KEYS extends readonly (infer K)[] ? K[] : never;
+	] as const satisfies readonly (keyof NotificationTriggers)[];
 
-	async function setTrigger(key: keyof NotificationTriggers, value: boolean) {
-		if (triggerBusy) return;
-		triggerBusy = true;
-		try {
-			const res = await fetch('/api/user/settings', {
-				method: 'PUT',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ notificationTriggers: { [key]: value } })
-			});
-			if (!res.ok) throw new Error(`Request failed (${res.status})`);
-			await invalidateAll();
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to save');
-		} finally {
-			triggerBusy = false;
+	/** Each trigger is set per channel: an open tab's alerts, or the server's pushes. */
+	const CHANNELS = [
+		{ id: 'tab', setting: 'notificationTriggers', label: 'Open tab', name: 'open-tab alerts' },
+		{ id: 'push', setting: 'pushTriggers', label: 'Push', name: 'push notifications' }
+	] as const;
+	type Channel = (typeof CHANNELS)[number];
+
+	async function setTrigger(channel: Channel, key: keyof NotificationTriggers, value: boolean) {
+		const cell = `${channel.id}:${key}`;
+		pending[cell] = value;
+		const seq = (saveSeq[cell] = (saveSeq[cell] ?? 0) + 1);
+		const saved = await fetch('/api/user/settings', {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ [channel.setting]: { [key]: value } })
+		})
+			.then((res) => res.ok)
+			.catch(() => false);
+		if (saved) {
+			await invalidateAll().catch(() => undefined);
+		} else {
+			toast.error(`Couldn't change "${TRIGGER_COPY[key].label}" for ${channel.name}. Try again.`);
 		}
+		// A newer click on the same switch owns the value from here. After a save,
+		// keep showing it until the refreshed settings agree (the refresh can fail).
+		if (saveSeq[cell] !== seq) return;
+		if (!saved || data.settings[channel.setting][key] === value) delete pending[cell];
+	}
+
+	function triggerOn(channel: Channel, key: keyof NotificationTriggers): boolean {
+		return pending[`${channel.id}:${key}`] ?? data.settings[channel.setting][key];
+	}
+
+	/** Scrolls to a device switch further down and focuses it. */
+	function showSwitch(id: string) {
+		const el = document.getElementById(id);
+		const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+		el?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+		el?.focus({ preventScroll: true });
 	}
 
 	function update(patch: Partial<DevicePrefs>) {
@@ -137,8 +178,8 @@
 		permission === 'unsupported'
 			? "This browser doesn't support notifications."
 			: permission === 'denied'
-				? 'Blocked for this site. Allow notifications in your browser settings, then come back to this tab.'
-				: 'Pop up a system notification when no Chatty tab is focused.'
+				? 'Notifications are blocked for this site. Allow them in your browser or system settings, then come back.'
+				: "While Chatty is open in a tab, show a system notification when you're in another app or tab. For when Chatty is closed, turn on push above."
 	);
 </script>
 
@@ -146,27 +187,105 @@
 
 <SettingsHeader
 	title="Notifications"
-	description="How Chatty gets your attention when a reply lands or a task needs you. Nothing alerts while you're looking at the conversation."
+	description="How Chatty gets your attention when a reply lands or a task needs you. An open tab never alerts about the conversation it's showing."
 />
 
-<SettingsSection title="Notify me about" description="Applies to all your devices.">
-	{#each TRIGGER_ORDER as key (key)}
-		<SettingsRow
-			label={TRIGGER_COPY[key].label}
-			for="trigger-{key}"
-			description={TRIGGER_COPY[key].description}
+<!-- Visible overflow so the column headers can stick while the rows scroll. -->
+<SettingsSection
+	title="Notify me about"
+	description="Applies to all your devices."
+	class="overflow-visible"
+>
+	<div
+		class="sticky top-0 z-10 -mt-3 -mb-2 flex justify-end gap-2 bg-card pt-3 pb-2 shadow-[0_1px_0] shadow-border/60"
+		aria-hidden="true"
+	>
+		{#each CHANNELS as channel (channel.id)}
+			<span
+				class={[
+					'relative left-1.5 w-14 text-center text-xs font-semibold',
+					channel.id === 'push' && pushNowhere ? 'text-muted-foreground' : 'text-foreground/80'
+				]}>{channel.label}</span
+			>
+		{/each}
+	</div>
+	{#each TRIGGER_ORDER as key, i (key)}
+		<div
+			role="group"
+			aria-labelledby="trigger-{key}"
+			aria-describedby="trigger-{key}-desc"
+			class={[
+				'flex items-center justify-between gap-x-4 sm:gap-x-6',
+				i > 0 && 'border-t border-border/60 pt-4'
+			]}
 		>
-			<Switch
-				id="trigger-{key}"
-				checked={data.settings.notificationTriggers[key]}
-				disabled={triggerBusy}
-				onCheckedChange={(checked) => setTrigger(key, checked)}
-			/>
-		</SettingsRow>
+			<div class="flex min-w-0 flex-col gap-1">
+				<span id="trigger-{key}" class="text-sm leading-none font-medium"
+					>{TRIGGER_COPY[key].label}</span
+				>
+				<p id="trigger-{key}-desc" class="text-sm text-muted-foreground">
+					{TRIGGER_COPY[key].description}
+				</p>
+			</div>
+			<!-- Pulled right so the centred Push switches line up with the switches below. -->
+			<div class="-mr-1.5 flex shrink-0 gap-2">
+				{#each CHANNELS as channel (channel.id)}
+					<div
+						class={[
+							'flex w-14 justify-center',
+							channel.id === 'push' && pushNowhere && 'opacity-60'
+						]}
+					>
+						<Switch
+							aria-label={channel.name}
+							checked={triggerOn(channel, key)}
+							onCheckedChange={(checked) => setTrigger(channel, key, checked)}
+						/>
+					</div>
+				{/each}
+			</div>
+		</div>
 	{/each}
+	<dl
+		class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-border/60 pt-4 text-sm text-muted-foreground"
+	>
+		<dt class="font-medium text-foreground">Open tab</dt>
+		<dd>
+			A pop-up, sound or title flash while Chatty is open in a browser or app window.
+			{#if desktopBlocked}
+				Pop-ups can't show on this device (see below).
+			{:else if !prefs.desktop || permission !== 'granted'}
+				<button
+					type="button"
+					class="rounded-sm font-medium text-foreground underline underline-offset-2 outline-none hover:no-underline focus-visible:ring-2 focus-visible:ring-ring/50"
+					onclick={() => showSwitch('pref-desktop')}>Turn on pop-ups below</button
+				>
+			{/if}
+		</dd>
+		<dt class="font-medium text-foreground">Push</dt>
+		<dd>
+			Sent to your phone or computer while Chatty is closed or you've stepped away.
+			{#if pushReady && pushUnavailable}
+				{pushOnElsewhere
+					? "Push isn't available on this device (see below)."
+					: "No device gets push yet, and this one can't (see below). Turn it on in Chatty on your phone."}
+			{:else if pushReady && !pushOnHere}
+				{pushOnElsewhere ? 'Push is off on this device.' : 'No device gets push yet.'}
+				<button
+					type="button"
+					class="rounded-sm font-medium text-foreground underline underline-offset-2 outline-none hover:no-underline focus-visible:ring-2 focus-visible:ring-ring/50"
+					onclick={() => showSwitch('pref-push')}>Turn it on below</button
+				>
+			{/if}
+		</dd>
+	</dl>
 </SettingsSection>
 
-<PushNotificationsSection />
+<PushNotificationsSection
+	bind:enabled={pushOnHere}
+	bind:ready={pushReady}
+	bind:unavailable={pushUnavailable}
+/>
 
 <SettingsSection title="On this device">
 	{#snippet description()}
@@ -182,11 +301,11 @@
 		<span title={canTest ? undefined : 'Turn on device notifications or a sound first'}>
 			<Button variant="outline" size="sm" onclick={sendTest} disabled={!canTest}>
 				<BellRingIcon class="size-4" />
-				Send test
+				Test pop-up
 			</Button>
 		</span>
 	{/snippet}
-	<SettingsRow label="Device notifications" for="pref-desktop">
+	<SettingsRow label="Pop-up notifications" for="pref-desktop">
 		{#snippet description()}
 			<span class={desktopBlocked ? 'text-amber-700 dark:text-amber-400' : undefined}
 				>{desktopHint}</span

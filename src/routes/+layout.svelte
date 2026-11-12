@@ -29,5 +29,12 @@
 	disableHeadScriptInjection
 	themeColors={{ light: '#f9f8f7', dark: '#0e0d0c' }}
 />
+<!-- The installed desktop app has no title bar (window controls overlay, see
+     --titlebar-height in layout.css): this strip, where it was, moves the window.
+     Zero height everywhere else. -->
+<div
+	class="fixed inset-x-0 top-0 z-50 h-(--titlebar-height) app-region-drag"
+	aria-hidden="true"
+></div>
 {@render children()}
 <Toaster />

@@ -7,7 +7,7 @@ import {
 	type Tool,
 	type ToolChoice
 } from 'ai';
-import type { ModelMappingTarget, ProxyCompression } from '$lib/types.js';
+import type { ModelMappingTarget } from '$lib/types.js';
 import { resolveApiKeyIdentity } from '../auth/apiKey.js';
 import { getDb, type Db } from '../db/index.js';
 import {
@@ -22,19 +22,7 @@ import {
 	finalizeProxyRequest,
 	type FinalizeProxyRequestInput
 } from '../db/repo/proxy-requests.js';
-import { getUserSetting } from '../db/repo/user-settings.js';
 import { ModelUnavailableError, resolveModel } from '../llm/registry.js';
-import {
-	applyCaveman,
-	cavemanOverheadTokens,
-	CAVEMAN_PROMPTS,
-	estimateCavemanSaved,
-	getCavemanBaseline,
-	parseCavemanLevel,
-	recordCavemanBaseline,
-	type CavemanBaseline,
-	type CavemanLevel
-} from './caveman.js';
 import {
 	chatCompletionsSchema,
 	createAssembler,
@@ -175,73 +163,6 @@ function startStream(prepared: PreparedRequest, model: LanguageModel, signal: Ab
 	});
 }
 
-type CavemanMode = 'instructions' | 'messages';
-
-interface CompressionContext {
-	userId: string;
-	cavemanLevel: CavemanLevel;
-	baseline: CavemanBaseline | null;
-}
-
-async function prepareCompression(
-	db: Db,
-	userId: string,
-	prepared: PreparedRequest,
-	model: string,
-	cavemanMode: CavemanMode
-): Promise<CompressionContext> {
-	const cavemanLevel = parseCavemanLevel(getUserSetting(db, userId, 'proxyCaveman'));
-	let baseline: CavemanBaseline | null = null;
-	if (cavemanLevel !== 'off') {
-		baseline = getCavemanBaseline(db, userId);
-		const cavemanContent = CAVEMAN_PROMPTS[cavemanLevel];
-		let index = 0;
-		while (index < prepared.messages.length && prepared.messages[index].role === 'system') {
-			index++;
-		}
-		if (cavemanMode === 'instructions' || index >= prepared.messages.length) {
-			prepared.instructions = applyCaveman(prepared.instructions, cavemanLevel);
-		} else if (index > 0) {
-			const firstSystemMsg = prepared.messages[0]!;
-			firstSystemMsg.content = `${firstSystemMsg.content}\n\n${cavemanContent}`;
-		} else if (index === 0 && prepared.instructions) {
-			prepared.instructions = applyCaveman(prepared.instructions, cavemanLevel);
-		} else {
-			prepared.messages = [{ role: 'system', content: cavemanContent }, ...prepared.messages];
-		}
-	}
-	return { userId, cavemanLevel, baseline };
-}
-
-function finalizeCompression(
-	db: Db,
-	ctx: CompressionContext,
-	outputTokens: number | null
-): ProxyCompression | null {
-	try {
-		let compression: ProxyCompression | null = null;
-		if (ctx.cavemanLevel !== 'off') {
-			const saved =
-				outputTokens == null
-					? { estSaved: null, basis: undefined }
-					: estimateCavemanSaved(ctx.cavemanLevel, outputTokens, ctx.baseline);
-			compression = {
-				caveman: {
-					level: ctx.cavemanLevel,
-					estSaved: saved.estSaved,
-					overhead: cavemanOverheadTokens(ctx.cavemanLevel),
-					basis: saved.basis
-				}
-			};
-		} else if (outputTokens != null) {
-			recordCavemanBaseline(db, ctx.userId, outputTokens);
-		}
-		return compression;
-	} catch {
-		return null;
-	}
-}
-
 export type SseEmit = (event: string | null, data: unknown) => void;
 
 export interface ProxyAssembler {
@@ -323,8 +244,7 @@ async function respondNonStreaming(
 	request: Request,
 	finalize: Finalize,
 	startedAt: number,
-	formats: ProxyFormats,
-	compression: CompressionContext
+	formats: ProxyFormats
 ): Promise<Response> {
 	let lastError: unknown = null;
 	for (let i = 0; i < resolved.targets.length; i++) {
@@ -353,8 +273,7 @@ async function respondNonStreaming(
 				inputTokens: usage?.inputTokens ?? null,
 				outputTokens: usage?.outputTokens ?? null,
 				...cacheTokens(usage),
-				costUsd: servedCost(db, target, usage),
-				compression: finalizeCompression(db, compression, usage?.outputTokens ?? null)
+				costUsd: servedCost(db, target, usage)
 			});
 			return new Response(JSON.stringify(assembler.build()), {
 				status: 200,
@@ -383,8 +302,7 @@ function respondStreaming(
 	request: Request,
 	finalize: Finalize,
 	startedAt: number,
-	formats: ProxyFormats,
-	compression: CompressionContext
+	formats: ProxyFormats
 ): Response {
 	const encoder = new TextEncoder();
 	const abort = new AbortController();
@@ -457,8 +375,7 @@ function respondStreaming(
 					inputTokens: served.usage?.inputTokens ?? null,
 					outputTokens: served.usage?.outputTokens ?? null,
 					...cacheTokens(served.usage),
-					costUsd: servedCost(db, served.target, served.usage),
-					compression: finalizeCompression(db, compression, served.usage?.outputTokens ?? null)
+					costUsd: servedCost(db, served.target, served.usage)
 				});
 				controller.close();
 			};
@@ -559,36 +476,11 @@ export async function handleChatCompletions(request: Request): Promise<Response>
 			responseFormat: input.response_format
 		}
 	};
-	const compression = await prepareCompression(
-		db,
-		identity.userId,
-		prepared,
-		input.model,
-		'messages'
-	);
 	const formats = chatFormats(input.model, input.stream_options?.include_usage ?? false);
 	if (input.stream) {
-		return respondStreaming(
-			db,
-			prepared,
-			resolved,
-			request,
-			finalize,
-			startedAt,
-			formats,
-			compression
-		);
+		return respondStreaming(db, prepared, resolved, request, finalize, startedAt, formats);
 	}
-	return respondNonStreaming(
-		db,
-		prepared,
-		resolved,
-		request,
-		finalize,
-		startedAt,
-		formats,
-		compression
-	);
+	return respondNonStreaming(db, prepared, resolved, request, finalize, startedAt, formats);
 }
 
 export async function handleResponses(request: Request): Promise<Response> {
@@ -640,34 +532,9 @@ export async function handleResponses(request: Request): Promise<Response> {
 			maxOutputTokens: input.max_output_tokens
 		}
 	};
-	const compression = await prepareCompression(
-		db,
-		identity.userId,
-		prepared,
-		input.model,
-		'instructions'
-	);
 	const formats = responsesFormats(input.model);
 	if (input.stream) {
-		return respondStreaming(
-			db,
-			prepared,
-			resolved,
-			request,
-			finalize,
-			startedAt,
-			formats,
-			compression
-		);
+		return respondStreaming(db, prepared, resolved, request, finalize, startedAt, formats);
 	}
-	return respondNonStreaming(
-		db,
-		prepared,
-		resolved,
-		request,
-		finalize,
-		startedAt,
-		formats,
-		compression
-	);
+	return respondNonStreaming(db, prepared, resolved, request, finalize, startedAt, formats);
 }

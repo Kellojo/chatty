@@ -20,9 +20,7 @@
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
-	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
 	import CodeBlock from '$lib/components/app/settings/CodeBlock.svelte';
-	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
@@ -101,29 +99,6 @@
 	let createdKey = $state<string | null>(null);
 	let deleteKeyBusy = $state<string | null>(null);
 	let deleteKeyId = $state<string | null>(null);
-
-	type CavemanLevel = 'off' | 'lite' | 'full' | 'ultra' | 'wenyan';
-
-	const cavemanLevels: CavemanLevel[] = ['off', 'lite', 'full', 'ultra', 'wenyan'];
-
-	const cavemanLabels: Record<CavemanLevel, string> = {
-		off: 'Off',
-		lite: 'Lite',
-		full: 'Full',
-		ultra: 'Ultra',
-		wenyan: 'Wenyan (文言文)'
-	};
-
-	const cavemanDescriptions: Record<CavemanLevel, string> = {
-		off: 'Responses come back exactly as the model writes them.',
-		lite: 'Tight professional prose, no filler (small savings)',
-		full: 'Classic caveman: drops articles, fragments (~65% fewer output tokens, estimated)',
-		ultra: 'Maximum English terseness (largest English savings, estimated)',
-		wenyan: 'Classical Chinese (文言文) terseness, 80–90% character reduction, estimated'
-	};
-
-	let caveman = $state<CavemanLevel>(data.proxySettings.caveman);
-	let cavemanBusy = $state(false);
 
 	const selectedScopes = $derived(
 		[
@@ -212,21 +187,6 @@
 			toast.error(e instanceof Error ? e.message : 'Failed to delete API key');
 		} finally {
 			deleteKeyBusy = null;
-		}
-	}
-
-	async function changeCaveman(value: CavemanLevel) {
-		if (cavemanBusy || value === caveman) return;
-		const previous = caveman;
-		caveman = value;
-		cavemanBusy = true;
-		try {
-			await api('/api/proxy-settings', 'POST', { caveman: value });
-		} catch (e) {
-			caveman = previous;
-			toast.error(e instanceof Error ? e.message : 'Failed to update Caveman level');
-		} finally {
-			cavemanBusy = false;
 		}
 	}
 </script>
@@ -386,53 +346,6 @@
 		{/if}
 	{/snippet}
 	<CodeBlock code={decisionsCurlSnippet} label="curl" />
-</SettingsSection>
-
-<SettingsSection
-	title="Compression"
-	description="Reduce token usage for proxy requests made with your API keys."
->
-	<SettingsRow label="Caveman mode" for="caveman-level" stack>
-		{#snippet description()}
-			<p>{cavemanDescriptions[caveman]}</p>
-			<p class="mt-1 text-xs">
-				Savings are estimates; the prompt adds about 1–1.5k input tokens per request.
-			</p>
-		{/snippet}
-		<Select.Root
-			type="single"
-			value={caveman}
-			onValueChange={(value) => changeCaveman(value as CavemanLevel)}
-		>
-			<Select.Trigger id="caveman-level" class="w-full sm:w-48" disabled={cavemanBusy}>
-				{cavemanLabels[caveman]}
-			</Select.Trigger>
-			<Select.Content>
-				{#each cavemanLevels as option (option)}
-					<Select.Item value={option}>
-						<span class="flex flex-col">
-							<span>{cavemanLabels[option]}</span>
-							<span class="text-xs whitespace-normal text-muted-foreground">
-								{cavemanDescriptions[option]}
-							</span>
-						</span>
-					</Select.Item>
-				{/each}
-			</Select.Content>
-		</Select.Root>
-	</SettingsRow>
-	<dl class="grid grid-cols-2 gap-3 border-t pt-4">
-		<div class="flex flex-col gap-0.5 rounded-xl bg-muted/50 px-4 py-3">
-			<dt class="text-xs text-muted-foreground">Proxy requests</dt>
-			<dd class="text-xl font-semibold tabular-nums">{data.savings.total.toLocaleString()}</dd>
-		</div>
-		<div class="flex flex-col gap-0.5 rounded-xl bg-muted/50 px-4 py-3">
-			<dt class="text-xs text-muted-foreground">Tokens saved (est.)</dt>
-			<dd class="text-xl font-semibold tabular-nums">
-				{data.savings.cavemanSaved.toLocaleString()}
-			</dd>
-		</div>
-	</dl>
 </SettingsSection>
 
 <Dialog.Root open={keyDialogOpen} onOpenChange={closeKeyDialog}>

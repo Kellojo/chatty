@@ -267,43 +267,121 @@ describe('CodingFollower live turn bounds', () => {
 		});
 	});
 
-	it('follows the active run when T3 adds a follow-up message to it', async () => {
-		const { getMessage } = await import('../db/repo/messages.js');
+	const item = (id: string, ordinal: number, rest: Record<string, unknown>) => ({
+		id,
+		runId: 'run-1',
+		ordinal,
+		status: 'completed',
+		...rest
+	});
+	const steered = (
+		status: string,
+		sequence: number,
+		items: Record<string, unknown>[],
+		messages: Record<string, unknown>[] = []
+	) => {
+		const snapshot = runSnapshot(status, sequence);
+		snapshot.projection.turnItems = items as never[];
+		(snapshot.projection as Record<string, unknown>).messages = messages;
+		return snapshot;
+	};
+	const thread = async () => {
+		const { getDb } = await import('../db/index.js');
+		return (
+			getDb()
+				.prepare(
+					'SELECT id, role, parent_id, status, parts FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid'
+				)
+				.all(conversationId) as {
+				id: string;
+				role: string;
+				parent_id: string | null;
+				status: string;
+				parts: string;
+			}[]
+		).map((r) => ({ ...r, parts: JSON.parse(r.parts) as { text?: string }[] }));
+	};
+
+	it('answers a message added to the active run with a reply of its own, after it', async () => {
+		const { createMessage } = await import('../db/repo/messages.js');
 		const { getStreamState, hasActiveStream } = await import('../chat/streams.js');
+		failConnect = false;
+		createMessage(getDb(), {
+			id: 'm1',
+			conversationId,
+			role: 'user',
+			parts: [{ type: 'text', text: 'first' }],
+			createdAt: 1
+		});
+		follower.beginTurn('m1');
+		await follower.follow();
+		const stream = lastConnection!.streams[0];
+		const before = item('a1', 2, { type: 'assistant_message', text: 'Looking' });
+		stream.onValue(steered('running', 1, [before]));
+		await seconds(1);
+
+		// Sent while run-1 is active: T3 adds m2 to run-1 instead of starting a run.
+		createMessage(getDb(), {
+			id: 'm2',
+			conversationId,
+			role: 'user',
+			parts: [{ type: 'text', text: 'next' }]
+		});
+		follower.beginTurn('m2');
+		const added = item('turn-item:message:m2', 5, {
+			type: 'user_message',
+			messageId: 'm2',
+			text: 'next'
+		});
+		stream.onValue(steered('running', 2, [before, added]));
+		await seconds(1);
+		expect(hasActiveStream(conversationId)).toBe(true);
+		expect(getStreamState(conversationId)?.chunks[0]).toEqual({
+			type: 'start',
+			messageId: 'm2:reply'
+		});
+
+		const after = item('a2', 6, { type: 'assistant_message', text: 'Done' });
+		stream.onValue(steered('completed', 3, [before, added, after]));
+		await seconds(1);
+		expect(hasActiveStream(conversationId)).toBe(false);
+		expect(await thread()).toMatchObject([
+			{ id: 'm1', parent_id: null },
+			{ id: 'm1:reply', parent_id: 'm1', status: 'complete', parts: [{ text: 'Looking' }] },
+			{ id: 'm2', parent_id: 'm1:reply' },
+			{ id: 'm2:reply', parent_id: 'm2', status: 'complete', parts: [{ text: 'Done' }] }
+		]);
+	});
+
+	it('mirrors a message added to the run from T3 and streams its reply', async () => {
+		const { getStreamState } = await import('../chat/streams.js');
 		failConnect = false;
 		follower.beginTurn('m1');
 		await follower.follow();
 		const stream = lastConnection!.streams[0];
-		stream.onValue(runSnapshot('running'));
+		const before = item('a1', 2, { type: 'assistant_message', text: 'Looking' });
+		const added = item('turn-item:message:m3', 5, {
+			type: 'user_message',
+			messageId: 'm3',
+			text: 'from t3'
+		});
+		const after = item('a2', 6, {
+			type: 'assistant_message',
+			text: 'Got it',
+			status: 'running',
+			streaming: true
+		});
+		stream.onValue(steered('running', 1, [before, added, after]));
 		await seconds(1);
-
-		// Sent while run-1 is active: T3 adds m2 to run-1 instead of starting a run.
-		follower.beginTurn('m2');
-		const joined = runSnapshot('running', 2);
-		joined.projection.turnItems = [
-			{
-				id: 'turn-item:message:m2',
-				runId: 'run-1',
-				messageId: 'm2',
-				ordinal: 5,
-				type: 'user_message',
-				status: 'completed',
-				text: 'next'
-			}
-		] as never[];
-		stream.onValue(joined);
-		await seconds(1);
-
-		expect(getMessage(getDb(), 'm2:reply')).toBeUndefined();
-		expect(hasActiveStream(conversationId)).toBe(true);
 		expect(getStreamState(conversationId)?.chunks[0]).toEqual({
 			type: 'start',
-			messageId: 'm1:reply'
+			messageId: 'm3:reply'
 		});
-
-		stream.onValue(runSnapshot('completed', 3));
-		await seconds(1);
-		expect(hasActiveStream(conversationId)).toBe(false);
+		expect((await thread()).map((m) => [m.id, m.role, m.status])).toEqual([
+			['m1:reply', 'assistant', 'complete'],
+			['m3', 'user', 'complete'],
+			['m3:reply', 'assistant', 'partial']
+		]);
 	});
 
 	it('does not let a pending idle stop end a new turn', async () => {

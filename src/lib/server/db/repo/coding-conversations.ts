@@ -35,6 +35,8 @@ export interface CodingConversationRow {
 	remote_title: string | null;
 	/** Pinned state last agreed with the T3 thread (0/1), NULL if never compared. */
 	remote_pinned: number | null;
+	/** Snooze end (ms, 0 = not snoozed) last agreed with the T3 thread, NULL if never compared. */
+	remote_snoozed_until: number | null;
 	/** The thread's `lastVisitedAt` (ms, 0 = never) when last seen, NULL if never seen. */
 	remote_visited_at: number | null;
 	run_started_at: number | null;
@@ -180,6 +182,8 @@ export interface CodingConversationPatch {
 	remoteSettled?: boolean;
 	remoteTitle?: string;
 	remotePinned?: boolean;
+	/** Snooze end in ms, 0 = not snoozed. */
+	remoteSnoozedUntil?: number;
 	remoteVisitedAt?: number;
 	runStartedAt?: number | null;
 	diff?: CodingDiffStat;
@@ -212,6 +216,9 @@ export function updateCodingConversation(
 	if (patch.remoteSettled !== undefined) set('remote_settled', patch.remoteSettled ? 1 : 0);
 	if (patch.remoteTitle !== undefined) set('remote_title', patch.remoteTitle);
 	if (patch.remotePinned !== undefined) set('remote_pinned', patch.remotePinned ? 1 : 0);
+	if (patch.remoteSnoozedUntil !== undefined) {
+		set('remote_snoozed_until', patch.remoteSnoozedUntil);
+	}
 	if (patch.remoteVisitedAt !== undefined) set('remote_visited_at', patch.remoteVisitedAt);
 	if (patch.runStartedAt !== undefined) set('run_started_at', patch.runStartedAt);
 	if (patch.diff !== undefined) {

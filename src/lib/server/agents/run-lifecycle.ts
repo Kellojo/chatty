@@ -18,6 +18,7 @@ import { parseCanAsk, setAgentRunTimes, type AgentRow } from '../db/repo/agents.
 import {
 	settleConversation,
 	unsettleConversation,
+	unsnoozeConversation,
 	type ConversationRow
 } from '../db/repo/conversations.js';
 import { publishServerEvent } from '../events/bus.js';
@@ -215,6 +216,14 @@ export function completeRunTurn(
 				type: 'conversation.settle_changed',
 				conversationIds: [conversation.id],
 				settled: false
+			});
+		}
+		// Likewise a question breaks through a snooze.
+		if (status === 'awaiting_input' && unsnoozeConversation(db, ctx.userId, conversation.id)) {
+			publishServerEvent(ctx.userId, {
+				type: 'conversation.snooze_changed',
+				conversationIds: [conversation.id],
+				snoozed: false
 			});
 		}
 		if (status === 'awaiting_input' && outcome.openAskUser) {

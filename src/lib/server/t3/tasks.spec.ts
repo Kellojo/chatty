@@ -26,7 +26,14 @@ vi.doMock('./client.js', () => ({
 	connectT3: vi.fn(async () => ({ closed: false, call, onClose: () => () => {}, close: vi.fn() })),
 	t3HttpGet,
 	t3PostBinary: vi.fn(async () => {}),
-	T3ClientError: class extends Error {}
+	T3ClientError: class extends Error {
+		constructor(
+			message: string,
+			readonly kind = 'remote'
+		) {
+			super(message);
+		}
+	}
 }));
 vi.doMock('../events/bus.js', () => ({ publishServerEvent: vi.fn() }));
 
@@ -34,13 +41,22 @@ const { openDatabase } = await import('../db/index.js');
 const conversations = await import('../db/repo/conversations.js');
 const coding = await import('../db/repo/coding-conversations.js');
 const { createCodingEnvironment } = await import('../db/repo/coding-environments.js');
-const { archiveCodingThread, startCodingTurn, respondToCodingRequest, updateCodingTaskSettings } =
-	await import('./tasks.js');
+const {
+	archiveCodingThread,
+	browseCodingFolders,
+	createCodingProject,
+	resolveCodingTarget,
+	startCodingTurn,
+	respondToCodingRequest,
+	updateCodingTaskSettings
+} = await import('./tasks.js');
+const { T3ClientError } = await import('./client.js');
 const { closeAllT3Connections } = await import('./pool.js');
 
 type Db = ReturnType<typeof openDatabase>;
 let db: Db;
 let conversationId: string;
+let environmentId: string;
 
 beforeEach(() => {
 	for (const fn of Object.values(follower)) fn.mockClear();
@@ -58,6 +74,7 @@ beforeEach(() => {
 		baseUrl: 'http://t3.test',
 		token: 'token'
 	});
+	environmentId = env.id;
 	conversationId = conversations.createConversation(db, 'u1', {
 		kind: 'chat',
 		mode: 'agent',
@@ -365,5 +382,113 @@ describe('respondToCodingRequest', () => {
 		expect(coding.getCodingRequestAnswers(db, conversationId)).toEqual({
 			req2: 'Run the unit tests only'
 		});
+	});
+});
+
+describe('adding an existing folder as a project', () => {
+	const browseReply = (parentPath: string) => async (tag: string) =>
+		tag === 'filesystem.browse' ? { parentPath, entries: [] } : {};
+
+	it('registers the resolved folder with T3', async () => {
+		t3HttpGet.mockResolvedValue({ projects: [] });
+		call.mockImplementation(browseReply('/home/u/app'));
+		const result = await createCodingProject(
+			'u1',
+			{ environmentId, title: 'app', path: '~/app' },
+			db
+		);
+		expect(call).toHaveBeenCalledWith('filesystem.browse', { partialPath: '~/app/' });
+		expect(call).toHaveBeenCalledWith(
+			'projects.mutate',
+			expect.objectContaining({
+				type: 'project.create',
+				title: 'app',
+				workspaceRoot: '/home/u/app',
+				projectId: result.project.id
+			})
+		);
+		expect(result).toEqual({ project: { id: expect.any(String), title: 'app' }, warning: null });
+	});
+
+	it('refuses a folder that is already a project', async () => {
+		t3HttpGet.mockResolvedValue({
+			projects: [{ id: 'p9', title: 'Existing', workspaceRoot: 'C:\\Code\\App\\' }]
+		});
+		call.mockImplementation(browseReply('c:\\code\\app'));
+		await expect(
+			createCodingProject('u1', { environmentId, title: 'app', path: 'c:\\code\\app' }, db)
+		).rejects.toMatchObject({ status: 409, message: expect.stringContaining('Existing') });
+		expect(call).not.toHaveBeenCalledWith('projects.mutate', expect.anything());
+	});
+
+	it('reports a folder that does not exist', async () => {
+		call.mockImplementation(async (tag) => {
+			if (tag === 'filesystem.browse') throw new T3ClientError('Failed to browse', 'remote');
+			return {};
+		});
+		await expect(
+			createCodingProject('u1', { environmentId, title: 'gone', path: '/nope' }, db)
+		).rejects.toMatchObject({ status: 400, message: 'No folder at /nope on T3' });
+		expect(call).not.toHaveBeenCalledWith('projects.mutate', expect.anything());
+	});
+});
+
+describe('browseCodingFolders', () => {
+	it('lists the folders T3 suggests', async () => {
+		call.mockResolvedValue({
+			parentPath: '/home/u',
+			entries: [{ name: 'code', fullPath: '/home/u/code' }, { name: '' }]
+		});
+		await expect(browseCodingFolders('u1', environmentId, '~/co', db)).resolves.toEqual({
+			parentPath: '/home/u',
+			entries: [{ name: 'code', path: '/home/u/code' }]
+		});
+	});
+
+	it('suggests nothing for a path that cannot be read yet', async () => {
+		call.mockRejectedValue(new T3ClientError('Failed to browse', 'remote'));
+		await expect(browseCodingFolders('u1', environmentId, '/nop', db)).resolves.toEqual({
+			parentPath: null,
+			entries: []
+		});
+	});
+
+	it('still surfaces a missing permission', async () => {
+		call.mockRejectedValue(new T3ClientError('Token is missing a scope', 'unauthorized'));
+		await expect(browseCodingFolders('u1', environmentId, '~/', db)).rejects.toMatchObject({
+			status: 403
+		});
+	});
+});
+
+describe('resolveCodingTarget', () => {
+	// Right after a project is added, T3 hasn't filled in `repositoryIdentity` yet.
+	const freshProject = { id: 'p1', title: 'App', workspaceRoot: '/home/u/app' };
+
+	it('asks git when T3 has not identified a new repository yet', async () => {
+		t3HttpGet.mockResolvedValue({ projects: [freshProject] });
+		call.mockImplementation(async (tag) =>
+			tag === 'vcs.listRefs' ? { isRepo: true, refs: [] } : {}
+		);
+		const { project } = await resolveCodingTarget(
+			'u1',
+			{ environmentId, projectId: 'p1', workspaceMode: 'worktree' },
+			db
+		);
+		expect(call).toHaveBeenCalledWith(
+			'vcs.listRefs',
+			expect.objectContaining({ cwd: '/home/u/app' })
+		);
+		expect(project.isGitRepo).toBe(true);
+	});
+
+	it('refuses a worktree for a folder without git', async () => {
+		t3HttpGet.mockResolvedValue({ projects: [freshProject] });
+		call.mockImplementation(async (tag) =>
+			tag === 'vcs.listRefs' ? { isRepo: false, refs: [] } : {}
+		);
+		await expect(
+			resolveCodingTarget('u1', { environmentId, projectId: 'p1', workspaceMode: 'worktree' }, db)
+		).rejects.toMatchObject({ status: 400 });
 	});
 });

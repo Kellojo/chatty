@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { setMode } from 'mode-watcher';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
+	import { Switch } from '$lib/components/ui/switch/index.js';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
@@ -14,9 +16,17 @@
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { THEMES, TIME_FORMATS, type Theme, type TimeFormat } from '$lib/user-settings.js';
+	import { haptic, hapticsPref } from '$lib/haptics.svelte.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	onMount(() => hapticsPref.load());
+
+	function setHaptics(enabled: boolean) {
+		hapticsPref.set(enabled);
+		if (enabled) haptic('medium');
+	}
 
 	const themeLabels: Record<Theme, string> = {
 		light: 'Light',
@@ -217,6 +227,13 @@
 				{/each}
 			</Select.Content>
 		</Select.Root>
+	</SettingsRow>
+	<SettingsRow
+		label="Haptic feedback"
+		for="pref-haptics"
+		description="Light vibrations when you send, toggle or swipe, on phones and tablets. Applies to this device only."
+	>
+		<Switch id="pref-haptics" checked={hapticsPref.enabled} onCheckedChange={setHaptics} />
 	</SettingsRow>
 </SettingsSection>
 

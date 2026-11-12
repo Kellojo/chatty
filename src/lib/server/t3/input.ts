@@ -64,14 +64,19 @@ export async function resolveEnvironmentConnection(input: {
 }
 
 /**
- * The id a T3 server reports for itself, or null when it can't be reached or
- * predates the field (then only the URL identifies it).
+ * The id a T3 server reports for itself, or null when it predates the field
+ * (then only the URL identifies it). Fails with 400 when the server can't be
+ * reached: without its id, the same server under another URL can't be told
+ * apart from a new one, so it isn't saved blind.
  */
-export async function probeRemoteEnvironmentId(baseUrl: string): Promise<string | null> {
+export async function identifyEnvironment(baseUrl: string): Promise<string | null> {
 	try {
 		return (await fetchEnvironmentDescriptor(baseUrl)).environmentId;
-	} catch {
-		return null;
+	} catch (e) {
+		const reason = e instanceof Error ? e.message : String(e);
+		error(400, {
+			message: `Couldn't reach this T3 Code server to check it isn't already connected: ${reason}`
+		});
 	}
 }
 

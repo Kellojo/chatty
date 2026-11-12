@@ -2,6 +2,7 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import FolderIcon from '@lucide/svelte/icons/folder';
+	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
 	import FolderXIcon from '@lucide/svelte/icons/folder-x';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
@@ -9,6 +10,7 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ServerIcon from '@lucide/svelte/icons/server';
+	import ServerOffIcon from '@lucide/svelte/icons/server-off';
 	import HandIcon from '@lucide/svelte/icons/hand';
 	import PencilLineIcon from '@lucide/svelte/icons/pencil-line';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
@@ -16,6 +18,7 @@
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import GithubIcon from './GithubIcon.svelte';
 	import NewProjectDialog from './NewProjectDialog.svelte';
+	import type { NewProjectMode } from './new-project.js';
 	import {
 		AUTONOMY_OPTIONS,
 		LOCAL_CHECKOUT,
@@ -38,11 +41,12 @@
 	// these never collide; the getter binding below keeps them from becoming the selection.
 	const NEW_PROJECT = ':new';
 	const CLONE_PROJECT = ':clone';
+	const OPEN_FOLDER = ':folder';
 	// Project and branch lists longer than this get a search box at the top.
 	const SEARCH_THRESHOLD = 7;
 
 	let dialogOpen = $state(false);
-	let dialogMode = $state<'empty' | 'clone'>('clone');
+	let dialogMode = $state<NewProjectMode>('clone');
 	let projectQuery = $state('');
 	let branchQuery = $state('');
 	const uid = $props.id();
@@ -107,7 +111,7 @@
 		task.branchValue === LOCAL_CHECKOUT ? 'Project checkout' : task.branchValue || 'Branch'
 	);
 
-	function openDialog(mode: 'empty' | 'clone') {
+	function openDialog(mode: NewProjectMode) {
 		dialogMode = mode;
 		dialogOpen = true;
 	}
@@ -116,6 +120,7 @@
 		projectQuery = '';
 		if (value === NEW_PROJECT) return openDialog('empty');
 		if (value === CLONE_PROJECT) return openDialog('clone');
+		if (value === OPEN_FOLDER) return openDialog('folder');
 		if (value !== task.projectId) void task.selectProject(value);
 	}
 
@@ -183,19 +188,32 @@
 <div class="flex flex-col gap-2">
 	{#if task.optionsError}
 		{#if task.environments.length > 1}<div>{@render environmentPicker()}</div>{/if}
-		<div
-			class="flex items-start gap-2 rounded-2xl border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-			role="alert"
-		>
-			<TriangleAlertIcon class="mt-0.5 size-4 shrink-0" />
-			<p class="min-w-0 flex-1">
-				Couldn't reach {task.environment?.name ?? 'the coding environment'}.
-				<span class="line-clamp-2 text-xs text-destructive/80">{task.optionsError}</span>
-			</p>
+		<!-- Calm card rather than a red banner: an offline machine is a state, not a crash. -->
+		<div class="flex items-center gap-3 rounded-2xl border bg-muted/30 p-3" role="alert">
+			<div
+				class="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive"
+				aria-hidden="true"
+			>
+				<ServerOffIcon class="size-4" />
+			</div>
+			<div class="min-w-0 flex-1">
+				<p class="text-sm font-medium">
+					Can't reach {task.environment?.name ?? 'the coding environment'}
+				</p>
+				<p class="text-xs text-muted-foreground">
+					Check that the machine is online and T3 Code is running.
+				</p>
+				<p
+					class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/70"
+					title={task.optionsError}
+				>
+					{task.optionsError}
+				</p>
+			</div>
 			<Button
-				variant="ghost"
+				variant="outline"
 				size="sm"
-				class="-my-1 h-7 shrink-0 rounded-full text-destructive hover:text-destructive"
+				class="shrink-0 rounded-full"
 				onclick={() => void task.selectEnvironment(task.environmentId, { refresh: true })}
 			>
 				<RefreshCwIcon class="size-3.5" />
@@ -214,6 +232,16 @@
 				<Button size="sm" class="rounded-full" {disabled} onclick={() => openDialog('clone')}>
 					<GithubIcon class="size-4" />
 					Clone repository
+				</Button>
+				<Button
+					variant="outline"
+					size="sm"
+					class="rounded-full"
+					{disabled}
+					onclick={() => openDialog('folder')}
+				>
+					<FolderOpenIcon class="size-4" />
+					Open folder
 				</Button>
 				<Button
 					variant="outline"
@@ -300,6 +328,10 @@
 								<Select.Item value={CLONE_PROJECT} label="Clone repository">
 									<GithubIcon class="size-4 text-muted-foreground" />
 									Clone repository…
+								</Select.Item>
+								<Select.Item value={OPEN_FOLDER} label="Open folder">
+									<FolderOpenIcon class="size-4 text-muted-foreground" />
+									Open folder…
 								</Select.Item>
 								<Select.Item value={NEW_PROJECT} label="New empty project">
 									<FolderPlusIcon class="size-4 text-muted-foreground" />

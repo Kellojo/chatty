@@ -55,7 +55,7 @@ import {
 	runItemsEvicted,
 	MAX_THREAD_RECORDS,
 	messageText,
-	renderRun,
+	renderRunSegments,
 	replyMessageId,
 	runFailureText,
 	runForUserMessage,
@@ -63,6 +63,7 @@ import {
 	streamItemRun,
 	summarizeTask,
 	type RenderedEntry,
+	type RunSegment,
 	type ThreadState
 } from './projection.js';
 import {
@@ -584,7 +585,12 @@ export class CodingFollower {
 		return this.isForeignMessage(remoteId) ? scoped : remoteId;
 	}
 
-	private openLive(messageId: string, userMessageId: string | null, runId: string | null): void {
+	private openLive(
+		messageId: string,
+		userMessageId: string | null,
+		runId: string | null,
+		parentId?: string
+	): void {
 		if (this.isForeignMessage(messageId)) {
 			log.warn('t3 reply id collides with another conversation; not streaming', {
 				conversationId: this.conversationId
@@ -610,7 +616,8 @@ export class CodingFollower {
 				conversationId: this.conversationId,
 				role: 'assistant',
 				parts: [],
-				status: 'partial'
+				status: 'partial',
+				parentId
 			});
 			// A new reply means a new turn (e.g. one started on T3 itself, with no
 			// local user message): it orders the sidebar like a sent message does.
@@ -845,6 +852,115 @@ export class CodingFollower {
 		return 'created';
 	}
 
+	/**
+	 * Mirrors a message added to a run mid-run from T3 itself (one sent from
+	 * Chatty is already stored), placed before its reply. True when created.
+	 */
+	private mirrorSegmentMessage(segment: RunSegment, replyId: string, now: number): boolean {
+		const remoteId = segment.userMessageId;
+		if (!remoteId || !segment.item) return false;
+		const id = this.localMessageId(remoteId);
+		if (getMessage(this.db, id)) return false;
+		const itemText = typeof segment.item.text === 'string' ? segment.item.text : null;
+		const text = messageText(this.state, remoteId) ?? itemText;
+		if (!text) return false;
+		const message = {
+			id,
+			conversationId: this.conversationId,
+			role: 'user' as const,
+			parts: [{ type: 'text', text }],
+			createdAt: Date.parse(String(segment.item.startedAt ?? segment.item.updatedAt)) || now
+		};
+		const reply = this.ownMessage(replyId);
+		if (!reply || !insertMessageBefore(this.db, reply.id, message)) createMessage(this.db, message);
+		return true;
+	}
+
+	/**
+	 * Saves one segment of a run as the reply `messageId` (throttled while the
+	 * run streams) and streams it when it's the live reply. Earlier segments
+	 * ended when the next message came in; the last one carries the run's
+	 * status. True when the reply was created.
+	 */
+	private persistSegment(
+		run: Rec,
+		segment: RunSegment,
+		messageId: string,
+		isLast: boolean,
+		now: number
+	): boolean {
+		if (this.isForeignMessage(messageId)) return false;
+		const db = this.db;
+		const runId = String(run.id);
+		const entries = segment.entries;
+		const parts = entries.map((e) => e.part);
+		if (this.live?.messageId === messageId) this.emitDiff(this.live, entries);
+
+		const finished = isRunFinished(run);
+		const status = !isLast
+			? 'complete'
+			: finished
+				? run.status === 'failed'
+					? 'failed'
+					: 'complete'
+				: 'partial';
+		// The run's first reply is saved even when empty once the run ends; a
+		// message added mid-run gets one only when the agent got to it.
+		const first = segment.item === null;
+		const json = JSON.stringify(parts);
+		const prev = this.persisted.get(messageId);
+		const changed = !prev || prev.json !== json || prev.status !== status;
+		const due = !prev || finished || now - prev.at >= PERSIST_INTERVAL_MS;
+		let created = false;
+		if (changed && due && (parts.length > 0 || (first && finished) || this.ownMessage(messageId))) {
+			const existing = this.ownMessage(messageId);
+			const error =
+				isLast && finished && run.status !== 'completed' ? runFailureText(this.state, run) : null;
+			if (existing) {
+				// Progress on an existing reply isn't new activity: the sidebar orders
+				// by when a turn started (as for normal chats), so a running task keeps
+				// its place instead of jumping up on every save.
+				// A finished run whose items were partly evicted (very long threads)
+				// renders incomplete: keep the parts saved while they were all known.
+				const keepParts = finished && runItemsEvicted(this.state, runId);
+				const partsChanged = !keepParts && existing.parts !== json;
+				if (partsChanged || existing.status !== status || existing.error !== error) {
+					updateMessage(db, messageId, keepParts ? { status, error } : { parts, status, error });
+					// Nothing streams this reply (e.g. a background subagent still at
+					// work after its turn ended), so tell an open chat to reload it.
+					if (this.live?.messageId !== messageId) {
+						publishServerEvent(this.userId, {
+							type: 'chat.messages.updated',
+							conversationId: this.conversationId
+						});
+					}
+				}
+			} else if (parts.length > 0 || (first && finished)) {
+				const userMessage = first
+					? undefined
+					: this.ownMessage(this.localMessageId(segment.userMessageId!));
+				createMessage(db, {
+					id: messageId,
+					conversationId: this.conversationId,
+					role: 'assistant',
+					parts,
+					status,
+					error,
+					createdAt: first
+						? (Date.parse(String(run.startedAt ?? run.requestedAt)) || now) + 1
+						: (userMessage?.created_at ?? now) + 1,
+					parentId: userMessage?.id
+				});
+				created = true;
+			}
+			this.persisted.set(messageId, { json, at: now, status });
+		} else if (changed && !due) {
+			this.dirtyRuns.add(runId);
+			this.scheduleRender(); // flush the throttled update later
+		}
+		return created;
+	}
+
 	private render(): void {
 		if (!this.hasSnapshot) return;
 		const db = this.db;
@@ -866,12 +982,11 @@ export class CodingFollower {
 		const active = activeRun(this.state);
 		if (this.live && !this.live.runId && this.live.userMessageId) {
 			const userMessageId = this.live.userMessageId;
+			// Sent while another run was active, T3 adds the message to that run
+			// rather than starting one for it: the run's work after the message is
+			// its reply (see renderRunSegments), streamed by this turn.
 			const run = runForUserMessage(this.state, userMessageId);
-			if (run?.userMessageId === userMessageId) this.live.runId = String(run.id);
-			// Sent while another run was active, T3 added the message to that run
-			// rather than starting one for it: that run's reply answers it, and is
-			// followed below like any run this turn didn't start.
-			else if (run) this.dropUnboundTurn();
+			if (run) this.live.runId = String(run.id);
 		}
 		// Its run is gone (thread deleted remotely, dropped from a snapshot, evicted):
 		// nothing would ever finish this turn.
@@ -911,61 +1026,29 @@ export class CodingFollower {
 			if (mirrored === 'created') touched = true;
 			else if (mirrored === 'removed') removedNotices = true;
 
-			const entries = renderRun(this.state, run, this.commandOutputs, answers);
-			const parts = entries.map((e) => e.part);
-			const messageId =
-				this.live?.runId === runId ? this.live.messageId : this.localMessageId(replyMessageId(run));
-			if (this.isForeignMessage(messageId)) continue;
-			if (this.live?.runId === runId) this.emitDiff(this.live, entries);
-
 			const finished = isRunFinished(run);
-			const status = finished ? (run.status === 'failed' ? 'failed' : 'complete') : 'partial';
-			const json = JSON.stringify(parts);
-			const prev = this.persisted.get(messageId);
-			const changed = !prev || prev.json !== json || prev.status !== status;
-			const due = !prev || finished || now - prev.at >= PERSIST_INTERVAL_MS;
-			if (changed && due && (parts.length > 0 || finished || this.ownMessage(messageId))) {
-				const existing = this.ownMessage(messageId);
-				const error = finished
-					? run.status === 'completed'
-						? null
-						: runFailureText(this.state, run)
-					: null;
-				if (existing) {
-					// Progress on an existing reply isn't new activity: the sidebar orders
-					// by when a turn started (as for normal chats), so a running task keeps
-					// its place instead of jumping up on every save.
-					// A finished run whose items were partly evicted (very long threads)
-					// renders incomplete: keep the parts saved while they were all known.
-					const keepParts = finished && runItemsEvicted(this.state, runId);
-					const partsChanged = !keepParts && existing.parts !== json;
-					if (partsChanged || existing.status !== status || existing.error !== error) {
-						updateMessage(db, messageId, keepParts ? { status, error } : { parts, status, error });
-						// Nothing streams this reply (e.g. a background subagent still at
-						// work after its turn ended), so tell an open chat to reload it.
-						if (this.live?.runId !== runId) {
-							publishServerEvent(this.userId, {
-								type: 'chat.messages.updated',
-								conversationId: this.conversationId
-							});
-						}
-					}
-				} else if (parts.length > 0 || finished) {
-					createMessage(db, {
-						id: messageId,
-						conversationId: this.conversationId,
-						role: 'assistant',
-						parts,
-						status,
-						error,
-						createdAt: (Date.parse(String(run.startedAt ?? run.requestedAt)) || now) + 1
-					});
-					touched = true;
-				}
-				this.persisted.set(messageId, { json, at: now, status });
-			} else if (changed && !due) {
-				this.dirtyRuns.add(runId);
-				this.scheduleRender(); // flush the throttled update later
+			const segments = renderRunSegments(this.state, run, this.commandOutputs, answers);
+			const replyIds = segments.map((segment, i) =>
+				this.localMessageId(i === 0 ? replyMessageId(run) : `${segment.userMessageId}:reply`)
+			);
+			// The agent moved on to a message added mid-run: stream that reply instead.
+			const last = segments.length - 1;
+			if (
+				last > 0 &&
+				this.live?.runId === runId &&
+				this.live.messageId !== replyIds[last] &&
+				segments[last].entries.length > 0 &&
+				!finished &&
+				!this.isForeignMessage(replyIds[last])
+			) {
+				this.endLive({ interrupted: false });
+				if (this.mirrorSegmentMessage(segments[last], replyIds[last], now)) touched = true;
+				const userMessage = this.ownMessage(this.localMessageId(segments[last].userMessageId!));
+				this.openLive(replyIds[last], segments[last].userMessageId, runId, userMessage?.id);
+			}
+			for (const [i, segment] of segments.entries()) {
+				if (i > 0 && this.mirrorSegmentMessage(segment, replyIds[i], now)) touched = true;
+				if (this.persistSegment(run, segment, replyIds[i], i === last, now)) touched = true;
 			}
 
 			if (finished && this.live?.runId === runId) {

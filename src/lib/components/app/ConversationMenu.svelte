@@ -9,6 +9,8 @@
 	import type { Conversation } from '$lib/types.js';
 	import type { CodingConversation } from '$lib/coding-environments.js';
 	import CodingTaskDetails from './CodingTaskDetails.svelte';
+	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
+	import SnoozeDialog from './SnoozeDialog.svelte';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
@@ -50,6 +52,7 @@
 	let renaming = $state(false);
 	let renameText = $state('');
 	let deleting = $state(false);
+	let pickingSnooze = $state(false);
 
 	const settled = $derived(conversation.settledAt !== null);
 	const noun = $derived(coding ? 'task' : 'conversation');
@@ -81,13 +84,23 @@
 			...conversation,
 			settledAt: settled ? null : Date.now(),
 			settledReason: settled ? null : 'manual',
-			pinned: settled ? conversation.pinned : false
+			pinned: settled ? conversation.pinned : false,
+			snoozedUntil: settled ? conversation.snoozedUntil : null
 		});
 		toast.success(
 			settled
 				? `${coding ? 'Task' : 'Conversation'} un-settled`
 				: `${coding ? 'Task' : 'Conversation'} settled`
 		);
+		await invalidateAll();
+	}
+
+	async function snoozeChanged(until: number | null) {
+		onupdated({
+			...conversation,
+			snoozedUntil: until,
+			pinned: until !== null ? false : conversation.pinned
+		});
 		await invalidateAll();
 	}
 
@@ -202,6 +215,11 @@
 				{/if}
 			</DropdownMenu.Item>
 		{/if}
+		<SnoozeMenuItems
+			{conversation}
+			onchanged={snoozeChanged}
+			oncustom={() => (pickingSnooze = true)}
+		/>
 		<DropdownMenu.Item onSelect={toggleSettled}>
 			{#if settled}
 				<ArchiveRestoreIcon class="size-4" /> Un-settle
@@ -230,6 +248,12 @@
 		</form>
 	</Dialog.Content>
 </Dialog.Root>
+
+<SnoozeDialog
+	conversation={pickingSnooze ? conversation : null}
+	onclose={() => (pickingSnooze = false)}
+	onchanged={snoozeChanged}
+/>
 
 <Dialog.Root open={deleting} onOpenChange={(open) => (deleting = open)}>
 	<Dialog.Content>

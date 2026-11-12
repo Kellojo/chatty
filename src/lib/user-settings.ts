@@ -27,7 +27,10 @@ export const MAX_GLOBAL_INSTRUCTIONS_LENGTH = 2000;
 /** Cap on starred models (encoded `providerId/modelId` refs). */
 export const MAX_FAVORITE_MODELS = 50;
 
-/** Which events may alert the user (title flash, desktop notification, sound). */
+/**
+ * Which events may alert the user. Kept per channel: `notificationTriggers` for
+ * an open tab (title flash, pop-up, sound), `pushTriggers` for Web Push.
+ */
 export interface NotificationTriggers {
 	/** A chat reply finished while you weren't looking at it. */
 	replies: boolean;
@@ -66,7 +69,10 @@ export interface UserSettings {
 	sidebarOpen: boolean;
 	/** Starred models as encoded refs (`providerId/modelId`), in starring order. */
 	favoriteModels: string[];
+	/** Alerts an open Chatty tab raises. */
 	notificationTriggers: NotificationTriggers;
+	/** Pushes the server sends while Chatty is closed; until set, these follow `notificationTriggers`. */
+	pushTriggers: NotificationTriggers;
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -77,5 +83,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 	timeFormat: 'auto',
 	sidebarOpen: true,
 	favoriteModels: [],
-	notificationTriggers: DEFAULT_NOTIFICATION_TRIGGERS
+	notificationTriggers: DEFAULT_NOTIFICATION_TRIGGERS,
+	pushTriggers: DEFAULT_NOTIFICATION_TRIGGERS
 };

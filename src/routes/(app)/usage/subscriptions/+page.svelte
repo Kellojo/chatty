@@ -105,11 +105,6 @@
 			</Card.Content>
 		</Card.Root>
 	{:else}
-		<p class="text-sm text-muted-foreground">
-			Your fixed-price plans (Claude, Codex, …), synced from your coding environments. Dollar values
-			are API list prices for comparison; you are not billed per token.
-		</p>
-
 		<!-- Plan limits -->
 		{#if subs.accounts.length > 0}
 			<section class="flex flex-col gap-3" aria-labelledby="limits-heading">

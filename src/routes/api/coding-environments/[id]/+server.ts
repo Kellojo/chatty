@@ -16,7 +16,7 @@ import {
 import { T3ClientError } from '$lib/server/t3/client.js';
 import {
 	environmentPatchSchema,
-	probeRemoteEnvironmentId,
+	identifyEnvironment,
 	rejectDuplicateEnvironment,
 	resolveEnvironmentConnection
 } from '$lib/server/t3/input.js';
@@ -38,7 +38,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	let remoteEnvironmentId: string | null | undefined;
 	if (newBaseUrl) {
 		rejectDuplicateEnvironment(db, user.id, { baseUrl: newBaseUrl }, existing.id);
-		remoteEnvironmentId = await probeRemoteEnvironmentId(newBaseUrl);
+		remoteEnvironmentId = await identifyEnvironment(newBaseUrl);
 		rejectDuplicateEnvironment(
 			db,
 			user.id,

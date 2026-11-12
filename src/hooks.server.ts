@@ -10,7 +10,7 @@ import { getDb } from '$lib/server/db/index.js';
 import { failRunningAgentRuns } from '$lib/server/db/repo/agent-runs.js';
 import { finalizeInterruptedMessages } from '$lib/server/db/repo/messages.js';
 import { failRunningProxyRequests } from '$lib/server/db/repo/proxy-requests.js';
-import { startDailyJobs, startHourlyJobs } from '$lib/server/jobs.js';
+import { startDailyJobs, startHourlyJobs, startSnoozeWaker } from '$lib/server/jobs.js';
 import { createLogger } from '$lib/server/logger.js';
 import { reconcileMemoryFts } from '$lib/server/memory/fts.js';
 import { startPushDispatcher } from '$lib/server/push/dispatcher.js';
@@ -60,6 +60,7 @@ if (!building) {
 	startAgentScheduler(getDb());
 	startDailyJobs(getDb());
 	startHourlyJobs(getDb());
+	startSnoozeWaker(getDb());
 	startCodingEnvironmentSync(getDb());
 	resumeCodingTasks(getDb());
 	registerShutdownHandlers();

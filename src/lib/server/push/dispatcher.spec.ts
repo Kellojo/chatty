@@ -150,6 +150,15 @@ describe('push dispatcher', () => {
 		expect(sender).not.toHaveBeenCalled();
 	});
 
+	it('uses the push triggers, which can differ from the tab triggers', async () => {
+		subscribe(db, 'u1', 1);
+		setUserSetting(db, 'u1', 'notificationTriggers', { replies: true });
+		setUserSetting(db, 'u1', 'pushTriggers', { replies: false });
+		const c = createConversation(db, 'u1');
+		await dispatcher.handle('u1', { type: 'chat.message_completed', conversationId: c.id });
+		expect(sender).not.toHaveBeenCalled();
+	});
+
 	it('holds a notice while you are at Chatty and pushes it once you step away', async () => {
 		subscribe(db, 'u1', 1);
 		const c = createConversation(db, 'u1');

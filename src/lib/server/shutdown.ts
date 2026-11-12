@@ -2,7 +2,7 @@ import { stopAllAgentRuns } from './agents/runner.js';
 import { stopAgentScheduler } from './agents/scheduler.js';
 import { abortStreamAndWait, listActiveStreamIds } from './chat/streams.js';
 import { closeDb } from './db/index.js';
-import { stopDailyJobs, stopHourlyJobs } from './jobs.js';
+import { stopDailyJobs, stopHourlyJobs, stopSnoozeWaker } from './jobs.js';
 import { createLogger } from './logger.js';
 import { closeAllMcpClients } from './mcp/pool.js';
 import { stopPushDispatcher } from './push/dispatcher.js';
@@ -23,6 +23,7 @@ export function drainForShutdown(): Promise<void> {
 		stopAgentScheduler();
 		stopDailyJobs();
 		stopHourlyJobs();
+		stopSnoozeWaker();
 		stopPushDispatcher();
 		stopCodingEnvironmentSync();
 		// Coding agents run remotely and must keep going; only detach from them.

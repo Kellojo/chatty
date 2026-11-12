@@ -87,6 +87,7 @@ beforeEach(() => {
 describe('POST /api/coding-environments', () => {
 	it('creates an environment below the per-user limit', async () => {
 		seed(MAX_CODING_ENVIRONMENTS_PER_USER - 1);
+		remoteIds.set('http://t3.test', 'env-1');
 		const res = await post(body);
 		expect(res.status).toBe(201);
 		expect(listCodingEnvironments(getDb(), 'u1')).toHaveLength(MAX_CODING_ENVIRONMENTS_PER_USER);
@@ -121,6 +122,16 @@ describe('POST /api/coding-environments', () => {
 		expect(listCodingEnvironments(getDb(), 'u1')).toHaveLength(1);
 	});
 
+	it('rejects a server it cannot reach, since it cannot tell whether it is a duplicate', async () => {
+		remoteIds.set('http://devbox.tailnet.test', 'env-1');
+		expect((await post({ ...body, baseUrl: 'http://devbox.tailnet.test' })).status).toBe(201);
+		// Offline second URL of the same server: its id is unknown, so it isn't saved.
+		const res = await post({ ...body, baseUrl: 'http://100.64.0.1:3773' });
+		expect(res.status).toBe(400);
+		expect(res.body.message).toMatch(/Couldn't reach this T3 Code server/);
+		expect(listCodingEnvironments(getDb(), 'u1')).toHaveLength(1);
+	});
+
 	it('allows different servers', async () => {
 		remoteIds.set('http://a.test', 'env-a');
 		remoteIds.set('http://b.test', 'env-b');
@@ -143,6 +154,17 @@ describe('PATCH /api/coding-environments/[id]', () => {
 		expect(listCodingEnvironments(getDb(), 'u1').find((e) => e.id === b.id)?.base_url).toBe(
 			'http://b.test'
 		);
+	});
+
+	it('rejects moving an environment to a URL it cannot reach', async () => {
+		const a = createCodingEnvironment(getDb(), 'u1', {
+			name: 'A',
+			baseUrl: 'http://a.test',
+			token: 't'
+		});
+		const res = await patch(a.id, { baseUrl: 'http://offline.test', token: 'new' });
+		expect(res.status).toBe(400);
+		expect(listCodingEnvironments(getDb(), 'u1')[0]?.base_url).toBe('http://a.test');
 	});
 
 	it('still allows editing an environment without moving it', async () => {
