@@ -6,6 +6,7 @@
 import { MAX_HISTORY_IMPORT, type CodingHistoryThread } from '$lib/coding-environments.js';
 import type { Db } from '../db/index.js';
 import {
+	countThreadCodingConversations,
 	importCodingConversation,
 	listDismissedThreadIds,
 	listLinkedThreadIds,
@@ -18,6 +19,7 @@ import { T3ClientError } from './client.js';
 import { ensureFollower } from './follower.js';
 import {
 	MAX_IMPORTS_PER_PASS,
+	MAX_THREAD_CONVERSATIONS_PER_ENV,
 	isCurrentEnvironment,
 	loadShell,
 	parseImportableThread,
@@ -110,7 +112,58 @@ export async function importHistoryThreads(
 ): Promise<string[]> {
 	const wanted = new Set(threadIds.slice(0, MAX_HISTORY_IMPORT));
 	const threads = (await loadHistory(db, env)).filter((t) => wanted.has(t.threadId));
-	// Synchronous from here on; threads linked during the await above are skipped.
+	return importThreads(db, env, threads);
+}
+
+/**
+ * The threads a bulk import brings in, from `history` (newest first): live
+ * ones only (archived and dismissed threads stay a deliberate, manual pick),
+ * and no more open (unsettled) ones than `room`, the newest winning. Settled
+ * threads don't count against the cap, as in the periodic sync.
+ */
+export function bulkImportSelection(
+	history: readonly HistoryThread[],
+	room: number
+): { threads: HistoryThread[]; skipped: number } {
+	const threads: HistoryThread[] = [];
+	let open = 0;
+	let skipped = 0;
+	for (const thread of history) {
+		if (thread.archived || thread.dismissed) continue;
+		if (!thread.settled && open >= room) {
+			skipped++;
+			continue;
+		}
+		if (!thread.settled) open++;
+		threads.push(thread);
+	}
+	return { threads, skipped };
+}
+
+/**
+ * Imports every past live thread of `env` at once (used right after it's
+ * connected). `skipped` counts open threads left out by the per-environment
+ * cap; they can still be imported by hand later.
+ */
+export async function importAllHistoryThreads(
+	db: Db,
+	env: CodingEnvironmentRow
+): Promise<{ imported: number; skipped: number }> {
+	const history = await loadHistory(db, env);
+	const room = MAX_THREAD_CONVERSATIONS_PER_ENV - countThreadCodingConversations(db, env.id);
+	const { threads, skipped } = bulkImportSelection(history, Math.max(0, room));
+	return { imported: importThreads(db, env, threads).length, skipped };
+}
+
+/**
+ * Creates conversations for `threads` and starts loading their history.
+ * Synchronous, so threads linked by someone else meanwhile are skipped.
+ */
+function importThreads(
+	db: Db,
+	env: CodingEnvironmentRow,
+	threads: readonly HistoryThread[]
+): string[] {
 	const imported = threads.flatMap((thread) => {
 		const conversationId = importCodingConversation(db, {
 			userId: env.user_id,

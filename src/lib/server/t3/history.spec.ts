@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { HistoryThread } from './history.js';
 
 vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
@@ -8,7 +9,7 @@ const { openDatabase } = await import('../db/index.js');
 const conversations = await import('../db/repo/conversations.js');
 const coding = await import('../db/repo/coding-conversations.js');
 const { createCodingEnvironment } = await import('../db/repo/coding-environments.js');
-const { historyThreads } = await import('./history.js');
+const { bulkImportSelection, historyThreads } = await import('./history.js');
 
 const thread = (overrides: Record<string, unknown> = {}) => ({
 	id: 't1',
@@ -67,6 +68,47 @@ describe('historyThreads', () => {
 			dismissed: new Set(['dismissed'])
 		});
 		expect(result.map((t) => [t.threadId, t.dismissed])).toEqual([['dismissed', true]]);
+	});
+});
+
+describe('bulkImportSelection', () => {
+	const item = (threadId: string, overrides: Partial<HistoryThread> = {}): HistoryThread => ({
+		threadId,
+		projectId: 'p1',
+		projectTitle: 'Chatty',
+		title: threadId,
+		providerInstanceId: 'codex',
+		model: 'gpt-5',
+		runtimeMode: 'full-access',
+		workspaceMode: 'local',
+		branch: null,
+		status: 'idle',
+		settled: false,
+		pinned: false,
+		visitedAt: 0,
+		createdAt: 0,
+		updatedAt: 0,
+		archived: false,
+		dismissed: false,
+		...overrides
+	});
+
+	it('skips archived and dismissed threads', () => {
+		const { threads, skipped } = bulkImportSelection(
+			[item('live'), item('archived', { archived: true }), item('gone', { dismissed: true })],
+			10
+		);
+		expect(threads.map((t) => t.threadId)).toEqual(['live']);
+		expect(skipped).toBe(0);
+	});
+
+	it('caps open threads at the room left, newest first, but not settled ones', () => {
+		const { threads, skipped } = bulkImportSelection(
+			[item('a'), item('b', { settled: true }), item('c'), item('d')],
+			2
+		);
+		expect(threads.map((t) => t.threadId)).toEqual(['a', 'b', 'c']);
+		expect(skipped).toBe(1);
 	});
 });
 

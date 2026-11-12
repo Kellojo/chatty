@@ -453,13 +453,17 @@ export function importCodingConversation(
 	})();
 }
 
-/** Number of not-deleted coding conversations on `environmentId` that have a remote thread. */
+/**
+ * Number of open (not deleted or settled) coding conversations on
+ * `environmentId` that have a remote thread.
+ */
 export function countThreadCodingConversations(db: Db, environmentId: string): number {
 	const row = db
 		.prepare(
 			`SELECT COUNT(*) AS n FROM coding_conversations cc
 			 JOIN conversations c ON c.id = cc.conversation_id
-			 WHERE c.deleted_at IS NULL AND cc.thread_id IS NOT NULL AND cc.environment_id = ?`
+			 WHERE c.deleted_at IS NULL AND c.settled_at IS NULL
+			   AND cc.thread_id IS NOT NULL AND cc.environment_id = ?`
 		)
 		.get(environmentId) as { n: number };
 	return row.n;
