@@ -189,3 +189,54 @@ describe('Sidebar row states', () => {
 		}
 	}
 });
+
+describe('Sidebar paging', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('keeps rows paged in by scrolling when the first page is refreshed', async () => {
+		const base = [conv('a', 'First'), conv('b', 'Second')];
+		const older = [
+			conv('c', 'Third', { updatedAt: now - 30 * 86_400_000 }),
+			conv('d', 'Fourth', { updatedAt: now - 31 * 86_400_000 })
+		];
+		const requests: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (!url.startsWith('/api/conversations?')) return new Response('{}', { status: 404 });
+				requests.push(url);
+				// The refetched range shows a row renamed since it was first paged in.
+				const rows = url.includes('limit=')
+					? [older[0], { ...older[1], title: 'Fourth, renamed' }]
+					: older;
+				return new Response(JSON.stringify({ conversations: rows, hasMore: false }));
+			})
+		);
+		const props = {
+			user: { name: 'Ada Lovelace', email: 'ada@example.com', image: null, role: 'user' },
+			conversations: base,
+			hasMore: true,
+			unreadIds: [],
+			settledCount: 0,
+			autoSettleDays: 14,
+			onclose: () => {},
+			onshowshortcuts: () => {}
+		};
+		const screen = render(Sidebar, props);
+		const row = (id: string) => screen.container.querySelector(`[data-conversation-id="${id}"]`);
+		await vi.waitFor(() => expect(row('d')).not.toBeNull());
+		expect(requests).toEqual(['/api/conversations?offset=2']);
+
+		// A sidebar refresh: same first page, new array.
+		await screen.rerender({ ...props, conversations: base.map((c) => ({ ...c })) });
+		expect(row('c')).not.toBeNull();
+		await vi.waitFor(() => expect(row('d')?.textContent).toContain('Fourth, renamed'));
+		expect(requests).toEqual([
+			'/api/conversations?offset=2',
+			'/api/conversations?offset=2&limit=2'
+		]);
+	});
+});

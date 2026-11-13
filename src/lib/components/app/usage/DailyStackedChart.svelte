@@ -10,6 +10,7 @@
 		valueFormat = (v: number) => v.toLocaleString(),
 		axisFormat,
 		emptyText = 'Nothing recorded in this period.',
+		summary,
 		class: className = 'max-h-[240px] min-h-[240px]'
 	}: {
 		/** One row per day: `day` (YYYY-MM-DD) plus a numeric value per series key. */
@@ -21,6 +22,8 @@
 		axisFormat?: (value: number) => string;
 		/** Shown instead of the chart when every value is zero (no fake 0–1 scale). */
 		emptyText?: string;
+		/** What the chart shows, for screen readers (the bars themselves aren't readable). */
+		summary?: string;
 		/** Height classes for the chart container. */
 		class?: string;
 	} = $props();
@@ -44,7 +47,8 @@
 		const widest = Math.max(formatAxis(max).length, formatAxis(max / 2).length);
 		return {
 			top: 4,
-			right: 4,
+			// Room for the last day's centred x label, which sits over the edge bar.
+			right: 16,
 			left: Math.max(24, Math.ceil(widest * 6.5) + 10),
 			bottom: 20
 		};
@@ -62,6 +66,7 @@
 {#if isEmpty}
 	<p class="py-3 text-sm text-muted-foreground">{emptyText}</p>
 {:else}
+	{#if summary}<p class="sr-only">{summary}</p>{/if}
 	<div bind:clientWidth={width}>
 		<Chart.Container {config} class={cn('w-full', className)}>
 			<BarChart

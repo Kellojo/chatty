@@ -1,18 +1,13 @@
 ---
 name: research-topic
 title: Research topic
-description: Research a topic with web search and fetches, cross-check sources, and produce a cited summary of findings.
-triggers:
-  - keyword: 'research'
-  - intent: 'research a topic'
-  - intent: 'find out about'
-when: Use when the user asks to research, investigate, or gather current information about a topic from the web.
+description: "Research a topic on the web: search, cross-check sources, and write a cited summary. Use when the user wants current or verified information, not a quick answer from memory."
 tools:
   - web_search
   - fetch
 enabled: true
 source: bundled
-version: '1.0.0'
+version: '1.1.0'
 author: ai-chat
 ---
 

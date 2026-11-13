@@ -35,6 +35,8 @@ export interface StartAgentRunInput {
 	trigger: 'schedule' | 'http' | 'manual' | 'event';
 	userId: string;
 	instructions?: string;
+	/** The API key that started an HTTP run, for its usage statistics. */
+	apiKeyId?: string;
 }
 
 export interface StartedAgentRun {
@@ -122,7 +124,8 @@ export async function startAgentRun(
 		agentId: agent.id,
 		userId: input.userId,
 		trigger: input.trigger,
-		conversationId: conversation.id
+		conversationId: conversation.id,
+		apiKeyId: input.apiKeyId
 	});
 	// Exists before the first turn, so the run's tools always have their sandbox.
 	ensureAgentWorkspace(agent.id, run.id);

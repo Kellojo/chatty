@@ -5,19 +5,27 @@ import {
 	activateBranch,
 	activeLeafId,
 	branchesFor,
+	compareMessageParts,
 	createMessage,
 	deleteBranch,
 	deleteMessage,
 	extractText,
 	finalizeInterruptedMessages,
+	getMessage,
+	getMessageMeta,
+	insertMessageBefore,
 	listMessages,
 	listMessagesFrom,
 	listMessagesAfter,
 	listMessagesPage,
 	listLatestMessages,
+	MAX_PARTIAL_SAVE_INTERVAL_MS,
+	partialSaveIntervalMs,
+	reopenMessage,
 	toPublic,
 	toPublicWithBranches,
-	updateMessage
+	updateMessage,
+	updateMessageParts
 } from './messages.js';
 
 let db: Db;
@@ -117,6 +125,140 @@ describe('messages repo', () => {
 		const done = updateMessage(db, m.id, { status: 'complete' });
 		expect(done!.content_text).toBe('streamed answer');
 		expect(ftsMatches('streamed')).toBe(1);
+	});
+
+	it('updateMessageParts saves a partial message in place, and nothing else', () => {
+		const ftsMatches = (term: string) =>
+			db.prepare('SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?').all(term).length;
+		const m = createMessage(db, {
+			conversationId,
+			role: 'assistant',
+			parts: [],
+			status: 'partial'
+		});
+		const parts = JSON.stringify([{ type: 'text', text: 'streamed answer' }]);
+		expect(updateMessageParts(db, m.id, parts)).toBe(true);
+		expect(getMessage(db, m.id)).toMatchObject({ parts, content_text: '', status: 'partial' });
+		expect(ftsMatches('streamed')).toBe(0);
+
+		updateMessage(db, m.id, { status: 'complete' });
+		// Settled: its final parts win over a late snapshot.
+		expect(updateMessageParts(db, m.id, '[]')).toBe(false);
+		expect(getMessage(db, m.id)!.parts).toBe(parts);
+		expect(updateMessageParts(db, 'nope', '[]')).toBe(false);
+	});
+
+	it('reopenMessage makes a settled message partial again, keeping its text', () => {
+		const m = createMessage(db, {
+			conversationId,
+			role: 'assistant',
+			parts: [{ type: 'text', text: 'so far' }],
+			status: 'failed',
+			error: 'boom'
+		});
+		expect(reopenMessage(db, m.id)).toBe(true);
+		expect(getMessage(db, m.id)).toMatchObject({
+			status: 'partial',
+			error: null,
+			content_text: 'so far'
+		});
+		expect(reopenMessage(db, 'nope')).toBe(false);
+	});
+
+	it('reads a message without its parts, or compares them in place', () => {
+		const m = createMessage(db, {
+			conversationId,
+			role: 'assistant',
+			parts: [{ type: 'text', text: 'hi' }],
+			status: 'failed',
+			error: 'boom',
+			createdAt: 5
+		});
+		expect(getMessageMeta(db, m.id)).toEqual({
+			id: m.id,
+			conversation_id: conversationId,
+			role: 'assistant',
+			status: 'failed',
+			error: 'boom',
+			created_at: 5,
+			parent_id: null
+		});
+		expect(getMessageMeta(db, 'nope')).toBeUndefined();
+
+		expect(compareMessageParts(db, m.id, conversationId, m.parts)).toEqual({
+			status: 'failed',
+			error: 'boom',
+			partsEqual: true
+		});
+		expect(compareMessageParts(db, m.id, conversationId, '[]')?.partsEqual).toBe(false);
+		expect(compareMessageParts(db, m.id, 'other', m.parts)).toBeUndefined();
+	});
+
+	it('createMessage and insertMessageBefore return the row as stored', () => {
+		const usage = {
+			providerId: 'p',
+			modelId: 'm',
+			inputTokens: 1,
+			outputTokens: 2,
+			totalTokens: 3,
+			latencyMs: null,
+			costUsd: null
+		};
+		const first = createMessage(db, { conversationId, role: 'user', parts: [] });
+		const reply = createMessage(db, {
+			conversationId,
+			role: 'assistant',
+			parts: [{ type: 'text', text: 'answer' }],
+			status: 'failed',
+			error: 'boom',
+			usage,
+			createdAt: 7
+		});
+		expect(first).toEqual(getMessage(db, first.id));
+		expect(reply).toEqual(getMessage(db, reply.id));
+
+		const inserted = insertMessageBefore(db, reply.id, {
+			conversationId,
+			role: 'user',
+			parts: [{ type: 'text', text: 'between' }],
+			createdAt: 6
+		});
+		expect(inserted).toEqual(getMessage(db, inserted!.id));
+		expect(inserted!.parent_id).toBe(first.id);
+		expect(getMessage(db, reply.id)!.parent_id).toBe(inserted!.id);
+		expect(
+			insertMessageBefore(db, reply.id, { conversationId: 'other', role: 'user', parts: [] })
+		).toBeUndefined();
+	});
+
+	it('partialSaveIntervalMs spaces saves out as a message grows, up to a cap', () => {
+		expect(partialSaveIntervalMs(2_000, 500)).toBe(500);
+		expect(partialSaveIntervalMs(16 * 1024, 1000)).toBe(1000);
+		const mid = partialSaveIntervalMs(100_000, 1000);
+		expect(mid).toBeGreaterThan(2000);
+		expect(mid).toBeLessThan(4000);
+		expect(partialSaveIntervalMs(400_000, 1000)).toBeGreaterThanOrEqual(5000);
+		expect(partialSaveIntervalMs(5_000_000, 1000)).toBe(MAX_PARTIAL_SAVE_INTERVAL_MS);
+	});
+
+	it('updateMessage returns the row as stored', () => {
+		const m = createMessage(db, { conversationId, role: 'assistant', parts: [] });
+		const usage = {
+			providerId: 'p',
+			modelId: 'm',
+			inputTokens: 3,
+			outputTokens: 4,
+			totalTokens: 7,
+			latencyMs: 5,
+			costUsd: null
+		};
+		const updated = updateMessage(db, m.id, {
+			parts: [{ type: 'text', text: 'answer' }],
+			usage
+		});
+		expect(updated).toEqual(getMessage(db, m.id));
+		expect(updateMessage(db, m.id, { error: 'x', usage: null })).toEqual(getMessage(db, m.id));
+		expect(updateMessage(db, 'nope', { status: 'complete' })).toBeUndefined();
 	});
 
 	it('extractText joins only text parts', () => {
@@ -273,6 +415,31 @@ describe('message tree', () => {
 		expect(branches.get(m.a2c.id)).toEqual({ index: 1, count: 2, ids: [m.a2b.id, m.a2c.id] });
 		const pub = toPublicWithBranches(db, conversationId, listMessages(db, conversationId));
 		expect(pub.map((p) => p.branch?.count ?? 1)).toEqual([1, 1, 2, 2]);
+	});
+
+	it('reports root and nested sibling groups together, ordered by creation', () => {
+		const m = branched();
+		const r2 = createMessage(db, {
+			conversationId,
+			role: 'user',
+			parts: text('r2'),
+			parentId: null
+		});
+		const u2c = createMessage(db, {
+			conversationId,
+			role: 'user',
+			parts: text('u2c'),
+			parentId: m.a1.id
+		});
+		const branches = branchesFor(db, conversationId, [m.u1, r2, m.u2, u2c, m.a2b, m.a1]);
+		expect(branches.get(m.u1.id)).toEqual({ index: 0, count: 2, ids: [m.u1.id, r2.id] });
+		expect(branches.get(r2.id)).toEqual({ index: 1, count: 2, ids: [m.u1.id, r2.id] });
+		const u2Group = [m.u2.id, m.u2b.id, u2c.id];
+		expect(branches.get(m.u2.id)).toEqual({ index: 0, count: 3, ids: u2Group });
+		expect(branches.get(u2c.id)).toEqual({ index: 2, count: 3, ids: u2Group });
+		expect(branches.get(m.a2b.id)).toEqual({ index: 0, count: 2, ids: [m.a2b.id, m.a2c.id] });
+		expect(branches.has(m.a1.id)).toBe(false);
+		expect(branchesFor(db, conversationId, [{ id: 'nope' }]).size).toBe(0);
 	});
 
 	it('pages through the active path only', () => {

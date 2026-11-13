@@ -1,8 +1,12 @@
 <script lang="ts">
 	import ChatView from '$lib/components/app/ChatView.svelte';
+	import { pickerModelGroups, syncModelCatalog } from '$lib/state/model-catalog.svelte.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	const groups = $derived(pickerModelGroups(data.modelCatalog));
+	$effect.pre(() => syncModelCatalog(data.modelCatalog));
 </script>
 
 {#key data.conversation.id}
@@ -10,7 +14,7 @@
 		conversation={data.conversation}
 		initialMessages={data.messages}
 		hasOlderMessages={data.hasOlderMessages}
-		groups={data.groups}
+		{groups}
 		mappings={data.mappings}
 		defaultModel={data.defaultModel}
 		sttModel={data.sttModel}

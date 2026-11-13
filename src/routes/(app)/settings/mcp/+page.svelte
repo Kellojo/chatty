@@ -1,5 +1,11 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { page } from '$app/state';
+	import * as Tabs from '$lib/components/ui/tabs/index.js';
+	import McpUsageStats from '$lib/components/app/settings/McpUsageStats.svelte';
+	import { DEFAULT_USAGE_PERIOD, type UsagePeriod } from '$lib/components/app/usage/usage.js';
+	import McpUsageDialog from '$lib/components/app/settings/McpUsageDialog.svelte';
+	import { fadeWhenScrollable } from '$lib/fade-when-scrollable.js';
 	import { toast } from 'svelte-sonner';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -38,7 +44,9 @@
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import RowMenu, { type RowMenuItem } from '$lib/components/app/settings/RowMenu.svelte';
 	import { Badge } from '$lib/components/ui/badge/index.js';
-	import type { McpServerInfo } from '$lib/types.js';
+	import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
+	import { formatTimeAgo } from '$lib/datetime.js';
+	import type { McpServerInfo, McpServerUsageDetail } from '$lib/types.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -62,9 +70,15 @@
 					icon: PackageSearchIcon,
 					onSelect: () => setLoadMode(server, 'deferred')
 				};
-		if (server.builtin) return [test, loadMode];
+		const usage: RowMenuItem = {
+			label: 'View usage',
+			icon: ChartColumnIcon,
+			onSelect: () => openUsage(server)
+		};
+		if (server.builtin) return [usage, test, loadMode];
 		return [
 			{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(server) },
+			usage,
 			test,
 			loadMode,
 			'separator',
@@ -141,29 +155,6 @@
 				: editing
 					? {}
 					: { oauthClientSecret: null })
-		};
-	}
-
-	/**
-	 * Marks a scroll area while more content sits below the visible part, so it can fade
-	 * out at the bottom as a hint to scroll.
-	 */
-	function fadeWhenScrollable(el: HTMLElement) {
-		const update = () => {
-			const more = el.scrollHeight - el.scrollTop - el.clientHeight > 4;
-			el.toggleAttribute('data-more-below', more);
-		};
-		update();
-		const observer = new ResizeObserver(update);
-		observer.observe(el);
-		for (const child of el.children) observer.observe(child);
-		const mutations = new MutationObserver(update);
-		mutations.observe(el, { childList: true, subtree: true, attributes: true });
-		el.addEventListener('scroll', update, { passive: true });
-		return () => {
-			observer.disconnect();
-			mutations.disconnect();
-			el.removeEventListener('scroll', update);
 		};
 	}
 
@@ -347,16 +338,29 @@
 		}
 	}
 
-	async function toggleEnabled(server: McpServerInfo, enabled: boolean) {
+	/** Resolves to whether the change was saved (failures are toasted here). */
+	async function toggleEnabled(server: McpServerInfo, enabled: boolean): Promise<boolean> {
 		enabledOverride[server.id] = enabled;
 		try {
 			await api(`/api/mcp-servers/${server.id}`, 'PATCH', { enabled });
 			await invalidateAll();
+			return true;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to update server');
+			return false;
 		} finally {
 			delete enabledOverride[server.id];
 		}
+	}
+
+	async function disableFromUsage(server: McpServerInfo): Promise<boolean> {
+		const ok = await toggleEnabled(server, false);
+		if (ok) {
+			toast.success(`${server.name} turned off`, {
+				action: { label: 'Undo', onClick: () => void toggleEnabled(server, true) }
+			});
+		}
+		return ok;
 	}
 
 	async function setLoadMode(server: McpServerInfo, loadMode: McpServerInfo['loadMode']) {
@@ -382,6 +386,79 @@
 		} finally {
 			testBusyId = null;
 		}
+	}
+
+	let usageOpen = $state(false);
+	let usageServer = $state<McpServerInfo | null>(null);
+	let usageDetail = $state<McpServerUsageDetail | null>(null);
+
+	async function openUsage(server: McpServerInfo) {
+		usageServer = server;
+		usageDetail = null;
+		usageOpen = true;
+		try {
+			const res = await api(`/api/mcp-servers/${server.id}/usage`, 'GET');
+			const detail = (await res.json()) as McpServerUsageDetail;
+			// Ignore a late answer for a server whose usage is no longer shown.
+			if (usageServer?.id === server.id) usageDetail = detail;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not load usage');
+			usageOpen = false;
+		}
+	}
+
+	/** The usage line under a server: how much it was used, or that it sat idle. */
+	function usageLabel(server: McpServerInfo): string {
+		const usage = data.usage[server.id];
+		const window = `${data.usageWindowDays} days`;
+		if (!usage || usage.calls === 0) {
+			const last = usage?.lastUsedAt ? ` · last used ${formatTimeAgo(usage.lastUsedAt)}` : '';
+			return `Not used in the last ${window}${last}`;
+		}
+		const parts = [
+			`${plural(usage.calls, 'call')} in ${window}`,
+			plural(usage.users, 'user'),
+			...(usage.errors > 0 ? [`${failureRate(usage.calls, usage.errors)} failed`] : [])
+		];
+		if (usage.lastUsedAt) parts.push(`last used ${formatTimeAgo(usage.lastUsedAt)}`);
+		return parts.join(' · ');
+	}
+
+	function isUnused(server: McpServerInfo): boolean {
+		return !data.usage[server.id]?.calls;
+	}
+
+	const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+	const failureRate = (calls: number, errors: number) =>
+		`${Math.max(1, Math.round((errors / calls) * 100))}%`;
+
+	type Tab = 'servers' | 'statistics';
+	// The tab and the statistics period live in the URL, so a reload or a shared link keeps them.
+	const activeTab = $derived<Tab>(
+		page.url.searchParams.get('tab') === 'statistics' ? 'statistics' : 'servers'
+	);
+
+	/** This page with `updates` applied to its query (empty values drop the param). */
+	function navigate(updates: { tab?: Tab; period?: UsagePeriod }) {
+		// A throwaway copy for building one href, not reactive state.
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity
+		const params = new URLSearchParams(page.url.searchParams);
+		if (updates.tab) params.set('tab', updates.tab);
+		if (updates.period) params.set('period', updates.period);
+		if (params.get('tab') === 'servers') params.delete('tab');
+		if (params.get('period') === DEFAULT_USAGE_PERIOD) params.delete('period');
+		const qs = params.toString();
+		// The resolved path of this page plus its own query.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		void goto(`${resolve('/settings/mcp')}${qs ? `?${qs}` : ''}`, {
+			keepFocus: true,
+			noScroll: true,
+			replaceState: true
+		});
+	}
+
+	function selectTab(value: string) {
+		navigate({ tab: value === 'statistics' ? 'statistics' : 'servers' });
 	}
 
 	function openDelete(server: McpServerInfo) {
@@ -541,6 +618,15 @@
 					OAuth
 				</Badge>
 			{/if}
+			{#if enabled && isUnused(server)}
+				<Badge
+					variant="outline"
+					class="text-muted-foreground"
+					title="No tool calls in the last {data.usageWindowDays} days"
+				>
+					Unused
+				</Badge>
+			{/if}
 			{#if (loadModeOverride[server.id] ?? server.loadMode) === 'deferred'}
 				<Badge
 					variant="secondary"
@@ -557,6 +643,14 @@
 				{BUILTIN_PURPOSE[server.name]}
 			{/if}
 		{/snippet}
+		<!-- Above the row's stretched click target, so it opens the usage, not the edit dialog. -->
+		<button
+			type="button"
+			class="relative z-10 w-fit rounded-sm text-left text-xs text-muted-foreground hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+			onclick={() => openUsage(server)}
+		>
+			{usageLabel(server)}
+		</button>
 		{#snippet trailing()}
 			{#if testBusyId === server.id}
 				<span class="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
@@ -573,48 +667,74 @@
 	</SettingsListItem>
 {/snippet}
 
-<SettingsSection
-	title="Your servers"
-	description="Servers you've connected over HTTP, SSE or stdio."
-	flush
->
-	{#if customServers.length === 0}
-		<div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
-			<div
-				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
-			>
-				<BlocksIcon class="size-5" />
-			</div>
-			<div class="flex flex-col gap-1">
-				<p class="text-sm font-medium">No servers added yet</p>
-				<p class="text-sm text-muted-foreground">
-					Add a remote server over HTTP or run a local one over stdio.
-				</p>
-			</div>
-			<Button size="sm" onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
-		</div>
-	{:else}
-		<ul class="divide-y divide-border/60" aria-label="Your MCP servers">
-			{#each customServers as server (server.id)}
-				{@render serverRow(server)}
-			{/each}
-		</ul>
-	{/if}
-</SettingsSection>
+<Tabs.Root value={activeTab} onValueChange={selectTab} class="gap-6">
+	<Tabs.List class="self-start">
+		<Tabs.Trigger value="servers"
+			><BlocksIcon class="size-4" aria-hidden="true" />Servers</Tabs.Trigger
+		>
+		<Tabs.Trigger value="statistics">
+			<ChartColumnIcon class="size-4" aria-hidden="true" />Statistics
+		</Tabs.Trigger>
+	</Tabs.List>
+	<Tabs.Content value="servers" class="flex flex-col gap-6">
+		{@render serverList()}
+	</Tabs.Content>
+	<Tabs.Content value="statistics">
+		<McpUsageStats
+			stats={data.stats}
+			period={data.stats.period}
+			servers={data.servers}
+			usage={data.usage}
+			onPeriodChange={(period) => navigate({ period })}
+			onShowServer={openUsage}
+		/>
+	</Tabs.Content>
+</Tabs.Root>
 
-{#if builtinServers.length > 0}
+{#snippet serverList()}
 	<SettingsSection
-		title="Built-in"
-		description="Tools that ship with Chatty. Turn off any you don't want models to use."
+		title="Your servers"
+		description="Servers you've connected over HTTP, SSE or stdio."
 		flush
 	>
-		<ul class="divide-y divide-border/60" aria-label="Built-in MCP servers">
-			{#each builtinServers as server (server.id)}
-				{@render serverRow(server)}
-			{/each}
-		</ul>
+		{#if customServers.length === 0}
+			<div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
+				<div
+					class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+				>
+					<BlocksIcon class="size-5" />
+				</div>
+				<div class="flex flex-col gap-1">
+					<p class="text-sm font-medium">No servers added yet</p>
+					<p class="text-sm text-muted-foreground">
+						Add a remote server over HTTP or run a local one over stdio.
+					</p>
+				</div>
+				<Button size="sm" onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
+			</div>
+		{:else}
+			<ul class="divide-y divide-border/60" aria-label="Your MCP servers">
+				{#each customServers as server (server.id)}
+					{@render serverRow(server)}
+				{/each}
+			</ul>
+		{/if}
 	</SettingsSection>
-{/if}
+
+	{#if builtinServers.length > 0}
+		<SettingsSection
+			title="Built-in"
+			description="Tools that ship with Chatty. Turn off any you don't want models to use."
+			flush
+		>
+			<ul class="divide-y divide-border/60" aria-label="Built-in MCP servers">
+				{#each builtinServers as server (server.id)}
+					{@render serverRow(server)}
+				{/each}
+			</ul>
+		</SettingsSection>
+	{/if}
+{/snippet}
 
 <Dialog.Root bind:open={addOpen}>
 	<!-- Tall with OAuth settings: scroll inside rather than off screen. -->
@@ -811,3 +931,13 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+<McpUsageDialog
+	bind:open={usageOpen}
+	serverName={usageServer?.name ?? ''}
+	detail={usageDetail}
+	lastUsedAt={usageServer ? (data.usage[usageServer.id]?.lastUsedAt ?? null) : null}
+	onDisable={usageServer && (enabledOverride[usageServer.id] ?? usageServer.enabled)
+		? () => disableFromUsage(usageServer!)
+		: undefined}
+/>

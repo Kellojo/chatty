@@ -49,14 +49,16 @@ function seed() {
 function listEvent(user: User, query = '') {
 	return {
 		locals: { user, session: null } as unknown as App.Locals,
-		url: new URL(`http://localhost/usage/requests${query}`)
+		url: new URL(`http://localhost/usage/requests${query}`),
+		depends: () => {}
 	} as never;
 }
 
 function detailEvent(user: User, id: string) {
 	return {
 		locals: { user, session: null } as unknown as App.Locals,
-		params: { id }
+		params: { id },
+		depends: () => {}
 	} as never;
 }
 

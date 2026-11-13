@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createTwoFilesPatch } from 'diff';
 import matter from 'gray-matter';
@@ -7,6 +8,7 @@ import { parseFrontmatter } from '../frontmatter.js';
 import type { Db } from '../db/index.js';
 import { recordMemoryWrite } from '../db/repo/memory-writes.js';
 import { publishServerEvent } from '../events/bus.js';
+import { createLogger } from '../logger.js';
 import { deleteMemoryFts, upsertMemoryFts } from './fts.js';
 import { ftsScope, bundleDir, normalizeConceptPath, resolveConceptAbs } from './paths.js';
 import type { MemoryScope } from './paths.js';
@@ -121,39 +123,120 @@ interface IndexEntry {
 	description: string;
 }
 
-function regenIndex(dirAbs: string): void {
+const log = createLogger('memory');
+
+function isMissing(e: unknown): boolean {
+	return (e as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+const isConceptFile = (e: fs.Dirent) =>
+	e.isFile() && e.name.endsWith('.md') && e.name !== 'index.md';
+
+// Each bundle directory carries an index.md listing its concepts (part of the
+// OKF bundle layout, for people and tools browsing the files; see the memory
+// section of requirements.md). The app never reads it, and rebuilding it
+// re-reads every sibling concept, so rebuilds run off the write path:
+// debounced per directory (a consolidation run writes many concepts in a
+// burst) and serialized per directory so two rebuilds never interleave.
+const INDEX_DEBOUNCE_MS = 1000;
+const indexTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const indexRuns = new Map<string, Promise<void>>();
+
+async function regenIndex(dirAbs: string): Promise<void> {
+	let dirents: fs.Dirent[] = [];
+	try {
+		dirents = await fsp.readdir(dirAbs, { withFileTypes: true });
+	} catch (e) {
+		if (!isMissing(e)) throw e;
+	}
 	const entries: IndexEntry[] = [];
-	if (fs.existsSync(dirAbs)) {
-		for (const e of fs.readdirSync(dirAbs, { withFileTypes: true })) {
-			if (!e.isFile() || !e.name.endsWith('.md') || e.name === 'index.md') continue;
-			let title = e.name.slice(0, -'.md'.length);
-			let description = '';
-			try {
-				const parsed = parseFrontmatter(fs.readFileSync(path.join(dirAbs, e.name), 'utf8'));
-				const d = parsed.data as Record<string, unknown>;
-				if (typeof d.title === 'string' && d.title.trim()) title = d.title;
-				if (typeof d.description === 'string') description = d.description;
-			} catch {
-				// fall back to filename title
-			}
-			entries.push({ file: e.name, title, description });
+	for (const e of dirents) {
+		if (!isConceptFile(e)) continue;
+		let title = e.name.slice(0, -'.md'.length);
+		let description = '';
+		try {
+			const parsed = parseFrontmatter(await fsp.readFile(path.join(dirAbs, e.name), 'utf8'));
+			const d = parsed.data as Record<string, unknown>;
+			if (typeof d.title === 'string' && d.title.trim()) title = d.title;
+			if (typeof d.description === 'string') description = d.description;
+		} catch {
+			// fall back to filename title
 		}
+		entries.push({ file: e.name, title, description });
 	}
 	const indexAbs = path.join(dirAbs, 'index.md');
 	if (entries.length === 0) {
-		if (fs.existsSync(indexAbs)) fs.unlinkSync(indexAbs);
+		await fsp.rm(indexAbs, { force: true });
 		return;
 	}
 	entries.sort((a, b) => a.file.localeCompare(b.file));
 	const lines = entries.map((e) => `- [${e.title}](${e.file}) — ${e.description}`);
-	fs.writeFileSync(indexAbs, `# Index\n\n${lines.join('\n')}\n`);
+	await fsp.writeFile(indexAbs, `# Index\n\n${lines.join('\n')}\n`);
+}
+
+function runIndex(dirAbs: string): void {
+	clearTimeout(indexTimers.get(dirAbs));
+	indexTimers.delete(dirAbs);
+	const run: Promise<void> = (indexRuns.get(dirAbs) ?? Promise.resolve())
+		.then(() => regenIndex(dirAbs))
+		.catch((e: unknown) => {
+			// The directory was pruned meanwhile: nothing left to index.
+			if (isMissing(e)) return;
+			log.warn('Failed to rebuild memory index.md', {
+				dir: dirAbs,
+				error: e instanceof Error ? e.message : String(e)
+			});
+		})
+		.finally(() => {
+			if (indexRuns.get(dirAbs) === run) indexRuns.delete(dirAbs);
+		});
+	indexRuns.set(dirAbs, run);
+}
+
+function scheduleIndex(dirAbs: string): void {
+	clearTimeout(indexTimers.get(dirAbs));
+	const timer = setTimeout(() => runIndex(dirAbs), INDEX_DEBOUNCE_MS);
+	timer.unref?.();
+	indexTimers.set(dirAbs, timer);
+}
+
+/** Runs pending index.md rebuilds now and waits for all of them (tests, shutdown). */
+export async function flushMemoryIndexes(): Promise<void> {
+	for (const dir of [...indexTimers.keys()]) runIndex(dir);
+	await Promise.all(indexRuns.values());
+}
+
+/**
+ * After a concept left `dirAbs`: when no concepts remain, drop its index.md
+ * and prune the emptied directories right away (one readdir, so the tree never
+ * shows an empty folder); otherwise schedule the index rebuild.
+ */
+function settleDirAfterRemoval(dirAbs: string, rootAbs: string): void {
+	let dirents: fs.Dirent[];
+	try {
+		dirents = fs.readdirSync(dirAbs, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	if (dirents.some(isConceptFile)) {
+		scheduleIndex(dirAbs);
+		return;
+	}
+	fs.rmSync(path.join(dirAbs, 'index.md'), { force: true });
+	pruneEmptyDirs(dirAbs, rootAbs);
+	// A rebuild already in flight may write index.md again; let a later one clear it.
+	if (indexRuns.has(dirAbs)) scheduleIndex(dirAbs);
 }
 
 function pruneEmptyDirs(startAbs: string, rootAbs: string): void {
 	let dir = startAbs;
 	while (dir !== rootAbs && dir.startsWith(rootAbs + path.sep)) {
-		if (!fs.existsSync(dir) || fs.readdirSync(dir).length > 0) return;
-		fs.rmdirSync(dir);
+		try {
+			if (fs.readdirSync(dir).length > 0) return;
+			fs.rmdirSync(dir);
+		} catch {
+			return; // gone already, or refilled meanwhile
+		}
 		dir = path.dirname(dir);
 	}
 }
@@ -206,7 +289,7 @@ export function writeConcept(
 		author: audit.author,
 		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
 	});
-	regenIndex(path.dirname(target.abs));
+	scheduleIndex(path.dirname(target.abs));
 	upsertMemoryFts(db, ftsScope(scope, userId), target.relPath, fm, input.body);
 	return { scope, path: target.relPath, frontmatter: fm, body: input.body };
 }
@@ -241,8 +324,7 @@ export function deleteConcept(
 		author: audit.author,
 		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
 	});
-	regenIndex(path.dirname(target.abs));
-	pruneEmptyDirs(path.dirname(target.abs), bundleDir(scope, userId));
+	settleDirAfterRemoval(path.dirname(target.abs), bundleDir(scope, userId));
 	deleteMemoryFts(db, ftsScope(scope, userId), target.relPath);
 	return true;
 }
@@ -263,9 +345,8 @@ export function moveConcept(
 	fs.mkdirSync(path.dirname(to.abs), { recursive: true });
 	fs.writeFileSync(to.abs, raw);
 	fs.unlinkSync(from.abs);
-	regenIndex(path.dirname(from.abs));
-	pruneEmptyDirs(path.dirname(from.abs), bundleDir(scope, userId));
-	regenIndex(path.dirname(to.abs));
+	settleDirAfterRemoval(path.dirname(from.abs), bundleDir(scope, userId));
+	scheduleIndex(path.dirname(to.abs));
 	const concept = parseConceptFile(scope, to.relPath, raw);
 	const scopeTag = ftsScope(scope, userId);
 	deleteMemoryFts(db, scopeTag, from.relPath);
@@ -334,6 +415,18 @@ export function listTree(scope: MemoryScope, userId: string): MemoryTreeNode[] {
 		return nodes;
 	};
 	return build(root, '');
+}
+
+/**
+ * Number of concepts in a bundle, counted from the FTS index rather than by
+ * walking the files: it holds one row per concept, kept in step by every
+ * write/move/delete here and reconciled with the files at startup.
+ */
+export function countConcepts(db: Db, scope: MemoryScope, userId: string): number {
+	const row = db
+		.prepare('SELECT count(*) AS n FROM memory_fts WHERE scope = ?')
+		.get(ftsScope(scope, userId)) as { n: number };
+	return row.n;
 }
 
 export function listConceptPaths(scope: MemoryScope, userId: string, prefix?: string): string[] {

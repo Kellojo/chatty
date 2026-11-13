@@ -1,4 +1,7 @@
 <script lang="ts" module>
+	import { isRunOpen, latestRunReply } from '$lib/agent-run-tool.js';
+	import type { AgentRun } from '$lib/types.js';
+
 	/** Agent names by id, shared by every row so a chat looks each agent up once. */
 	// A plain cache of promises: nothing renders from the map itself.
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -10,10 +13,44 @@
 			pending = fetch(`/api/agents/${encodeURIComponent(id)}`)
 				.then((r) => (r.ok ? r.json() : null))
 				.then((b: { agent?: { name?: string } } | null) => b?.agent?.name ?? null)
-				.catch(() => null);
+				.catch(() => {
+					// Offline or similar: let a later row try again.
+					nameCache.delete(id);
+					return null;
+				});
 			nameCache.set(id, pending);
 		}
 		return pending;
+	}
+
+	type RunState = { run: AgentRun; reply: string | null; question: string | null };
+
+	/**
+	 * Runs that have ended, by id. An ended run never changes again (only one
+	 * waiting on the user resumes), so reopening a chat shows it without asking
+	 * the server once more.
+	 */
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a plain cache, nothing renders from it
+	const endedRuns = new Map<string, RunState>();
+
+	/** The run as the server has it now; null when it can't be loaded. */
+	async function loadRun(id: string): Promise<RunState | null> {
+		const ended = endedRuns.get(id);
+		if (ended) return ended;
+		const res = await fetch(`/api/agent-runs/${encodeURIComponent(id)}`).catch(() => null);
+		if (!res?.ok) return null;
+		const body = (await res.json().catch(() => null)) as {
+			run?: AgentRun;
+			messages?: { role: string; parts: unknown[] }[];
+		} | null;
+		if (!body?.run) return null;
+		const latest =
+			body.run.status === 'running'
+				? { text: null, question: null }
+				: latestRunReply(body.messages ?? []);
+		const state = { run: body.run, reply: latest.text, question: latest.question };
+		if (!isRunOpen(body.run.status)) endedRuns.set(id, state);
+		return state;
 	}
 </script>
 
@@ -34,8 +71,6 @@
 		AGENT_RUN_PHASE_LABEL,
 		AGENT_RUN_PHASE_SHORT_LABEL,
 		agentRunPhase,
-		isRunOpen,
-		latestRunReply,
 		parseAgentRunOutput,
 		replyPreview,
 		describeRefusal,
@@ -45,7 +80,6 @@
 	import { now } from '$lib/state/now.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
 	import { toolFailed } from '$lib/tool-meta.js';
-	import type { AgentRun } from '$lib/types.js';
 	import { cn } from '$lib/utils.js';
 
 	/**
@@ -240,18 +274,9 @@
 
 	async function refreshRun(id: string) {
 		const seq = ++refreshSeq;
-		const res = await fetch(`/api/agent-runs/${encodeURIComponent(id)}`).catch(() => null);
-		if (!res?.ok || seq !== refreshSeq) return;
-		const body = (await res.json().catch(() => null)) as {
-			run: AgentRun;
-			messages: { role: string; parts: unknown[] }[];
-		} | null;
-		if (!body || seq !== refreshSeq) return;
-		const latest =
-			body.run.status === 'running'
-				? { text: null, question: null }
-				: latestRunReply(body.messages);
-		live = { run: body.run, reply: latest.text, question: latest.question, source: 'fetched' };
+		const state = await loadRun(id);
+		if (!state || seq !== refreshSeq) return;
+		live = { ...state, source: 'fetched' };
 	}
 
 	// Check (and keep checking) whether the run an "already running" refusal points at is still busy.
@@ -260,14 +285,11 @@
 		if (!id) return;
 		let cancelled = false;
 		const check = async () => {
-			const res = await fetch(`/api/agent-runs/${encodeURIComponent(id)}`).catch(() => null);
-			const body = res?.ok
-				? ((await res.json().catch(() => null)) as { run?: AgentRun } | null)
-				: null;
+			const state = await loadRun(id);
 			// A run that is gone (deleted, or not this user's) has nothing left to watch.
 			if (cancelled) return;
-			busyStillOpen = body?.run ? isRunOpen(body.run.status) : false;
-			busyStartedAt = body?.run?.startedAt ?? null;
+			busyStillOpen = state ? isRunOpen(state.run.status) : false;
+			busyStartedAt = state?.run.startedAt ?? null;
 		};
 		untrack(check);
 		const offEvent = onServerEvent((event) => {

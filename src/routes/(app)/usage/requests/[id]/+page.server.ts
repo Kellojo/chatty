@@ -3,10 +3,12 @@ import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getProxyRequest, toPublic } from '$lib/server/db/repo/proxy-requests.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
+import { PROXY_REQUESTS_KEY } from '$lib/load-keys.js';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals, params }) => {
+export const load: PageServerLoad = ({ locals, params, depends }) => {
 	const user = requireUser(locals);
+	depends(PROXY_REQUESTS_KEY);
 	const isAdmin = (user as { role?: string }).role === 'admin';
 	const db = getDb();
 	const row = getProxyRequest(db, params.id);

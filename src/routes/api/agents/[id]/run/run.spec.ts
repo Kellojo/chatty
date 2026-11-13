@@ -87,7 +87,8 @@ beforeEach(() => {
 			status: 'running',
 			error: null,
 			started_at: Date.now(),
-			ended_at: null
+			ended_at: null,
+			api_key_id: null
 		};
 		return { run, done: Promise.resolve(run) };
 	});
@@ -151,7 +152,7 @@ describe('POST /api/agents/[id]/run auth matrix', () => {
 
 	it('runs an owned agent via api key as an http trigger', async () => {
 		const agent = seedAgent('u1');
-		const { rawKey } = await createApiKey(getDb(), { userId: 'u1', label: 'k' });
+		const { row, rawKey } = await createApiKey(getDb(), { userId: 'u1', label: 'k' });
 		const res = await call<{ run: import('$lib/types.js').AgentRun }>(POST, {
 			user: null,
 			params: { id: agent.id },
@@ -163,7 +164,8 @@ describe('POST /api/agents/[id]/run auth matrix', () => {
 			agentId: agent.id,
 			trigger: 'http',
 			userId: 'u1',
-			instructions: undefined
+			instructions: undefined,
+			apiKeyId: row.id
 		});
 	});
 

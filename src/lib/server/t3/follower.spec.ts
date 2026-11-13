@@ -73,6 +73,7 @@ const {
 
 let conversationId: string;
 let follower: ReturnType<typeof ensureFollower>;
+let codingEnv: ReturnType<typeof createCodingEnvironment>;
 
 beforeEach(() => {
 	vi.useFakeTimers();
@@ -83,11 +84,11 @@ beforeEach(() => {
 	db.prepare(
 		`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u1', 'u1', 'u1@example.com', 0, 0, 0, 'user')`
 	).run();
-	const env = createCodingEnvironment(db, 'u1', {
+	const env = (codingEnv = createCodingEnvironment(db, 'u1', {
 		name: 'T3',
 		baseUrl: 'http://t3.test',
 		token: 'token'
-	});
+	}));
 	conversationId = createConversation(db, 'u1', { kind: 'chat', mode: 'agent', title: 'Task' }).id;
 	coding.createCodingConversation(db, {
 		conversationId,
@@ -111,6 +112,17 @@ afterEach(() => {
 
 const seconds = (s: number) => vi.advanceTimersByTimeAsync(s * 1000);
 const lastError = () => coding.getCodingConversation(getDb(), conversationId)?.last_error;
+
+/** Counts the writes of each message's parts from here on. */
+const countPartsWrites = () => {
+	const db = getDb();
+	db.exec(`CREATE TEMP TABLE IF NOT EXISTS parts_writes (id TEXT);
+		DELETE FROM parts_writes;
+		CREATE TEMP TRIGGER IF NOT EXISTS count_parts_writes AFTER UPDATE OF parts ON main.messages
+		BEGIN INSERT INTO parts_writes VALUES (new.id); END;`);
+	return (id: string) =>
+		(db.prepare('SELECT COUNT(*) AS n FROM parts_writes WHERE id = ?').get(id) as { n: number }).n;
+};
 
 describe('CodingFollower reconnects', () => {
 	it('gives up after repeated failed connects and surfaces the error', async () => {
@@ -606,6 +618,161 @@ describe('CodingFollower omitted output', () => {
 		expect(fetched).toBe(10);
 		expect(peak).toBe(4);
 	});
+
+	const storedParts = async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		return getMessage(getDb(), 'm1:reply')?.parts ?? '';
+	};
+
+	it('keeps outputs an earlier follower fetched when a new one renders the reply', async () => {
+		failConnect = false;
+		await follower.follow();
+		vi.spyOn(lastConnection!, 'call').mockResolvedValue({ item: { output: 'file.txt' } });
+		lastConnection!.streams[0].onValue(outputSnapshot(1));
+		await seconds(2);
+		expect(await storedParts()).toContain('file.txt');
+
+		// A restart, idle stop or re-follow: the fetched output is no longer in memory,
+		// and T3 can't serve it again.
+		follower.stop();
+		const next = ensureFollower({ conversationId, userId: 'u1', env: codingEnv, threadId: 't1' });
+		await next.follow();
+		// The socket may be the same one, already spied on.
+		const call = vi.spyOn(lastConnection!, 'call').mockRejectedValue(new Error('gone'));
+		call.mockClear();
+		const writes = countPartsWrites();
+		lastConnection!.streams.at(-1)!.onValue(outputSnapshot(2));
+		await seconds(2);
+
+		expect(await storedParts()).toContain('file.txt');
+		expect(await storedParts()).not.toContain('Output not loaded');
+		expect(writes('m1:reply')).toBe(0);
+		// Nothing left to fetch either.
+		expect(
+			call.mock.calls.filter((c) => (c as unknown[])[0] === 'orchestration.getTurnItem')
+		).toHaveLength(0);
+	});
+
+	it('saves the outputs of a run once its fetches are done, not per batch', async () => {
+		failConnect = false;
+		await follower.follow();
+		const conn = lastConnection!;
+		vi.spyOn(conn, 'call').mockImplementation((async (tag: string, payload: { itemId: string }) => {
+			if (tag !== 'orchestration.getTurnItem') return {};
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			return { item: { output: `out-${payload.itemId}` } };
+		}) as never);
+		const writes = countPartsWrites();
+		const base = runSnapshot('completed', 1);
+		conn.streams[0].onValue({
+			...base,
+			projection: {
+				...base.projection,
+				turnItems: Array.from({ length: 10 }, (_, i) => ({
+					id: `c${i}`,
+					runId: 'run-1',
+					ordinal: i + 1,
+					type: 'command_execution',
+					status: 'completed',
+					outputOmitted: true
+				}))
+			}
+		});
+		await seconds(3);
+
+		const parts = await storedParts();
+		for (let i = 0; i < 10; i++) expect(parts).toContain(`out-c${i}`);
+		expect(writes('m1:reply')).toBe(1);
+	});
+});
+
+describe('CodingFollower save throttle', () => {
+	const BIG = 200_000;
+	const snapshotWith = (sequence: number, status: string, items: Record<string, unknown>[]) => {
+		const snapshot = runSnapshot(status, sequence);
+		snapshot.projection.turnItems = items as never[];
+		return snapshot;
+	};
+	const text = (chars: number, done = false) => ({
+		id: 'a1',
+		runId: 'run-1',
+		ordinal: 1,
+		type: 'assistant_message',
+		status: done ? 'completed' : 'running',
+		streaming: !done,
+		text: 'x'.repeat(chars)
+	});
+	const command = (status: string) => ({
+		id: 'c1',
+		runId: 'run-1',
+		ordinal: 2,
+		type: 'command_execution',
+		status,
+		input: 'ls',
+		output: 'file.txt'
+	});
+	const setup = async () => {
+		const { getMessage } = await import('../db/repo/messages.js');
+		const writes = countPartsWrites();
+		failConnect = false;
+		await follower.follow();
+		return {
+			stream: lastConnection!.streams[0],
+			writes: () => writes('m1:reply'),
+			reply: () => getMessage(getDb(), 'm1:reply')!
+		};
+	};
+
+	it('saves a large streaming reply less often, and in full once its run ends', async () => {
+		const { stream, writes, reply } = await setup();
+		stream.onValue(snapshotWith(1, 'running', [text(BIG)]));
+		await seconds(1);
+		const first = writes();
+		expect(first).toBeGreaterThanOrEqual(1);
+		for (let i = 1; i <= 3; i++) {
+			stream.onValue(snapshotWith(1 + i, 'running', [text(BIG + i * 100)]));
+			await seconds(1);
+		}
+		// A small reply would have been saved every second.
+		expect(writes()).toBe(first);
+		await seconds(3);
+		expect(writes()).toBe(first + 1);
+		expect(reply().parts).toContain('x'.repeat(BIG + 300));
+
+		stream.onValue(snapshotWith(10, 'completed', [text(BIG + 500, true)]));
+		await seconds(1);
+		expect(reply().status).toBe('complete');
+		expect(reply().parts).toContain('x'.repeat(BIG + 500));
+	});
+
+	it('saves a new step of a large reply after the base interval', async () => {
+		const { stream, writes, reply } = await setup();
+		stream.onValue(snapshotWith(1, 'running', [text(BIG)]));
+		await seconds(1);
+		const first = writes();
+		stream.onValue(snapshotWith(2, 'running', [text(BIG), command('running')]));
+		await seconds(1.5);
+		expect(writes()).toBe(first + 1);
+		expect(reply().parts).toContain('"toolCallId":"c1"');
+		expect(reply().parts).toContain('"state":"input-available"');
+
+		// The tool call completing is a change of state too.
+		stream.onValue(snapshotWith(3, 'running', [text(BIG), command('completed')]));
+		await seconds(1.5);
+		expect(writes()).toBe(first + 2);
+		expect(reply().parts).toContain('file.txt');
+		expect(reply().status).toBe('partial');
+	});
+
+	it('saves a small streaming reply about every second, as before', async () => {
+		const { stream, writes, reply } = await setup();
+		for (let i = 1; i <= 4; i++) {
+			stream.onValue(snapshotWith(i, 'running', [text(100 * i)]));
+			await seconds(1.1);
+		}
+		expect(writes()).toBeGreaterThanOrEqual(3);
+		expect(reply().parts).toContain('x'.repeat(400));
+	});
 });
 
 describe('CodingFollower change size', () => {
@@ -760,6 +927,27 @@ describe('CodingFollower subagent status', () => {
 			type: 'chat.messages.updated',
 			conversationId
 		});
+	});
+
+	it('keeps saving the reply as it changes, and writes it again when its row is removed', async () => {
+		const { listMessages, deleteMessage } = await import('../db/repo/messages.js');
+		const reply = () => listMessages(getDb(), conversationId).find((m) => m.role === 'assistant');
+		failConnect = false;
+		await follower.follow();
+		const stream = lastConnection!.streams[0];
+
+		stream.onValue(subagentSnapshot('completed', 'Reading routes'));
+		await seconds(2);
+		expect(reply()?.parts).toContain('Reading routes');
+		stream.onValue(subagentSnapshot('completed', 'Writing the report'));
+		await seconds(2);
+		expect(reply()?.parts).toContain('Writing the report');
+
+		deleteMessage(getDb(), reply()!.id);
+		stream.onValue(subagentSnapshot('completed', 'Done'));
+		await seconds(2);
+		expect(reply()?.parts).toContain('Done');
+		expect(reply()?.status).toBe('complete');
 	});
 });
 

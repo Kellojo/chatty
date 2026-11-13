@@ -80,7 +80,8 @@ function event(path: string) {
 	return {
 		locals: { user: admin, session: null } as unknown as App.Locals,
 		url: new URL(`http://localhost${path}`),
-		params: {}
+		params: {},
+		depends: () => {}
 	} as never;
 }
 

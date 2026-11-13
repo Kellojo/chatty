@@ -1,17 +1,11 @@
 ---
 name: google-maps-route
 title: Google Maps route
-description: Build a Google Maps directions link from an ordered list of locations (multi-stop route) and present it to the user.
-triggers:
-  - intent: 'create a route'
-  - intent: 'directions between places'
-  - intent: 'plan a trip with stops'
-  - keyword: 'route'
-when: Use when the user provides several locations (cities, addresses, landmarks) and wants a route or directions linking them in Google Maps.
+description: Build a clickable Google Maps directions link for a route through two or more places (cities, addresses, landmarks), optionally walking, cycling or transit.
 tools: []
 enabled: true
 source: bundled
-version: '1.0.0'
+version: '1.1.0'
 author: ai-chat
 ---
 

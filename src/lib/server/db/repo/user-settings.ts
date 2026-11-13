@@ -34,49 +34,33 @@ export function deleteUserSetting(db: Db, userId: string, key: string): void {
 	db.prepare('DELETE FROM user_settings WHERE user_id = ? AND key = ?').run(userId, key);
 }
 
-export function getTheme(db: Db, userId: string): Theme {
-	const theme = getUserSetting<string>(db, userId, 'theme');
-	return THEMES.includes(theme as Theme) ? (theme as Theme) : DEFAULT_USER_SETTINGS.theme;
+// Each setting's stored value (undefined when unset), validated, with its default.
+
+function parseTheme(value: unknown): Theme {
+	return THEMES.includes(value as Theme) ? (value as Theme) : DEFAULT_USER_SETTINGS.theme;
 }
 
-function getSuggestionList(
-	db: Db,
-	userId: string,
-	key: 'suggestions' | 'codingSuggestions'
-): string[] {
-	const suggestions = getUserSetting<string[]>(db, userId, key);
-	if (!Array.isArray(suggestions)) return DEFAULT_USER_SETTINGS[key];
-	return suggestions.filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+function parseSuggestionList(value: unknown, key: 'suggestions' | 'codingSuggestions'): string[] {
+	if (!Array.isArray(value)) return DEFAULT_USER_SETTINGS[key];
+	return value.filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
 }
 
-export function getSuggestions(db: Db, userId: string): string[] {
-	return getSuggestionList(db, userId, 'suggestions');
-}
-
-export function getCodingSuggestions(db: Db, userId: string): string[] {
-	return getSuggestionList(db, userId, 'codingSuggestions');
-}
-
-export function getGlobalInstructions(db: Db, userId: string): string {
-	const value = getUserSetting<string>(db, userId, 'globalInstructions');
+function parseGlobalInstructions(value: unknown): string {
 	if (typeof value !== 'string') return DEFAULT_USER_SETTINGS.globalInstructions;
 	return value.trim();
 }
 
-export function getTimeFormat(db: Db, userId: string): TimeFormat {
-	const value = getUserSetting<string>(db, userId, 'timeFormat');
+function parseTimeFormat(value: unknown): TimeFormat {
 	return TIME_FORMATS.includes(value as TimeFormat)
 		? (value as TimeFormat)
 		: DEFAULT_USER_SETTINGS.timeFormat;
 }
 
-export function getSidebarOpen(db: Db, userId: string): boolean {
-	const value = getUserSetting<boolean>(db, userId, 'sidebarOpen');
+function parseSidebarOpen(value: unknown): boolean {
 	return typeof value === 'boolean' ? value : DEFAULT_USER_SETTINGS.sidebarOpen;
 }
 
-export function getFavoriteModels(db: Db, userId: string): string[] {
-	const value = getUserSetting<unknown>(db, userId, 'favoriteModels');
+function parseFavoriteModels(value: unknown): string[] {
 	if (!Array.isArray(value)) return DEFAULT_USER_SETTINGS.favoriteModels;
 	return [...new Set(value.filter((v): v is string => typeof v === 'string' && v.includes('/')))];
 }
@@ -91,6 +75,37 @@ function readTriggers(value: unknown, base: NotificationTriggers): NotificationT
 		}
 	}
 	return triggers;
+}
+
+export function getTheme(db: Db, userId: string): Theme {
+	return parseTheme(getUserSetting<unknown>(db, userId, 'theme'));
+}
+
+export function getSuggestions(db: Db, userId: string): string[] {
+	return parseSuggestionList(getUserSetting<unknown>(db, userId, 'suggestions'), 'suggestions');
+}
+
+export function getCodingSuggestions(db: Db, userId: string): string[] {
+	return parseSuggestionList(
+		getUserSetting<unknown>(db, userId, 'codingSuggestions'),
+		'codingSuggestions'
+	);
+}
+
+export function getGlobalInstructions(db: Db, userId: string): string {
+	return parseGlobalInstructions(getUserSetting<unknown>(db, userId, 'globalInstructions'));
+}
+
+export function getTimeFormat(db: Db, userId: string): TimeFormat {
+	return parseTimeFormat(getUserSetting<unknown>(db, userId, 'timeFormat'));
+}
+
+export function getSidebarOpen(db: Db, userId: string): boolean {
+	return parseSidebarOpen(getUserSetting<unknown>(db, userId, 'sidebarOpen'));
+}
+
+export function getFavoriteModels(db: Db, userId: string): string[] {
+	return parseFavoriteModels(getUserSetting<unknown>(db, userId, 'favoriteModels'));
 }
 
 /** What an open tab alerts about. */
@@ -135,16 +150,25 @@ export function updatePushTriggers(
 	setUserSetting(db, userId, 'pushTriggers', { ...getPushTriggers(db, userId), ...patch });
 }
 
+/** All of the user's settings, read in one query. */
 export function getUserSettings(db: Db, userId: string): UserSettings {
+	const rows = db
+		.prepare('SELECT key, value FROM user_settings WHERE user_id = ?')
+		.all(userId) as UserSettingRow[];
+	const stored = new Map(rows.map((row) => [row.key, JSON.parse(row.value) as unknown]));
+	const notificationTriggers = readTriggers(
+		stored.get('notificationTriggers'),
+		DEFAULT_USER_SETTINGS.notificationTriggers
+	);
 	return {
-		theme: getTheme(db, userId),
-		suggestions: getSuggestions(db, userId),
-		codingSuggestions: getCodingSuggestions(db, userId),
-		globalInstructions: getGlobalInstructions(db, userId),
-		timeFormat: getTimeFormat(db, userId),
-		sidebarOpen: getSidebarOpen(db, userId),
-		favoriteModels: getFavoriteModels(db, userId),
-		notificationTriggers: getNotificationTriggers(db, userId),
-		pushTriggers: getPushTriggers(db, userId)
+		theme: parseTheme(stored.get('theme')),
+		suggestions: parseSuggestionList(stored.get('suggestions'), 'suggestions'),
+		codingSuggestions: parseSuggestionList(stored.get('codingSuggestions'), 'codingSuggestions'),
+		globalInstructions: parseGlobalInstructions(stored.get('globalInstructions')),
+		timeFormat: parseTimeFormat(stored.get('timeFormat')),
+		sidebarOpen: parseSidebarOpen(stored.get('sidebarOpen')),
+		favoriteModels: parseFavoriteModels(stored.get('favoriteModels')),
+		notificationTriggers,
+		pushTriggers: readTriggers(stored.get('pushTriggers'), notificationTriggers)
 	};
 }

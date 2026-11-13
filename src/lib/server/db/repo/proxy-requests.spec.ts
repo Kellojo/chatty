@@ -3,6 +3,7 @@ import type { ServerEvent } from '$lib/types.js';
 import { subscribeAllServerEvents } from '../../events/bus.js';
 import { openDatabase, type Db } from '../index.js';
 import {
+	countProxyRequests,
 	createProxyRequest,
 	failRunningProxyRequests,
 	finalizeProxyRequest,
@@ -34,6 +35,15 @@ function logRequest(userId: string, requestedModel: string, stream = false) {
 }
 
 describe('proxy-requests repo', () => {
+	it('counts all requests and the running ones', () => {
+		expect(countProxyRequests(db)).toEqual({ total: 0, running: 0 });
+		const done = logRequest('u1', 'fast');
+		logRequest('u1', 'fast');
+		logRequest('u2', 'slow');
+		finalizeProxyRequest(db, done.id, { status: 'complete', httpStatus: 200, latencyMs: 1 });
+		expect(countProxyRequests(db)).toEqual({ total: 3, running: 2 });
+	});
+
 	it('creates a running row and finalizes it with usage and cost', () => {
 		const row = logRequest('u1', 'fast');
 		expect(row.status).toBe('running');

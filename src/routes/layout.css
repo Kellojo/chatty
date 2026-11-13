@@ -297,6 +297,29 @@
 }
 
 /*
+ * An hourglass turning over now and then, for "waiting" marks: it holds while the sand
+ * runs, then flips. The icon is symmetric, so each half turn ends where the next begins.
+ */
+@utility hourglass-flip {
+	animation: hourglass-flip 3s infinite;
+
+	@media (prefers-reduced-motion: reduce) {
+		animation: none;
+	}
+}
+
+@keyframes hourglass-flip {
+	0%,
+	80% {
+		transform: rotate(0deg);
+		animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+	}
+	100% {
+		transform: rotate(180deg);
+	}
+}
+
+/*
  * Paints an element's strip out to its scroll area's side edges, for full-width bars inside a
  * padded column: the box shadows carry the background and a top border sideways without adding
  * overflow, and the clip-path keeps them off whatever sits above and below.

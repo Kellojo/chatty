@@ -10,7 +10,7 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { getSidebarState } from './sidebar-state.svelte.js';
 	import { decodeModelRef, encodeModelRef } from '$lib/model-ref.js';
-	import type { Agent, Conversation, ModelMapping, ModelsByProvider } from '$lib/types.js';
+	import type { Agent, Conversation, ModelMapping, PickerModelGroup } from '$lib/types.js';
 	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
 	import type { CodingBrowserActivity } from '$lib/coding-preview.js';
 	import { canCreatePullRequest } from '$lib/coding-task-details.js';
@@ -32,7 +32,7 @@
 		onupdated
 	}: {
 		conversation: Conversation;
-		groups: ModelsByProvider[];
+		groups: PickerModelGroup[];
 		mappings?: ModelMapping[];
 		defaultModel?: { providerId: string; modelId: string } | null;
 		personas?: Agent[];

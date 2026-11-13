@@ -6,6 +6,7 @@ import {
 	copyThreadRecords,
 	emptyThreadState,
 	hasRunningSubagent,
+	hasUnloadedOutput,
 	itemsOfType,
 	MAX_PART_CHARS,
 	MAX_RUN_PARTS,
@@ -15,6 +16,7 @@ import {
 	replyMessageId,
 	runItems,
 	runItemsEvicted,
+	storedOutputs,
 	streamItemRun,
 	summarizeTask,
 	TRUNCATED_MARKER
@@ -507,6 +509,91 @@ describe('renderRun', () => {
 });
 
 describe('summarizeTask', () => {
+	describe('waiting on background work', () => {
+		const done = run({ status: 'completed', completedAt: '2026-11-07T10:05:00.000Z' });
+		const statusOf = (projection: Record<string, unknown>) => {
+			const state = emptyThreadState();
+			applyStreamItem(state, snapshot({ thread: { id: 't1' }, runs: [done], ...projection }));
+			return summarizeTask(state).status;
+		};
+
+		it('waits on awaited or delegated tasks of the active provider thread', () => {
+			const provider = (tasks: unknown[], id = 'p1') => ({ id, pendingBackgroundTasks: tasks });
+			expect(
+				statusOf({
+					thread: { id: 't1', activeProviderThreadId: 'p1' },
+					providerThreads: [provider([{ taskId: 'x', kind: 'background_task' }])]
+				})
+			).toBe('waiting');
+			expect(
+				statusOf({ providerThreads: [provider([{ taskId: 'x', kind: 'command', awaited: true }])] })
+			).toBe('waiting');
+			// A plain command left running doesn't hold the thread.
+			expect(statusOf({ providerThreads: [provider([{ taskId: 'x', kind: 'command' }])] })).toBe(
+				'idle'
+			);
+			// Only the active provider thread counts.
+			expect(
+				statusOf({
+					thread: { id: 't1', activeProviderThreadId: 'p2' },
+					providerThreads: [provider([{ taskId: 'x', kind: 'subagent' }]), provider([], 'p2')]
+				})
+			).toBe('idle');
+		});
+
+		it('waits on a watched pull request until it merges', () => {
+			const pr = (extra: Record<string, unknown> = {}) => ({
+				host: 'github.com',
+				repository: 'a/b',
+				number: 1,
+				watch: {},
+				...extra
+			});
+			expect(statusOf({ thread: { id: 't1', pullRequests: [pr()] } })).toBe('waiting');
+			expect(
+				statusOf({ thread: { id: 't1', pullRequests: [pr({ snapshot: { state: 'merged' } })] } })
+			).toBe('idle');
+			expect(statusOf({ thread: { id: 't1', pullRequests: [pr({ watch: undefined })] } })).toBe(
+				'idle'
+			);
+		});
+
+		it('waits on a tool call still at work after its run ended', () => {
+			const tool = (input: unknown) => ({
+				id: 'i1',
+				runId: 'run-1',
+				ordinal: 1,
+				type: 'dynamic_tool',
+				status: 'running',
+				input
+			});
+			expect(statusOf({ turnItems: [tool({})] })).toBe('waiting');
+			expect(statusOf({ turnItems: [tool({ persistent: true })] })).toBe('idle');
+		});
+
+		it('picks up provider thread updates from the stream', () => {
+			const state = emptyThreadState();
+			applyStreamItem(state, snapshot({ thread: { id: 't1' }, runs: [done] }));
+			expect(summarizeTask(state).status).toBe('idle');
+			const update = event(11, 'provider-thread.updated', {
+				id: 'p1',
+				pendingBackgroundTasks: [{ taskId: 'x', kind: 'subagent' }]
+			});
+			expect(streamItemRun(update, state)).toBeNull();
+			expect(applyStreamItem(state, update)).toBe(true);
+			expect(summarizeTask(state).status).toBe('waiting');
+		});
+
+		it('is still running while a run is active', () => {
+			expect(
+				statusOf({
+					runs: [run()],
+					thread: { id: 't1', pullRequests: [{ host: 'h', repository: 'r', number: 1, watch: {} }] }
+				})
+			).toBe('running');
+		});
+	});
+
 	it('stays running while a background subagent works after its run completed', () => {
 		const state = emptyThreadState();
 		const subagent = (status: string) => ({
@@ -811,5 +898,79 @@ describe('hasRunningSubagent', () => {
 			snapshot({ runs: [run({ status: 'completed' })], turnItems: [item('completed')] }, 11)
 		);
 		expect(hasRunningSubagent(state)).toBe(false);
+	});
+});
+
+describe('stored outputs', () => {
+	const state = emptyThreadState();
+	applyStreamItem(
+		state,
+		snapshot({
+			runs: [run({ status: 'completed' })],
+			turnItems: [
+				{
+					id: 'c1',
+					runId: 'run-1',
+					ordinal: 1,
+					type: 'command_execution',
+					status: 'completed',
+					input: 'ls',
+					exitCode: 0,
+					outputOmitted: true
+				},
+				{
+					id: 'd1',
+					runId: 'run-1',
+					ordinal: 2,
+					type: 'dynamic_tool',
+					status: 'completed',
+					toolName: 'Read',
+					outputOmitted: true
+				},
+				{
+					id: 'c2',
+					runId: 'run-1',
+					ordinal: 3,
+					type: 'command_execution',
+					status: 'completed',
+					input: 'pwd',
+					outputOmitted: true
+				}
+			]
+		})
+	);
+	const render = (outputs: Map<string, string> = new Map()) =>
+		renderRun(state, state.runs.get('run-1')!, outputs);
+
+	it('tells when omitted output is not loaded', () => {
+		expect(hasUnloadedOutput(render())).toBe(true);
+		expect(
+			hasUnloadedOutput(
+				render(
+					new Map([
+						['c1', 'a'],
+						['d1', 'b'],
+						['c2', 'c']
+					])
+				)
+			)
+		).toBe(false);
+	});
+
+	it('takes the outputs a stored reply holds, and renders the same parts with them', () => {
+		const fetched = new Map([
+			['c1', 'file.txt'],
+			['d1', 'contents']
+		]);
+		const storedParts = JSON.parse(JSON.stringify(render(fetched).map((e) => e.part)));
+		const found = storedOutputs(render(), storedParts);
+		// c2 was never loaded: its stored placeholder isn't taken for an output.
+		expect(found).toEqual(fetched);
+		expect(render(found).map((e) => e.part)).toEqual(storedParts);
+	});
+
+	it('finds nothing in a reply without parts', () => {
+		expect(storedOutputs(render(), null).size).toBe(0);
+		expect(storedOutputs(render(), []).size).toBe(0);
 	});
 });

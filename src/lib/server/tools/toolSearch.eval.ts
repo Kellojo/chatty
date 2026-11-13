@@ -58,7 +58,7 @@ const CASES: EvalCase[] = [
 	{
 		id: 'time',
 		prompt: 'What time is it in Tokyo right now?',
-		expect: ['now', 'convert', 'get_timezone']
+		expect: ['now', 'convert']
 	},
 	{
 		id: 'fetch',

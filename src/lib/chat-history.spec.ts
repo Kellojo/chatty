@@ -100,4 +100,33 @@ describe('reuseUnchanged', () => {
 		expect(merged).toEqual([b]);
 		expect(merged[0]).toBe(b);
 	});
+
+	it('reads a shown message once across reloads', () => {
+		let reads = 0;
+		const parts = [{ type: 'text', text: 'one' }];
+		const a = {
+			id: 'a',
+			role: 'assistant',
+			get parts() {
+				reads++;
+				return parts;
+			}
+		};
+		const current = [a];
+		expect(reuseUnchanged(current, [msg('a', 'one')])).toBe(current);
+		expect(reuseUnchanged(current, [msg('a', 'one')])).toBe(current);
+		expect(reuseUnchanged(current, [msg('a', 'one, edited')])[0].parts[0]).toEqual({
+			type: 'text',
+			text: 'one, edited'
+		});
+		expect(reads).toBe(1);
+	});
+
+	it('compares each new message by its own content', () => {
+		const a = msg('a', 'one');
+		const first = msg('a', 'two');
+		expect(reuseUnchanged([a], [first])[0]).toBe(first);
+		const second = msg('a', 'one');
+		expect(reuseUnchanged([a], [second])[0]).toBe(a);
+	});
 });

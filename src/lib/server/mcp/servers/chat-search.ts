@@ -6,7 +6,7 @@ import {
 	getConversation,
 	listConversationsSince,
 	MAX_SEARCH_PAGE_SIZE,
-	searchConversations
+	searchConversationsRanked
 } from '../../db/repo/conversations.js';
 import { listLatestMessages } from '../../db/repo/messages.js';
 import type { CallerContext } from '../types.js';
@@ -45,9 +45,8 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 		'search_chats',
 		{
 			description:
-				"Search the current user's chat conversations by title and message content, and/or list chats updated since a timestamp. Coding threads (T3 sessions) include a `coding` field: project, status (starting, running, awaiting_input, idle, failed, interrupted), provider, model, branch, pull request (and its state: open, draft, merged or closed), lines added/removed and any pending question or error. " +
-				'To show the user an overview of the results, reply with a ```chats fenced code block containing {"title":"optional","chats":[...]}, ' +
-				'where chats are result objects copied verbatim, each optionally with a one-line "summary" (no extra text inside the fence).',
+				"Search the user's chats by title and content, and/or list chats updated since a time. Any word can match and the best matches come first, so use a few distinctive keywords. Coding threads include a `coding` field (project, status, branch, PR, pending question…). " +
+				'To show an overview, reply with a ```chats fenced block of {"title":"optional","chats":[...]}: result objects verbatim, each optionally with a one-line "summary".',
 			inputSchema: {
 				query: z.string().optional(),
 				since: z
@@ -71,7 +70,7 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 			const n = Math.min(50, Math.max(1, Math.floor(limit ?? 10)));
 			const db = getDb();
 			const rows = q
-				? searchConversations(db, ctx.userId, q, {
+				? searchConversationsRanked(db, ctx.userId, q, {
 						// The since filter below runs after the search, so fetch more to filter.
 						limit: sinceMs !== null ? MAX_SEARCH_PAGE_SIZE : n
 					})

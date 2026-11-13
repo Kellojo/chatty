@@ -28,10 +28,10 @@ import { listMessagesPage, toPublicWithBranches } from '$lib/server/db/repo/mess
 import { getAgentRunByConversation } from '$lib/server/db/repo/agent-runs.js';
 import type { DispatchInfo } from '$lib/types.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
-import { listModelsGrouped } from '$lib/server/llm/registry.js';
+import { modelCatalogInfo } from '$lib/server/llm/model-catalog.js';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals, params }) => {
+export const load: PageServerLoad = ({ locals, params, isDataRequest }) => {
 	const user = locals.user;
 	if (!user) error(401, { message: 'Unauthorized' });
 	const db = getDb();
@@ -77,7 +77,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		dispatch,
 		messages: toPublicWithBranches(db, conversation.id, page.rows),
 		hasOlderMessages: page.hasOlder,
-		groups: listModelsGrouped(),
+		// The models themselves only on a full page load; see model-catalog.
+		modelCatalog: modelCatalogInfo(isDataRequest),
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		defaultModel,
 		sttModel,

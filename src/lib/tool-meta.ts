@@ -93,6 +93,7 @@ export function serverLabel(server: string): string {
 export const TOOL_META: Record<string, ToolMeta> = {
 	fetch: { label: 'Fetch URL', server: 'webfetch', kind: 'web', detail: 'url' },
 	now: { label: 'Current time', server: 'datetime', kind: 'time' },
+	// Removed tool; kept so past chats still label its calls.
 	get_timezone: { label: 'Get timezone', server: 'datetime', kind: 'time' },
 	format: { label: 'Format date', server: 'datetime', kind: 'time', detail: 'iso' },
 	convert: { label: 'Convert timezone', server: 'datetime', kind: 'time', detail: 'to' },

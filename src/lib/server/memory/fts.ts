@@ -30,10 +30,20 @@ export interface MemorySearchHit {
 	snippet: string;
 }
 
+/**
+ * Turns free text into an FTS5 MATCH expression: any-term (OR) matching, with
+ * joined words like `Pocket-ID` or `next.js` kept together as a phrase so their
+ * parts don't match on their own. Only letters and digits survive, so the
+ * result can never contain FTS5 syntax.
+ */
 function sanitizeQuery(query: string): string {
-	const tokens = query.match(/[a-zA-Z0-9]+/g) ?? [];
-	return tokens.map((t) => `"${t}"`).join(' OR ');
+	const tokens = query.match(/[\p{L}\p{M}\p{N}]+(?:[-.'’_/][\p{L}\p{M}\p{N}]+)*/gu) ?? [];
+	return tokens.map((t) => `"${t.replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ')}"`).join(' OR ');
 }
+
+// bm25 weights per column (scope, path, title, description, tags, body): a hit
+// in the title or tags says far more about a concept than one in its body.
+const BM25_WEIGHTS = '0.0, 0.0, 10.0, 5.0, 5.0, 1.0';
 
 // snippet() copies concept text verbatim, so the highlight markers are control
 // characters that can't appear in it, swapped for the real markup afterwards.
@@ -71,7 +81,7 @@ export function searchMemoryFts(
 				snippet(memory_fts, 5, ?, ?, '…', 24) AS snippet
 			FROM memory_fts
 			WHERE memory_fts MATCH ? AND scope IN (${placeholders})
-			ORDER BY bm25(memory_fts)
+			ORDER BY bm25(memory_fts, ${BM25_WEIGHTS})
 			LIMIT ?`
 		)
 		.all(MARK_OPEN, MARK_CLOSE, match, ...scopes, n) as Array<
@@ -82,6 +92,19 @@ export function searchMemoryFts(
 		snippet: renderSnippet(r.snippet, options.html === true),
 		tags: r.tags ? r.tags.split(' ').filter((t) => t.length > 0) : []
 	}));
+}
+
+export interface MemorySummary {
+	title: string;
+	description: string;
+}
+
+/** Titles and descriptions of every indexed concept in a scope, keyed by path. */
+export function memorySummaries(db: Db, scope: string): Map<string, MemorySummary> {
+	const rows = db
+		.prepare('SELECT path, title, description FROM memory_fts WHERE scope = ?')
+		.all(scope) as Array<MemorySummary & { path: string }>;
+	return new Map(rows.map((r) => [r.path, { title: r.title, description: r.description }]));
 }
 
 interface DiskEntry {

@@ -15,10 +15,19 @@ export const CODING_STATUS_STYLE: Record<
 		dot: 'bg-amber-500',
 		tone: 'text-amber-700 dark:text-amber-400'
 	},
+	// A slow breath, calmer than the working pulse: idle, but it picks up by itself.
+	waiting: {
+		label: 'Waiting',
+		dot: 'bg-muted-foreground animate-[pulse_3s_ease-in-out_infinite]',
+		tone: 'text-muted-foreground'
+	},
 	idle: { label: 'Idle', dot: 'bg-muted-foreground', tone: 'text-muted-foreground' },
 	failed: { label: 'Failed', dot: 'bg-destructive', tone: 'text-destructive' },
 	interrupted: { label: 'Interrupted', dot: 'bg-muted-foreground', tone: 'text-muted-foreground' }
 };
+
+/** What a waiting task's tooltip says it is doing. */
+export const WAITING_HINT = 'Waiting on background work. Resumes on its own.';
 
 export function isCodingTaskStatus(value: unknown): value is CodingTaskStatus {
 	return typeof value === 'string' && Object.hasOwn(CODING_STATUS_STYLE, value);

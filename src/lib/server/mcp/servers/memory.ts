@@ -9,8 +9,8 @@ import {
 	writeConcept,
 	type MemoryAuditInfo
 } from '../../memory/bundle.js';
-import { searchMemoryFts } from '../../memory/fts.js';
-import { normalizeConceptPath, type MemoryScope } from '../../memory/paths.js';
+import { memorySummaries, searchMemoryFts } from '../../memory/fts.js';
+import { ftsScope, normalizeConceptPath, type MemoryScope } from '../../memory/paths.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
 
@@ -54,8 +54,10 @@ function written(
 	};
 }
 
+/** Widget instructions, given once (create_concept); the other writes point at them. */
 const FENCE_HINT =
-	'Returns a widget item; to show the user what was remembered, end your reply with a ```memory fenced code block containing {"items":[...]} — the items from all memory writes this turn, verbatim.';
+	'Returns a widget item; to show what was remembered, end your reply with a ```memory fenced block of {"items":[...]}: the items of all memory writes this turn, verbatim.';
+const SAME_ITEM = 'Returns a ```memory widget item (see create_concept).';
 const pathSchema = z
 	.string()
 	.describe('Concept path, e.g. "people/john.md" (".md" is appended automatically if missing)');
@@ -78,7 +80,8 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'search_memory',
 		{
-			description: "Search long-term memory (the user's and the shared bundle) by full-text query",
+			description:
+				"Search long-term memory (the user's and the shared bundle) by keyword. Any word can match and results are ranked by relevance, so use a few distinctive keywords about one topic per call (e.g. 'pocket-id oauth'), and make separate calls for unrelated topics rather than one long mixed query. Matching is by word, not meaning: if nothing relevant comes back, call list_concepts and pick by title and description instead.",
 			inputSchema: { query: z.string(), limit: z.number().int().optional() }
 		},
 		async ({ query, limit }) => {
@@ -113,7 +116,8 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'list_concepts',
 		{
-			description: 'List memory concept paths, optionally under a directory prefix',
+			description:
+				'List memory concepts with their title and description, optionally under a directory prefix. Use it to find a concept by meaning when search_memory finds nothing that fits, e.g. a paraphrase or a question in another language.',
 			inputSchema: { prefix: z.string().optional(), scope: scopeSchema.optional() }
 		},
 		async ({ prefix, scope }) => {
@@ -123,8 +127,21 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 					return err('invalid prefix');
 				}
 			}
-			const paths = listConceptPaths(scope ?? 'user', ctx.userId, prefix);
-			return text(JSON.stringify(paths));
+			const bundleScope = scope ?? 'user';
+			const paths = listConceptPaths(bundleScope, ctx.userId, prefix);
+			const summaries = memorySummaries(getDb(), ftsScope(bundleScope, ctx.userId));
+			return text(
+				JSON.stringify(
+					paths.map((p) => {
+						const s = summaries.get(p);
+						return {
+							path: p,
+							...(s?.title ? { title: s.title } : {}),
+							...(s?.description ? { description: s.description } : {})
+						};
+					})
+				)
+			);
 		}
 	);
 
@@ -168,7 +185,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'update_concept',
 		{
-			description: `Update an existing memory concept (omitted fields keep their current values). ${FENCE_HINT}`,
+			description: `Update a memory concept; omitted fields keep their values. ${SAME_ITEM}`,
 			inputSchema: {
 				path: pathSchema,
 				title: z.string().optional(),
@@ -214,7 +231,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'delete_concept',
 		{
-			description: 'Delete a memory concept. Returns a ```memory widget item (see create_concept).',
+			description: `Delete a memory concept. ${SAME_ITEM}`,
 			inputSchema: { path: pathSchema, scope: scopeSchema.optional() }
 		},
 		async ({ path, scope }) => {

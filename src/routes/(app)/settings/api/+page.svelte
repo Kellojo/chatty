@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
@@ -24,6 +24,10 @@
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
+	import { formatSpend } from '$lib/formats.js';
+	import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
+	import ApiKeyUsageStats from '$lib/components/app/settings/ApiKeyUsageStats.svelte';
+	import { DEFAULT_USAGE_PERIOD, type UsagePeriod } from '$lib/components/app/usage/usage.js';
 	import type { ApiKey } from '$lib/types.js';
 	import type { PageData } from './$types';
 
@@ -171,6 +175,51 @@
 		}
 	}
 
+	/** The usage line under a key: its recent requests and spend, or that it sat idle. */
+	function usageLabel(key: ApiKey): string {
+		const usage = data.keyUsage[key.id];
+		const window = `the last ${data.keyUsageDays} days`;
+		if (!usage) return `No requests in ${window}`;
+		const parts = [
+			`${usage.requests.toLocaleString()} ${usage.requests === 1 ? 'request' : 'requests'}`
+		];
+		if (usage.runs) parts.push(`${usage.runs} agent ${usage.runs === 1 ? 'run' : 'runs'}`);
+		if (usage.pricedRequests) {
+			const lower = usage.pricedRequests < usage.requests ? '+' : '';
+			parts.push(`${formatSpend(usage.costUsd)}${lower}`);
+		}
+		return `${parts.join(' · ')} in ${window}`;
+	}
+
+	type Tab = 'keys' | 'statistics';
+	// The tab and the statistics period live in the URL, so a reload or a shared link keeps them.
+	const activeTab = $derived<Tab>(
+		page.url.searchParams.get('tab') === 'statistics' ? 'statistics' : 'keys'
+	);
+
+	/** This page with `updates` applied to its query (defaults drop the param). */
+	function navigate(updates: { tab?: Tab; period?: UsagePeriod }) {
+		// A throwaway copy for building one href, not reactive state.
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity
+		const params = new URLSearchParams(page.url.searchParams);
+		if (updates.tab) params.set('tab', updates.tab);
+		if (updates.period) params.set('period', updates.period);
+		if (params.get('tab') === 'keys') params.delete('tab');
+		if (params.get('period') === DEFAULT_USAGE_PERIOD) params.delete('period');
+		const qs = params.toString();
+		// The resolved path of this page plus its own query.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		void goto(`${resolve('/settings/api')}${qs ? `?${qs}` : ''}`, {
+			keepFocus: true,
+			noScroll: true,
+			replaceState: true
+		});
+	}
+
+	function selectTab(value: string) {
+		navigate({ tab: value === 'statistics' ? 'statistics' : 'keys' });
+	}
+
 	async function deleteKey(id: string) {
 		deleteKeyId = id;
 	}
@@ -202,151 +251,172 @@
 	{/snippet}
 </SettingsHeader>
 
-<SettingsSection title="API keys" flush>
-	{#snippet description()}
-		Scope a key to <code class="rounded bg-muted px-1 py-0.5 text-xs">agents:run</code>,
-		<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> or both.
-	{/snippet}
-	{#if data.apiKeys.length === 0}
-		<div
-			class="flex flex-col items-center gap-3 border-t border-border/60 px-6 pt-6 pb-4 text-center"
-		>
-			<div
-				class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
-			>
-				<KeyRoundIcon class="size-5" />
-			</div>
-			<div class="flex flex-col gap-1">
-				<p class="text-sm font-medium">No API keys yet</p>
-				<p class="text-sm text-muted-foreground">
-					Create one to start agent runs or call models from scripts and other tools.
-				</p>
-			</div>
-		</div>
-	{:else}
-		<ul class="divide-y divide-border/60 border-t border-border/60" aria-label="API keys">
-			{#each data.apiKeys as key (key.id)}
-				<SettingsListItem title={key.label}>
-					{#snippet leading()}<KeyRoundIcon class="size-4" />{/snippet}
-					{#snippet badges()}
-						{#each key.scopes as scope (scope)}
-							<Badge variant="secondary" class="font-mono font-normal">{scope}</Badge>
-						{/each}
-					{/snippet}
-					{#snippet meta()}
-						Created {formatDateTime(key.createdAt, data.timeFormat)} · {key.lastUsedAt
-							? `Last used ${formatDateTime(key.lastUsedAt, data.timeFormat)}`
-							: 'Never used'}
-					{/snippet}
-					{#snippet trailing()}
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							class="text-muted-foreground hover:text-destructive"
-							title="Delete key"
-							aria-label="Delete key {key.label}"
-							disabled={deleteKeyBusy !== null}
-							onclick={() => deleteKey(key.id)}
+<Tabs.Root value={activeTab} onValueChange={selectTab} class="gap-6">
+	<Tabs.List class="self-start">
+		<Tabs.Trigger value="keys"><KeyRoundIcon class="size-4" aria-hidden="true" />Keys</Tabs.Trigger>
+		<Tabs.Trigger value="statistics">
+			<ChartColumnIcon class="size-4" aria-hidden="true" />Statistics
+		</Tabs.Trigger>
+	</Tabs.List>
+	<Tabs.Content value="keys" class="flex flex-col gap-6">
+		<SettingsSection title="API keys" flush>
+			{#snippet description()}
+				Scope a key to <code class="rounded bg-muted px-1 py-0.5 text-xs">agents:run</code>,
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> or both.
+			{/snippet}
+			{#if data.apiKeys.length === 0}
+				<div
+					class="flex flex-col items-center gap-3 border-t border-border/60 px-6 pt-6 pb-4 text-center"
+				>
+					<div
+						class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+					>
+						<KeyRoundIcon class="size-5" />
+					</div>
+					<div class="flex flex-col gap-1">
+						<p class="text-sm font-medium">No API keys yet</p>
+						<p class="text-sm text-muted-foreground">
+							Create one to start agent runs or call models from scripts and other tools.
+						</p>
+					</div>
+				</div>
+			{:else}
+				<ul class="divide-y divide-border/60 border-t border-border/60" aria-label="API keys">
+					{#each data.apiKeys as key (key.id)}
+						<SettingsListItem title={key.label}>
+							{#snippet leading()}<KeyRoundIcon class="size-4" />{/snippet}
+							{#snippet badges()}
+								{#each key.scopes as scope (scope)}
+									<Badge variant="secondary" class="font-mono font-normal">{scope}</Badge>
+								{/each}
+							{/snippet}
+							{#snippet meta()}
+								Created {formatDateTime(key.createdAt, data.timeFormat)} · {key.lastUsedAt
+									? `Last used ${formatDateTime(key.lastUsedAt, data.timeFormat)}`
+									: 'Never used'}
+							{/snippet}
+							<p class="text-xs text-muted-foreground">{usageLabel(key)}</p>
+							{#snippet trailing()}
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									class="text-muted-foreground hover:text-destructive"
+									title="Delete key"
+									aria-label="Delete key {key.label}"
+									disabled={deleteKeyBusy !== null}
+									onclick={() => deleteKey(key.id)}
+								>
+									<Trash2Icon class="size-4" />
+								</Button>
+							{/snippet}
+						</SettingsListItem>
+					{/each}
+				</ul>
+			{/if}
+		</SettingsSection>
+
+		<SettingsSection title="Agent API">
+			{#snippet description()}
+				Start an agent run. Needs a key with the <code class="rounded bg-muted px-1 py-0.5 text-xs"
+					>agents:run</code
+				>
+				scope and returns
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">202 Accepted</code> with the created run.
+			{/snippet}
+			<CodeBlock code={agentRunSnippet} label="curl" />
+		</SettingsSection>
+
+		<SettingsSection title="Model inference">
+			{#snippet description()}
+				Point your tools at the OpenAI-compatible proxy with an <code
+					class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code
+				>
+				key. Listing model ids needs no key:
+				<code
+					class="inline-block max-w-full overflow-x-auto rounded bg-muted px-1 py-0.5 align-bottom text-xs whitespace-nowrap"
+					>GET {origin}/api/v1/models</code
+				>
+			{/snippet}
+			<Tabs.Root value="curl" class="gap-3">
+				<Tabs.List
+					class="max-w-full [scrollbar-width:none] justify-start overflow-x-auto max-sm:[&_svg]:hidden"
+				>
+					<Tabs.Trigger value="curl">
+						<SquareTerminalIcon class="size-4" aria-hidden="true" />curl
+					</Tabs.Trigger>
+					<Tabs.Trigger value="opencode">
+						<CodeIcon class="size-4" aria-hidden="true" />OpenCode
+					</Tabs.Trigger>
+					<Tabs.Trigger value="claude-code">
+						<BotIcon class="size-4" aria-hidden="true" />Claude Code
+					</Tabs.Trigger>
+					<Tabs.Trigger value="pi">
+						<SquarePiIcon class="size-4" aria-hidden="true" />pi
+					</Tabs.Trigger>
+				</Tabs.List>
+				<Tabs.Content value="curl" class="flex flex-col gap-3">
+					<p class="text-sm text-muted-foreground">Stream a chat completion.</p>
+					<CodeBlock code={curlSnippet} label="curl" />
+				</Tabs.Content>
+				<Tabs.Content value="opencode" class="flex flex-col gap-3">
+					<p class="text-sm text-muted-foreground">
+						Add this provider entry to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
+							>opencode.json</code
+						>.
+					</p>
+					<CodeBlock code={opencodeSnippet} label="OpenCode config" />
+				</Tabs.Content>
+				<Tabs.Content value="claude-code" class="flex flex-col gap-3">
+					<p class="text-sm text-muted-foreground">
+						Claude Code speaks the Anthropic Messages API. Point an OpenAI-compatible shim such as
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">claude-code-router</code> at
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">{origin}/api/v1</code>
+						with an
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key. Native
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">/v1/messages</code> support is planned.
+					</p>
+				</Tabs.Content>
+				<Tabs.Content value="pi" class="flex flex-col gap-3">
+					<p class="text-sm text-muted-foreground">
+						Add this provider to <code class="rounded bg-muted px-1 py-0.5 text-xs"
+							>models.json</code
 						>
-							<Trash2Icon class="size-4" />
-						</Button>
-					{/snippet}
-				</SettingsListItem>
-			{/each}
-		</ul>
-	{/if}
-</SettingsSection>
+						in pi's agent directory and replace
+						<code class="rounded bg-muted px-1 py-0.5 text-xs">&lt;model&gt;</code> with a model id from
+						the models endpoint.
+					</p>
+					<CodeBlock code={piSnippet} label="pi config" />
+				</Tabs.Content>
+			</Tabs.Root>
+		</SettingsSection>
 
-<SettingsSection title="Agent API">
-	{#snippet description()}
-		Start an agent run. Needs a key with the <code class="rounded bg-muted px-1 py-0.5 text-xs"
-			>agents:run</code
-		>
-		scope and returns
-		<code class="rounded bg-muted px-1 py-0.5 text-xs">202 Accepted</code> with the created run.
-	{/snippet}
-	<CodeBlock code={agentRunSnippet} label="curl" />
-</SettingsSection>
-
-<SettingsSection title="Model inference">
-	{#snippet description()}
-		Point your tools at the OpenAI-compatible proxy with an <code
-			class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code
-		>
-		key. Listing model ids needs no key:
-		<code
-			class="inline-block max-w-full overflow-x-auto rounded bg-muted px-1 py-0.5 align-bottom text-xs whitespace-nowrap"
-			>GET {origin}/api/v1/models</code
-		>
-	{/snippet}
-	<Tabs.Root value="curl" class="gap-3">
-		<Tabs.List
-			class="max-w-full [scrollbar-width:none] justify-start overflow-x-auto max-sm:[&_svg]:hidden"
-		>
-			<Tabs.Trigger value="curl">
-				<SquareTerminalIcon class="size-4" aria-hidden="true" />curl
-			</Tabs.Trigger>
-			<Tabs.Trigger value="opencode">
-				<CodeIcon class="size-4" aria-hidden="true" />OpenCode
-			</Tabs.Trigger>
-			<Tabs.Trigger value="claude-code">
-				<BotIcon class="size-4" aria-hidden="true" />Claude Code
-			</Tabs.Trigger>
-			<Tabs.Trigger value="pi">
-				<SquarePiIcon class="size-4" aria-hidden="true" />pi
-			</Tabs.Trigger>
-		</Tabs.List>
-		<Tabs.Content value="curl" class="flex flex-col gap-3">
-			<p class="text-sm text-muted-foreground">Stream a chat completion.</p>
-			<CodeBlock code={curlSnippet} label="curl" />
-		</Tabs.Content>
-		<Tabs.Content value="opencode" class="flex flex-col gap-3">
-			<p class="text-sm text-muted-foreground">
-				Add this provider entry to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
-					>opencode.json</code
-				>.
-			</p>
-			<CodeBlock code={opencodeSnippet} label="OpenCode config" />
-		</Tabs.Content>
-		<Tabs.Content value="claude-code" class="flex flex-col gap-3">
-			<p class="text-sm text-muted-foreground">
-				Claude Code speaks the Anthropic Messages API. Point an OpenAI-compatible shim such as
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">claude-code-router</code> at
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">{origin}/api/v1</code>
-				with an
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key. Native
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">/v1/messages</code> support is planned.
-			</p>
-		</Tabs.Content>
-		<Tabs.Content value="pi" class="flex flex-col gap-3">
-			<p class="text-sm text-muted-foreground">
-				Add this provider to <code class="rounded bg-muted px-1 py-0.5 text-xs">models.json</code>
-				in pi's agent directory and replace
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">&lt;model&gt;</code> with a model id from the
-				models endpoint.
-			</p>
-			<CodeBlock code={piSnippet} label="pi config" />
-		</Tabs.Content>
-	</Tabs.Root>
-</SettingsSection>
-
-<SettingsSection title="Decisions">
-	{#snippet description()}
-		Classify content, route requests and score inputs with predicate, choice and score questions.
-		Needs an <code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key and a model
-		with the
-		<code class="rounded bg-muted px-1 py-0.5 text-xs">decisions</code> capability set in
-		{#if data.user.role === 'admin'}
-			<a
-				class="underline underline-offset-4 hover:text-foreground"
-				href={resolve('/settings/defaults')}>Defaults</a
-			>; until then the endpoint returns an error.
-		{:else}
-			Defaults by an admin; until then the endpoint returns an error.
-		{/if}
-	{/snippet}
-	<CodeBlock code={decisionsCurlSnippet} label="curl" />
-</SettingsSection>
+		<SettingsSection title="Decisions">
+			{#snippet description()}
+				Classify content, route requests and score inputs with predicate, choice and score
+				questions. Needs an <code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key
+				and a model with the
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">decisions</code> capability set in
+				{#if data.user.role === 'admin'}
+					<a
+						class="underline underline-offset-4 hover:text-foreground"
+						href={resolve('/settings/defaults')}>Defaults</a
+					>; until then the endpoint returns an error.
+				{:else}
+					Defaults by an admin; until then the endpoint returns an error.
+				{/if}
+			{/snippet}
+			<CodeBlock code={decisionsCurlSnippet} label="curl" />
+		</SettingsSection>
+	</Tabs.Content>
+	<Tabs.Content value="statistics">
+		<ApiKeyUsageStats
+			stats={data.stats}
+			period={data.stats.period}
+			keys={data.apiKeys}
+			onPeriodChange={(period) => navigate({ period })}
+		/>
+	</Tabs.Content>
+</Tabs.Root>
 
 <Dialog.Root open={keyDialogOpen} onOpenChange={closeKeyDialog}>
 	<Dialog.Content>

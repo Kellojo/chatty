@@ -1,17 +1,11 @@
 ---
 name: meeting-notes
 title: Meeting notes
-description: Turn raw meeting notes, a transcript, or a chat log into structured minutes — attendees, decisions, action items, and open questions.
-triggers:
-  - keyword: 'meeting'
-  - keyword: 'minutes'
-  - intent: 'write up meeting notes'
-  - intent: 'clean up my notes'
-when: Use when the user provides raw meeting notes, a transcript, or a chat log and wants structured minutes.
+description: Turn raw meeting notes, a transcript or a chat log into structured minutes, or just pull out its action items (owners, deadlines) as a task list.
 tools: []
 enabled: true
 source: bundled
-version: '1.0.0'
+version: '1.1.0'
 author: ai-chat
 ---
 
@@ -25,6 +19,10 @@ Turn raw meeting notes, a transcript, or a chat log into structured minutes.
 4. **Decisions**: numbered list of everything that was decided. Each decision must be traceable to the text — never infer agreement from silence.
 5. **Action items**: `- [ ] **Task** — owner, due date` format; omit owner/due when not stated.
 6. **Open questions**: anything raised but not resolved.
+
+## Action items only
+
+If the user only wants the tasks ("what are the action items", "extract the to-dos"), output just the **Action items** list in the format above, grouped by owner or topic when there are more than ~6. Follow it with one line per ambiguous item (unclear owner, deadline, or whether it was agreed). No header, summary, or other sections.
 
 ## Rules
 

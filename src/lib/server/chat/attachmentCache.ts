@@ -1,7 +1,3 @@
-import { createLogger } from '../logger.js';
-
-const log = createLogger('attachment-cache');
-
 export const CACHE_MAX_BYTES = 100 * 1024 * 1024; // 100MB hard cap (constant)
 
 interface CacheEntry {
@@ -40,7 +36,6 @@ class LruCache {
 
 		this.cache.set(id, { dataUri, size });
 		this.#totalBytes += size;
-		log.info('Cache hit', { id, size: `${size / 1024}KB`, totalBytes: this.totalBytes() });
 	}
 
 	clear(): void {

@@ -28,6 +28,7 @@
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import { decodeModelRef } from '$lib/model-ref.js';
+	import { pickerModelGroups, syncModelCatalog } from '$lib/state/model-catalog.svelte.js';
 	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
 	import { clipboardFiles } from '$lib/state/clipboard-files.js';
@@ -190,7 +191,9 @@
 		data.defaultModel ? `${data.defaultModel.providerId}/${data.defaultModel.modelId}` : ''
 	);
 	const selectedValue = $derived(picked || defaultModelValue);
-	const hasModels = $derived(data.groups.some((g) => g.models.length > 0));
+	const modelGroups = $derived(pickerModelGroups(data.modelCatalog));
+	$effect.pre(() => syncModelCatalog(data.modelCatalog));
+	const hasModels = $derived(data.modelCatalog.count > 0);
 	const modelMissing = $derived(!hasModels || selectedValue === '');
 	const canSend = $derived(
 		coding
@@ -350,7 +353,7 @@
 						</Button>
 					{:else}
 						<ModelPicker
-							groups={data.groups}
+							groups={modelGroups}
 							mappings={data.mappings}
 							value={selectedValue}
 							onselect={(v) => (picked = v)}

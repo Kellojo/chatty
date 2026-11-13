@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { UIMessage, UIMessageChunk } from 'ai';
 
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
@@ -99,7 +100,13 @@ vi.mock('ai', async () => {
 });
 
 const { getDb, closeDb } = await import('../db/index.js');
-const { answerOnLastStep, handleChatRequest, inlineAttachmentParts } = await import('./service.js');
+const {
+	answerOnLastStep,
+	coalesceDeltas,
+	handleChatRequest,
+	inlineAttachmentParts,
+	partialSaveThrottle
+} = await import('./service.js');
 const { createConversation, getConversation } = await import('../db/repo/conversations.js');
 const { branchesFor, getMessage, listMessages } = await import('../db/repo/messages.js');
 const { createProvider } = await import('../db/repo/providers.js');
@@ -1121,5 +1128,102 @@ describe('answerOnLastStep', () => {
 		expect(prepare({ stepNumber: 0 })).toBeUndefined();
 		expect(prepare({ stepNumber: 3 })).toBeUndefined();
 		expect(prepare({ stepNumber: 4 })).toEqual({ toolChoice: 'none' });
+	});
+});
+
+describe('coalesceDeltas', () => {
+	const chunks = [
+		{ type: 'start', messageId: 'a1' },
+		{ type: 'start-step' },
+		{ type: 'reasoning-start', id: 'r1' },
+		{ type: 'reasoning-delta', id: 'r1', delta: 'think' },
+		{ type: 'reasoning-delta', id: 'r1', delta: 'ing', providerMetadata: { p: { sig: 'x' } } },
+		{ type: 'reasoning-delta', id: 'r1', delta: '...' },
+		{ type: 'reasoning-end', id: 'r1' },
+		{ type: 'tool-input-start', toolCallId: 'c1', toolName: 'search' },
+		{ type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"q":' },
+		{ type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '"cats"}' },
+		{ type: 'tool-input-available', toolCallId: 'c1', toolName: 'search', input: { q: 'cats' } },
+		{ type: 'tool-output-available', toolCallId: 'c1', output: { big: 'x'.repeat(1000) } },
+		{ type: 'finish-step' },
+		{ type: 'start-step' },
+		{ type: 'text-start', id: 't1' },
+		{ type: 'text-start', id: 't2' },
+		{ type: 'text-delta', id: 't1', delta: 'Hello' },
+		{ type: 'text-delta', id: 't1', delta: ' world' },
+		{ type: 'text-delta', id: 't2', delta: 'other' },
+		{ type: 'text-delta', id: 't1', delta: '!' },
+		{ type: 'text-end', id: 't1' },
+		{ type: 'text-end', id: 't2' },
+		{ type: 'finish-step' },
+		{ type: 'finish' }
+	] as UIMessageChunk[];
+
+	async function snapshots(flushNow: (() => boolean) | null) {
+		const { readUIMessageStream } = await import('ai');
+		let stream = new ReadableStream<UIMessageChunk>({
+			start(c) {
+				for (const chunk of chunks) c.enqueue(chunk);
+				c.close();
+			}
+		});
+		if (flushNow) stream = stream.pipeThrough(coalesceDeltas(flushNow));
+		const out: UIMessage[] = [];
+		for await (const m of readUIMessageStream<UIMessage>({ stream })) out.push(m);
+		return out;
+	}
+
+	it('builds the same message from fewer snapshots', async () => {
+		const raw = await snapshots(null);
+		const coalesced = await snapshots(() => false);
+		expect(coalesced.at(-1)).toEqual(raw.at(-1));
+		expect(coalesced.length).toBeLessThan(raw.length);
+	});
+
+	it('releases held deltas whenever a snapshot is due', async () => {
+		const raw = await snapshots(null);
+		const due = await snapshots(() => true);
+		expect(due).toEqual(raw);
+	});
+});
+
+describe('partialSaveThrottle', () => {
+	const text = (chars: number) => [{ type: 'text', text: 'x'.repeat(chars) }];
+
+	it('saves a small reply every 500 ms and skips unchanged snapshots', () => {
+		let now = 0;
+		const saved: string[] = [];
+		const throttle = partialSaveThrottle(
+			(json) => saved.push(json),
+			() => now
+		);
+		throttle.offer(text(10));
+		expect(saved).toHaveLength(1);
+		now = 200;
+		expect(throttle.due()).toBe(false);
+		throttle.offer(text(20));
+		expect(saved).toHaveLength(1);
+		now = 500;
+		throttle.offer(text(10));
+		expect(saved).toHaveLength(1); // same as the last one written
+		now = 1000;
+		throttle.offer(text(30));
+		expect(saved).toHaveLength(2);
+		expect(saved[1]).toBe(JSON.stringify(text(30)));
+	});
+
+	it('waits longer between saves of a large reply', () => {
+		let now = 0;
+		const saved: string[] = [];
+		const throttle = partialSaveThrottle(
+			(json) => saved.push(json),
+			() => now
+		);
+		throttle.offer(text(300_000));
+		for (now = 500; now < 5000; now += 500) throttle.offer(text(300_000 + now));
+		expect(saved).toHaveLength(1);
+		now = 10_000;
+		throttle.offer(text(400_000));
+		expect(saved).toHaveLength(2);
 	});
 });

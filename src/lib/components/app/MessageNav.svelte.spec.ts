@@ -61,4 +61,14 @@ describe('MessageNav', () => {
 		await userEvent.keyboard('{Escape}');
 		await expect.element(page.getByText('2 of 5')).not.toBeInTheDocument();
 	});
+
+	it('tracks nothing while hidden by CSS and catches up once shown', async () => {
+		const screen = render(Harness, { messages: convo(5), navHidden: true });
+		await nextFrame();
+		await nextFrame();
+		expect(ticks()).toHaveLength(5);
+		expect(current()).toBeUndefined();
+		await screen.rerender({ messages: convo(5), navHidden: false });
+		await expect.poll(() => current()?.dataset.navId).toBe('u0');
+	});
 });

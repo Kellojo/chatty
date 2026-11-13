@@ -78,8 +78,13 @@ export interface CodingUsageDailyRow {
 /** Cookie remembering whether the new-chat page opens in chat or coding mode. */
 export const START_MODE_COOKIE = 'chatty_start_mode';
 
+/**
+ * `waiting`: the run ended but the agent waits on background work it started
+ * (a background task, delegated thread or watched pull request) and resumes
+ * when it reports back.
+ */
 export type CodingTaskStatus =
-	'starting' | 'running' | 'awaiting_input' | 'idle' | 'failed' | 'interrupted';
+	'starting' | 'running' | 'awaiting_input' | 'waiting' | 'idle' | 'failed' | 'interrupted';
 
 export type CodingWorkspaceMode = 'worktree' | 'local';
 

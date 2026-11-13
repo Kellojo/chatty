@@ -42,7 +42,11 @@ function choose(n: number, k: number): number {
 	}
 	if (k > n) return 0;
 	let out = 1;
-	for (let i = 1; i <= Math.min(k, n - k); i++) out = (out * (n - i + 1)) / i;
+	// Each factor is >= 1, so once the product overflows it stays Infinity;
+	// stopping there bounds the loop (nCr(1e15, 5e14) would otherwise hang).
+	for (let i = 1; i <= Math.min(k, n - k) && Number.isFinite(out); i++) {
+		out = (out * (n - i + 1)) / i;
+	}
 	return Math.round(out);
 }
 
@@ -94,6 +98,9 @@ const FUNCTIONS: Record<string, Fn> = {
 	lcm: { arity: [2, Infinity], run: (...xs) => xs.reduce(lcm) },
 	ncr: { arity: [2, 2], run: choose }
 };
+
+/** Parser recursion levels (each paren adds about two). */
+const MAX_DEPTH = 256;
 
 const CONSTANTS: Record<string, number> = { pi: Math.PI, e: Math.E, tau: 2 * Math.PI };
 
@@ -160,7 +167,23 @@ export function evaluateExpression(src: string): number {
 		pos++;
 	};
 
+	// Nesting recurses several frames per level; cap it so a deeply nested
+	// input fails with a clear error rather than a stack overflow.
+	let depth = 0;
+	const enter = () => {
+		if (++depth > MAX_DEPTH) throw new MathExprError('expression is nested too deeply');
+	};
+
 	function expr(): number {
+		enter();
+		try {
+			return sum();
+		} finally {
+			depth--;
+		}
+	}
+
+	function sum(): number {
 		let left = term();
 		while (isOp('+') || isOp('-')) {
 			const op = tokens[pos++].value;
@@ -184,15 +207,20 @@ export function evaluateExpression(src: string): number {
 	}
 
 	function unary(): number {
-		if (isOp('-')) {
-			pos++;
-			return -unary();
+		enter();
+		try {
+			if (isOp('-')) {
+				pos++;
+				return -unary();
+			}
+			if (isOp('+')) {
+				pos++;
+				return unary();
+			}
+			return power();
+		} finally {
+			depth--;
 		}
-		if (isOp('+')) {
-			pos++;
-			return unary();
-		}
-		return power();
 	}
 
 	function power(): number {

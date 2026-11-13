@@ -14,9 +14,17 @@ export function hasPullRequestWork(coding: CodingConversation): boolean {
 	return changed || (coding.workspaceMode === 'worktree' && ownBranch);
 }
 
-/** The agent can take a new instruction now (not mid-run or waiting on an approval). */
+/**
+ * The agent can take a new instruction now (not mid-run or waiting on an
+ * approval). Waiting on background work doesn't block a new instruction.
+ */
 export function agentIsFree(coding: CodingConversation): boolean {
-	return coding.status === 'idle' || coding.status === 'interrupted' || coding.status === 'failed';
+	return (
+		coding.status === 'idle' ||
+		coding.status === 'waiting' ||
+		coding.status === 'interrupted' ||
+		coding.status === 'failed'
+	);
 }
 
 /**

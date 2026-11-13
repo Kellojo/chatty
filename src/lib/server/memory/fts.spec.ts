@@ -87,6 +87,46 @@ describe('memory fts', () => {
 		);
 	});
 
+	it('stems words and folds diacritics', () => {
+		fts.upsertMemoryFts(
+			db,
+			'user:stem',
+			't.md',
+			{ title: 'Timesheet', description: '', tags: [] },
+			'Tracking worked hours in the Grösse table'
+		);
+		const find = (q: string) => fts.searchMemoryFts(db, ['user:stem'], q).map((h) => h.path);
+		expect(find('tracker hour')).toEqual(['t.md']);
+		expect(find('grosse')).toEqual(['t.md']);
+	});
+
+	it('keeps hyphenated words together as a phrase', () => {
+		const tags: string[] = [];
+		fts.upsertMemoryFts(db, 'user:ph', 'a.md', { title: 'A', description: '', tags }, 'pocket id');
+		fts.upsertMemoryFts(db, 'user:ph', 'b.md', { title: 'B', description: '', tags }, 'id pocket');
+		expect(fts.searchMemoryFts(db, ['user:ph'], 'Pocket-ID').map((h) => h.path)).toEqual(['a.md']);
+	});
+
+	it('ranks title matches above body matches', () => {
+		const tags: string[] = [];
+		fts.upsertMemoryFts(
+			db,
+			'user:rank',
+			'body.md',
+			{ title: 'Notes', description: '', tags },
+			'a long note that mentions kubernetes once among plenty of other words'
+		);
+		fts.upsertMemoryFts(
+			db,
+			'user:rank',
+			'title.md',
+			{ title: 'Kubernetes', description: '', tags },
+			'a long note about cluster setup with plenty of other words in it'
+		);
+		const hits = fts.searchMemoryFts(db, ['user:rank'], 'kubernetes');
+		expect(hits.map((h) => h.path)).toEqual(['title.md', 'body.md']);
+	});
+
 	it('scopes search results', () => {
 		expect(fts.searchMemoryFts(db, ['user:u1'], 'alpha')).toEqual([]);
 		expect(fts.searchMemoryFts(db, ['user:u2', 'shared'], 'alpha')).toHaveLength(1);

@@ -100,11 +100,41 @@
 	// Keyed on the ids: streamed text makes a new `items` on every token.
 	const itemIds = $derived(items.map((item) => item.id).join(' '));
 
+	/**
+	 * Whether the rail is laid out at all. The page hides it with CSS where
+	 * there's no room, and then nothing tracks the scroll or measures messages.
+	 */
+	let displayed = $state(false);
+
+	$effect(() => {
+		const nav = root;
+		if (!nav) {
+			displayed = false;
+			return;
+		}
+		// No boxes means `display: none` on it or an ancestor; showing or hiding
+		// it changes its size, which the observer reports.
+		const update = () => (displayed = nav.getClientRects().length > 0);
+		update();
+		// Applied on the next frame: the scroll tracking it starts observes sizes
+		// too, which the browser reports as a loop when started from in here.
+		let frame = 0;
+		const resize = new ResizeObserver(() => {
+			cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(update);
+		});
+		resize.observe(nav);
+		return () => {
+			cancelAnimationFrame(frame);
+			resize.disconnect();
+		};
+	});
+
 	$effect(() => {
 		const el = scrollEl;
 		void itemIds;
 		messageEls.clear();
-		if (!el) return;
+		if (!el || !displayed) return;
 		let frame = 0;
 		const schedule = () => {
 			if (!frame) frame = requestAnimationFrame(() => ((frame = 0), updateActive()));

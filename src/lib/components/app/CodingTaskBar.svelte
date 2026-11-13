@@ -8,9 +8,10 @@
 	import { canCreatePullRequest, pullRequestNumber } from '$lib/coding-task-details.js';
 	import type { CodingConversation } from '$lib/coding-environments.js';
 	import type { CodingBrowserActivity } from '$lib/coding-preview.js';
-	import { CODING_PR_STATE_STYLE, CODING_STATUS_STYLE } from '$lib/coding-status.js';
+	import { CODING_PR_STATE_STYLE, CODING_STATUS_STYLE, WAITING_HINT } from '$lib/coding-status.js';
 	import PullRequestIcon from './PullRequestIcon.svelte';
 	import CodingRunTimer from './CodingRunTimer.svelte';
+	import WaitingMark from './WaitingMark.svelte';
 	import DiffStat from './DiffStat.svelte';
 	import CodingBrowserPreview from './CodingBrowserPreview.svelte';
 	import CodingDiffDialog from './CodingDiffDialog.svelte';
@@ -121,13 +122,22 @@
 				<!-- Idle is the resting state and shows nothing. -->
 				<span
 					class="inline-flex shrink-0 items-center gap-1.5 {status.tone}"
-					title={coding.lastError ?? undefined}
+					title={coding.lastError ?? (coding.status === 'waiting' ? WAITING_HINT : undefined)}
 				>
-					<span
-						class="size-1.5 rounded-full motion-reduce:animate-none {status.dot}"
-						aria-hidden="true"
-					></span>
+					{#if coding.status === 'waiting'}
+						<!-- The sidebar's waiting mark, so the state reads the same everywhere. -->
+						<WaitingMark />
+					{:else}
+						<span
+							class="size-1.5 rounded-full motion-reduce:animate-none {status.dot}"
+							aria-hidden="true"
+						></span>
+					{/if}
 					{status.label}
+					{#if coding.status === 'waiting'}
+						<!-- The tooltip's hint, for screen readers too. -->
+						<span class="sr-only">: {WAITING_HINT}</span>
+					{/if}
 				</span>
 			{/if}
 		</div>

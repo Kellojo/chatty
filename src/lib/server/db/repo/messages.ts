@@ -336,26 +336,36 @@ export function branchesFor(
 			.all(conversationId, ...chunk) as { id: string; parent_id: string | null }[];
 		for (const row of found) parents.set(row.id, row.parent_id);
 	}
-	const childrenOf = db.prepare(
-		`SELECT id FROM messages WHERE parent_id = ? AND +conversation_id = ?
-		 ORDER BY created_at, rowid`
-	);
-	const rootsOf = db.prepare(
-		`SELECT id FROM messages WHERE conversation_id = ? AND parent_id IS NULL
-		 ORDER BY created_at, rowid`
-	);
+	// Every sibling group in one query per chunk of parents (not one per parent).
 	const groups = new Map<string | null, string[]>();
+	const parentIds = [...new Set(parents.values())].filter((p): p is string => p !== null);
+	for (let i = 0; i < parentIds.length; i += ID_CHUNK) {
+		const chunk = parentIds.slice(i, i + ID_CHUNK);
+		for (const parent of chunk) groups.set(parent, []);
+		const children = db
+			.prepare(
+				`SELECT parent_id, id FROM messages
+				 WHERE +conversation_id = ? AND parent_id IN (${chunk.map(() => '?').join(', ')})
+				 ORDER BY parent_id, created_at, rowid`
+			)
+			.all(conversationId, ...chunk) as { parent_id: string; id: string }[];
+		for (const row of children) groups.get(row.parent_id)!.push(row.id);
+	}
+	if ([...parents.values()].includes(null)) {
+		const roots = db
+			.prepare(
+				`SELECT id FROM messages WHERE conversation_id = ? AND parent_id IS NULL
+				 ORDER BY created_at, rowid`
+			)
+			.all(conversationId) as { id: string }[];
+		groups.set(
+			null,
+			roots.map((r) => r.id)
+		);
+	}
 	for (const id of ids) {
 		if (!parents.has(id)) continue;
-		const parent = parents.get(id)!;
-		let group = groups.get(parent);
-		if (!group) {
-			const siblings = (
-				parent === null ? rootsOf.all(conversationId) : childrenOf.all(parent, conversationId)
-			) as { id: string }[];
-			group = siblings.map((r) => r.id);
-			groups.set(parent, group);
-		}
+		const group = groups.get(parents.get(id)!)!;
 		if (group.length > 1) {
 			result.set(id, { index: group.indexOf(id), count: group.length, ids: group });
 		}
@@ -384,8 +394,61 @@ export function countMessages(db: Db, conversationId: string): number {
 	return row.count;
 }
 
+/**
+ * The conversation a message belongs to, or undefined when there is no such
+ * message. For existence and ownership checks: unlike `getMessage` it doesn't
+ * read `parts` (coding replies run to hundreds of KB), as `conversation_id`
+ * comes before it in the row.
+ */
+export function messageConversationId(db: Db, id: string): string | undefined {
+	const row = db.prepare('SELECT conversation_id FROM messages WHERE id = ?').get(id) as
+		{ conversation_id: string } | undefined;
+	return row?.conversation_id;
+}
+
 export function getMessage(db: Db, id: string): MessageRow | undefined {
 	return db.prepare('SELECT rowid, * FROM messages WHERE id = ?').get(id) as MessageRow | undefined;
+}
+
+/** A message's fields other than `parts` and `content_text`. */
+export type MessageMeta = Pick<
+	MessageRow,
+	'id' | 'conversation_id' | 'role' | 'status' | 'error' | 'created_at' | 'parent_id'
+>;
+
+/**
+ * A message without its `parts` (and text), for callers that only need its
+ * role, status or place in the tree. The columns after `parts` still make
+ * SQLite walk a large row's overflow pages, but the parts string is never
+ * copied out or parsed.
+ */
+export function getMessageMeta(db: Db, id: string): MessageMeta | undefined {
+	return db
+		.prepare(
+			'SELECT id, conversation_id, role, status, error, created_at, parent_id FROM messages WHERE id = ?'
+		)
+		.get(id) as MessageMeta | undefined;
+}
+
+/**
+ * A message's status and error, and whether its stored parts equal
+ * `partsJson`: compared in SQLite, so a large reply's parts are never copied
+ * out of the database just to find they haven't changed. Undefined when the
+ * message isn't in that conversation.
+ */
+export function compareMessageParts(
+	db: Db,
+	id: string,
+	conversationId: string,
+	partsJson: string
+): { status: string; error: string | null; partsEqual: boolean } | undefined {
+	const row = db
+		.prepare(
+			'SELECT status, error, parts = ? AS same FROM messages WHERE id = ? AND conversation_id = ?'
+		)
+		.get(partsJson, id, conversationId) as
+		{ status: string; error: string | null; same: number } | undefined;
+	return row && { status: row.status, error: row.error, partsEqual: row.same === 1 };
 }
 
 export interface CreateMessageInput {
@@ -412,9 +475,9 @@ export function createMessage(db: Db, input: CreateMessageInput): MessageRow {
 			input.parentId !== undefined
 				? input.parentId
 				: (activeLeafId(db, input.conversationId) ?? null);
-		insertMessageRow(db, id, input, parentId);
+		const row = insertMessageRow(db, id, input, parentId);
 		setActiveLeaf(db, input.conversationId, id);
-		return getMessage(db, id)!;
+		return row;
 	})();
 }
 
@@ -430,39 +493,61 @@ export function insertMessageBefore(
 ): MessageRow | undefined {
 	const id = input.id ?? randomUUID();
 	return db.transaction(() => {
-		const child = getMessage(db, childId);
+		const child = db
+			.prepare('SELECT conversation_id, parent_id FROM messages WHERE id = ?')
+			.get(childId) as Pick<MessageRow, 'conversation_id' | 'parent_id'> | undefined;
 		if (!child || child.conversation_id !== input.conversationId) return undefined;
-		insertMessageRow(db, id, input, child.parent_id);
+		const row = insertMessageRow(db, id, input, child.parent_id);
 		db.prepare('UPDATE messages SET parent_id = ? WHERE id = ? AND conversation_id = ?').run(
 			id,
 			childId,
 			input.conversationId
 		);
-		return getMessage(db, id)!;
+		return row;
 	})();
 }
 
+/**
+ * Inserts a message and returns its row, built from what was written rather
+ * than read back: every column is given, and the only insert trigger
+ * (messages_fts_insert) writes to the FTS index, not to the row.
+ */
 function insertMessageRow(
 	db: Db,
 	id: string,
 	input: Omit<CreateMessageInput, 'parentId'>,
 	parentId: string | null
-): void {
-	db.prepare(
-		`INSERT INTO messages (id, conversation_id, role, parts, content_text, status, error, usage_json, created_at, parent_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	).run(
+): MessageRow {
+	const row: Omit<MessageRow, 'rowid'> = {
 		id,
-		input.conversationId,
-		input.role,
-		JSON.stringify(input.parts),
-		extractText(input.parts),
-		input.status ?? 'complete',
-		input.error ?? null,
-		input.usage ? JSON.stringify(input.usage) : null,
-		input.createdAt ?? Date.now(),
-		parentId
-	);
+		conversation_id: input.conversationId,
+		role: input.role,
+		parts: JSON.stringify(input.parts),
+		content_text: extractText(input.parts),
+		status: input.status ?? 'complete',
+		error: input.error ?? null,
+		usage_json: input.usage ? JSON.stringify(input.usage) : null,
+		created_at: input.createdAt ?? Date.now(),
+		parent_id: parentId
+	};
+	const { lastInsertRowid } = db
+		.prepare(
+			`INSERT INTO messages (id, conversation_id, role, parts, content_text, status, error, usage_json, created_at, parent_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+		.run(
+			row.id,
+			row.conversation_id,
+			row.role,
+			row.parts,
+			row.content_text,
+			row.status,
+			row.error,
+			row.usage_json,
+			row.created_at,
+			row.parent_id
+		);
+	return { rowid: Number(lastInsertRowid), ...row };
 }
 
 export function updateMessage(
@@ -493,16 +578,67 @@ export function updateMessage(
 		status === 'partial'
 			? existing.content_text
 			: extractText(patch.parts ?? (JSON.parse(existing.parts) as unknown[]));
-	if (text !== existing.content_text) {
-		db.prepare(
-			'UPDATE messages SET parts = ?, content_text = ?, status = ?, error = ?, usage_json = ? WHERE id = ?'
-		).run(parts, text, status, error, usage, id);
-	} else {
-		db.prepare(
-			'UPDATE messages SET parts = ?, status = ?, error = ?, usage_json = ? WHERE id = ?'
-		).run(parts, status, error, usage, id);
-	}
-	return getMessage(db, id);
+	const { changes } =
+		text !== existing.content_text
+			? db
+					.prepare(
+						'UPDATE messages SET parts = ?, content_text = ?, status = ?, error = ?, usage_json = ? WHERE id = ?'
+					)
+					.run(parts, text, status, error, usage, id)
+			: db
+					.prepare(
+						'UPDATE messages SET parts = ?, status = ?, error = ?, usage_json = ? WHERE id = ?'
+					)
+					.run(parts, status, error, usage, id);
+	if (changes === 0) return undefined;
+	// Built from what was just written rather than read back: rows run to
+	// hundreds of KB, and nothing else (no trigger) changes them on update.
+	return { ...existing, parts, content_text: text, status, error, usage_json: usage };
+}
+
+/**
+ * Saves the parts of a message still being generated ('partial'): one UPDATE,
+ * without reading the row first as {@link updateMessage} does. Like it, it
+ * leaves `content_text` alone while the message is partial. False when there
+ * is no such message or it has settled meanwhile (its final parts win).
+ */
+export function updateMessageParts(db: Db, id: string, partsJson: string): boolean {
+	return (
+		db
+			.prepare("UPDATE messages SET parts = ? WHERE id = ? AND status = 'partial'")
+			.run(partsJson, id).changes > 0
+	);
+}
+
+/**
+ * Puts a message back into 'partial' (being generated again) and clears its
+ * error, without reading it first. Its text stays as it is, as with
+ * `updateMessage(db, id, { status: 'partial', error: null })`.
+ */
+export function reopenMessage(db: Db, id: string): boolean {
+	return (
+		db.prepare("UPDATE messages SET status = 'partial', error = NULL WHERE id = ?").run(id)
+			.changes > 0
+	);
+}
+
+/** Size (chars of parts JSON) up to which a partial message is saved at the base interval. */
+const FREE_SAVE_SIZE = 16 * 1024;
+/** Chars of parts JSON per extra millisecond between saves (~1 s more per 50 KB). */
+const SAVE_CHARS_PER_MS = 50;
+export const MAX_PARTIAL_SAVE_INTERVAL_MS = 10_000;
+
+/**
+ * How long to wait between saves of a message still being generated, given
+ * the size of its parts JSON. Each save rewrites the whole row, overflow pages
+ * included, so a reply of a few hundred KB costs that much WAL per save:
+ * `baseMs` while small, about a second more per 50 KB beyond that, at most
+ * {@link MAX_PARTIAL_SAVE_INTERVAL_MS}. Live clients follow the stream; the
+ * saved copy is for reloads and crash recovery.
+ */
+export function partialSaveIntervalMs(size: number, baseMs: number): number {
+	const extra = Math.max(0, size - FREE_SAVE_SIZE) / SAVE_CHARS_PER_MS;
+	return Math.min(MAX_PARTIAL_SAVE_INTERVAL_MS, baseMs + extra);
 }
 
 /**

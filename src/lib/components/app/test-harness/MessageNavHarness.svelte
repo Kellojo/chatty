@@ -6,7 +6,7 @@
 	import { messageText } from '$lib/chat-history.js';
 	import type { UIMessage } from '$lib/types.js';
 
-	let { messages }: { messages: UIMessage[] } = $props();
+	let { messages, navHidden = false }: { messages: UIMessage[]; navHidden?: boolean } = $props();
 
 	let scrollEl = $state<HTMLDivElement | null>(null);
 	const items = $derived(
@@ -18,5 +18,8 @@
 	<div bind:this={scrollEl} style="height: 100%; overflow-y: auto">
 		<MessageTimeline {messages} />
 	</div>
-	<MessageNav {items} {scrollEl} />
+	<!-- Hidden by CSS, as ChatView does where the chat pane is narrow. -->
+	<div style:display={navHidden ? 'none' : 'contents'}>
+		<MessageNav {items} {scrollEl} />
+	</div>
 </div>

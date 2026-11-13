@@ -13,6 +13,7 @@ process.env.MAX_ATTACHMENT_SIZE_MB = '1';
 const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { createConversation } = await import('$lib/server/db/repo/conversations.js');
 const { POST } = await import('./+server.js');
+const { GET } = await import('./[attachmentId]/+server.js');
 
 let conversationId: string;
 
@@ -83,5 +84,47 @@ describe('POST /api/conversations/[id]/attachments', () => {
 		const request = { headers: new Headers(), formData: async () => form } as unknown as Request;
 		const res = await upload(request);
 		expect(res.status).toBe(413);
+	});
+});
+
+describe('GET /api/conversations/[id]/attachments/[attachmentId]', () => {
+	async function fetchAttachment(id: string, headers: Record<string, string> = {}) {
+		const event = {
+			locals: { user: { id: 'u1', role: 'user' }, session: null } as unknown as App.Locals,
+			params: { id: conversationId, attachmentId: id },
+			request: new Request(`${url()}/${id}`, { headers })
+		};
+		try {
+			return await GET(event as never);
+		} catch (e) {
+			if (isHttpError(e)) return new Response(null, { status: e.status });
+			throw e;
+		}
+	}
+
+	async function uploadText(content: string): Promise<string> {
+		const form = new FormData();
+		form.append('file', new File([content], 'song.mp3', { type: 'audio/mpeg' }));
+		const res = await upload(new Request(url(), { method: 'POST', body: form }));
+		return (res.body as { attachment: { id: string } }).attachment.id;
+	}
+
+	it('streams the file with immutable caching and range support', async () => {
+		const id = await uploadText('0123456789');
+		const full = await fetchAttachment(id);
+		expect(full.status).toBe(200);
+		expect(await full.text()).toBe('0123456789');
+		expect(full.headers.get('content-length')).toBe('10');
+		expect(full.headers.get('content-type')).toBe('audio/mpeg');
+		expect(full.headers.get('cache-control')).toBe('private, max-age=31536000, immutable');
+		expect(full.headers.get('accept-ranges')).toBe('bytes');
+		const part = await fetchAttachment(id, { range: 'bytes=7-' });
+		expect(part.status).toBe(206);
+		expect(await part.text()).toBe('789');
+		expect(part.headers.get('content-range')).toBe('bytes 7-9/10');
+	});
+
+	it('returns 404 for an unknown attachment', async () => {
+		expect((await fetchAttachment('nope')).status).toBe(404);
 	});
 });

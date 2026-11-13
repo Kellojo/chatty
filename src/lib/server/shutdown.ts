@@ -5,6 +5,7 @@ import { closeDb } from './db/index.js';
 import { stopDailyJobs, stopHourlyJobs, stopSnoozeWaker } from './jobs.js';
 import { createLogger } from './logger.js';
 import { closeAllMcpClients } from './mcp/pool.js';
+import { flushMemoryIndexes } from './memory/bundle.js';
 import { stopPushDispatcher } from './push/dispatcher.js';
 import { prepareCodingShutdown, stopAllCodingFollowers } from './t3/follower.js';
 import { closeAllPreviewViewers } from './t3/preview.js';
@@ -37,6 +38,8 @@ export function drainForShutdown(): Promise<void> {
 		stopAllCodingFollowers();
 		// After the drain: running turns may still be calling pooled MCP tools.
 		await closeAllMcpClients();
+		// Debounced memory index.md rebuilds would otherwise be lost.
+		await flushMemoryIndexes();
 	})().catch((e) => {
 		log.error('Failed to drain running work on shutdown', {
 			error: e instanceof Error ? e.message : String(e)

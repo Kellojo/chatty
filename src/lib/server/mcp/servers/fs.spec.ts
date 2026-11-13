@@ -54,6 +54,10 @@ function resultText(res: unknown): string {
 	return r.content?.[0]?.text ?? '';
 }
 
+function cap(out: string): string {
+	return out.length > 64 * 1024 ? `${out.slice(0, 64 * 1024)}\n… truncated` : out;
+}
+
 function isErr(res: unknown): boolean {
 	return (res as { isError?: boolean }).isError === true;
 }
@@ -187,6 +191,123 @@ describe('fs server', () => {
 		});
 	});
 
+	describe('bounded reads and walks', () => {
+		let dir: string;
+		let bctx: typeof ctx;
+		const call = (name: string, args: Record<string, unknown>) =>
+			callTool(name, { scope: 'workspace', ...args }, bctx);
+
+		// What fs_read returned when it loaded the whole file.
+		const wholeHead = (s: string, n: number) => s.split(/\r?\n/).slice(0, n).join('\n');
+		const wholeTail = (s: string, n: number) => {
+			const all = s.split(/\r?\n/);
+			return all.slice(Math.max(0, all.length - n)).join('\n');
+		};
+		const wholeStats = (s: string) =>
+			`${s === '' ? 0 : (s.match(/\n/g)?.length ?? 0)} ${s.split(/\s+/).filter(Boolean).length} ${Buffer.byteLength(s)}`;
+
+		beforeAll(() => {
+			dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-fs-bounded-'));
+			bctx = { ...ctx, workspaceDir: dir };
+		});
+
+		it('fs_read head/tail/stats match whole-file results across chunk boundaries', async () => {
+			// ~200KB of CRLF lines with multi-byte chars and words straddling 64KB chunks.
+			const lines = Array.from(
+				{ length: 4000 },
+				(_, i) => `\u00a0zeile ${i} äöü 😀 longwordlongwordlongword${i}\tend`
+			);
+			const content = `\ufeff${lines.join('\r\n')}\r\n`;
+			fs.writeFileSync(path.join(dir, 'crlf.txt'), content);
+			for (const n of [0, 1, 7, 2000, 3999, 4000, 4001, 10_000]) {
+				expect(resultText(await call('fs_read', { path: 'crlf.txt', head: n }))).toBe(
+					cap(wholeHead(content, n))
+				);
+				expect(resultText(await call('fs_read', { path: 'crlf.txt', tail: n }))).toBe(
+					cap(wholeTail(content, n))
+				);
+			}
+			expect(resultText(await call('fs_read', { path: 'crlf.txt', stats: true }))).toBe(
+				`${wholeStats(content)} crlf.txt`
+			);
+		});
+
+		it('fs_read tail handles a missing trailing newline and an empty file', async () => {
+			fs.writeFileSync(path.join(dir, 'nonl.txt'), 'a\nb\nc');
+			fs.writeFileSync(path.join(dir, 'empty.txt'), '');
+			expect(resultText(await call('fs_read', { path: 'nonl.txt', tail: 2 }))).toBe('b\nc');
+			expect(resultText(await call('fs_read', { path: 'nonl.txt', tail: 9 }))).toBe('a\nb\nc');
+			expect(resultText(await call('fs_read', { path: 'empty.txt', tail: 3 }))).toBe('');
+			expect(resultText(await call('fs_read', { path: 'empty.txt', stats: true }))).toBe(
+				'0 0 0 empty.txt'
+			);
+		});
+
+		it('fs_read truncates files over 1MB and rejects directories', async () => {
+			fs.writeFileSync(path.join(dir, 'huge.txt'), 'x'.repeat(3 * 1024 * 1024));
+			const out = resultText(await call('fs_read', { path: 'huge.txt' }));
+			expect(out).toBe(`${'x'.repeat(1024 * 1024)}\n… truncated`);
+			fs.mkdirSync(path.join(dir, 'adir'), { recursive: true });
+			const res = await call('fs_read', { path: 'adir' });
+			expect(isErr(res)).toBe(true);
+			expect(resultText(res)).toContain('not a file');
+		});
+
+		it('fs_grep skips heavy and binary files unless the path points inside', async () => {
+			fs.mkdirSync(path.join(dir, 'node_modules', 'pkg'), { recursive: true });
+			fs.mkdirSync(path.join(dir, 'lib', '.git'), { recursive: true });
+			fs.writeFileSync(path.join(dir, 'node_modules', 'pkg', 'i.js'), 'grepme\n');
+			fs.writeFileSync(path.join(dir, 'lib', '.git', 'HEAD'), 'grepme\n');
+			fs.writeFileSync(path.join(dir, 'lib', 'ok.txt'), 'grepme\n');
+			fs.writeFileSync(path.join(dir, 'lib', 'bin.dat'), Buffer.from('grepme\0\n'));
+			const out = resultText(await call('fs_grep', { pattern: 'grepme' }));
+			expect(out).toBe('lib/ok.txt:1:grepme');
+			const inside = resultText(await call('fs_grep', { pattern: 'grepme', path: 'node_modules' }));
+			expect(inside).toBe('node_modules/pkg/i.js:1:grepme');
+		});
+
+		it('fs_grep refuses an explicit file over the scan limit', async () => {
+			fs.writeFileSync(path.join(dir, 'scan-big.txt'), Buffer.alloc(5 * 1024 * 1024 + 1, 97));
+			const res = await call('fs_grep', { pattern: 'a', path: 'scan-big.txt' });
+			expect(isErr(res)).toBe(true);
+			expect(resultText(res)).toContain('file too large to search');
+		});
+
+		it('fs_grep stops after 5000 files and says so', { timeout: 60_000 }, async () => {
+			const many = path.join(dir, 'many');
+			fs.mkdirSync(many, { recursive: true });
+			await Promise.all(
+				Array.from({ length: 5001 }, (_, i) =>
+					fs.promises.writeFile(path.join(many, `f${i}.txt`), 'nothing here\n')
+				)
+			);
+			const out = resultText(await call('fs_grep', { pattern: 'zzz', path: 'many' }));
+			expect(out).toContain('searched only the first 5000 files');
+		});
+
+		it('fs_glob skips heavy dirs unless the pattern names them', async () => {
+			const all = JSON.parse(resultText(await call('fs_glob', { pattern: '**/*.js' })));
+			expect(all).toEqual([]);
+			const named = JSON.parse(
+				resultText(await call('fs_glob', { pattern: 'node_modules/**/*.js' }))
+			);
+			expect(named).toEqual(['node_modules/pkg/i.js']);
+			const deep = JSON.parse(resultText(await call('fs_glob', { pattern: '**/.git/*' })));
+			expect(deep).toEqual(['lib/.git/HEAD']);
+		});
+
+		it('fs_glob walks only below the literal prefix', async () => {
+			expect(JSON.parse(resultText(await call('fs_glob', { pattern: 'lib/*.txt' })))).toEqual([
+				'lib/ok.txt'
+			]);
+			expect(JSON.parse(resultText(await call('fs_glob', { pattern: 'lib/ok.txt' })))).toEqual([
+				'lib/ok.txt'
+			]);
+			expect(resultText(await call('fs_glob', { pattern: 'missing/**' }))).toBe('[]');
+			expect(resultText(await call('fs_glob', { pattern: 'lib/ok.txt/*' }))).toBe('[]');
+		});
+	});
+
 	it('fs_glob matches relative paths', async () => {
 		const res = await callTool('fs_glob', { scope: 'workspace', pattern: '**/*.md' });
 		const matches = JSON.parse(resultText(res)) as string[];
@@ -267,7 +388,7 @@ describe('fs server', () => {
 			expect(fs.readFileSync(path.join(documentsDir, 'notes', 'a.txt'), 'utf-8')).toBe('updated');
 		});
 
-		it('fs_edit replaces first occurrence and replaceAll replaces every occurrence', async () => {
+		it('fs_edit needs a unique match unless replaceAll is set', async () => {
 			await callTool('fs_write', {
 				scope: 'documents',
 				path: 'edit.txt',
@@ -275,11 +396,16 @@ describe('fs server', () => {
 			});
 			expect(
 				isErr(
+					await callTool('fs_edit', { scope: 'documents', path: 'edit.txt', old: 'foo', new: 'x' })
+				)
+			).toBe(true);
+			expect(
+				isErr(
 					await callTool('fs_edit', {
 						scope: 'documents',
 						path: 'edit.txt',
-						old: 'foo',
-						new: 'baz'
+						old: 'foo bar',
+						new: 'baz bar'
 					})
 				)
 			).toBe(false);
@@ -321,6 +447,18 @@ describe('fs server', () => {
 			).toBe(false);
 			expect(isErr(await callTool('fs_rm', { scope: 'documents', path: 'x/y' }))).toBe(false);
 			expect(fs.existsSync(path.join(documentsDir, 'x', 'y'))).toBe(false);
+		});
+
+		it('fs_edit keeps $ patterns in the new text literal', async () => {
+			await callTool('fs_write', { scope: 'documents', path: 'sh.txt', content: 'echo X' });
+			await callTool('fs_edit', { scope: 'documents', path: 'sh.txt', old: 'X', new: '$& $$1' });
+			expect(fs.readFileSync(path.join(documentsDir, 'sh.txt'), 'utf-8')).toBe('echo $& $$1');
+		});
+
+		it('fs_rm refuses the root and reports missing paths', async () => {
+			expect(isErr(await callTool('fs_rm', { scope: 'documents', path: '.' }))).toBe(true);
+			expect(fs.existsSync(documentsDir)).toBe(true);
+			expect(isErr(await callTool('fs_rm', { scope: 'documents', path: 'nope.txt' }))).toBe(true);
 		});
 	});
 

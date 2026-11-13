@@ -30,8 +30,10 @@ import {
 	deleteMessage,
 	extractText,
 	getMessage,
+	partialSaveIntervalMs,
 	toPublic,
 	updateMessage,
+	updateMessageParts,
 	type MessageBranch,
 	type MessageUsage
 } from '../db/repo/messages.js';
@@ -333,7 +335,111 @@ export function answerOnLastStep(maxSteps: number) {
 		stepNumber >= maxSteps - 1 ? { toolChoice: 'none' as const } : undefined;
 }
 
+/** Least time between saves of a reply being generated; see partialSaveIntervalMs. */
 const PERSIST_INTERVAL_MS = 500;
+
+/**
+ * Throttles the saves of a reply while it is generated: `due()` says whether
+ * the next snapshot should be saved, spacing saves by the size of the last one
+ * written (each save rewrites the whole row), and `offer()` saves a snapshot
+ * when due and different from the last one written. The final save is the
+ * caller's (onEnd), so nothing is lost at the end.
+ */
+export function partialSaveThrottle(
+	save: (partsJson: string) => void,
+	now: () => number = Date.now
+): { due: () => boolean; offer: (parts: unknown[]) => void } {
+	let lastAt = -Infinity;
+	// The row is created with no parts.
+	let lastJson = '[]';
+	const due = () => now() - lastAt >= partialSaveIntervalMs(lastJson.length, PERSIST_INTERVAL_MS);
+	return {
+		due,
+		offer(parts) {
+			if (!due()) return;
+			lastAt = now();
+			const json = JSON.stringify(parts);
+			if (json === lastJson) return;
+			lastJson = json;
+			save(json);
+		}
+	};
+}
+
+type DeltaChunk = Extract<
+	UIMessageChunk,
+	{ type: 'text-delta' | 'reasoning-delta' | 'tool-input-delta' }
+>;
+
+function isDeltaChunk(chunk: UIMessageChunk): chunk is DeltaChunk {
+	return (
+		chunk.type === 'text-delta' ||
+		chunk.type === 'reasoning-delta' ||
+		chunk.type === 'tool-input-delta'
+	);
+}
+
+/** Folds `next` into `pending` when applying them in one go is the same as applying both. */
+function mergeDeltas(pending: DeltaChunk, next: DeltaChunk): DeltaChunk | null {
+	if (pending.type === 'tool-input-delta' && next.type === 'tool-input-delta') {
+		if (pending.toolCallId !== next.toolCallId) return null;
+		return { ...pending, inputTextDelta: pending.inputTextDelta + next.inputTextDelta };
+	}
+	if (
+		(pending.type === 'text-delta' && next.type === 'text-delta') ||
+		(pending.type === 'reasoning-delta' && next.type === 'reasoning-delta')
+	) {
+		if (pending.id !== next.id) return null;
+		// The accumulator keeps the newest metadata a delta carried, as this does.
+		const providerMetadata = next.providerMetadata ?? pending.providerMetadata;
+		return {
+			...pending,
+			delta: pending.delta + next.delta,
+			...(providerMetadata !== undefined ? { providerMetadata } : {})
+		};
+	}
+	return null;
+}
+
+/**
+ * Joins runs of consecutive deltas into one chunk until `flushNow()` says a
+ * snapshot is wanted. `readUIMessageStream` deep-clones every non-text part
+ * per chunk it applies, so with large tool outputs in the message, feeding it
+ * every token costs O(tokens × output size). Any other chunk (and the stream's
+ * end) first releases the held delta, so every snapshot still covers all
+ * chunks received before it.
+ */
+export function coalesceDeltas(
+	flushNow: () => boolean
+): TransformStream<UIMessageChunk, UIMessageChunk> {
+	let pending: DeltaChunk | null = null;
+	return new TransformStream({
+		transform(chunk, out) {
+			if (isDeltaChunk(chunk)) {
+				const merged = pending ? mergeDeltas(pending, chunk) : chunk;
+				if (merged) {
+					pending = merged;
+				} else {
+					out.enqueue(pending!);
+					pending = chunk;
+				}
+				if (flushNow()) {
+					out.enqueue(pending);
+					pending = null;
+				}
+				return;
+			}
+			if (pending) {
+				out.enqueue(pending);
+				pending = null;
+			}
+			out.enqueue(chunk);
+		},
+		flush(out) {
+			if (pending) out.enqueue(pending);
+		}
+	});
+}
 
 // Consumes the tee'd copy of the SSE stream: mirrors every chunk into the
 // reconnect buffer and keeps the assistant row in the DB in sync (throttled)
@@ -342,23 +448,25 @@ async function consumeStreamCopy(
 	conversationId: string,
 	messageId: string,
 	sseStream: ReadableStream<string>,
-	controller: AbortController
+	controller: AbortController,
+	isSettled: () => boolean
 ): Promise<void> {
 	const db = getDb();
-	let lastPersist = 0;
-	const persist = (parts: unknown[]) => {
+	const throttle = partialSaveThrottle((partsJson) => {
 		try {
 			// This copy of the stream can lag behind the response. Once onEnd has
 			// settled the message, a late snapshot must not overwrite its final parts.
-			if (getMessage(db, messageId)?.status !== 'partial') return;
-			updateMessage(db, messageId, { parts });
+			// onEnd is the only thing that moves the row out of 'partial' (and
+			// updateMessageParts only writes a partial row).
+			if (isSettled()) return;
+			updateMessageParts(db, messageId, partsJson);
 		} catch (e) {
 			log.error('Failed to persist streaming assistant message', {
 				conversationId,
 				error: e instanceof Error ? e.message : String(e)
 			});
 		}
-	};
+	});
 	try {
 		// Tee again: one branch replays raw chunks into the reconnect buffer, the
 		// other reconstructs the live message for throttled DB persistence.
@@ -384,16 +492,11 @@ async function consumeStreamCopy(
 			})
 		);
 		const uiStream = readUIMessageStream<UIMessage>({
-			stream: messageChunks,
+			stream: messageChunks.pipeThrough(coalesceDeltas(throttle.due)),
 			onError: () => undefined
 		});
 		for await (const message of uiStream) {
-			if (message.parts.length === 0) continue;
-			const now = Date.now();
-			if (now - lastPersist >= PERSIST_INTERVAL_MS) {
-				lastPersist = now;
-				persist(message.parts);
-			}
+			if (message.parts.length > 0) throttle.offer(message.parts);
 		}
 		await mirror;
 	} catch {
@@ -779,6 +882,8 @@ export async function runChatTurn(
 
 	let resolveOutcome!: (outcome: TurnOutcome) => void;
 	const outcome = new Promise<TurnOutcome>((resolve) => (resolveOutcome = resolve));
+	/** Set once onEnd writes the final row; stream snapshots stop persisting then. */
+	let settled = false;
 
 	const stream = createUIMessageStream<UIMessage>({
 		originalMessages: history,
@@ -999,6 +1104,7 @@ export async function runChatTurn(
 			throw lastError ?? new Error('No model produced a response');
 		},
 		onEnd: async ({ responseMessage, isAborted }) => {
+			settled = true;
 			// A provider may surface an abort as an error; our abort reason wins.
 			const abortReason = abortReasonOf(controller.signal);
 			const aborted = isAborted || abortReason !== null;
@@ -1068,7 +1174,13 @@ export async function runChatTurn(
 	const response = createUIMessageStreamResponse({
 		stream,
 		consumeSseStream: ({ stream: sseStream }) => {
-			void consumeStreamCopy(conversation.id, assistantMessageId, sseStream, controller);
+			void consumeStreamCopy(
+				conversation.id,
+				assistantMessageId,
+				sseStream,
+				controller,
+				() => settled
+			);
 		}
 	});
 	return { response, outcome };

@@ -36,6 +36,24 @@ export interface ModelsByProvider {
 	models: ChatModel[];
 }
 
+/**
+ * The enabled models as the model pickers need them: a slimmed-down
+ * ModelsByProvider (which also fits), sent once per change (see model-catalog).
+ */
+export interface PickerModelGroup {
+	provider: Pick<Provider, 'id' | 'name' | 'type' | 'baseUrl'>;
+	models: Pick<ChatModel, 'providerId' | 'modelId' | 'displayName' | 'capabilities'>[];
+}
+
+/** What a page load says about the picker models; `groups` only on a full page load. */
+export interface ModelCatalogInfo {
+	/** Changes whenever the picker models do. */
+	version: string;
+	/** How many models there are. */
+	count: number;
+	groups?: PickerModelGroup[];
+}
+
 export interface ToolInfo {
 	name: string;
 	description: string;
@@ -61,6 +79,83 @@ export interface McpServerInfo {
 	oauthClientId: string | null;
 	hasOauthClientSecret: boolean;
 	oauthScope: string | null;
+}
+
+/** A server's tool calls over the usage window (Settings → MCP servers). */
+export interface McpServerUsage {
+	calls: number;
+	errors: number;
+	/** Distinct users who called its tools. */
+	users: number;
+	/** Latest call ever made, even before the window. */
+	lastUsedAt: number | null;
+}
+
+export interface McpToolUsage {
+	name: string;
+	calls: number;
+	errors: number;
+	users: number;
+	avgMs: number;
+	lastUsedAt: number;
+}
+
+export interface McpServerUsageDetail {
+	/** Length of the window in days. */
+	days: number;
+	users: number;
+	/** Most used first; tools never called in the window are absent. */
+	tools: McpToolUsage[];
+	/** One entry per UTC day of the window, oldest first. */
+	daily: { day: string; calls: number; errors: number }[];
+}
+
+/** A user's API key usage over a period (Settings → API → Statistics). */
+export interface ApiKeyUsageStats {
+	days: number;
+	/** Keys with at least one request in the period, most used first (may include deleted keys). */
+	keys: {
+		keyId: string;
+		/** Model requests made with the key, including those of agent runs it started. */
+		requests: number;
+		failed: number;
+		/** Agent runs the key started. */
+		runs: number;
+		/** Input (incl. cached) plus output tokens. */
+		tokens: number;
+		costUsd: number;
+		/** Requests that reported a cost; fewer than `requests` means `costUsd` is a lower bound. */
+		pricedRequests: number;
+		avgLatencyMs: number | null;
+		lastUsedAt: number;
+	}[];
+	/** One entry per UTC day, oldest first; each metric keyed by key id (absent: none). */
+	daily: {
+		day: string;
+		requests: Record<string, number>;
+		failed: Record<string, number>;
+		tokens: Record<string, number>;
+		/** USD, from requests that reported a cost. */
+		cost: Record<string, number>;
+	}[];
+}
+
+/** All servers' tool calls over a period (Settings → MCP servers → Statistics). */
+export interface McpUsageStats {
+	days: number;
+	/** Distinct users who called any MCP tool. */
+	users: number;
+	/** Servers with at least one call, most used first. */
+	servers: {
+		serverId: string;
+		calls: number;
+		errors: number;
+		users: number;
+		avgMs: number;
+		lastUsedAt: number;
+	}[];
+	/** One entry per UTC day, oldest first; calls and errors keyed by server id (absent: none). */
+	daily: { day: string; calls: Record<string, number>; errors: Record<string, number> }[];
 }
 
 /** An OAuth MCP server as the signed-in user sees it on Settings → Connected apps. */

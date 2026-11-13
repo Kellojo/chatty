@@ -239,6 +239,16 @@ export function listProxyRequests(
 	return { rows, total };
 }
 
+/** All requests and those still running: what the admin sidebar shows, without the full stats scan. */
+export function countProxyRequests(db: Db): { total: number; running: number } {
+	return db
+		.prepare(
+			`SELECT (SELECT COUNT(*) FROM proxy_requests) AS total,
+				(SELECT COUNT(*) FROM proxy_requests WHERE status = 'running') AS running`
+		)
+		.get() as { total: number; running: number };
+}
+
 export interface ProxyRequestStats {
 	total: number;
 	completed: number;

@@ -12,6 +12,7 @@ import {
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import { isUsagePeriod } from '$lib/components/app/usage/usage.js';
 import { localDays, startOfLocalDay, usageWindow, utcOffsetMinutes } from '../usage-data.server.js';
+import { PROXY_REQUESTS_KEY } from '$lib/load-keys.js';
 import type { PageServerLoad } from './$types';
 
 const PAGE_SIZE = 50;
@@ -19,8 +20,10 @@ const DAY_MS = 86_400_000;
 /** Longest span the per-day model chart draws; wider ranges show their most recent days. */
 const MAX_CHART_DAYS = 90;
 
-export const load: PageServerLoad = ({ locals, url }) => {
+export const load: PageServerLoad = ({ locals, url, depends }) => {
 	const user = requireUser(locals);
+	// Request events refresh just this page, not the whole app layout.
+	depends(PROXY_REQUESTS_KEY);
 	// Admins see everyone's requests; everyone else only ever sees their own.
 	const isAdmin = (user as { role?: string }).role === 'admin';
 	const db = getDb();
