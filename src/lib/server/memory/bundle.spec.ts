@@ -28,8 +28,8 @@ describe('memory bundle', () => {
 		db = getDb();
 	});
 
-	it('writeConcept creates the file, audit row and FTS entry', () => {
-		const concept = bundle.writeConcept(
+	it('writeConcept creates the file, audit row and FTS entry', async () => {
+		const concept = await bundle.writeConcept(
 			db,
 			'user',
 			'u1',
@@ -59,8 +59,8 @@ describe('memory bundle', () => {
 		expect(tagHits.map((h) => h.path)).toContain('people/john.md');
 	});
 
-	it('readConcept returns what was written', () => {
-		const concept = bundle.readConcept('user', 'u1', 'people/john.md');
+	it('readConcept returns what was written', async () => {
+		const concept = await bundle.readConcept('user', 'u1', 'people/john.md');
 		expect(concept).not.toBeNull();
 		expect(concept!.frontmatter.title).toBe('John');
 		expect(concept!.frontmatter.description).toBe('A person');
@@ -69,13 +69,13 @@ describe('memory bundle', () => {
 		expect(concept!.body.trim()).toBe('John likes espresso.');
 	});
 
-	it('readConcept returns null for missing or invalid paths', () => {
-		expect(bundle.readConcept('user', 'u1', 'missing.md')).toBeNull();
-		expect(bundle.readConcept('user', 'u1', '../x.md')).toBeNull();
+	it('readConcept returns null for missing or invalid paths', async () => {
+		expect(await bundle.readConcept('user', 'u1', 'missing.md')).toBeNull();
+		expect(await bundle.readConcept('user', 'u1', '../x.md')).toBeNull();
 	});
 
-	it('update produces an update row with a parseable diff', () => {
-		bundle.writeConcept(
+	it('update produces an update row with a parseable diff', async () => {
+		await bundle.writeConcept(
 			db,
 			'user',
 			'u1',
@@ -104,8 +104,8 @@ describe('memory bundle', () => {
 		expect(content).toContain('- [John](john.md) — A person');
 	});
 
-	it('listTree nests dirs and concepts with titles', () => {
-		const tree = bundle.listTree('user', 'u1');
+	it('listTree nests dirs and concepts with titles', async () => {
+		const tree = await bundle.listTree('user', 'u1');
 		const people = tree.find((n) => n.name === 'people');
 		expect(people?.kind).toBe('dir');
 		const john = people?.children?.find((n) => n.name === 'john.md');
@@ -115,15 +115,15 @@ describe('memory bundle', () => {
 		expect(tree.some((n) => n.name === 'index.md')).toBe(false);
 	});
 
-	it('listConceptPaths returns flat paths with optional prefix', () => {
-		expect(bundle.listConceptPaths('user', 'u1')).toEqual(['people/john.md']);
-		expect(bundle.listConceptPaths('user', 'u1', 'people')).toEqual(['people/john.md']);
-		expect(bundle.listConceptPaths('user', 'u1', 'nope')).toEqual([]);
-		expect(bundle.listConceptPaths('user', 'u1', '../')).toEqual([]);
+	it('listConceptPaths returns flat paths with optional prefix', async () => {
+		expect(await bundle.listConceptPaths('user', 'u1')).toEqual(['people/john.md']);
+		expect(await bundle.listConceptPaths('user', 'u1', 'people')).toEqual(['people/john.md']);
+		expect(await bundle.listConceptPaths('user', 'u1', 'nope')).toEqual([]);
+		expect(await bundle.listConceptPaths('user', 'u1', '../')).toEqual([]);
 	});
 
 	it('moveConcept relocates the file and records a rename diff', async () => {
-		const moved = bundle.moveConcept(
+		const moved = await bundle.moveConcept(
 			db,
 			'user',
 			'u1',
@@ -152,19 +152,19 @@ describe('memory bundle', () => {
 		expect(indexContent).toContain('- [John](jonathan.md) — A person');
 	});
 
-	it('moveConcept throws when source is missing or target exists', () => {
-		expect(() => bundle.moveConcept(db, 'user', 'u1', 'missing.md', 'other.md', audit)).toThrow(
-			/not found/i
-		);
-		expect(() =>
+	it('moveConcept throws when source is missing or target exists', async () => {
+		await expect(
+			bundle.moveConcept(db, 'user', 'u1', 'missing.md', 'other.md', audit)
+		).rejects.toThrow(/not found/i);
+		await expect(
 			bundle.moveConcept(db, 'user', 'u1', 'people/jonathan.md', 'people/jonathan.md', audit)
-		).toThrow(/already exists/i);
+		).rejects.toThrow(/already exists/i);
 	});
 
-	it('deleteConcept removes file, FTS row and index.md', () => {
-		const ok = bundle.deleteConcept(db, 'user', 'u1', 'people/jonathan.md', audit);
+	it('deleteConcept removes file, FTS row and index.md', async () => {
+		const ok = await bundle.deleteConcept(db, 'user', 'u1', 'people/jonathan.md', audit);
 		expect(ok).toBe(true);
-		expect(bundle.deleteConcept(db, 'user', 'u1', 'people/jonathan.md', audit)).toBe(false);
+		expect(await bundle.deleteConcept(db, 'user', 'u1', 'people/jonathan.md', audit)).toBe(false);
 		expect(fs.existsSync(conceptAbs('u1', 'people/jonathan.md'))).toBe(false);
 		expect(fts.searchMemoryFts(db, ['user:u1'], 'marathons')).toEqual([]);
 		expect(fs.existsSync(path.join(paths.bundleDir('user', 'u1'), 'people', 'index.md'))).toBe(
@@ -178,7 +178,7 @@ describe('memory bundle', () => {
 
 	it('deleteConcept publishes a memory.changed event with action delete', async () => {
 		const { subscribeServerEvents } = await import('../events/bus.js');
-		bundle.writeConcept(
+		await bundle.writeConcept(
 			db,
 			'user',
 			'u1',
@@ -191,7 +191,7 @@ describe('memory bundle', () => {
 			if (event.type === 'memory.changed') seen.push(event);
 		});
 		try {
-			bundle.deleteConcept(db, 'user', 'u1', 'events/victim.md', audit);
+			await bundle.deleteConcept(db, 'user', 'u1', 'events/victim.md', audit);
 		} finally {
 			unsub();
 		}
@@ -204,8 +204,8 @@ describe('memory bundle', () => {
 		});
 	});
 
-	it('deleteConcept prunes the now-empty directory chain', () => {
-		bundle.writeConcept(
+	it('deleteConcept prunes the now-empty directory chain', async () => {
+		await bundle.writeConcept(
 			db,
 			'user',
 			'u1',
@@ -215,13 +215,13 @@ describe('memory bundle', () => {
 		);
 		expect(fs.existsSync(conceptAbs('u1', 'deep/nested/thing.md'))).toBe(true);
 
-		bundle.deleteConcept(db, 'user', 'u1', 'deep/nested/thing.md', audit);
+		await bundle.deleteConcept(db, 'user', 'u1', 'deep/nested/thing.md', audit);
 		expect(fs.existsSync(conceptAbs('u1', 'deep/nested/thing.md'))).toBe(false);
 		expect(fs.existsSync(path.join(paths.bundleDir('user', 'u1'), 'deep'))).toBe(false);
 	});
 
-	it('moveConcept prunes the emptied source directory', () => {
-		bundle.writeConcept(
+	it('moveConcept prunes the emptied source directory', async () => {
+		await bundle.writeConcept(
 			db,
 			'user',
 			'u1',
@@ -229,17 +229,40 @@ describe('memory bundle', () => {
 			{ frontmatter: { title: 'Note' }, body: 'A movable note.' },
 			audit
 		);
-		const moved = bundle.moveConcept(db, 'user', 'u1', 'oldhome/note.md', 'newhome/note.md', audit);
+		const moved = await bundle.moveConcept(
+			db,
+			'user',
+			'u1',
+			'oldhome/note.md',
+			'newhome/note.md',
+			audit
+		);
 		expect(moved.path).toBe('newhome/note.md');
 		expect(fs.existsSync(conceptAbs('u1', 'newhome/note.md'))).toBe(true);
 		expect(fs.existsSync(path.join(paths.bundleDir('user', 'u1'), 'oldhome'))).toBe(false);
 
-		bundle.deleteConcept(db, 'user', 'u1', 'newhome/note.md', audit);
+		await bundle.deleteConcept(db, 'user', 'u1', 'newhome/note.md', audit);
 		expect(fs.existsSync(path.join(paths.bundleDir('user', 'u1'), 'newhome'))).toBe(false);
 	});
 
-	it('shared scope audit rows use actor id and shared/ prefix', () => {
-		bundle.writeConcept(
+	it('serializes concurrent writes so each diff sees the previous content', async () => {
+		const write = (body: string) =>
+			bundle.writeConcept(
+				db,
+				'user',
+				'u1',
+				'race/note.md',
+				{ frontmatter: { title: 'Race' }, body },
+				audit
+			);
+		await Promise.all([write('first'), write('second')]);
+		const rows = writes.listMemoryWrites(db, { userId: 'u1', conceptPath: 'race/note.md' });
+		expect(rows.map((r) => r.action).sort()).toEqual(['create', 'update']);
+		await bundle.deleteConcept(db, 'user', 'u1', 'race/note.md', audit);
+	});
+
+	it('shared scope audit rows use actor id and shared/ prefix', async () => {
+		await bundle.writeConcept(
 			db,
 			'shared',
 			'u1',
@@ -254,8 +277,8 @@ describe('memory bundle', () => {
 		expect(fts.searchMemoryFts(db, ['shared'], 'terms').map((h) => h.scope)).toEqual(['shared']);
 	});
 
-	it('rejects invalid frontmatter input', () => {
-		expect(() =>
+	it('rejects invalid frontmatter input', async () => {
+		await expect(
 			bundle.writeConcept(
 				db,
 				'user',
@@ -264,8 +287,8 @@ describe('memory bundle', () => {
 				{ frontmatter: { title: '' }, body: 'x' },
 				audit
 			)
-		).toThrow(/frontmatter/i);
-		expect(() =>
+		).rejects.toThrow(/frontmatter/i);
+		await expect(
 			bundle.writeConcept(
 				db,
 				'user',
@@ -274,11 +297,11 @@ describe('memory bundle', () => {
 				{ frontmatter: { title: 'Ok', tags: Array(21).fill('t') }, body: 'x' },
 				audit
 			)
-		).toThrow(/frontmatter/i);
+		).rejects.toThrow(/frontmatter/i);
 	});
 
-	it('rejects invalid concept paths', () => {
-		expect(() =>
+	it('rejects invalid concept paths', async () => {
+		await expect(
 			bundle.writeConcept(
 				db,
 				'user',
@@ -287,8 +310,8 @@ describe('memory bundle', () => {
 				{ frontmatter: { title: 'X' }, body: 'x' },
 				audit
 			)
-		).toThrow(/invalid concept path/i);
-		expect(() => bundle.deleteConcept(db, 'user', 'u1', 'index.md', audit)).toThrow(
+		).rejects.toThrow(/invalid concept path/i);
+		await expect(bundle.deleteConcept(db, 'user', 'u1', 'index.md', audit)).rejects.toThrow(
 			/invalid concept path/i
 		);
 	});

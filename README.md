@@ -24,6 +24,7 @@ services:
     environment:
       DATABASE_PATH: /data/ai-chat.db
       MEMORY_VOLUME: /memory
+      SKILLS_VOLUME: /skills
       DOCUMENTS_VOLUME: /documents
       WORKSPACES_VOLUME: /workspaces
       APP_SECRET: ${CHATTY_APP_SECRET}
@@ -93,6 +94,57 @@ Chatty finds the authorization server through the MCP server's protected resourc
 3. dynamic client registration, when the authorization server offers it.
 
 The redirect URL to allow is `<ORIGIN>/api/mcp-oauth/callback`. Set `ORIGIN` so these URLs are stable. With Pocket ID, add the client ID URL to **Allowed metadata document URLs** and enable **Allow all metadata document clients** on the API, or register Chatty as an OIDC client with that redirect URL.
+
+## Data, backups and restore
+
+All state lives in the mounted volumes:
+
+| Volume        | Contents                                                                                       | Back up? |
+| ------------- | ---------------------------------------------------------------------------------------------- | -------- |
+| `/data`       | SQLite database (users, chats, agents, settings, encrypted secrets) and `.secret` (see below)  | **Yes**  |
+| `/memory`     | Memory bundles (markdown files); the search index in the database is rebuilt from them on boot | **Yes**  |
+| `/skills`     | User and shared skills                                                                         | **Yes**  |
+| `/documents`  | Uploaded documents                                                                             | **Yes**  |
+| `/workspaces` | Agent sandbox directories, garbage-collected after `WORKSPACE_GC_DAYS`                         | Optional |
+
+Provider keys, MCP tokens and OAuth tokens are encrypted with `APP_SECRET`. If `APP_SECRET` is not set, Chatty generates one and stores it in `/data/.secret`. **Keep the secret with your backups**: a database restored with a different secret loses every stored provider key and token, and they have to be re-entered.
+
+### Backing up
+
+The simplest consistent backup is to stop the container, copy the volumes, and start it again:
+
+```sh
+docker compose stop app
+tar czf chatty-backup-$(date +%F).tar.gz data memory skills documents
+docker compose start app
+```
+
+To back up without downtime, take an online snapshot of the database (copying the `.db` file of a running instance can produce a corrupt copy, because SQLite runs in WAL mode), then copy the other volumes:
+
+```sh
+docker exec chatty node -e "require('better-sqlite3')('/data/ai-chat.db').backup('/data/backup.db').then(() => console.log('ok'))"
+```
+
+Then archive `data/backup.db`, `data/.secret` (if used), `memory`, `skills` and `documents`.
+
+### Restoring
+
+1. Stop the container.
+2. Replace the volume contents with the backup. When restoring an online snapshot, rename `backup.db` to `ai-chat.db` and delete any leftover `ai-chat.db-wal` / `ai-chat.db-shm` files.
+3. Make sure `APP_SECRET` (or `/data/.secret`) matches the one in use when the backup was taken.
+4. Start the **same or a newer** Chatty version as the one that took the backup. A newer version migrates the database on boot.
+
+## Upgrading
+
+1. **Back up first** (see above). Database migrations cannot be undone.
+2. Pull the new image and recreate the container: `docker compose pull && docker compose up -d`. Stop the old container before starting the new one; never run two versions against the same volumes.
+3. On boot, Chatty applies any new numbered migrations from `migrations/` in order, each inside a transaction, and records them in the `_migrations` table. A migration that fails is rolled back, and Chatty cannot open its database until the problem is fixed; the logged error names the failing migration file. To recover, restore the backup or go back to the previous image.
+
+**Downgrading.** Migrations are forward-only; there are no down migrations. An older version starts against a newer database but may fail on the changed schema. To roll back, restore the backup taken before the upgrade and run the previous image.
+
+**Stability.** From 1.0 on, upgrades within the same major version keep the database, the volume layout and the environment variables backward compatible: existing installs keep working after pulling a new image. Breaking changes to any of those only ship in a new major version, with notes in the release.
+
+> **Older installs:** earlier versions of this README did not set `SKILLS_VOLUME`, so skills were stored inside the container (`/app/skills`) rather than in the `/skills` volume, and were lost when the container was recreated. Before adding `SKILLS_VOLUME: /skills`, copy any skills out of the running container: `docker cp chatty:/app/skills/. ./skills/` (skip the `defaults` folder).
 
 ## Development
 

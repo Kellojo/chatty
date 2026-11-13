@@ -24,6 +24,18 @@ export interface Concept {
 	body: string;
 }
 
+/** How often the AI came across a concept, since tracking began. */
+export interface MemoryViewTotals {
+	/** Times it was among search_memory results. */
+	searchHits: number;
+	/** Times read_concept opened it. */
+	reads: number;
+	/** The part of each made by agent runs rather than chats. */
+	agentSearchHits: number;
+	agentReads: number;
+	lastViewedAt: number | null;
+}
+
 export interface MemorySearchHit {
 	scope: string;
 	path: string;

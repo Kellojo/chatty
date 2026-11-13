@@ -35,6 +35,7 @@ function row(overrides: Partial<McpServerRow> = {}): McpServerRow {
 		oauth_client_secret_enc: null,
 		oauth_scope: null,
 		oauth_client_info_enc: null,
+		tool_count: null,
 		...overrides
 	};
 }

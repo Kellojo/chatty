@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
@@ -19,13 +21,19 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
+	import * as Tabs from '$lib/components/ui/tabs/index.js';
+	import SkillUsageDialog from '$lib/components/app/skills/SkillUsageDialog.svelte';
+	import SkillUsageStats from '$lib/components/app/skills/SkillUsageStats.svelte';
+	import { plural } from '$lib/components/app/skills/skill-usage.js';
+	import { DEFAULT_USAGE_PERIOD, type UsagePeriod } from '$lib/components/app/usage/usage.js';
+	import { formatTimeAgo } from '$lib/datetime.js';
 	import EmptyState from '$lib/components/app/EmptyState.svelte';
 	import PageHeader from '$lib/components/app/PageHeader.svelte';
 	import RowMenu, { type RowMenuItem } from '$lib/components/app/settings/RowMenu.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import { skillPath, skillSourceLabel } from '$lib/skill-labels.js';
-	import type { SkillSummary } from '$lib/skill-types.js';
+	import { skillUsageKey, type SkillSummary, type SkillUsageDetail } from '$lib/skill-types.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -74,6 +82,7 @@
 				icon: editable ? PencilIcon : EyeIcon,
 				onSelect: () => goto(resolve(skillPath(skill)))
 			},
+			{ label: 'View usage', icon: ChartColumnIcon, onSelect: () => openUsage(skill) },
 			{
 				label: skill.scope === 'shared' ? 'Duplicate to yours' : 'Duplicate',
 				icon: CopyIcon,
@@ -97,8 +106,9 @@
 		return items;
 	}
 
-	async function toggleSkill(skill: SkillSummary, enabled: boolean) {
-		if (toggleBusy) return;
+	/** Turns a skill on or off; true once saved. */
+	async function toggleSkill(skill: SkillSummary, enabled: boolean): Promise<boolean> {
+		if (toggleBusy) return false;
 		toggleBusy = `${skill.scope}:${skill.name}`;
 		try {
 			const res = await fetch(`/api/skills/${skill.name}?scope=${skill.scope}`, {
@@ -111,11 +121,87 @@
 				throw new Error(body?.message ?? `Request failed (${res.status})`);
 			}
 			await invalidateAll();
+			return true;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to update skill');
+			return false;
 		} finally {
 			toggleBusy = null;
 		}
+	}
+
+	/** Who a skill's numbers count: everyone for an admin on a shared skill, else only the viewer. */
+	const countsEveryone = (skill: SkillSummary) => data.isAdmin && skill.scope === 'shared';
+	const canToggle = (skill: SkillSummary) => skill.scope === 'user' || data.isAdmin;
+
+	let usageOpen = $state(false);
+	let usageSkill = $state<SkillSummary | null>(null);
+	let usageDetail = $state<SkillUsageDetail | null>(null);
+
+	async function openUsage(skill: SkillSummary) {
+		usageSkill = skill;
+		usageDetail = null;
+		usageOpen = true;
+		try {
+			const res = await fetch(`/api/skills/${skill.name}/usage?scope=${skill.scope}`);
+			if (!res.ok) {
+				const body = (await res.json().catch(() => null)) as { message?: string } | null;
+				throw new Error(body?.message ?? `Request failed (${res.status})`);
+			}
+			const detail = (await res.json()) as SkillUsageDetail;
+			// Ignore a late answer for a skill whose usage is no longer shown.
+			if (usageSkill && skillUsageKey(usageSkill) === skillUsageKey(skill)) usageDetail = detail;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not load usage');
+			usageOpen = false;
+		}
+	}
+
+	/** The full usage sentence, for the usage button's tooltip and accessible name. */
+	function usageLabel(skill: SkillSummary): string {
+		const usage = data.usage[skillUsageKey(skill)];
+		const window = `${data.usageWindowDays} days`;
+		if (!usage || usage.uses === 0) {
+			const last = usage?.lastUsedAt ? ` · last used ${formatTimeAgo(usage.lastUsedAt)}` : '';
+			return `Not used in the last ${window}${last}`;
+		}
+		const parts = [`${plural(usage.uses, 'use')} in ${window}`];
+		if (countsEveryone(skill)) parts.push(plural(usage.users, 'user'));
+		if (usage.lastUsedAt) parts.push(`last used ${formatTimeAgo(usage.lastUsedAt)}`);
+		return parts.join(' · ');
+	}
+
+	const isUnused = (skill: SkillSummary) => !data.usage[skillUsageKey(skill)]?.uses;
+
+	/** The short usage figure in the row: "42 uses", "Unused" for an idle skill that is on, else nothing. */
+	function usageShort(skill: SkillSummary): string {
+		if (!isUnused(skill)) return plural(data.usage[skillUsageKey(skill)].uses, 'use');
+		return skill.enabled ? 'Unused' : '';
+	}
+
+	type Tab = 'skills' | 'statistics';
+	// The tab and the statistics period live in the URL, so a reload or a shared link keeps them.
+	const activeTab = $derived<Tab>(
+		page.url.searchParams.get('tab') === 'statistics' ? 'statistics' : 'skills'
+	);
+
+	/** This page with `updates` applied to its query (default values drop the param). */
+	function navigate(updates: { tab?: Tab; period?: UsagePeriod }) {
+		// A throwaway copy for building one href, not reactive state.
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity
+		const params = new URLSearchParams(page.url.searchParams);
+		if (updates.tab) params.set('tab', updates.tab);
+		if (updates.period) params.set('period', updates.period);
+		if (params.get('tab') === 'skills') params.delete('tab');
+		if (params.get('period') === DEFAULT_USAGE_PERIOD) params.delete('period');
+		const qs = params.toString();
+		// The resolved path of this page plus its own query.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		void goto(`${resolve('/skills')}${qs ? `?${qs}` : ''}`, {
+			keepFocus: true,
+			noScroll: true,
+			replaceState: true
+		});
 	}
 
 	async function confirmDelete() {
@@ -226,39 +312,42 @@
 	>
 		{#snippet leading()}
 			{#if skill.source.startsWith('git:')}
-				<GitBranchIcon class="size-4" />
+				<GitBranchIcon class="size-4" aria-label={skillSourceLabel(skill)} />
 			{:else}
 				<SparklesIcon class="size-4" />
 			{/if}
 		{/snippet}
 		{#snippet badges()}
-			{#if skill.version}
-				<span class="text-xs text-muted-foreground tabular-nums max-sm:hidden"
-					>v{skill.version}</span
-				>
-			{/if}
 			{#if shadowed}
-				<Badge variant="outline" title="Used instead of the shared skill “{shadowed.title}”">
+				<!-- Phones: the skill page says so; the badge would take a line of its own. -->
+				<Badge
+					variant="outline"
+					class="max-sm:hidden"
+					title="Used instead of the shared skill “{shadowed.title}”"
+				>
 					Overrides shared
 				</Badge>
 			{/if}
 		{/snippet}
 		{#snippet meta()}
-			<!-- Phones: title and a one-line description; slug and source are on the skill page. -->
-			<span class="max-sm:hidden">
-				<span class="font-mono">{skill.name}</span> ·
-				<span title={skill.source}>{skillSourceLabel(skill)}</span>
-			</span>
+			<span title={skill.description}>{skill.description}</span>
 		{/snippet}
-		{#if skill.description}
-			<p
-				class="line-clamp-2 text-xs text-pretty text-muted-foreground max-sm:line-clamp-1"
-				title={skill.description}
-			>
-				{skill.description}
-			</p>
-		{/if}
 		{#snippet trailing()}
+			<!-- Phones get the usage from the row menu. -->
+			{@const usage = usageShort(skill)}
+			{#if usage}
+				<button
+					type="button"
+					class="w-20 cursor-pointer rounded-sm text-right text-xs text-muted-foreground tabular-nums underline decoration-muted-foreground/40 decoration-dotted underline-offset-2 hover:text-foreground hover:decoration-current hover:decoration-solid focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-sm:hidden"
+					title="{usageLabel(skill)}. Click for details."
+					aria-label="View usage of {skill.title}: {usageLabel(skill)}"
+					onclick={() => openUsage(skill)}
+				>
+					{usage}
+				</button>
+			{:else}
+				<span class="w-20 max-sm:hidden" aria-hidden="true"></span>
+			{/if}
 			{#if canToggle}
 				<Switch
 					checked={skill.enabled}
@@ -300,98 +389,142 @@
 			{/snippet}
 		</PageHeader>
 
-		{#if totalSkills > 5}
-			<div class="relative sm:max-w-xs">
-				<SearchIcon
-					class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-				/>
-				<Input
-					type="search"
-					placeholder="Search skills"
-					aria-label="Search skills"
-					class="pl-9"
-					bind:value={query}
-				/>
-			</div>
-		{/if}
-
-		<SettingsSection title="Your skills" flush>
-			{#if data.userSkills.length === 0}
-				<EmptyState
-					icon={SparklesIcon}
-					title="No skills of your own yet"
-					description="Write one, import a repository of skills, or duplicate a shared skill to adapt it."
-				>
-					<Button size="sm" href={resolve('/skills/new')}
-						><PlusIcon class="size-4" />New skill</Button
-					>
-					<Button size="sm" variant="outline" onclick={() => (importOpen = true)}>
-						<GitBranchIcon class="size-4" />Import from git
-					</Button>
-				</EmptyState>
-			{:else if userSkills.length === 0}
-				<p class="px-6 py-6 text-center text-sm text-muted-foreground">
-					No skills of yours match “{query.trim()}”.
-				</p>
-			{:else}
-				<ul class="divide-y divide-border/60" aria-label="Your skills">
-					{#each userSkills as skill (skill.name)}
-						{@render skillRow(skill, true)}
-					{/each}
-				</ul>
-			{/if}
-		</SettingsSection>
-
-		<SettingsSection
-			title="Shared skills"
-			description={data.isAdmin
-				? 'Available to everyone. A skill of yours with the same name replaces it for you.'
-				: 'Available to everyone and managed by admins. A skill of yours with the same name replaces it for you.'}
-			flush
+		<Tabs.Root
+			value={activeTab}
+			onValueChange={(value) => navigate({ tab: value === 'statistics' ? 'statistics' : 'skills' })}
+			class="gap-6"
 		>
-			{#if data.sharedSkills.length === 0}
-				<p class="px-6 py-6 text-center text-sm text-muted-foreground">No shared skills.</p>
-			{:else if sharedSkills.length === 0}
-				<p class="px-6 py-6 text-center text-sm text-muted-foreground">
-					No shared skills match “{query.trim()}”.
-				</p>
-			{:else}
-				<ul class="divide-y divide-border/60" aria-label="Shared skills">
-					{#each sharedSkills as skill (skill.name)}
-						{@render skillRow(skill, data.isAdmin)}
-					{/each}
-				</ul>
-			{/if}
-		</SettingsSection>
-
-		{#if data.shadowedSkills.length > 0}
-			<details class="group rounded-2xl border">
-				<summary
-					class="flex cursor-pointer list-none items-center gap-2 rounded-2xl px-6 py-3 text-sm text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+			<Tabs.List class="self-start">
+				<Tabs.Trigger value="skills"
+					><SparklesIcon class="size-4" aria-hidden="true" />Skills</Tabs.Trigger
 				>
-					<ChevronRightIcon class="size-4 transition-transform group-open:rotate-90" />
-					{data.shadowedSkills.length} shared skill{data.shadowedSkills.length === 1 ? '' : 's'}
-					replaced by yours
-				</summary>
-				<ul class="divide-y divide-border/60 border-t" aria-label="Replaced shared skills">
-					{#each data.shadowedSkills as skill (skill.name)}
-						<SettingsListItem
-							title={skill.title}
-							titleAttr={skill.name}
-							href={resolve(skillPath(skill))}
-							muted
-						>
-							{#snippet leading()}<SparklesIcon class="size-4" />{/snippet}
-							{#snippet meta()}
-								<span class="font-mono">{skill.name}</span> · {skillSourceLabel(skill)}
-							{/snippet}
-						</SettingsListItem>
-					{/each}
-				</ul>
-			</details>
-		{/if}
+				<Tabs.Trigger value="statistics">
+					<ChartColumnIcon class="size-4" aria-hidden="true" />Statistics
+				</Tabs.Trigger>
+			</Tabs.List>
+			<Tabs.Content value="skills" class="flex flex-col gap-6">
+				{@render skillList()}
+			</Tabs.Content>
+			<Tabs.Content value="statistics">
+				<SkillUsageStats
+					stats={data.stats}
+					period={data.stats.period}
+					skills={[...data.userSkills, ...data.sharedSkills]}
+					usage={data.usage}
+					everyone={data.isAdmin}
+					onPeriodChange={(period) => navigate({ period })}
+					onShowSkill={openUsage}
+				/>
+			</Tabs.Content>
+		</Tabs.Root>
 	</div>
 </div>
+
+{#snippet skillList()}
+	{#if totalSkills > 5}
+		<div class="relative sm:max-w-xs">
+			<SearchIcon
+				class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+			/>
+			<Input
+				type="search"
+				placeholder="Search skills"
+				aria-label="Search skills"
+				class="pl-9"
+				bind:value={query}
+			/>
+		</div>
+	{/if}
+
+	<SettingsSection title="Your skills" flush>
+		{#if data.userSkills.length === 0}
+			<EmptyState
+				icon={SparklesIcon}
+				title="No skills of your own yet"
+				description="Write one, import a repository of skills, or duplicate a shared skill to adapt it."
+			>
+				<Button size="sm" href={resolve('/skills/new')}><PlusIcon class="size-4" />New skill</Button
+				>
+				<Button size="sm" variant="outline" onclick={() => (importOpen = true)}>
+					<GitBranchIcon class="size-4" />Import from git
+				</Button>
+			</EmptyState>
+		{:else if userSkills.length === 0}
+			<p class="px-6 py-6 text-center text-sm text-muted-foreground">
+				No skills of yours match “{query.trim()}”.
+			</p>
+		{:else}
+			<ul class="divide-y divide-border/60" aria-label="Your skills">
+				{#each userSkills as skill (skill.name)}
+					{@render skillRow(skill, true)}
+				{/each}
+			</ul>
+		{/if}
+	</SettingsSection>
+
+	<SettingsSection
+		title="Shared skills"
+		description={data.isAdmin
+			? 'Available to everyone. Yours replace any with the same name.'
+			: 'Managed by admins. Yours replace any with the same name.'}
+		flush
+	>
+		{#if data.sharedSkills.length === 0}
+			<p class="px-6 py-6 text-center text-sm text-muted-foreground">No shared skills.</p>
+		{:else if sharedSkills.length === 0}
+			<p class="px-6 py-6 text-center text-sm text-muted-foreground">
+				No shared skills match “{query.trim()}”.
+			</p>
+		{:else}
+			<ul class="divide-y divide-border/60" aria-label="Shared skills">
+				{#each sharedSkills as skill (skill.name)}
+					{@render skillRow(skill, data.isAdmin)}
+				{/each}
+			</ul>
+		{/if}
+	</SettingsSection>
+
+	{#if data.shadowedSkills.length > 0}
+		<details class="group">
+			<summary
+				class="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm px-2 py-1 text-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [&::-webkit-details-marker]:hidden"
+			>
+				<ChevronRightIcon class="size-4 transition-transform group-open:rotate-90" />
+				{data.shadowedSkills.length} shared skill{data.shadowedSkills.length === 1 ? '' : 's'}
+				replaced by yours
+			</summary>
+			<ul
+				class="mt-2 divide-y divide-border/60 overflow-hidden rounded-2xl bg-card text-card-foreground shadow-md ring-1 ring-foreground/5 [--card-spacing:--spacing(6)] max-sm:[--card-spacing:--spacing(4)] dark:ring-foreground/10"
+				aria-label="Replaced shared skills"
+			>
+				{#each data.shadowedSkills as skill (skill.name)}
+					<SettingsListItem
+						title={skill.title}
+						titleAttr={skill.name}
+						href={resolve(skillPath(skill))}
+						muted
+					>
+						{#snippet leading()}<SparklesIcon class="size-4" />{/snippet}
+						{#snippet meta()}
+							<span title={skill.description}>{skill.description}</span>
+						{/snippet}
+					</SettingsListItem>
+				{/each}
+			</ul>
+		</details>
+	{/if}
+{/snippet}
+
+<SkillUsageDialog
+	bind:open={usageOpen}
+	skill={usageSkill}
+	detail={usageDetail}
+	everyone={usageSkill ? countsEveryone(usageSkill) : false}
+	lastUsedAt={usageSkill ? (data.usage[skillUsageKey(usageSkill)]?.lastUsedAt ?? null) : null}
+	onDisable={usageSkill?.enabled && canToggle(usageSkill)
+		? () => toggleSkill(usageSkill!, false)
+		: undefined}
+/>
 
 <Dialog.Root open={deleteTarget !== null} onOpenChange={(open) => !open && (deleteTarget = null)}>
 	<Dialog.Content>

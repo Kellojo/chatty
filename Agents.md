@@ -41,4 +41,5 @@ SvelteKit 2 + Svelte 5 (runes forced for all non-`node_modules` files, see `vite
 
 ## Reference docs in repo
 
-- `requirements.md`, `implementation-plan.md`, `todos.md` — historical/planning docs; verify against code before trusting.
+- `todos.md` — loose backlog; verify against code before trusting.
+- `README.md` — deployment, backups and upgrade notes; keep it in sync when env vars, volumes or migration behavior change.

@@ -30,6 +30,7 @@
 		MemoryScope,
 		MemorySearchHit,
 		MemoryTreeNode,
+		MemoryViewTotals,
 		MemoryWriteEntry
 	} from '$lib/memory-types.js';
 	import type { PageData } from './$types';
@@ -385,6 +386,8 @@
 	let extractBusy = $state(false);
 
 	let writes = $state<MemoryWriteEntry[]>([]);
+	/** How often the AI came across the open memory; null until loaded. */
+	let views = $state<MemoryViewTotals | null>(null);
 	let writesLoading = $state(false);
 	let restoreBusy = $state(false);
 
@@ -422,10 +425,11 @@
 				const body = (await conceptRes.json().catch(() => null)) as { message?: string } | null;
 				throw new Error(body?.message ?? `Request failed (${conceptRes.status})`);
 			}
-			const { concept } = (await conceptRes.json()) as { concept: Concept };
+			const body = (await conceptRes.json()) as { concept: Concept; views: MemoryViewTotals };
 			if (token !== selectToken) return;
-			setEditor(editorFromConcept(concept));
+			setEditor(editorFromConcept(body.concept));
 			writes = history;
+			views = body.views;
 		} catch (e) {
 			if (token === selectToken) {
 				toast.error(e instanceof Error ? e.message : 'Failed to load memory');
@@ -440,6 +444,7 @@
 		editorLoading = false;
 		setEditor({ ...emptyEditor });
 		writes = [];
+		views = null;
 	}
 
 	function startNew() {
@@ -449,6 +454,7 @@
 		editorLoading = false;
 		setEditor({ ...emptyEditor, mode: 'new' });
 		writes = [];
+		views = null;
 	}
 
 	async function fetchWrites(path: string): Promise<MemoryWriteEntry[]> {
@@ -894,6 +900,7 @@
 							tags={parseTags(editor.tags)}
 							body={editor.body}
 							timestamp={editor.timestamp}
+							{views}
 							{knownPaths}
 							{connections}
 							onback={clearSelection}

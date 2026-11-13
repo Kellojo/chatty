@@ -32,6 +32,7 @@
 	import MessageNav from './MessageNav.svelte';
 	import { hasVisibleContent } from './timeline.js';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
+	import WaitingIndicator from './WaitingIndicator.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import {
 		canCreatePullRequest,
@@ -359,6 +360,9 @@
 		else if (waitStartedLocally === null) waitStartedLocally = Date.now();
 	});
 	const waitingSince = $derived(waiting ? (coding?.runStartedAt ?? waitStartedLocally) : null);
+	// The run ended but resumes by itself once its background work reports back
+	// (the sidebar's "Waiting"): said at the end of the log too.
+	const backgroundWaiting = $derived(coding?.status === 'waiting' && !waiting && !streaming);
 	const hasContent = $derived(displayInput.trim().length > 0 || selectedFiles.length > 0);
 
 	let scroll = $state<ChatContainerContext>();
@@ -382,6 +386,9 @@
 		if (now && !wasStreaming) replyAnnouncement = 'Thinking';
 		else if (wasStreaming && chat.status !== 'error') replyAnnouncement = 'Response complete';
 		wasStreaming = now;
+	});
+	$effect(() => {
+		if (backgroundWaiting) replyAnnouncement = 'Waiting on background work';
 	});
 	let sending = $state(false);
 
@@ -1227,6 +1234,8 @@
 				/>
 				{#if waiting}
 					<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
+				{:else if backgroundWaiting}
+					<WaitingIndicator class="mx-auto w-full max-w-3xl px-4 pb-4" />
 				{/if}
 			</ChatContainerContent>
 		</ChatContainer>

@@ -1,9 +1,9 @@
-import fs from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { z } from 'zod';
 import { parseFrontmatter } from '../frontmatter.js';
-import { walk } from '../mcp/servers/shared.js';
 import {
 	findSkillFile,
 	isValidSkillName,
@@ -108,14 +108,21 @@ export function serializeSkill(frontmatter: SkillFrontmatter, body: string): str
 	return matter.stringify(body.replace(/\r\n/g, '\n').replace(/\n*$/, '\n'), fm);
 }
 
-function listReferences(dir: string): string[] {
-	const refsDir = path.join(dir, 'references');
-	if (!fs.existsSync(refsDir)) return [];
+/** Every `.md` file under `dir`, as POSIX paths relative to it (symlinks are skipped). */
+async function listMarkdownFiles(dir: string, prefix = ''): Promise<string[]> {
+	const out: string[] = [];
+	for (const e of await fsp.readdir(dir, { withFileTypes: true })) {
+		const rel = prefix ? `${prefix}/${e.name}` : e.name;
+		if (e.isDirectory()) out.push(...(await listMarkdownFiles(path.join(dir, e.name), rel)));
+		else if (e.isFile() && e.name.endsWith('.md')) out.push(rel);
+	}
+	return out;
+}
+
+async function listReferences(dir: string): Promise<string[]> {
 	try {
-		return walk(refsDir)
-			.filter((e) => !e.isDir && e.rel.endsWith('.md'))
-			.map((e) => `references/${e.rel}`)
-			.sort();
+		const files = await listMarkdownFiles(path.join(dir, 'references'));
+		return files.map((rel) => `references/${rel}`).sort();
 	} catch {
 		return [];
 	}
@@ -124,26 +131,22 @@ function listReferences(dir: string): string[] {
 // cache keyed by "<dir>" with newest-file fingerprint; dir mtime alone is too coarse on NTFS
 const referencesCache = new Map<string, { fingerprint: string; references: string[] }>();
 
-function listReferencesCached(dir: string): string[] {
+async function listReferencesCached(dir: string): Promise<string[]> {
 	const refsDir = path.join(dir, 'references');
-	let entries: fs.Dirent[] = [];
-	try {
-		if (fs.existsSync(refsDir)) entries = fs.readdirSync(refsDir, { withFileTypes: true });
-	} catch {
-		entries = [];
-	}
-	let fingerprint = String(entries.length);
-	for (const e of entries) {
-		try {
-			const st = fs.statSync(path.join(refsDir, e.name));
-			fingerprint += `|${e.name}:${st.mtimeMs}:${st.size}`;
-		} catch {
-			// skip vanished entries
-		}
-	}
+	const entries = await fsp.readdir(refsDir, { withFileTypes: true }).catch(() => []);
+	const stats = await Promise.all(
+		entries.map((e) =>
+			fsp
+				.stat(path.join(refsDir, e.name))
+				.then((st) => `|${e.name}:${st.mtimeMs}:${st.size}`)
+				// skip vanished entries
+				.catch(() => '')
+		)
+	);
+	const fingerprint = String(entries.length) + stats.join('');
 	const hit = referencesCache.get(dir);
 	if (hit && hit.fingerprint === fingerprint) return hit.references;
-	const references = listReferences(dir);
+	const references = await listReferences(dir);
 	referencesCache.set(dir, { fingerprint, references });
 	return references;
 }
@@ -151,14 +154,18 @@ function listReferencesCached(dir: string): string[] {
 // mtime-keyed cache: "<scope>:<userId>:<name>" → { mtimeMs, skill }
 const cache = new Map<string, { mtimeMs: number; skill: Skill }>();
 
-export function readSkill(scope: SkillScope, userId: string, name: string): Skill | null {
+export async function readSkill(
+	scope: SkillScope,
+	userId: string,
+	name: string
+): Promise<Skill | null> {
 	const dir = resolveSkillDir(scope, userId, name);
 	if (!dir) return null;
-	const skillFile = findSkillFile(dir);
+	const skillFile = await findSkillFile(dir);
 	if (!skillFile) return null;
-	let stat: fs.Stats;
+	let stat: Stats;
 	try {
-		stat = fs.statSync(skillFile);
+		stat = await fsp.stat(skillFile);
 	} catch {
 		return null;
 	}
@@ -168,7 +175,7 @@ export function readSkill(scope: SkillScope, userId: string, name: string): Skil
 
 	let skill: Skill;
 	try {
-		const parsed = parseFrontmatter(fs.readFileSync(skillFile, 'utf8'));
+		const parsed = parseFrontmatter(await fsp.readFile(skillFile, 'utf8'));
 		const frontmatter = parseSkillFrontmatter(parsed.data);
 		if (frontmatter.name !== name) return null;
 		skill = {
@@ -180,7 +187,7 @@ export function readSkill(scope: SkillScope, userId: string, name: string): Skil
 			source: frontmatter.source,
 			version: frontmatter.version,
 			author: frontmatter.author,
-			references: listReferencesCached(dir),
+			references: await listReferencesCached(dir),
 			frontmatter,
 			body: parsed.content.trim()
 		};
@@ -196,20 +203,20 @@ export function invalidateSkillCache(): void {
 	referencesCache.clear();
 }
 
-export function scanSkills(scope: SkillScope, userId: string): SkillSummary[] {
+export async function scanSkills(scope: SkillScope, userId: string): Promise<SkillSummary[]> {
 	const root = skillsRoot(scope, userId);
-	let entries: fs.Dirent[];
+	let entries: Dirent[];
 	try {
-		entries = fs.readdirSync(root, { withFileTypes: true });
+		entries = await fsp.readdir(root, { withFileTypes: true });
 	} catch {
 		return [];
 	}
-	const out: SkillSummary[] = [];
-	for (const entry of entries) {
-		if (!entry.isDirectory() || !isValidSkillName(entry.name)) continue;
-		const skill = readSkill(scope, userId, entry.name);
-		if (skill) out.push(toSummary(skill));
-	}
+	const skills = await Promise.all(
+		entries
+			.filter((entry) => entry.isDirectory() && isValidSkillName(entry.name))
+			.map((entry) => readSkill(scope, userId, entry.name))
+	);
+	const out = skills.filter((s): s is Skill => s !== null).map(toSummary);
 	out.sort((a, b) => a.name.localeCompare(b.name));
 	return out;
 }
@@ -222,19 +229,21 @@ export function toSummary(skill: Skill): SkillSummary {
 }
 
 // User skills shadow shared skills of the same name.
-export function resolveSkill(userId: string, name: string): Skill | null {
-	return readSkill('user', userId, name) ?? readSkill('shared', userId, name);
+export async function resolveSkill(userId: string, name: string): Promise<Skill | null> {
+	return (await readSkill('user', userId, name)) ?? (await readSkill('shared', userId, name));
 }
 
-export function listAllSkills(userId: string): SkillSummary[] {
-	const shared = scanSkills('shared', userId);
-	const user = scanSkills('user', userId);
+export async function listAllSkills(userId: string): Promise<SkillSummary[]> {
+	const [shared, user] = await Promise.all([
+		scanSkills('shared', userId),
+		scanSkills('user', userId)
+	]);
 	const shadowed = new Set(user.map((s) => s.name));
 	return [...user, ...shared.filter((s) => !shadowed.has(s.name))];
 }
 
-export function skillsIndexPrompt(userId: string): string {
-	const skills = listAllSkills(userId).filter((s) => s.enabled);
+export async function skillsIndexPrompt(userId: string): Promise<string> {
+	const skills = (await listAllSkills(userId)).filter((s) => s.enabled);
 	if (skills.length === 0) return '';
 	const lines = skills.map((s) => `- ${s.name}: ${s.description}`);
 	return `## Available skills\nLoad a skill with the load_skill tool when the task matches its description. Reference files can be read with read_skill_reference.\n${lines.join('\n')}`;

@@ -77,7 +77,7 @@ description: Patterns for evaluating agent outputs.
 `;
 
 describe('parseGitUrl', () => {
-	it('passes plain repo URLs through unchanged', () => {
+	it('passes plain repo URLs through unchanged', async () => {
 		expect(parseGitUrl('https://github.com/user/repo')).toEqual({
 			gitUrl: 'https://github.com/user/repo'
 		});
@@ -89,7 +89,7 @@ describe('parseGitUrl', () => {
 		});
 	});
 
-	it('parses GitHub tree URLs into repo, branch and subpath', () => {
+	it('parses GitHub tree URLs into repo, branch and subpath', async () => {
 		expect(parseGitUrl('https://github.com/user/repo/tree/main/skills')).toEqual({
 			gitUrl: 'https://github.com/user/repo.git',
 			branch: 'main',
@@ -102,7 +102,7 @@ describe('parseGitUrl', () => {
 		});
 	});
 
-	it('parses GitHub blob URLs and drops the file name', () => {
+	it('parses GitHub blob URLs and drops the file name', async () => {
 		expect(
 			parseGitUrl('https://github.com/user/repo/blob/main/skills/agentic-eval/SKILL.md')
 		).toEqual({
@@ -112,7 +112,7 @@ describe('parseGitUrl', () => {
 		});
 	});
 
-	it('parses GitLab tree URLs with the /-/ separator', () => {
+	it('parses GitLab tree URLs with the /-/ separator', async () => {
 		expect(parseGitUrl('https://gitlab.com/user/repo/-/tree/main/skills')).toEqual({
 			gitUrl: 'https://gitlab.com/user/repo.git',
 			branch: 'main',
@@ -120,7 +120,7 @@ describe('parseGitUrl', () => {
 		});
 	});
 
-	it('parses Bitbucket src URLs', () => {
+	it('parses Bitbucket src URLs', async () => {
 		expect(parseGitUrl('https://bitbucket.org/user/repo/src/main/skills')).toEqual({
 			gitUrl: 'https://bitbucket.org/user/repo.git',
 			branch: 'main',
@@ -128,7 +128,7 @@ describe('parseGitUrl', () => {
 		});
 	});
 
-	it('handles tree URLs pointing at the repo root', () => {
+	it('handles tree URLs pointing at the repo root', async () => {
 		expect(parseGitUrl('https://github.com/user/repo/tree/main')).toEqual({
 			gitUrl: 'https://github.com/user/repo.git',
 			branch: 'main',
@@ -136,12 +136,12 @@ describe('parseGitUrl', () => {
 		});
 	});
 
-	it('returns non-URL input unchanged', () => {
+	it('returns non-URL input unchanged', async () => {
 		expect(parseGitUrl('not a url')).toEqual({ gitUrl: 'not a url' });
 	});
 });
 
-beforeAll(() => {
+beforeAll(async () => {
 	writeRepoFile('skills/skill-a/skill.md', SKILL_A);
 	writeRepoFile('skills/skill-a/references/examples.md', '# Examples\n');
 	writeRepoFile('skills/skill-b/skill.md', SKILL_BAD_NAME);
@@ -154,7 +154,7 @@ beforeAll(() => {
 	writeRepoFile('skills/agentic-eval/SKILL.md', SKILL_NO_TITLE);
 });
 
-afterAll(() => {
+afterAll(async () => {
 	fs.rmSync(VOL, { recursive: true, force: true });
 	fs.rmSync(SRC, { recursive: true, force: true });
 });
@@ -176,7 +176,7 @@ describe('importSkillsFromGit', () => {
 
 	it('stamps source and copies reference files', async () => {
 		scanner.invalidateSkillCache();
-		const skill = scanner.readSkill('user', 'u1', 'skill-a');
+		const skill = await scanner.readSkill('user', 'u1', 'skill-a');
 		expect(skill).not.toBeNull();
 		expect(skill!.source).toBe(`git:${REPO_URL}`);
 		expect(skill!.references).toEqual(['references/examples.md']);
@@ -186,7 +186,7 @@ describe('importSkillsFromGit', () => {
 
 	it('imports SKILL.md files without a title, deriving a humanized title', async () => {
 		scanner.invalidateSkillCache();
-		const skill = scanner.readSkill('user', 'u1', 'agentic-eval');
+		const skill = await scanner.readSkill('user', 'u1', 'agentic-eval');
 		expect(skill).not.toBeNull();
 		expect(skill!.title).toBe('Agentic Eval');
 		// normalized to lowercase skill.md on disk
@@ -240,7 +240,7 @@ describe('importSkillsFromGit', () => {
 		});
 		expect(result.imported).toEqual([{ name: 'single', action: 'created' }]);
 		scanner.invalidateSkillCache();
-		expect(scanner.readSkill('shared', 'u1', 'single')).not.toBeNull();
+		expect(await scanner.readSkill('shared', 'u1', 'single')).not.toBeNull();
 	});
 
 	it('rejects clone URLs with a query, fragment or non-http scheme', async () => {

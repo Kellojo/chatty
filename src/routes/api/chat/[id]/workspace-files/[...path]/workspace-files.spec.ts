@@ -45,7 +45,7 @@ function write(dir: string, name: string, content: string) {
 	fs.writeFileSync(path.join(dir, name), content);
 }
 
-function seedAgentRun() {
+async function seedAgentRun() {
 	const db = getDb();
 	const agent = createAgent(db, 'u1', { name: 'a', systemPrompt: 'x', triggerType: 'manual' });
 	const conversation = createConversation(db, 'u1', { kind: 'agent-run', agentId: agent.id });
@@ -55,7 +55,7 @@ function seedAgentRun() {
 		trigger: 'manual',
 		conversationId: conversation.id
 	});
-	return { conversation, dir: ensureAgentWorkspace(agent.id, run.id) };
+	return { conversation, dir: await ensureAgentWorkspace(agent.id, run.id) };
 }
 
 beforeEach(() => {
@@ -81,7 +81,7 @@ describe('GET /api/chat/[id]/workspace-files/[...path]', () => {
 	});
 
 	it('serves files from the agent workspace of an agent-run conversation', async () => {
-		const { conversation, dir } = seedAgentRun();
+		const { conversation, dir } = await seedAgentRun();
 		write(path.join(dir, 'src'), 'app.ts', 'export {};');
 		const res = await call(u1, conversation.id, 'src/app.ts');
 		expect(res.status).toBe(200);
@@ -89,19 +89,19 @@ describe('GET /api/chat/[id]/workspace-files/[...path]', () => {
 	});
 
 	it('does not serve agent-run files from the conversation workspace', async () => {
-		const { conversation } = seedAgentRun();
+		const { conversation } = await seedAgentRun();
 		write(conversationWorkspace(conversation.id), 'stray.txt', 'nope');
 		expect((await call(u1, conversation.id, 'stray.txt')).status).toBe(404);
 	});
 
 	it('returns 404 to other users', async () => {
-		const { conversation, dir } = seedAgentRun();
+		const { conversation, dir } = await seedAgentRun();
 		write(dir, 'secret.txt', 'x');
 		expect((await call(u2, conversation.id, 'secret.txt')).status).toBe(404);
 	});
 
 	it('rejects paths escaping the workspace', async () => {
-		const { conversation, dir } = seedAgentRun();
+		const { conversation, dir } = await seedAgentRun();
 		write(path.dirname(dir), 'outside.txt', 'x');
 		expect((await call(u1, conversation.id, '../outside.txt')).status).toBe(404);
 	});

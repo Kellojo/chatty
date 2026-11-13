@@ -20,12 +20,16 @@ export function migrate(db: Db, dir = path.join(process.cwd(), 'migrations')): v
 		const version = Number(file.slice(0, 4));
 		if (applied.has(version)) continue;
 		const sql = fs.readFileSync(path.join(dir, file), 'utf8');
-		db.transaction(() => {
-			db.exec(sql);
-			db.prepare('INSERT INTO _migrations (version, applied_at) VALUES (?, ?)').run(
-				version,
-				Date.now()
-			);
-		})();
+		try {
+			db.transaction(() => {
+				db.exec(sql);
+				db.prepare('INSERT INTO _migrations (version, applied_at) VALUES (?, ?)').run(
+					version,
+					Date.now()
+				);
+			})();
+		} catch (err) {
+			throw new Error(`Migration ${file} failed and was rolled back`, { cause: err });
+		}
 	}
 }

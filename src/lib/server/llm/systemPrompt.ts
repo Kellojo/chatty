@@ -35,10 +35,10 @@ export interface SystemPromptParts {
 	system: string;
 }
 
-export function buildSystemPromptParts(
+export async function buildSystemPromptParts(
 	conversation: ConversationRow,
 	globalInstructionsOrOpts: string | SystemPromptOptions = ''
-): SystemPromptParts {
+): Promise<SystemPromptParts> {
 	const opts: SystemPromptOptions =
 		typeof globalInstructionsOrOpts === 'string'
 			? { globalInstructions: globalInstructionsOrOpts }
@@ -48,7 +48,7 @@ export function buildSystemPromptParts(
 	if (opts.userId && opts.boundSkillNames && opts.boundSkillNames.length > 0) {
 		const loaded: string[] = [];
 		for (const name of opts.boundSkillNames) {
-			const skill = resolveSkill(opts.userId, name);
+			const skill = await resolveSkill(opts.userId, name);
 			if (skill && skill.enabled) loaded.push(`### Skill: ${skill.title}\n${skill.body}`);
 		}
 		if (loaded.length > 0) {
@@ -56,7 +56,7 @@ export function buildSystemPromptParts(
 		}
 	}
 	if (opts.userId && opts.includeSkillsIndex !== false) {
-		const index = skillsIndexPrompt(opts.userId);
+		const index = await skillsIndexPrompt(opts.userId);
 		if (index) skills += `${skills ? '\n\n' : ''}${index}`;
 	}
 
@@ -72,11 +72,11 @@ export function buildSystemPromptParts(
 	};
 }
 
-export function buildSystemPrompt(
+export async function buildSystemPrompt(
 	conversation: ConversationRow,
 	globalInstructionsOrOpts: string | SystemPromptOptions = ''
-): string {
-	const parts = buildSystemPromptParts(conversation, globalInstructionsOrOpts);
+): Promise<string> {
+	const parts = await buildSystemPromptParts(conversation, globalInstructionsOrOpts);
 	const sections = [parts.base, parts.widgets];
 	if (parts.skills) sections.push(parts.skills);
 	if (parts.system) sections.push(parts.system);

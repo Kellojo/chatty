@@ -26,6 +26,8 @@ export interface McpServerRow {
 	oauth_client_secret_enc: string | null;
 	oauth_scope: string | null;
 	oauth_client_info_enc: string | null;
+	/** Tools listed on the last successful connect; null before the first. */
+	tool_count: number | null;
 }
 
 export interface McpServer {
@@ -44,6 +46,8 @@ export interface McpServer {
 	oauthClientId: string | null;
 	hasOauthClientSecret: boolean;
 	oauthScope: string | null;
+	/** Tools listed on the last successful connect; null before the first. */
+	toolCount: number | null;
 }
 
 /** Parses the JSON `args` column, tolerating malformed values. */
@@ -72,7 +76,8 @@ export function toPublic(row: McpServerRow): McpServer {
 		auth: row.auth,
 		oauthClientId: row.oauth_client_id,
 		hasOauthClientSecret: !!row.oauth_client_secret_enc,
-		oauthScope: row.oauth_scope
+		oauthScope: row.oauth_scope,
+		toolCount: row.tool_count ?? null
 	};
 }
 
@@ -84,6 +89,15 @@ export function listMcpServers(db: Db): McpServerRow[] {
 
 export function listEnabledMcpServers(db: Db): McpServerRow[] {
 	return listMcpServers(db).filter((row) => row.enabled === 1);
+}
+
+/** Remembers how many tools a server listed; writes only when the count changed. */
+export function setMcpToolCount(db: Db, id: string, count: number): void {
+	db.prepare('UPDATE mcp_servers SET tool_count = ? WHERE id = ? AND tool_count IS NOT ?').run(
+		count,
+		id,
+		count
+	);
 }
 
 export function getMcpServer(db: Db, id: string): McpServerRow | undefined {

@@ -64,7 +64,7 @@ describe('skills server create/update/delete', () => {
 			scope: 'user'
 		});
 
-		const stored = readSkill('user', 'u1', 'weekly-report');
+		const stored = await readSkill('user', 'u1', 'weekly-report');
 		expect(stored?.frontmatter.when).toBe('on Fridays');
 		expect(stored?.frontmatter.tools).toEqual(['fetch']);
 		expect(
@@ -87,7 +87,7 @@ describe('skills server create/update/delete', () => {
 			when: null
 		});
 		expect(isError(updated), resultText(updated)).toBe(false);
-		const after = readSkill('user', 'u1', 'weekly-report');
+		const after = await readSkill('user', 'u1', 'weekly-report');
 		expect(after?.body).toContain('v2');
 		expect(after?.enabled).toBe(false);
 		expect(after?.frontmatter.when).toBeNull();
@@ -98,7 +98,7 @@ describe('skills server create/update/delete', () => {
 
 		const deleted = await callTool(userCtx, 'delete_skill', { name: 'weekly-report' });
 		expect(isError(deleted)).toBe(false);
-		expect(resolveSkill('u1', 'weekly-report')).toBeNull();
+		expect(await resolveSkill('u1', 'weekly-report')).toBeNull();
 		expect(fs.existsSync(skillDir('weekly-report'))).toBe(false);
 	});
 
@@ -132,7 +132,7 @@ describe('skills server create/update/delete', () => {
 			references: [{ path: '../outside.md', content: 'x' }]
 		});
 		expect(isError(badRef)).toBe(true);
-		expect(readSkill('user', 'u1', 'ref-escape')).toBeNull();
+		expect(await readSkill('user', 'u1', 'ref-escape')).toBeNull();
 		expect(fs.existsSync(path.join(process.env.SKILLS_VOLUME!, 'u1', 'outside.md'))).toBe(false);
 	});
 
@@ -151,17 +151,17 @@ describe('skills server create/update/delete', () => {
 		expect(isError(updated)).toBe(false);
 		expect(JSON.parse(resultText(updated)).scope).toBe('user');
 
-		const shared = readSkill('shared', 'u1', 'shared-skill');
+		const shared = await readSkill('shared', 'u1', 'shared-skill');
 		expect(shared?.body).toBe('shared body');
-		const user = readSkill('user', 'u1', 'shared-skill');
+		const user = await readSkill('user', 'u1', 'shared-skill');
 		expect(user?.body).toBe('user override body');
 		expect(user?.description).toBe('shared desc');
 
 		// deleting the user skill restores the shared one
 		const deleted = await callTool(userCtx, 'delete_skill', { name: 'shared-skill' });
 		expect(isError(deleted)).toBe(false);
-		expect(readSkill('user', 'u1', 'shared-skill')).toBeNull();
-		expect(resolveSkill('u1', 'shared-skill')?.scope).toBe('shared');
+		expect(await readSkill('user', 'u1', 'shared-skill')).toBeNull();
+		expect((await resolveSkill('u1', 'shared-skill'))?.scope).toBe('shared');
 
 		// shared skill alone cannot be deleted
 		const delShared = await callTool(userCtx, 'delete_skill', { name: 'shared-skill' });

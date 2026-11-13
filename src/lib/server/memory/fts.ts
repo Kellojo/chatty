@@ -1,4 +1,5 @@
-import fs from 'node:fs';
+import type { Dirent } from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseFrontmatter } from '../frontmatter.js';
 import type { Db } from '../db/index.js';
@@ -113,41 +114,56 @@ interface DiskEntry {
 	abs: string;
 }
 
-function walkBundle(root: string, scope: string): DiskEntry[] {
+/** Directory entries of `dir`, or none when it doesn't exist. */
+async function readDirIfExists(dir: string): Promise<Dirent[]> {
+	try {
+		return await fs.readdir(dir, { withFileTypes: true });
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+		throw e;
+	}
+}
+
+async function walkBundle(root: string, scope: string): Promise<DiskEntry[]> {
 	const out: DiskEntry[] = [];
-	const recurse = (dir: string): void => {
-		for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+	const recurse = async (dir: string): Promise<void> => {
+		for (const e of await readDirIfExists(dir)) {
 			const abs = path.join(dir, e.name);
 			if (e.isDirectory()) {
-				recurse(abs);
+				await recurse(abs);
 			} else if (e.isFile() && e.name.endsWith('.md') && e.name !== 'index.md') {
 				out.push({ scope, path: path.relative(root, abs).split(path.sep).join('/'), abs });
 			}
 		}
 	};
-	if (fs.existsSync(root)) recurse(root);
+	await recurse(root);
 	return out;
 }
 
-function listDiskEntries(): DiskEntry[] {
+async function listDiskEntries(): Promise<DiskEntry[]> {
 	const root = memoryRoot();
-	if (!fs.existsSync(root)) return [];
 	const entries: DiskEntry[] = [];
-	for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+	for (const e of await readDirIfExists(root)) {
 		if (!e.isDirectory()) continue;
 		const scope = e.name === 'shared' ? 'shared' : `user:${e.name}`;
-		entries.push(...walkBundle(path.join(root, e.name), scope));
+		entries.push(...(await walkBundle(path.join(root, e.name), scope)));
 	}
 	return entries;
 }
 
-function upsertFromDisk(db: Db, entry: DiskEntry): void {
+interface DiskConcept {
+	entry: DiskEntry;
+	fm: { title: string; description: string; tags: string[] };
+	body: string;
+}
+
+async function readFromDisk(entry: DiskEntry): Promise<DiskConcept> {
 	let title = path.basename(entry.abs, '.md');
 	let description = '';
 	let tags: string[] = [];
 	let body = '';
 	try {
-		const parsed = parseFrontmatter(fs.readFileSync(entry.abs, 'utf8'));
+		const parsed = parseFrontmatter(await fs.readFile(entry.abs, 'utf8'));
 		const d = parsed.data as Record<string, unknown>;
 		if (typeof d.title === 'string' && d.title.trim()) title = d.title;
 		if (typeof d.description === 'string') description = d.description;
@@ -156,34 +172,53 @@ function upsertFromDisk(db: Db, entry: DiskEntry): void {
 	} catch {
 		// unreadable file or invalid frontmatter: index with filename as title
 	}
-	upsertMemoryFts(db, entry.scope, entry.path, { title, description, tags }, body);
+	return { entry, fm: { title, description, tags }, body };
 }
 
-export function reconcileMemoryFts(db: Db): { upserted: number; removed: number } {
-	const disk = listDiskEntries();
-	const diskKeys = new Set(disk.map((e) => `${e.scope}${e.path}`));
-	let upserted = 0;
-	for (const entry of disk) {
-		upsertFromDisk(db, entry);
-		upserted++;
+// Files read concurrently while rebuilding, to stay well clear of fd limits.
+const READ_BATCH = 32;
+
+/** Reads every concept file in the memory bundle (all scopes). */
+async function readDiskConcepts(): Promise<DiskConcept[]> {
+	const entries = await listDiskEntries();
+	const out: DiskConcept[] = [];
+	for (let i = 0; i < entries.length; i += READ_BATCH) {
+		out.push(...(await Promise.all(entries.slice(i, i + READ_BATCH).map(readFromDisk))));
 	}
-	const rows = db.prepare('SELECT scope, path FROM memory_fts').all() as Array<{
-		scope: string;
-		path: string;
-	}>;
-	let removed = 0;
-	for (const row of rows) {
-		if (!diskKeys.has(`${row.scope}${row.path}`)) {
-			deleteMemoryFts(db, row.scope, row.path);
-			removed++;
+	return out;
+}
+
+export async function reconcileMemoryFts(db: Db): Promise<{ upserted: number; removed: number }> {
+	const disk = await readDiskConcepts();
+	const diskKeys = new Set(disk.map((c) => `${c.entry.scope}${c.entry.path}`));
+	return db.transaction(() => {
+		let upserted = 0;
+		for (const { entry, fm, body } of disk) {
+			upsertMemoryFts(db, entry.scope, entry.path, fm, body);
+			upserted++;
 		}
-	}
-	return { upserted, removed };
+		const rows = db.prepare('SELECT scope, path FROM memory_fts').all() as Array<{
+			scope: string;
+			path: string;
+		}>;
+		let removed = 0;
+		for (const row of rows) {
+			if (!diskKeys.has(`${row.scope}${row.path}`)) {
+				deleteMemoryFts(db, row.scope, row.path);
+				removed++;
+			}
+		}
+		return { upserted, removed };
+	})();
 }
 
-export function reindexMemoryFts(db: Db): { indexed: number } {
-	db.prepare('DELETE FROM memory_fts').run();
-	const disk = listDiskEntries();
-	for (const entry of disk) upsertFromDisk(db, entry);
+export async function reindexMemoryFts(db: Db): Promise<{ indexed: number }> {
+	const disk = await readDiskConcepts();
+	db.transaction(() => {
+		db.prepare('DELETE FROM memory_fts').run();
+		for (const { entry, fm, body } of disk) {
+			upsertMemoryFts(db, entry.scope, entry.path, fm, body);
+		}
+	})();
 	return { indexed: disk.length };
 }

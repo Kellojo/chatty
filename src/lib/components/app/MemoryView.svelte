@@ -17,12 +17,14 @@
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import EyeIcon from '@lucide/svelte/icons/eye';
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import TagIcon from '@lucide/svelte/icons/tag';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import Markdown from '$lib/components/ai/markdown/markdown.svelte';
 	import { formatTimeAgo } from '$lib/datetime.js';
+	import type { MemoryViewTotals } from '$lib/memory-types.js';
 
 	let {
 		path,
@@ -33,6 +35,7 @@
 		tags,
 		body,
 		timestamp,
+		views = null,
 		knownPaths,
 		connections,
 		onback,
@@ -50,6 +53,8 @@
 		tags: string[];
 		body: string;
 		timestamp: string;
+		/** How often the AI came across this memory; null while unknown. */
+		views?: MemoryViewTotals | null;
 		/** Every memory path in this scope, to resolve links between memories. */
 		knownPaths: Set<string>;
 		connections: MemoryConnection[];
@@ -66,6 +71,30 @@
 	const updated = $derived(timestamp ? new Date(timestamp) : null);
 	const links = $derived(connections.filter((c) => c.kind === 'link'));
 	const related = $derived(connections.filter((c) => c.kind === 'tag'));
+
+	const times = (n: number) => `${n.toLocaleString()} time${n === 1 ? '' : 's'}`;
+	const searches = (n: number) => `${n.toLocaleString()} search${n === 1 ? '' : 'es'}`;
+	const byAgents = (n: number) => (n ? ` (${n.toLocaleString()} by agents)` : '');
+	/** "Read 4× · in 12 searches": the reads matter most, searches show it surfacing. */
+	const viewsLabel = $derived.by(() => {
+		if (!views) return '';
+		if (!views.reads && !views.searchHits) return 'Not used by the AI yet';
+		const parts: string[] = [];
+		if (views.reads) parts.push(`Read ${views.reads.toLocaleString()}×`);
+		if (views.searchHits) parts.push(`in ${searches(views.searchHits)}`);
+		return parts.join(' · ');
+	});
+	const viewsTitle = $derived.by(() => {
+		if (!views || (!views.reads && !views.searchHits)) {
+			return 'No chat or agent run has searched for or read this memory yet';
+		}
+		const lines = [
+			`Read by the AI ${times(views.reads)}${byAgents(views.agentReads)}`,
+			`Among the results of ${searches(views.searchHits)}${byAgents(views.agentSearchHits)}`
+		];
+		if (views.lastViewedAt) lines.push(`Last used ${formatTimeAgo(views.lastViewedAt)}`);
+		return lines.join('\n');
+	});
 
 	// Links between memories are relative `.md` paths: open them here instead of
 	// letting the browser navigate to a URL that doesn't exist.
@@ -149,8 +178,13 @@
 			{#each tags as tag (tag)}
 				<span class="inline-flex items-center gap-1"><TagIcon class="size-3" />{tag}</span>
 			{/each}
+			{#if views}
+				<span class="ml-auto inline-flex items-center gap-1 tabular-nums" title={viewsTitle}>
+					<EyeIcon class="size-3" />{viewsLabel}
+				</span>
+			{/if}
 			{#if updated}
-				<span class="ml-auto" title={updated.toLocaleString()}
+				<span class={views ? '' : 'ml-auto'} title={updated.toLocaleString()}
 					>Updated {formatTimeAgo(updated.getTime())}</span
 				>
 			{/if}

@@ -128,7 +128,7 @@ export async function startAgentRun(
 		apiKeyId: input.apiKeyId
 	});
 	// Exists before the first turn, so the run's tools always have their sandbox.
-	ensureAgentWorkspace(agent.id, run.id);
+	await ensureAgentWorkspace(agent.id, run.id);
 	publishServerEvent(input.userId, {
 		type: 'agent.run.started',
 		agentId: agent.id,

@@ -6,7 +6,7 @@ import { getDb } from '../db/index.js';
 import { listEnabledMcpServers, type McpServerRow } from '../db/repo/mcp-servers.js';
 import { recordMcpToolCall } from '../db/repo/mcp-tool-usage.js';
 import { createLogger } from '../logger.js';
-import { connectServer, MCP_LIST_TIMEOUT_MS, withTimeout } from '../mcp/clientManager.js';
+import { connectServer, listServerTools } from '../mcp/clientManager.js';
 import { McpSignInRequiredError } from '../mcp/oauth.js';
 import { acquireMcpServer, cachedMcpTools, type McpLease } from '../mcp/pool.js';
 import type { CallerContext } from '../mcp/types.js';
@@ -114,12 +114,7 @@ interface OpenedServer {
 async function openBuiltin(row: McpServerRow, ctx: CallerContext): Promise<OpenedServer> {
 	const conn = await connectServer(row, ctx);
 	try {
-		const listed = await withTimeout(
-			conn.client.tools(),
-			`Listing tools of MCP server ${row.name}`,
-			undefined,
-			MCP_LIST_TIMEOUT_MS
-		);
+		const listed = await listServerTools(conn, row);
 		return { tools: listed as unknown as Record<string, Tool>, close: conn.close };
 	} catch (e) {
 		await conn.close().catch(() => undefined);

@@ -26,7 +26,7 @@ describe('memory fts', () => {
 		db = getDb();
 	});
 
-	it('reconcile picks up external files and drops stale rows', () => {
+	it('reconcile picks up external files and drops stale rows', async () => {
 		writeExternal('u1', 'notes/todo.md', 'Todo', 'buy oat milk');
 		writeExternal('shared', 'glossary.md', 'Glossary', 'shared terms');
 		fts.upsertMemoryFts(
@@ -37,7 +37,7 @@ describe('memory fts', () => {
 			'stale body'
 		);
 
-		const result = fts.reconcileMemoryFts(db);
+		const result = await fts.reconcileMemoryFts(db);
 		expect(result.upserted).toBe(2);
 		expect(result.removed).toBe(1);
 
@@ -52,16 +52,16 @@ describe('memory fts', () => {
 		expect(fts.searchMemoryFts(db, ['user:ghost'], 'stale')).toEqual([]);
 	});
 
-	it('reconcile removes rows for deleted files', () => {
+	it('reconcile removes rows for deleted files', async () => {
 		fs.unlinkSync(path.join(paths.memoryRoot(), 'u1', 'notes', 'todo.md'));
-		const result = fts.reconcileMemoryFts(db);
+		const result = await fts.reconcileMemoryFts(db);
 		expect(result.removed).toBe(1);
 		expect(fts.searchMemoryFts(db, ['user:u1'], 'oat')).toEqual([]);
 	});
 
-	it('reindex rebuilds the table and returns the count', () => {
+	it('reindex rebuilds the table and returns the count', async () => {
 		writeExternal('u2', 'a.md', 'Alpha', 'alpha body');
-		const result = fts.reindexMemoryFts(db);
+		const result = await fts.reindexMemoryFts(db);
 		expect(result.indexed).toBe(2);
 		expect(fts.searchMemoryFts(db, ['user:u2'], 'alpha').map((h) => h.path)).toEqual(['a.md']);
 		expect(fts.searchMemoryFts(db, ['shared'], 'terms').map((h) => h.path)).toEqual([
@@ -69,11 +69,11 @@ describe('memory fts', () => {
 		]);
 	});
 
-	it('tolerates files with invalid frontmatter', () => {
+	it('tolerates files with invalid frontmatter', async () => {
 		const abs = path.join(paths.memoryRoot(), 'u1', 'broken.md');
 		fs.mkdirSync(path.dirname(abs), { recursive: true });
 		fs.writeFileSync(abs, '---\ntitle: [unclosed\n---\nbody text here');
-		const result = fts.reindexMemoryFts(db);
+		const result = await fts.reindexMemoryFts(db);
 		expect(result.indexed).toBe(3);
 	});
 

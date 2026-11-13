@@ -11,7 +11,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const user = requireUser(locals);
 	const isAdmin = (user as { role?: string }).role === 'admin';
 	const scope = url.searchParams.get('scope') === 'shared' ? 'shared' : 'user';
-	const skill = readSkill(scope, user.id, params.name);
+	const skill = await readSkill(scope, user.id, params.name);
 	if (!skill) error(404, { message: 'Skill not found' });
 	const canEdit = scope === 'user' || isAdmin;
 	return {

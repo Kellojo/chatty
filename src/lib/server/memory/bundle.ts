@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import type { Dirent } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createTwoFilesPatch } from 'diff';
@@ -6,6 +6,7 @@ import matter from 'gray-matter';
 import { z } from 'zod';
 import { parseFrontmatter } from '../frontmatter.js';
 import type { Db } from '../db/index.js';
+import { moveMemoryViews } from '../db/repo/memory-views.js';
 import { recordMemoryWrite } from '../db/repo/memory-writes.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
@@ -92,18 +93,50 @@ function parseConceptFile(scope: MemoryScope, relPath: string, raw: string): Con
 	};
 }
 
-export function readConcept(scope: MemoryScope, userId: string, relPath: string): Concept | null {
+export async function readConcept(
+	scope: MemoryScope,
+	userId: string,
+	relPath: string
+): Promise<Concept | null> {
 	const normalized = normalizeConceptPath(relPath);
 	if (!normalized) return null;
 	const abs = resolveConceptAbs(scope, userId, normalized);
-	if (!abs || !fs.existsSync(abs)) return null;
+	if (!abs) return null;
 	let raw: string;
 	try {
-		raw = fs.readFileSync(abs, 'utf8');
+		raw = await fsp.readFile(abs, 'utf8');
 	} catch {
 		return null;
 	}
 	return parseConceptFile(scope, normalized, raw);
+}
+
+/** File contents, or null when it does not exist. */
+async function readIfExists(abs: string): Promise<string | null> {
+	try {
+		return await fsp.readFile(abs, 'utf8');
+	} catch (e) {
+		if (isMissing(e)) return null;
+		throw e;
+	}
+}
+
+// Mutations of one bundle run one at a time: each reads the old file (for the
+// audit diff) before writing, and a move checks both paths, so their awaits
+// must not interleave with another write to the same bundle.
+const bundleLocks = new Map<string, Promise<void>>();
+
+function withBundleLock<T>(rootAbs: string, fn: () => Promise<T>): Promise<T> {
+	const run = (bundleLocks.get(rootAbs) ?? Promise.resolve()).then(fn);
+	const tail = run.then(
+		() => {},
+		() => {}
+	);
+	bundleLocks.set(rootAbs, tail);
+	void tail.then(() => {
+		if (bundleLocks.get(rootAbs) === tail) bundleLocks.delete(rootAbs);
+	});
+	return run;
 }
 
 function auditTarget(
@@ -129,8 +162,7 @@ function isMissing(e: unknown): boolean {
 	return (e as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
-const isConceptFile = (e: fs.Dirent) =>
-	e.isFile() && e.name.endsWith('.md') && e.name !== 'index.md';
+const isConceptFile = (e: Dirent) => e.isFile() && e.name.endsWith('.md') && e.name !== 'index.md';
 
 // Each bundle directory carries an index.md listing its concepts (part of the
 // OKF bundle layout, for people and tools browsing the files; see the memory
@@ -143,7 +175,7 @@ const indexTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const indexRuns = new Map<string, Promise<void>>();
 
 async function regenIndex(dirAbs: string): Promise<void> {
-	let dirents: fs.Dirent[] = [];
+	let dirents: Dirent[] = [];
 	try {
 		dirents = await fsp.readdir(dirAbs, { withFileTypes: true });
 	} catch (e) {
@@ -211,10 +243,10 @@ export async function flushMemoryIndexes(): Promise<void> {
  * and prune the emptied directories right away (one readdir, so the tree never
  * shows an empty folder); otherwise schedule the index rebuild.
  */
-function settleDirAfterRemoval(dirAbs: string, rootAbs: string): void {
-	let dirents: fs.Dirent[];
+async function settleDirAfterRemoval(dirAbs: string, rootAbs: string): Promise<void> {
+	let dirents: Dirent[];
 	try {
-		dirents = fs.readdirSync(dirAbs, { withFileTypes: true });
+		dirents = await fsp.readdir(dirAbs, { withFileTypes: true });
 	} catch {
 		return;
 	}
@@ -222,18 +254,18 @@ function settleDirAfterRemoval(dirAbs: string, rootAbs: string): void {
 		scheduleIndex(dirAbs);
 		return;
 	}
-	fs.rmSync(path.join(dirAbs, 'index.md'), { force: true });
-	pruneEmptyDirs(dirAbs, rootAbs);
+	await fsp.rm(path.join(dirAbs, 'index.md'), { force: true });
+	await pruneEmptyDirs(dirAbs, rootAbs);
 	// A rebuild already in flight may write index.md again; let a later one clear it.
 	if (indexRuns.has(dirAbs)) scheduleIndex(dirAbs);
 }
 
-function pruneEmptyDirs(startAbs: string, rootAbs: string): void {
+async function pruneEmptyDirs(startAbs: string, rootAbs: string): Promise<void> {
 	let dir = startAbs;
 	while (dir !== rootAbs && dir.startsWith(rootAbs + path.sep)) {
 		try {
-			if (fs.readdirSync(dir).length > 0) return;
-			fs.rmdirSync(dir);
+			if ((await fsp.readdir(dir)).length > 0) return;
+			await fsp.rmdir(dir);
 		} catch {
 			return; // gone already, or refilled meanwhile
 		}
@@ -241,7 +273,7 @@ function pruneEmptyDirs(startAbs: string, rootAbs: string): void {
 	}
 }
 
-export function writeConcept(
+export async function writeConcept(
 	db: Db,
 	scope: MemoryScope,
 	userId: string,
@@ -257,13 +289,16 @@ export function writeConcept(
 		body: string;
 	},
 	audit: MemoryAuditInfo
-): Concept {
+): Promise<Concept> {
 	const target = requireConcept(scope, userId, relPath);
 	const fm = parseFrontmatterInput(input.frontmatter);
-	const oldRaw = fs.existsSync(target.abs) ? fs.readFileSync(target.abs, 'utf8') : null;
 	const newRaw = matter.stringify(input.body, fm);
-	fs.mkdirSync(path.dirname(target.abs), { recursive: true });
-	fs.writeFileSync(target.abs, newRaw);
+	const oldRaw = await withBundleLock(bundleDir(scope, userId), async () => {
+		const old = await readIfExists(target.abs);
+		await fsp.mkdir(path.dirname(target.abs), { recursive: true });
+		await fsp.writeFile(target.abs, newRaw);
+		return old;
+	});
 	const diff = createTwoFilesPatch(
 		`a/${target.relPath}`,
 		`b/${target.relPath}`,
@@ -294,17 +329,23 @@ export function writeConcept(
 	return { scope, path: target.relPath, frontmatter: fm, body: input.body };
 }
 
-export function deleteConcept(
+export async function deleteConcept(
 	db: Db,
 	scope: MemoryScope,
 	userId: string,
 	relPath: string,
 	audit: MemoryAuditInfo
-): boolean {
+): Promise<boolean> {
 	const target = requireConcept(scope, userId, relPath);
-	if (!fs.existsSync(target.abs)) return false;
-	const oldRaw = fs.readFileSync(target.abs, 'utf8');
-	fs.unlinkSync(target.abs);
+	const rootAbs = bundleDir(scope, userId);
+	const oldRaw = await withBundleLock(rootAbs, async () => {
+		const old = await readIfExists(target.abs);
+		if (old === null) return null;
+		await fsp.unlink(target.abs);
+		await settleDirAfterRemoval(path.dirname(target.abs), rootAbs);
+		return old;
+	});
+	if (oldRaw === null) return false;
 	const diff = createTwoFilesPatch(`a/${target.relPath}`, `b/${target.relPath}`, oldRaw, '');
 	const t = auditTarget(scope, userId, target.relPath, audit);
 	recordMemoryWrite(db, {
@@ -324,33 +365,44 @@ export function deleteConcept(
 		author: audit.author,
 		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
 	});
-	settleDirAfterRemoval(path.dirname(target.abs), bundleDir(scope, userId));
 	deleteMemoryFts(db, ftsScope(scope, userId), target.relPath);
 	return true;
 }
 
-export function moveConcept(
+export async function moveConcept(
 	db: Db,
 	scope: MemoryScope,
 	userId: string,
 	oldPath: string,
 	newPath: string,
 	audit: MemoryAuditInfo
-): Concept {
+): Promise<Concept> {
 	const from = requireConcept(scope, userId, oldPath);
 	const to = requireConcept(scope, userId, newPath);
-	if (!fs.existsSync(from.abs)) throw new Error(`Concept not found: ${from.relPath}`);
-	if (fs.existsSync(to.abs)) throw new Error(`Concept already exists: ${to.relPath}`);
-	const raw = fs.readFileSync(from.abs, 'utf8');
-	fs.mkdirSync(path.dirname(to.abs), { recursive: true });
-	fs.writeFileSync(to.abs, raw);
-	fs.unlinkSync(from.abs);
-	settleDirAfterRemoval(path.dirname(from.abs), bundleDir(scope, userId));
+	const rootAbs = bundleDir(scope, userId);
+	const raw = await withBundleLock(rootAbs, async () => {
+		const content = await readIfExists(from.abs);
+		if (content === null) throw new Error(`Concept not found: ${from.relPath}`);
+		await fsp.mkdir(path.dirname(to.abs), { recursive: true });
+		try {
+			// 'wx' fails when the target exists, so the check and the write are one step.
+			await fsp.writeFile(to.abs, content, { flag: 'wx' });
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+				throw new Error(`Concept already exists: ${to.relPath}`, { cause: e });
+			}
+			throw e;
+		}
+		await fsp.unlink(from.abs);
+		await settleDirAfterRemoval(path.dirname(from.abs), rootAbs);
+		return content;
+	});
 	scheduleIndex(path.dirname(to.abs));
 	const concept = parseConceptFile(scope, to.relPath, raw);
 	const scopeTag = ftsScope(scope, userId);
 	deleteMemoryFts(db, scopeTag, from.relPath);
 	upsertMemoryFts(db, scopeTag, to.relPath, concept.frontmatter, concept.body);
+	moveMemoryViews(db, scope, userId, from.relPath, to.relPath);
 	const diff = createTwoFilesPatch(`a/${from.relPath}`, `b/${to.relPath}`, raw, raw);
 	const t = auditTarget(scope, userId, to.relPath, audit);
 	recordMemoryWrite(db, {
@@ -382,39 +434,43 @@ export interface MemoryTreeNode {
 	children?: MemoryTreeNode[];
 }
 
-export function listTree(scope: MemoryScope, userId: string): MemoryTreeNode[] {
-	const root = bundleDir(scope, userId);
-	if (!fs.existsSync(root)) return [];
-	const build = (dir: string, rel: string): MemoryTreeNode[] => {
-		const nodes: MemoryTreeNode[] = [];
-		const entries = fs
-			.readdirSync(dir, { withFileTypes: true })
-			.filter(
-				(e) => e.isDirectory() || (e.isFile() && e.name.endsWith('.md') && e.name !== 'index.md')
-			)
+/** Directory entries, or none when the directory does not exist. */
+async function readDirIfExists(dir: string): Promise<Dirent[]> {
+	try {
+		return await fsp.readdir(dir, { withFileTypes: true });
+	} catch (e) {
+		if (isMissing(e)) return [];
+		throw e;
+	}
+}
+
+export async function listTree(scope: MemoryScope, userId: string): Promise<MemoryTreeNode[]> {
+	const build = async (dir: string, rel: string): Promise<MemoryTreeNode[]> => {
+		const entries = (await readDirIfExists(dir))
+			.filter((e) => e.isDirectory() || isConceptFile(e))
 			.sort((a, b) => a.name.localeCompare(b.name));
-		for (const e of entries) {
-			const abs = path.join(dir, e.name);
-			const nodeRel = rel ? `${rel}/${e.name}` : e.name;
-			if (e.isDirectory()) {
-				nodes.push({ name: e.name, path: nodeRel, kind: 'dir', children: build(abs, nodeRel) });
-			} else {
+		return Promise.all(
+			entries.map(async (e): Promise<MemoryTreeNode> => {
+				const abs = path.join(dir, e.name);
+				const nodeRel = rel ? `${rel}/${e.name}` : e.name;
+				if (e.isDirectory()) {
+					return { name: e.name, path: nodeRel, kind: 'dir', children: await build(abs, nodeRel) };
+				}
 				let title = e.name.slice(0, -'.md'.length);
 				let description = '';
 				try {
-					const parsed = parseFrontmatter(fs.readFileSync(abs, 'utf8'));
+					const parsed = parseFrontmatter(await fsp.readFile(abs, 'utf8'));
 					const d = parsed.data as Record<string, unknown>;
 					if (typeof d.title === 'string' && d.title.trim()) title = d.title;
 					if (typeof d.description === 'string') description = d.description;
 				} catch {
 					// fall back to filename title
 				}
-				nodes.push({ name: e.name, path: nodeRel, kind: 'concept', title, description });
-			}
-		}
-		return nodes;
+				return { name: e.name, path: nodeRel, kind: 'concept', title, description };
+			})
+		);
 	};
-	return build(root, '');
+	return build(bundleDir(scope, userId), '');
 }
 
 /**
@@ -429,7 +485,11 @@ export function countConcepts(db: Db, scope: MemoryScope, userId: string): numbe
 	return row.n;
 }
 
-export function listConceptPaths(scope: MemoryScope, userId: string, prefix?: string): string[] {
+export async function listConceptPaths(
+	scope: MemoryScope,
+	userId: string,
+	prefix?: string
+): Promise<string[]> {
 	const root = bundleDir(scope, userId);
 	let base = root;
 	let baseRel = '';
@@ -448,19 +508,18 @@ export function listConceptPaths(scope: MemoryScope, userId: string, prefix?: st
 		base = abs;
 		baseRel = normalized;
 	}
-	if (!fs.existsSync(base)) return [];
 	const out: string[] = [];
-	const recurse = (dir: string, rel: string): void => {
-		for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+	const recurse = async (dir: string, rel: string): Promise<void> => {
+		for (const e of await readDirIfExists(dir)) {
 			const abs = path.join(dir, e.name);
 			const nodeRel = rel ? `${rel}/${e.name}` : e.name;
 			if (e.isDirectory()) {
-				recurse(abs, nodeRel);
-			} else if (e.isFile() && e.name.endsWith('.md') && e.name !== 'index.md') {
+				await recurse(abs, nodeRel);
+			} else if (isConceptFile(e)) {
 				out.push(nodeRel);
 			}
 		}
 	};
-	recurse(base, baseRel);
+	await recurse(base, baseRel);
 	return out.sort();
 }
