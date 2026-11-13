@@ -1,3 +1,4 @@
+import { purgeExpiredOAuth } from './db/repo/oauth.js';
 import { dismissRun } from './agents/run-lifecycle.js';
 import { listActiveStreamIds } from './chat/streams.js';
 import { config } from './config.js';
@@ -153,6 +154,7 @@ export function pruneAgentRunChats(
 export async function runDailyJobs(db: Db = getDb()): Promise<void> {
 	expireAgentQuestions(db);
 	pruneAgentRunChats(db);
+	purgeExpiredOAuth(db);
 
 	const purged = await purgeSoftDeletedConversations(db);
 	if (purged > 0) log.info(`Purged ${purged} soft-deleted conversation(s)`);

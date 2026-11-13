@@ -1,5 +1,6 @@
 import type { Handle } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
+import { csrfHandle } from '$lib/server/csrf.js';
 import { building } from '$app/environment';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { auth } from '$lib/server/auth/index.js';
@@ -90,4 +91,4 @@ const sessionHandle: Handle = async ({ event, resolve }) => {
 	return resolve(event);
 };
 
-export const handle: Handle = sequence(authRoutes, sessionHandle);
+export const handle: Handle = sequence(csrfHandle, authRoutes, sessionHandle);

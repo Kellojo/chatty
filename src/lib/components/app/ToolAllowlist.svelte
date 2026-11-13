@@ -12,12 +12,15 @@
 	let {
 		tools,
 		value = $bindable([]),
-		disabled = false
+		disabled = false,
+		emptyWarning = 'No tools allowed. The agent can only reply with text.'
 	}: {
 		tools: ToolInfo[];
 		/** Allowed tool names. */
 		value: string[];
 		disabled?: boolean;
+		/** Shown when nothing is allowed. */
+		emptyWarning?: string;
 	} = $props();
 
 	interface Entry extends ToolInfo {
@@ -63,6 +66,7 @@
 		const q = query.trim().toLowerCase();
 		const result: {
 			server: string;
+			builtin: boolean;
 			tools: Entry[];
 			total: number;
 			allowed: number;
@@ -71,7 +75,14 @@
 		for (const entry of entries) {
 			let group = result.find((g) => g.server === entry.server);
 			if (!group) {
-				group = { server: entry.server, tools: [], total: 0, allowed: 0, risk: null };
+				group = {
+					server: entry.server,
+					builtin: entry.builtin === true,
+					tools: [],
+					total: 0,
+					allowed: 0,
+					risk: null
+				};
 				result.push(group);
 			}
 			group.total++;
@@ -88,6 +99,18 @@
 		}
 		return result.filter((g) => g.tools.length > 0);
 	});
+
+	/**
+	 * Servers bundled with Chatty first, then the ones an admin added. Headings
+	 * only show when both kinds are present.
+	 */
+	const sections = $derived(
+		[
+			{ key: 'builtin', label: 'Built-in', groups: groups.filter((g) => g.builtin) },
+			{ key: 'added', label: 'Added servers', groups: groups.filter((g) => !g.builtin) }
+		].filter((section) => section.groups.length > 0)
+	);
+	const showSectionHeadings = $derived(sections.length > 1);
 
 	const visibleNames = $derived(groups.flatMap((g) => g.tools.map((t) => t.name)));
 	const searching = $derived(query.trim() !== '');
@@ -193,87 +216,95 @@
 			class="flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400"
 		>
 			<TriangleAlertIcon class="size-4 shrink-0" />
-			No tools allowed. The agent can only reply with text.
+			{emptyWarning}
 		</p>
 	{/if}
 
 	<div class="flex flex-col gap-2">
-		{#each groups as group (group.server)}
-			{@const state = groupState(group)}
-			{@const open = searching || isOpen(group.server)}
-			<div class="rounded-xl border border-border/60">
-				<div class="flex items-center gap-2 px-3 py-2">
-					<input
-						type="checkbox"
-						class="size-4 shrink-0 accent-primary dark:[color-scheme:dark]"
-						aria-label={`Allow every ${serverLabel(group.server) || 'other'} tool`}
-						checked={state === 'all'}
-						{@attach indeterminate(() => state === 'some')}
-						{disabled}
-						onchange={(e) =>
-							set(
-								group.tools.map((t) => t.name),
-								e.currentTarget.checked
-							)}
-					/>
-					<button
-						type="button"
-						class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium"
-						aria-expanded={open}
-						disabled={searching}
-						onclick={() => (openOverride[group.server] = !isOpen(group.server))}
-					>
-						<span class="truncate">{serverLabel(group.server) || 'Other'}</span>
-						<span class="text-xs font-normal text-muted-foreground tabular-nums">
-							{group.allowed}/{group.total}
-						</span>
-						{#if !open && group.risk}
-							{@render riskBadge(group.risk)}
-						{/if}
-						{#if !searching}
-							<ChevronRightIcon
-								class="ml-auto size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none {open
-									? 'rotate-90'
-									: ''}"
-							/>
-						{/if}
-					</button>
-				</div>
-				{#if open}
-					<div class="grid gap-0.5 border-t border-border/60 p-1.5 sm:grid-cols-2">
-						{#each group.tools as tool (tool.name)}
-							<label
-								class="flex items-start gap-2.5 rounded-lg px-2 py-1.5 text-sm {disabled
-									? ''
-									: 'cursor-pointer hover:bg-accent/50'}"
-								title={tool.description ? `${tool.name}: ${tool.description}` : tool.name}
-							>
-								<input
-									type="checkbox"
-									class="mt-0.5 size-4 shrink-0 accent-primary dark:[color-scheme:dark]"
-									checked={selected.has(tool.name)}
-									{disabled}
-									onchange={(e) => set([tool.name], e.currentTarget.checked)}
+		{#each sections as section, i (section.key)}
+			{#if showSectionHeadings}
+				<h4 class="px-1 text-xs font-medium text-muted-foreground {i > 0 ? 'pt-3' : ''}">
+					{section.label}
+				</h4>
+			{/if}
+			{#each section.groups as group (group.server)}
+				{@const state = groupState(group)}
+				{@const open = searching || isOpen(group.server)}
+				<div class="rounded-xl border border-border/60">
+					<div class="flex items-center gap-2 px-3 py-2">
+						<input
+							type="checkbox"
+							class="size-4 shrink-0 accent-primary dark:[color-scheme:dark]"
+							aria-label={`Allow every ${serverLabel(group.server) || 'other'} tool`}
+							checked={state === 'all'}
+							{@attach indeterminate(() => state === 'some')}
+							{disabled}
+							onchange={(e) =>
+								set(
+									group.tools.map((t) => t.name),
+									e.currentTarget.checked
+								)}
+						/>
+						<button
+							type="button"
+							class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium"
+							aria-expanded={open}
+							disabled={searching}
+							onclick={() => (openOverride[group.server] = !isOpen(group.server))}
+						>
+							<span class="truncate">{serverLabel(group.server) || 'Other'}</span>
+							<span class="text-xs font-normal text-muted-foreground tabular-nums">
+								{group.allowed}/{group.total}
+							</span>
+							{#if !open && group.risk}
+								{@render riskBadge(group.risk)}
+							{/if}
+							{#if !searching}
+								<ChevronRightIcon
+									class="ml-auto size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none {open
+										? 'rotate-90'
+										: ''}"
 								/>
-								<span class="min-w-0 flex-1">
-									<span class="flex items-center gap-1.5">
-										<ToolIcon kind={tool.kind} class="size-3.5 shrink-0 text-muted-foreground" />
-										<span class="truncate font-medium">{tool.label}</span>
-										{#if tool.risk}
-											{@render riskBadge(tool.risk)}
+							{/if}
+						</button>
+					</div>
+					{#if open}
+						<!-- grid-cols-1 (minmax(0,1fr)), not an auto column: long tool names must truncate, not widen the grid -->
+						<div class="grid grid-cols-1 gap-0.5 border-t border-border/60 p-1.5 sm:grid-cols-2">
+							{#each group.tools as tool (tool.name)}
+								<label
+									class="flex min-w-0 items-start gap-2.5 rounded-lg px-2 py-1.5 text-sm {disabled
+										? ''
+										: 'cursor-pointer hover:bg-accent/50'}"
+									title={tool.description ? `${tool.name}: ${tool.description}` : tool.name}
+								>
+									<input
+										type="checkbox"
+										class="mt-0.5 size-4 shrink-0 accent-primary dark:[color-scheme:dark]"
+										checked={selected.has(tool.name)}
+										{disabled}
+										onchange={(e) => set([tool.name], e.currentTarget.checked)}
+									/>
+									<span class="min-w-0 flex-1">
+										<span class="flex items-center gap-1.5">
+											<ToolIcon kind={tool.kind} class="size-3.5 shrink-0 text-muted-foreground" />
+											<span class="truncate font-medium">{tool.label}</span>
+											{#if tool.risk}
+												{@render riskBadge(tool.risk)}
+											{/if}
+										</span>
+										{#if tool.description}
+											<span class="block truncate text-xs text-muted-foreground"
+												>{tool.description}</span
+											>
 										{/if}
 									</span>
-									{#if tool.description}
-										<span class="block truncate text-xs text-muted-foreground"
-											>{tool.description}</span
-										>
-									{/if}
-								</span>
-							</label>
-						{/each}
-					</div>
-				{/if}
-			</div>
+								</label>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/each}
 		{:else}
 			<p class="py-4 text-center text-sm text-muted-foreground">
 				{searching ? 'No tools match your search.' : 'No tools available.'}

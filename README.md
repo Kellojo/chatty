@@ -10,6 +10,7 @@ Self-hosted AI chat with multi-agent workflows, MCP tools, memory, and an OpenAI
 - **Skills** system to extend agent capabilities
 - **Workspaces** — per-agent sandboxed directories
 - **OpenAI-compatible proxy** (`/v1/chat/completions`) for external tools
+- **MCP gateway** (`/api/mcp`) — use Chatty's tools (memory, past chats, skills, agents, …) from Claude Code, Codex or OpenCode
 - Auth via better-auth: password, OIDC, or OIDC-only mode
 - PWA support
 
@@ -94,6 +95,24 @@ Chatty finds the authorization server through the MCP server's protected resourc
 3. dynamic client registration, when the authorization server offers it.
 
 The redirect URL to allow is `<ORIGIN>/api/mcp-oauth/callback`. Set `ORIGIN` so these URLs are stable. With Pocket ID, add the client ID URL to **Allowed metadata document URLs** and enable **Allow all metadata document clients** on the API, or register Chatty as an OIDC client with that redirect URL.
+
+### MCP gateway
+
+`<ORIGIN>/api/mcp` serves Chatty's MCP servers to other MCP clients (Streamable HTTP, stateless). Clients authenticate with an API key that has the `mcp:use` scope, and the tools act as that key's user, with their memory, chats and OAuth sign-ins. Each key has its own tool access, picked per server or per tool when creating or editing it under **Settings → API**. A server with all its tools picked also gets tools it adds later. A key that was never edited gets the default servers: everything except `fs`, `code-exec`, `math`, `datetime` and `wait` (coding agents have their own versions) and `agents` (agent runs use each agent's own tools, so they reach past the key's picks; turn it on only for clients you fully trust). Gateway calls never run with admin rights, even for an admin's keys. The **MCP gateway** tab shows the keys with access, which keys reach each server, call counts and setup snippets.
+
+Clients can also **sign in with OAuth** instead of taking a key: Claude Code and Claude.ai only need the endpoint URL. They discover Chatty's OAuth server (`/.well-known/oauth-protected-resource`, dynamic client registration, PKCE) and open Chatty in the browser, where you approve them and pick their tools. Each approval becomes an API key marked with the client's name. Edit it to change its tools, or delete it to sign the client out. Set `ORIGIN` to Chatty's public URL so the URLs in the OAuth metadata match what clients use. Claude.ai connects from Anthropic's servers, so Chatty has to be reachable from the internet over HTTPS for it.
+
+For Claude Code, including coding agents started through T3 Code (run this on the T3 host, then run `/mcp` in Claude Code and choose Authenticate):
+
+```sh
+claude mcp add --scope user --transport http chatty <ORIGIN>/api/mcp
+```
+
+Or with an API key instead of signing in:
+
+```sh
+claude mcp add --scope user --transport http chatty <ORIGIN>/api/mcp --header "Authorization: Bearer aic_..."
+```
 
 ## Data, backups and restore
 

@@ -58,6 +58,8 @@ export interface ToolInfo {
 	name: string;
 	description: string;
 	server: string;
+	/** From a server bundled with Chatty, not one an admin added. */
+	builtin?: boolean;
 }
 
 export interface McpServerInfo {
@@ -350,8 +352,49 @@ export interface ApiKey {
 	id: string;
 	label: string;
 	scopes: string[];
+	/** MCP gateway access (keys with `mcp:use`); null: the default servers. */
+	mcpAccess: McpKeyAccess | null;
+	/** Name of the OAuth client that signed in with this key (MCP gateway); null for keys made by hand. */
+	oauthClient: string | null;
 	createdAt: number;
 	lastUsedAt: number | null;
+}
+
+/**
+ * What an API key with the `mcp:use` scope may use through the MCP gateway: per server,
+ * all of its tools (null, including ones it adds later) or only the listed ones.
+ */
+export type McpKeyAccess = { serverId: string; tools: string[] | null }[];
+
+/** An enabled MCP server as the MCP gateway (Settings → API) shows it. */
+export interface McpGatewayServer {
+	id: string;
+	name: string;
+	builtin: boolean;
+	transport: string;
+	/** Tools listed on the last successful connect; null before the first. */
+	toolCount: number | null;
+	/** Part of a new key's access unless changed. */
+	exposedByDefault: boolean;
+	/** OAuth server the user hasn't signed in to: its tools are missing until they do. */
+	needsSignIn: boolean;
+}
+
+/** Gateway tool calls over a window, for one user. */
+export interface McpGatewayUsage {
+	days: number;
+	calls: number;
+	errors: number;
+	/** Per API key id (may include deleted keys). */
+	byKey: Record<string, McpGatewayUsageTotals>;
+	/** Per server id. */
+	byServer: Record<string, McpGatewayUsageTotals & { topTools: { tool: string; calls: number }[] }>;
+}
+
+export interface McpGatewayUsageTotals {
+	calls: number;
+	errors: number;
+	lastUsedAt: number;
 }
 
 export interface ModelMappingTarget {

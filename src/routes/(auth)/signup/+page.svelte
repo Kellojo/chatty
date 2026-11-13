@@ -2,6 +2,8 @@
 	import { authClient } from '$lib/auth-client.js';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { safeRedirectPath } from '$lib/redirect-to.js';
 	import { tick } from 'svelte';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import CircleDashedIcon from '@lucide/svelte/icons/circle-dashed';
@@ -20,6 +22,12 @@
 	const MIN_PASSWORD_LENGTH = 8;
 
 	let { data }: { data: PageData } = $props();
+
+	/** Where to go once signed in: back to e.g. an OAuth approval, else home. */
+	const redirectTo = $derived(safeRedirectPath(page.url.searchParams.get('redirectTo')));
+	/** Keeps ?redirectTo= when switching between sign-in and sign-up. */
+	const withRedirect = (path: string) =>
+		redirectTo === '/' ? path : `${path}?redirectTo=${encodeURIComponent(redirectTo)}`;
 
 	let name = $state('');
 	let email = $state('');
@@ -46,7 +54,7 @@
 			name,
 			email,
 			password,
-			callbackURL: '/'
+			callbackURL: redirectTo
 		});
 		if (error) {
 			errorMessage = error.message ?? 'Sign up failed';
@@ -57,7 +65,9 @@
 			(errorField === 'password' ? passwordInput : emailInput)?.focus();
 			return;
 		}
-		await goto(resolve('/'), { invalidateAll: true });
+		// A same-site path from ?redirectTo= (safeRedirectPath), e.g. an OAuth approval.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		await goto(redirectTo, { invalidateAll: true });
 	}
 </script>
 
@@ -67,9 +77,12 @@
 
 {#snippet signinLink()}
 	Already have an account?
-	<a href={resolve('/login')} class="font-medium text-foreground underline-offset-4 hover:underline"
-		>Sign in</a
+	<!-- eslint-disable svelte/no-navigation-without-resolve -- resolve()d inside withRedirect -->
+	<a
+		href={withRedirect(resolve('/login'))}
+		class="font-medium text-foreground underline-offset-4 hover:underline">Sign in</a
 	>
+	<!-- eslint-enable svelte/no-navigation-without-resolve -->
 {/snippet}
 
 <AuthCard
@@ -85,6 +98,7 @@
 >
 	{#if data.authConfig.oidc}
 		<SsoButton
+			callbackURL={redirectTo}
 			primary={!data.authConfig.signup}
 			divider={data.authConfig.signup}
 			disabled={loading}
