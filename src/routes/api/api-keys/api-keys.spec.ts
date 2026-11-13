@@ -5,7 +5,7 @@ process.env.DATABASE_PATH = ':memory:';
 
 const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { GET, POST } = await import('./+server.js');
-const { DELETE: DELETE_KEY } = await import('./[id]/+server.js');
+const { DELETE: DELETE_KEY, PATCH } = await import('./[id]/+server.js');
 
 type Db = ReturnType<typeof getDb>;
 
@@ -97,5 +97,42 @@ describe('api-keys endpoints', () => {
 		expect(res.status).toBe(200);
 		expect(res.body.ok).toBe(true);
 		expect((await call(GET, { user: u1 })).status).toBe(200);
+	});
+
+	it('PATCH changes scopes and MCP access, scoped to the owner', async () => {
+		const created = await call<{ key: { id: string } }>(POST, {
+			user: u1,
+			body: { label: 'claude', scopes: ['llm:invoke'] }
+		});
+		const id = created.body.key.id;
+		const body = {
+			label: 'claude code',
+			scopes: ['mcp:use'],
+			mcpAccess: [{ serverId: 's1', tools: ['search_memory'] }]
+		};
+		expect((await call(PATCH, { user: u2, params: { id }, method: 'PATCH', body })).status).toBe(
+			404
+		);
+		const res = await call<{ key: Record<string, unknown> }>(PATCH, {
+			user: u1,
+			params: { id },
+			method: 'PATCH',
+			body
+		});
+		expect(res.status).toBe(200);
+		expect(res.body.key).toMatchObject(body);
+
+		const reset = await call<{ key: Record<string, unknown> }>(PATCH, {
+			user: u1,
+			params: { id },
+			method: 'PATCH',
+			body: { mcpAccess: null }
+		});
+		expect(reset.body.key).toMatchObject({ label: 'claude code', mcpAccess: null });
+	});
+
+	it('rejects unknown scopes', async () => {
+		const res = await call(POST, { user: u1, body: { label: 'x', scopes: ['root'] } });
+		expect(res.status).toBe(400);
 	});
 });

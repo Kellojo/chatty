@@ -22,20 +22,7 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import CopyButton from '$lib/components/app/settings/CopyValue.svelte';
 	import BlocksIcon from '@lucide/svelte/icons/blocks';
-	import GlobeIcon from '@lucide/svelte/icons/globe';
-	import ClockIcon from '@lucide/svelte/icons/clock';
-	import MessageSquareTextIcon from '@lucide/svelte/icons/message-square-text';
-	import FolderIcon from '@lucide/svelte/icons/folder';
-	import SettingsIcon from '@lucide/svelte/icons/settings';
-	import BrainIcon from '@lucide/svelte/icons/brain';
-	import BotIcon from '@lucide/svelte/icons/bot';
-	import SparklesIcon from '@lucide/svelte/icons/sparkles';
-	import TerminalIcon from '@lucide/svelte/icons/terminal';
-	import ImageIcon from '@lucide/svelte/icons/image';
-	import HourglassIcon from '@lucide/svelte/icons/hourglass';
-	import CalculatorIcon from '@lucide/svelte/icons/calculator';
-	import CloudSunIcon from '@lucide/svelte/icons/cloud-sun';
-	import type { Component } from 'svelte';
+	import { BUILTIN_ICON, BUILTIN_PURPOSE } from '$lib/components/app/settings/mcp-builtins.js';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlugZapIcon from '@lucide/svelte/icons/plug-zap';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -200,39 +187,6 @@
 		}
 		return server.url ?? '';
 	}
-
-	/** One-line purpose for each bundled server, shown under its name. */
-	const BUILTIN_PURPOSE: Record<string, string> = {
-		webfetch: 'Fetch and read web pages',
-		datetime: 'Current date, time and time zones',
-		'chat-search': 'Search your past conversations',
-		fs: 'Read and write files in the agent workspace',
-		settings: "Read and change Chatty's settings",
-		memory: 'Read and save long-term memory',
-		agents: 'Create, run and manage agents',
-		skills: 'Load skills and their reference files',
-		'code-exec': 'Run code in a sandbox',
-		image: 'Generate and edit images',
-		wait: 'Pause, then check back on long tasks',
-		math: 'Evaluate math expressions',
-		weather: 'Current weather and forecasts'
-	};
-
-	const BUILTIN_ICON: Record<string, Component<{ class?: string }>> = {
-		webfetch: GlobeIcon,
-		datetime: ClockIcon,
-		'chat-search': MessageSquareTextIcon,
-		fs: FolderIcon,
-		settings: SettingsIcon,
-		memory: BrainIcon,
-		agents: BotIcon,
-		skills: SparklesIcon,
-		'code-exec': TerminalIcon,
-		image: ImageIcon,
-		wait: HourglassIcon,
-		math: CalculatorIcon,
-		weather: CloudSunIcon
-	};
 
 	const builtinServers = $derived(data.servers.filter((s) => s.builtin));
 	const customServers = $derived(data.servers.filter((s) => !s.builtin));

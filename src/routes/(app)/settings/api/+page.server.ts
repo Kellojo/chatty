@@ -1,7 +1,13 @@
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getApiKeyUsageStats } from '$lib/server/db/repo/api-key-usage.js';
+import { listAgents } from '$lib/server/db/repo/agents.js';
 import { listApiKeys, toPublic } from '$lib/server/db/repo/api-keys.js';
+import {
+	getMcpGatewayUsage,
+	listMcpGatewayServers,
+	MCP_GATEWAY_USAGE_DAYS
+} from '$lib/server/db/repo/mcp-gateway.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
 import { parseUsagePeriod, periodDays } from '$lib/components/app/usage/usage.js';
 import type { PageServerLoad } from './$types';
@@ -23,6 +29,15 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		keyUsage: Object.fromEntries(recent.keys.map((k) => [k.keyId, k])),
 		keyUsageDays: KEY_USAGE_DAYS,
 		/** The Statistics tab, over the `?period=` it shows. */
-		stats: { period, ...stats }
+		stats: { period, ...stats },
+		/** The user's own agents, which keys can start (the webhook guide). */
+		agents: listAgents(db, user.id)
+			.filter((a) => a.user_id === user.id)
+			.map((a) => ({ id: a.id, name: a.name })),
+		/** The MCP gateway guide: what it serves this user, and its tool calls. */
+		gateway: {
+			servers: listMcpGatewayServers(db, user.id),
+			usage: getMcpGatewayUsage(db, user.id, MCP_GATEWAY_USAGE_DAYS)
+		}
 	};
 };

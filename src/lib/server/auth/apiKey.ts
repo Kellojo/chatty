@@ -1,11 +1,14 @@
 import type { Db } from '../db/index.js';
-import { resolveApiKey } from '../db/repo/api-keys.js';
+import type { McpKeyAccess } from '$lib/types.js';
+import { parseMcpAccess, resolveApiKey } from '../db/repo/api-keys.js';
 
 export interface ApiKeyIdentity {
 	keyId: string;
 	userId: string;
 	role: string;
 	scopes: string[];
+	/** MCP gateway access; null: the default servers. */
+	mcpAccess: McpKeyAccess | null;
 }
 
 export async function resolveApiKeyIdentity(
@@ -23,6 +26,7 @@ export async function resolveApiKeyIdentity(
 		keyId: row.id,
 		userId: row.user_id,
 		role: user?.role ?? 'user',
-		scopes: JSON.parse(row.scopes) as string[]
+		scopes: JSON.parse(row.scopes) as string[],
+		mcpAccess: parseMcpAccess(row.mcp_access)
 	};
 }

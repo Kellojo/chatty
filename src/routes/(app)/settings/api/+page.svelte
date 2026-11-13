@@ -3,30 +3,25 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
-	import CopyIcon from '@lucide/svelte/icons/copy';
-	import CheckIcon from '@lucide/svelte/icons/check';
-	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
-	import CodeIcon from '@lucide/svelte/icons/code';
-	import BotIcon from '@lucide/svelte/icons/bot';
-	import SquarePiIcon from '@lucide/svelte/icons/square-pi';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { Input } from '$lib/components/ui/input/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
-	import { Switch } from '$lib/components/ui/switch/index.js';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
-	import CodeBlock from '$lib/components/app/settings/CodeBlock.svelte';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { formatDateTime } from '$lib/datetime.js';
 	import { formatSpend } from '$lib/formats.js';
 	import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
 	import ApiKeyUsageStats from '$lib/components/app/settings/ApiKeyUsageStats.svelte';
+	import ApiKeyDialog from '$lib/components/app/settings/ApiKeyDialog.svelte';
+	import ApiGuides, { GUIDES, type Guide } from '$lib/components/app/settings/api/ApiGuides.svelte';
+	import type { ApiScope } from '$lib/components/app/settings/api/scopes.js';
+	import { defaultAccess, describeAccess } from '$lib/mcp-access.js';
 	import { DEFAULT_USAGE_PERIOD, type UsagePeriod } from '$lib/components/app/usage/usage.js';
 	import type { ApiKey } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -35,98 +30,12 @@
 
 	const origin = $derived(page.url.origin);
 
-	const agentRunSnippet = $derived(
-		`curl -X POST ${origin}/api/agents/<agent-id>/run \\
-  -H "Authorization: Bearer aic_..." \\
-  -H "Content-Type: application/json" \\
-  -d '{"instructions":"Optional extra instructions for this run"}'`
-	);
-
-	const curlSnippet = $derived(
-		`curl ${origin}/api/v1/chat/completions \\
-  -H "Authorization: Bearer aic_..." \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}],"stream":true}'`
-	);
-
-	const opencodeSnippet = $derived(
-		JSON.stringify(
-			{
-				$schema: 'https://opencode.ai/config.json',
-				provider: {
-					chatty: {
-						npm: '@ai-sdk/openai-compatible',
-						options: {
-							baseURL: `${origin}/api/v1`,
-							apiKey: 'aic_...'
-						},
-						models: {
-							'<model>': {}
-						}
-					}
-				}
-			},
-			null,
-			2
-		)
-	);
-
-	const piSnippet = $derived(
-		JSON.stringify(
-			{
-				providers: {
-					chatty: {
-						baseUrl: `${origin}/api/v1`,
-						api: 'openai-completions',
-						apiKey: 'aic_...',
-						models: [{ id: '<model>' }]
-					}
-				}
-			},
-			null,
-			2
-		)
-	);
-
-	const decisionsCurlSnippet = $derived(
-		`curl ${origin}/api/v1/decisions \\
-  -H "Authorization: Bearer aic_..." \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"<model>","input":"I was charged twice for my order.","questions":[{"type":"choice","name":"department","instructions":"Which department should handle this complaint?","choices":[{"value":"billing","description":"Payments, invoices, and refunds."},{"value":"technical","description":"Problems using the product."},{"value":"shipping","description":"Delivery and tracking."},{"value":"other","description":"Requests outside these categories."}]}]}'`
-	);
-
 	let keyDialogOpen = $state(false);
-	let keyLabel = $state('');
-	let scopeAgentsRun = $state(false);
-	let scopeLlmInvoke = $state(true);
-	let keyBusy = $state(false);
-	let createdKey = $state<string | null>(null);
+	/** The key the dialog edits; null creates one. */
+	let editingKey = $state<ApiKey | null>(null);
+	let keyPreset = $state<ApiScope>('llm:invoke');
 	let deleteKeyBusy = $state<string | null>(null);
 	let deleteKeyId = $state<string | null>(null);
-
-	const selectedScopes = $derived(
-		[
-			scopeAgentsRun ? ('agents:run' as const) : null,
-			scopeLlmInvoke ? ('llm:invoke' as const) : null
-		].filter((scope) => scope !== null)
-	);
-
-	let copiedId = $state<string | null>(null);
-	let copyTimer: ReturnType<typeof setTimeout> | undefined;
-
-	async function copyText(id: string, text: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			toast.success('Copied');
-			copiedId = id;
-			clearTimeout(copyTimer);
-			copyTimer = setTimeout(() => {
-				copiedId = null;
-			}, 2000);
-		} catch {
-			toast.error('Failed to copy');
-		}
-	}
 
 	async function api(path: string, method: string, body?: unknown): Promise<Response> {
 		const res = await fetch(path, {
@@ -141,45 +50,27 @@
 		return res;
 	}
 
-	function openKeyDialog() {
-		keyLabel = '';
-		scopeAgentsRun = false;
-		scopeLlmInvoke = true;
-		createdKey = null;
+	/** Opens the key dialog: a new key starting with `preset`, or `key` to edit. */
+	function openKeyDialog(preset: ApiScope = 'llm:invoke', key: ApiKey | null = null) {
+		keyPreset = preset;
+		editingKey = key;
 		keyDialogOpen = true;
 	}
 
-	function closeKeyDialog(open: boolean) {
-		keyDialogOpen = open;
-		if (!open && createdKey) {
-			createdKey = null;
-			invalidateAll();
-		}
-	}
-
-	async function createKey(event: SubmitEvent) {
-		event.preventDefault();
-		if (keyBusy || selectedScopes.length === 0) return;
-		keyBusy = true;
-		try {
-			const res = await api('/api/api-keys', 'POST', {
-				label: keyLabel.trim(),
-				scopes: selectedScopes
-			});
-			const payload = (await res.json()) as { key: ApiKey & { rawKey: string } };
-			createdKey = payload.key.rawKey;
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to create API key');
-		} finally {
-			keyBusy = false;
-		}
+	/** What a gateway key may use, for its row. */
+	function accessLabel(key: ApiKey): string {
+		const servers = data.gateway.servers;
+		return `MCP: ${describeAccess(key.mcpAccess ?? defaultAccess(servers), servers)}${key.mcpAccess ? '' : ' (defaults)'}`;
 	}
 
 	/** The usage line under a key: its recent requests and spend, or that it sat idle. */
 	function usageLabel(key: ApiKey): string {
 		const usage = data.keyUsage[key.id];
+		const toolCalls = data.gateway.usage.byKey[key.id]?.calls ?? 0;
 		const window = `the last ${data.keyUsageDays} days`;
-		if (!usage) return `No requests in ${window}`;
+		if (!usage) {
+			return toolCalls ? `${toolCallsLabel(toolCalls)} in ${window}` : `No requests in ${window}`;
+		}
 		const parts = [
 			`${usage.requests.toLocaleString()} ${usage.requests === 1 ? 'request' : 'requests'}`
 		];
@@ -188,23 +79,36 @@
 			const lower = usage.pricedRequests < usage.requests ? '+' : '';
 			parts.push(`${formatSpend(usage.costUsd)}${lower}`);
 		}
+		if (toolCalls) parts.push(toolCallsLabel(toolCalls));
 		return `${parts.join(' · ')} in ${window}`;
 	}
 
-	type Tab = 'keys' | 'statistics';
-	// The tab and the statistics period live in the URL, so a reload or a shared link keeps them.
-	const activeTab = $derived<Tab>(
-		page.url.searchParams.get('tab') === 'statistics' ? 'statistics' : 'keys'
+	function toolCallsLabel(calls: number): string {
+		return `${calls.toLocaleString()} MCP tool ${calls === 1 ? 'call' : 'calls'}`;
+	}
+
+	const TABS = ['keys', 'statistics'] as const;
+	type Tab = (typeof TABS)[number];
+	const asTab = (value: string | null): Tab => TABS.find((tab) => tab === value) ?? 'keys';
+	// The tab, guide and statistics period live in the URL, so a reload or a shared link keeps them.
+	const activeTab = $derived<Tab>(asTab(page.url.searchParams.get('tab')));
+	// The old MCP gateway tab now opens its guide.
+	const activeGuide = $derived<Guide>(
+		page.url.searchParams.get('tab') === 'mcp'
+			? 'mcp'
+			: (GUIDES.find((g) => g === page.url.searchParams.get('guide')) ?? 'inference')
 	);
 
 	/** This page with `updates` applied to its query (defaults drop the param). */
-	function navigate(updates: { tab?: Tab; period?: UsagePeriod }) {
+	function navigate(updates: { tab?: Tab; guide?: Guide; period?: UsagePeriod }) {
 		// A throwaway copy for building one href, not reactive state.
 		// eslint-disable-next-line svelte/prefer-svelte-reactivity
 		const params = new URLSearchParams(page.url.searchParams);
 		if (updates.tab) params.set('tab', updates.tab);
+		if (updates.guide) params.set('guide', updates.guide);
 		if (updates.period) params.set('period', updates.period);
-		if (params.get('tab') === 'keys') params.delete('tab');
+		if (params.get('tab') === 'keys' || params.get('tab') === 'mcp') params.delete('tab');
+		if (params.get('guide') === 'inference') params.delete('guide');
 		if (params.get('period') === DEFAULT_USAGE_PERIOD) params.delete('period');
 		const qs = params.toString();
 		// The resolved path of this page plus its own query.
@@ -217,7 +121,7 @@
 	}
 
 	function selectTab(value: string) {
-		navigate({ tab: value === 'statistics' ? 'statistics' : 'keys' });
+		navigate({ tab: asTab(value) });
 	}
 
 	async function deleteKey(id: string) {
@@ -244,10 +148,10 @@
 
 <SettingsHeader
 	title="API"
-	description="Run agents over HTTP or call models through the OpenAI-compatible proxy. API keys act as you, so treat them like passwords."
+	description="Call your models, use Chatty's tools from MCP clients and start agents from other apps. API keys act as you, so treat them like passwords."
 >
 	{#snippet actions()}
-		<Button onclick={openKeyDialog}><PlusIcon class="size-4" />Create key</Button>
+		<Button onclick={() => openKeyDialog()}><PlusIcon class="size-4" />Create key</Button>
 	{/snippet}
 </SettingsHeader>
 
@@ -262,7 +166,8 @@
 		<SettingsSection title="API keys" flush>
 			{#snippet description()}
 				Scope a key to <code class="rounded bg-muted px-1 py-0.5 text-xs">agents:run</code>,
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> or both.
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code>,
+				<code class="rounded bg-muted px-1 py-0.5 text-xs">mcp:use</code> or any mix.
 			{/snippet}
 			{#if data.apiKeys.length === 0}
 				<div
@@ -276,19 +181,24 @@
 					<div class="flex flex-col gap-1">
 						<p class="text-sm font-medium">No API keys yet</p>
 						<p class="text-sm text-muted-foreground">
-							Create one to start agent runs or call models from scripts and other tools.
+							Create one to start agent runs, call models or use Chatty's tools from other apps.
 						</p>
 					</div>
 				</div>
 			{:else}
 				<ul class="divide-y divide-border/60 border-t border-border/60" aria-label="API keys">
 					{#each data.apiKeys as key (key.id)}
-						<SettingsListItem title={key.label}>
+						<SettingsListItem title={key.label} onclick={() => openKeyDialog('llm:invoke', key)}>
 							{#snippet leading()}<KeyRoundIcon class="size-4" />{/snippet}
 							{#snippet badges()}
 								{#each key.scopes as scope (scope)}
 									<Badge variant="secondary" class="font-mono font-normal">{scope}</Badge>
 								{/each}
+								{#if key.oauthClient}
+									<Badge variant="outline" class="font-normal text-muted-foreground"
+										>Signed in · {key.oauthClient}</Badge
+									>
+								{/if}
 							{/snippet}
 							{#snippet meta()}
 								Created {formatDateTime(key.createdAt, data.timeFormat)} · {key.lastUsedAt
@@ -296,7 +206,20 @@
 									: 'Never used'}
 							{/snippet}
 							<p class="text-xs text-muted-foreground">{usageLabel(key)}</p>
+							{#if key.scopes.includes('mcp:use')}
+								<p class="truncate text-xs text-muted-foreground">{accessLabel(key)}</p>
+							{/if}
 							{#snippet trailing()}
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									class="text-muted-foreground"
+									title="Edit key"
+									aria-label="Edit key {key.label}"
+									onclick={() => openKeyDialog('llm:invoke', key)}
+								>
+									<PencilIcon class="size-4" />
+								</Button>
 								<Button
 									variant="ghost"
 									size="icon-sm"
@@ -315,98 +238,17 @@
 			{/if}
 		</SettingsSection>
 
-		<SettingsSection title="Agent API">
-			{#snippet description()}
-				Start an agent run. Needs a key with the <code class="rounded bg-muted px-1 py-0.5 text-xs"
-					>agents:run</code
-				>
-				scope and returns
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">202 Accepted</code> with the created run.
-			{/snippet}
-			<CodeBlock code={agentRunSnippet} label="curl" />
-		</SettingsSection>
-
-		<SettingsSection title="Model inference">
-			{#snippet description()}
-				Point your tools at the OpenAI-compatible proxy with an <code
-					class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code
-				>
-				key. Listing model ids needs no key:
-				<code
-					class="inline-block max-w-full overflow-x-auto rounded bg-muted px-1 py-0.5 align-bottom text-xs whitespace-nowrap"
-					>GET {origin}/api/v1/models</code
-				>
-			{/snippet}
-			<Tabs.Root value="curl" class="gap-3">
-				<Tabs.List
-					class="max-w-full [scrollbar-width:none] justify-start overflow-x-auto max-sm:[&_svg]:hidden"
-				>
-					<Tabs.Trigger value="curl">
-						<SquareTerminalIcon class="size-4" aria-hidden="true" />curl
-					</Tabs.Trigger>
-					<Tabs.Trigger value="opencode">
-						<CodeIcon class="size-4" aria-hidden="true" />OpenCode
-					</Tabs.Trigger>
-					<Tabs.Trigger value="claude-code">
-						<BotIcon class="size-4" aria-hidden="true" />Claude Code
-					</Tabs.Trigger>
-					<Tabs.Trigger value="pi">
-						<SquarePiIcon class="size-4" aria-hidden="true" />pi
-					</Tabs.Trigger>
-				</Tabs.List>
-				<Tabs.Content value="curl" class="flex flex-col gap-3">
-					<p class="text-sm text-muted-foreground">Stream a chat completion.</p>
-					<CodeBlock code={curlSnippet} label="curl" />
-				</Tabs.Content>
-				<Tabs.Content value="opencode" class="flex flex-col gap-3">
-					<p class="text-sm text-muted-foreground">
-						Add this provider entry to your <code class="rounded bg-muted px-1 py-0.5 text-xs"
-							>opencode.json</code
-						>.
-					</p>
-					<CodeBlock code={opencodeSnippet} label="OpenCode config" />
-				</Tabs.Content>
-				<Tabs.Content value="claude-code" class="flex flex-col gap-3">
-					<p class="text-sm text-muted-foreground">
-						Claude Code speaks the Anthropic Messages API. Point an OpenAI-compatible shim such as
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">claude-code-router</code> at
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">{origin}/api/v1</code>
-						with an
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key. Native
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">/v1/messages</code> support is planned.
-					</p>
-				</Tabs.Content>
-				<Tabs.Content value="pi" class="flex flex-col gap-3">
-					<p class="text-sm text-muted-foreground">
-						Add this provider to <code class="rounded bg-muted px-1 py-0.5 text-xs"
-							>models.json</code
-						>
-						in pi's agent directory and replace
-						<code class="rounded bg-muted px-1 py-0.5 text-xs">&lt;model&gt;</code> with a model id from
-						the models endpoint.
-					</p>
-					<CodeBlock code={piSnippet} label="pi config" />
-				</Tabs.Content>
-			</Tabs.Root>
-		</SettingsSection>
-
-		<SettingsSection title="Decisions">
-			{#snippet description()}
-				Classify content, route requests and score inputs with predicate, choice and score
-				questions. Needs an <code class="rounded bg-muted px-1 py-0.5 text-xs">llm:invoke</code> key
-				and a model with the
-				<code class="rounded bg-muted px-1 py-0.5 text-xs">decisions</code> capability set in
-				{#if data.user.role === 'admin'}
-					<a
-						class="underline underline-offset-4 hover:text-foreground"
-						href={resolve('/settings/defaults')}>Defaults</a
-					>; until then the endpoint returns an error.
-				{:else}
-					Defaults by an admin; until then the endpoint returns an error.
-				{/if}
-			{/snippet}
-			<CodeBlock code={decisionsCurlSnippet} label="curl" />
-		</SettingsSection>
+		<ApiGuides
+			guide={activeGuide}
+			onGuideChange={(guide) => navigate({ guide })}
+			{origin}
+			keys={data.apiKeys}
+			gateway={data.gateway}
+			agents={data.agents}
+			isAdmin={data.user.role === 'admin'}
+			onCreateKey={(scope) => openKeyDialog(scope)}
+			onEditKey={(key) => openKeyDialog('llm:invoke', key)}
+		/>
 	</Tabs.Content>
 	<Tabs.Content value="statistics">
 		<ApiKeyUsageStats
@@ -418,79 +260,13 @@
 	</Tabs.Content>
 </Tabs.Root>
 
-<Dialog.Root open={keyDialogOpen} onOpenChange={closeKeyDialog}>
-	<Dialog.Content>
-		<Dialog.Header>
-			<Dialog.Title>Create API key</Dialog.Title>
-		</Dialog.Header>
-		{#if createdKey}
-			<div class="flex flex-col gap-3">
-				<p class="text-sm text-muted-foreground">Shown once — store it now.</p>
-				<div class="flex items-center gap-2">
-					<Input value={createdKey} readonly class="font-mono text-xs" />
-					<Button
-						variant="outline"
-						size="sm"
-						onclick={() => copyText('raw-key', createdKey ?? '')}
-						aria-label="Copy API key"
-					>
-						{#if copiedId === 'raw-key'}
-							<CheckIcon class="size-4" />
-						{:else}
-							<CopyIcon class="size-4" />
-						{/if}
-					</Button>
-				</div>
-				<Dialog.Footer>
-					<Button onclick={() => closeKeyDialog(false)}>Done</Button>
-				</Dialog.Footer>
-			</div>
-		{:else}
-			<form onsubmit={createKey} class="flex flex-col gap-4">
-				<div class="flex flex-col gap-2">
-					<Label for="api-key-label">Label</Label>
-					<Input
-						id="api-key-label"
-						bind:value={keyLabel}
-						maxlength={100}
-						required
-						placeholder="e.g. Nightly automation"
-					/>
-				</div>
-				<div class="flex flex-col gap-3">
-					<Label>Scopes</Label>
-					<div class="flex items-center justify-between gap-6">
-						<div class="flex min-w-0 flex-col gap-1">
-							<Label for="scope-agents-run" class="font-normal">agents:run</Label>
-							<p class="text-sm text-muted-foreground">Trigger agents over HTTP.</p>
-						</div>
-						<Switch id="scope-agents-run" bind:checked={scopeAgentsRun} />
-					</div>
-					<div class="flex items-center justify-between gap-6">
-						<div class="flex min-w-0 flex-col gap-1">
-							<Label for="scope-llm-invoke" class="font-normal">llm:invoke</Label>
-							<p class="text-sm text-muted-foreground">Call the AI proxy (LLM API).</p>
-						</div>
-						<Switch id="scope-llm-invoke" bind:checked={scopeLlmInvoke} />
-					</div>
-				</div>
-				<Dialog.Footer>
-					<Dialog.Close>
-						{#snippet child({ props })}
-							<Button {...props} type="button" variant="outline">Cancel</Button>
-						{/snippet}
-					</Dialog.Close>
-					<Button
-						type="submit"
-						disabled={keyBusy || !keyLabel.trim() || selectedScopes.length === 0}
-					>
-						{keyBusy ? 'Creating…' : 'Create key'}
-					</Button>
-				</Dialog.Footer>
-			</form>
-		{/if}
-	</Dialog.Content>
-</Dialog.Root>
+<ApiKeyDialog
+	bind:open={keyDialogOpen}
+	key={editingKey}
+	preset={keyPreset}
+	servers={data.gateway.servers}
+	onSaved={() => invalidateAll()}
+/>
 
 <Dialog.Root open={deleteKeyId !== null} onOpenChange={(open) => !open && (deleteKeyId = null)}>
 	<Dialog.Content>

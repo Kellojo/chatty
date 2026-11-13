@@ -23,6 +23,12 @@ export interface BuildToolsInput {
 	author?: string;
 	conversationId?: string | null;
 	agentRunId?: string | null;
+	/** Run builtins with this role instead of the user's (e.g. never admin). */
+	role?: string;
+	/** Only these servers' tools (default: every enabled server). */
+	servers?: McpServerRow[];
+	/** Sees every finished tool call, after it was counted towards the server's usage. */
+	onToolCall?: (row: McpServerRow, outcome: McpToolCallOutcome) => void;
 }
 
 export interface BuiltTools extends ToolCatalog {
@@ -35,14 +41,14 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		{ role: string } | undefined;
 	const ctx: CallerContext = {
 		userId: input.userId,
-		role: user?.role ?? 'user',
+		role: input.role ?? user?.role ?? 'user',
 		workspaceDir: input.workspaceDir ?? null,
 		documentsDir: path.join(path.resolve(config.DOCUMENTS_VOLUME), input.userId),
 		author: input.author,
 		conversationId: input.conversationId,
 		agentRunId: input.agentRunId
 	};
-	const rows = listEnabledMcpServers(db).filter(
+	const rows = (input.servers ?? listEnabledMcpServers(db)).filter(
 		(row) => input.memoryEnabled || row.name !== 'memory'
 	);
 	const tools: Record<string, Tool> = {};
@@ -67,7 +73,10 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		closers.push(result.value.close);
 		const set = wrapMcpTools(result.value.tools, row.name, {
 			onError: result.value.onError,
-			onCall: (outcome) => trackCall(row, ctx.userId, outcome)
+			onCall: (outcome) => {
+				trackCall(row, ctx.userId, outcome);
+				input.onToolCall?.(row, outcome);
+			}
 		});
 		for (const [name, tool] of Object.entries(set)) {
 			if (tools[name] || name === SEARCH_TOOLS_NAME) {
@@ -203,12 +212,18 @@ function isConnectionError(e: unknown): boolean {
 /** Lists every tool currently available to the user (for pickers in the UI), sorted by server then name. */
 export async function listToolInfo(userId: string): Promise<ToolInfo[]> {
 	const built = await buildTools({ userId, memoryEnabled: true });
+	const builtin = new Set(
+		listEnabledMcpServers(getDb())
+			.filter((row) => row.builtin === 1)
+			.map((row) => row.name)
+	);
 	try {
 		return Object.entries(built.tools)
 			.map(([name, t]) => ({
 				name,
 				description: typeof t.description === 'string' ? t.description : '',
-				server: built.toolToServer[name] ?? ''
+				server: built.toolToServer[name] ?? '',
+				builtin: builtin.has(built.toolToServer[name] ?? '')
 			}))
 			.sort((a, b) => a.server.localeCompare(b.server) || a.name.localeCompare(b.name));
 	} finally {
