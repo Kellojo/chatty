@@ -28,7 +28,7 @@
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
+	import LoaderIcon from '@lucide/svelte/icons/loader';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
@@ -285,9 +285,11 @@
 						>
 					</div>
 				{:else if status.status === 'partial' && !messageActive}
+					<!-- 'partial' only ever means "still being generated" (a stopped reply is
+					     saved as failed): this view just isn't attached to it right now. -->
 					<p class="flex items-center gap-1.5 text-xs text-muted-foreground">
-						<CircleSlashIcon class="size-3.5" />
-						Response stopped before it finished.
+						<LoaderIcon class="size-3.5 animate-spin" />
+						Still generating…
 					</p>
 				{/if}
 
