@@ -23,6 +23,8 @@
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import XIcon from '@lucide/svelte/icons/x';
+	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import {
@@ -67,6 +69,15 @@
 	const allVisibleSelected = $derived(
 		visibleHistory.length > 0 && visibleHistory.every((t) => historySelected.has(t.threadId))
 	);
+
+	/** Status of the automatic import of past sessions right after connecting. */
+	type InitialImport =
+		| { state: 'importing' }
+		| { state: 'done'; imported: number; skipped: number }
+		| { state: 'error'; message: string };
+	let initialImportOpen = $state(false);
+	let initialImportEnv = $state<CodingEnvironment | null>(null);
+	let initialImport = $state<InitialImport>({ state: 'importing' });
 
 	let syncBusyId = $state<string | null>(null);
 	let enabledOverride = $state<Record<string, boolean>>({});
@@ -139,15 +150,15 @@
 					);
 				}
 			} else {
-				reportStatus(
-					await readEnvironment(
-						await api('/api/coding-environments', 'POST', {
-							name: formName,
-							baseUrl: formUrl,
-							...credentials()
-						})
-					)
+				const created = await readEnvironment(
+					await api('/api/coding-environments', 'POST', {
+						name: formName,
+						baseUrl: formUrl,
+						...credentials()
+					})
 				);
+				reportStatus(created);
+				if (created.enabled && created.status === 'online') void importAllPast(created);
 			}
 			formOpen = false;
 			await invalidateAll();
@@ -235,6 +246,34 @@
 		} finally {
 			historyBusy = false;
 		}
+	}
+
+	/** Brings in every live past session of a freshly connected environment. */
+	async function importAllPast(env: CodingEnvironment) {
+		initialImportEnv = env;
+		initialImport = { state: 'importing' };
+		initialImportOpen = true;
+		try {
+			const res = await api(`/api/coding-environments/${env.id}/history`, 'POST', { all: true });
+			const result = (await res.json()) as { imported: number; skipped: number };
+			if (initialImportEnv?.id !== env.id) return;
+			// Hidden while importing: report it the light way instead.
+			if (!initialImportOpen && result.imported > 0) {
+				toast.success(`Imported ${sessions(result.imported)} from "${env.name}"`);
+			}
+			// Nothing to report: don't leave a dialog up just to say so.
+			if (result.imported === 0 && result.skipped === 0) initialImportOpen = false;
+			initialImport = { state: 'done', ...result };
+		} catch (e) {
+			if (initialImportEnv?.id !== env.id) return;
+			const message = e instanceof Error ? e.message : 'Failed to import past sessions';
+			if (!initialImportOpen) toast.error(`Couldn't import past sessions: ${message}`);
+			initialImport = { state: 'error', message };
+		}
+	}
+
+	function sessions(n: number): string {
+		return n === 1 ? '1 session' : `${n} sessions`;
 	}
 
 	async function confirmDelete() {
@@ -535,6 +574,54 @@
 				{:else}
 					Import{historySelected.size > 0 ? ` ${historySelected.size}` : ''}
 				{/if}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={initialImportOpen}>
+	<Dialog.Content class="sm:max-w-sm">
+		<Dialog.Header>
+			<Dialog.Title>Syncing past sessions</Dialog.Title>
+			<Dialog.Description>From {initialImportEnv?.name}</Dialog.Description>
+		</Dialog.Header>
+		<div class="flex items-start gap-3 rounded-md border border-border/60 bg-muted/40 px-3 py-3">
+			{#if initialImport.state === 'importing'}
+				<Loader2Icon class="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground" />
+				<div class="flex flex-col gap-0.5 text-sm">
+					<p class="font-medium">Importing past sessions…</p>
+					<p class="text-xs text-muted-foreground">You can close this, the import keeps going.</p>
+				</div>
+			{:else if initialImport.state === 'done'}
+				<CircleCheckIcon class="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+				<div class="flex flex-col gap-0.5 text-sm">
+					<p class="font-medium">Imported {sessions(initialImport.imported)}</p>
+					<p class="text-xs text-muted-foreground">
+						Their history loads in the background and stays in sync with T3 Code.
+						{#if initialImport.skipped > 0}
+							{sessions(initialImport.skipped)} left out to stay under the limit of open tasks.
+						{/if}
+						Archived ones can be added with <span class="font-medium">Import past sessions</span>.
+					</p>
+				</div>
+			{:else}
+				<CircleAlertIcon class="mt-0.5 size-4 shrink-0 text-destructive" />
+				<div class="flex flex-col gap-0.5 text-sm">
+					<p class="font-medium">Couldn't import past sessions</p>
+					<p class="text-xs break-words text-muted-foreground">{initialImport.message}</p>
+				</div>
+			{/if}
+		</div>
+		<Dialog.Footer>
+			{#if initialImport.state === 'error' && initialImportEnv}
+				{@const env = initialImportEnv}
+				<Button variant="outline" onclick={() => importAllPast(env)}>Try again</Button>
+			{/if}
+			<Button
+				variant={initialImport.state === 'importing' ? 'outline' : 'default'}
+				onclick={() => (initialImportOpen = false)}
+			>
+				{initialImport.state === 'importing' ? 'Hide' : 'Done'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

@@ -59,25 +59,33 @@ function parseOutput(output: unknown): Record<string, unknown> | null {
 export function readHtmlRender(part: ToolPartLike): HtmlRenderRef | null {
 	if (part.type !== 'dynamic-tool' || !isHtmlRenderToolName(part.toolName)) return null;
 	if (part.state !== 'output-available') return null;
+	// T3 shortens large inputs to `{ summary, truncated }`, so the page may only
+	// be available through T3's stored copy (`attachmentId`).
 	const input = rec(part.input);
-	if (typeof input?.html !== 'string' || input.html.trim() === '') return null;
 	const ref = rec(parseOutput(part.output)?.htmlRender);
 	// No reference means T3 refused the page (the output is an error message).
 	if (!ref) return null;
-	const title = typeof ref.title === 'string' ? ref.title : input.title;
-	const height = typeof ref.height === 'number' ? ref.height : input.height;
-	const attachmentId = ref.attachmentId;
+	const title = typeof ref.title === 'string' ? ref.title : input?.title;
+	const height = typeof ref.height === 'number' ? ref.height : input?.height;
+	const attachmentId =
+		typeof ref.attachmentId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(ref.attachmentId)
+			? ref.attachmentId
+			: null;
+	if (!attachmentId && !inlineHtml(part)) return null;
 	return {
 		title: (typeof title === 'string' ? title.trim().slice(0, 200) : '') || 'HTML',
 		height: clampHtmlRenderHeight(
 			typeof height === 'number' && Number.isFinite(height) ? height : 400
 		),
 		heights: readHeights(ref.heights),
-		attachmentId:
-			typeof attachmentId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(attachmentId)
-				? attachmentId
-				: null
+		attachmentId
 	};
+}
+
+/** The page's HTML from the tool call's input, unless T3 shortened it. */
+export function inlineHtml(part: Pick<ToolPartLike, 'input'>): string | null {
+	const html = rec(part.input)?.html;
+	return typeof html === 'string' && html.trim() !== '' ? html : null;
 }
 
 function readHeights(value: unknown): [number, number][] {

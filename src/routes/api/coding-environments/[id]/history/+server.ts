@@ -8,7 +8,11 @@ import {
 	type CodingEnvironmentRow
 } from '$lib/server/db/repo/coding-environments.js';
 import { T3ClientError } from '$lib/server/t3/client.js';
-import { importHistoryThreads, listHistoryThreads } from '$lib/server/t3/history.js';
+import {
+	importAllHistoryThreads,
+	importHistoryThreads,
+	listHistoryThreads
+} from '$lib/server/t3/history.js';
 import type { RequestHandler } from './$types';
 
 function enabledEnvironment(userId: string, id: string): CodingEnvironmentRow {
@@ -34,16 +38,20 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 	return json({ threads: await remote(() => listHistoryThreads(getDb(), env)) });
 };
 
-const importSchema = z.object({
-	threadIds: z.array(z.string().min(1).max(200)).min(1).max(MAX_HISTORY_IMPORT)
-});
+const importSchema = z.union([
+	z.object({ threadIds: z.array(z.string().min(1).max(200)).min(1).max(MAX_HISTORY_IMPORT) }),
+	// Every live past thread, as offered right after connecting the environment.
+	z.object({ all: z.literal(true) })
+]);
 
-/** Imports the chosen past threads as coding conversations. */
+/** Imports the chosen (or all live) past threads as coding conversations. */
 export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireUser(locals);
 	const parsed = importSchema.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });
 	const env = enabledEnvironment(user.id, params.id);
-	const imported = await remote(() => importHistoryThreads(getDb(), env, parsed.data.threadIds));
-	return json({ imported: imported.length });
+	const body = parsed.data;
+	if ('all' in body) return json(await remote(() => importAllHistoryThreads(getDb(), env)));
+	const imported = await remote(() => importHistoryThreads(getDb(), env, body.threadIds));
+	return json({ imported: imported.length, skipped: 0 });
 };

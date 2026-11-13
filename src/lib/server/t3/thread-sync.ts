@@ -44,9 +44,10 @@ export const THREAD_SYNC_INTERVAL_MS = 2 * 60 * 1000;
 /** Imports per environment and pass; each one opens a follower to load its history. */
 export const MAX_IMPORTS_PER_PASS = 10;
 /**
- * Coding conversations (with a thread, not deleted) per environment beyond
- * which no more threads are imported, so a hostile or runaway server can't
- * grow Chatty's conversation list without bound.
+ * Open coding conversations (with a thread, not deleted or settled) per
+ * environment beyond which no more threads are imported, so a hostile or
+ * runaway server can't flood Chatty's conversation list. Settled ones don't
+ * count: a long history of finished tasks must not stop new ones syncing.
  */
 export const MAX_THREAD_CONVERSATIONS_PER_ENV = 200;
 

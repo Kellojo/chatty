@@ -20,7 +20,9 @@ const SWEEP_INTERVAL_MS = 60_000;
 
 // External servers don't see the caller (no user, workspace or conversation is
 // passed to them), so one connection can serve every user and conversation.
-// Builtin servers are bound to their caller and are never pooled.
+// The exception is OAuth servers: they act as the signed-in user, so each user
+// gets their own pooled connection. Builtin servers are bound to their caller
+// and are never pooled.
 const POOL_CTX: CallerContext = {
 	userId: 'mcp-pool',
 	role: 'user',
@@ -31,6 +33,8 @@ const POOL_CTX: CallerContext = {
 interface Entry {
 	key: string;
 	serverId: string;
+	/** Set for per-user (OAuth) connections. */
+	userId: string | null;
 	ready: Promise<{ conn: ServerConnection; tools: Record<string, Tool> }>;
 	leases: number;
 	lastUsed: number;
@@ -43,6 +47,8 @@ interface Entry {
 
 interface Failure {
 	key: string;
+	serverId: string;
+	userId: string | null;
 	until: number;
 	error: Error;
 }
@@ -57,22 +63,50 @@ export interface McpLease {
 }
 
 const entries = new Map<string, Entry>();
+/** By connection slot (server, plus user for OAuth servers). */
 const failures = new Map<string, Failure>();
 /**
  * The tools each server listed on its last successful connect, by pool key.
  * They outlive idle connections, so a turn can offer a server's tools without
  * connecting and only connect when one of them is called.
  */
-const catalogs = new Map<string, { serverId: string; tools: Record<string, Tool> }>();
+const catalogs = new Map<
+	string,
+	{ serverId: string; userId: string | null; tools: Record<string, Tool> }
+>();
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Identifies a server's connection settings: an edit yields a new key, so stale clients are never reused. */
-export function poolKey(row: McpServerRow): string {
+export function poolKey(row: McpServerRow, userId?: string | null): string {
 	const hash = createHash('sha256')
-		.update(JSON.stringify([row.transport, row.command, row.args, row.url, row.token_enc ?? null]))
+		.update(
+			JSON.stringify([
+				row.transport,
+				row.command,
+				row.args,
+				row.url,
+				row.token_enc ?? null,
+				row.auth ?? 'token',
+				row.oauth_client_id ?? null,
+				row.oauth_scope ?? null
+			])
+		)
 		.digest('hex')
 		.slice(0, 16);
-	return `${row.id}:${hash}`;
+	const user = connectionUser(row, userId);
+	return user ? `${row.id}:${hash}:${user}` : `${row.id}:${hash}`;
+}
+
+/** The user a connection to this server acts as: only OAuth servers have one. */
+function connectionUser(row: McpServerRow, userId?: string | null): string | null {
+	if (row.auth !== 'oauth') return null;
+	if (!userId) throw new Error(`MCP server ${row.name} needs a signed-in user`);
+	return userId;
+}
+
+/** Failures and settings changes are tracked per connection slot. */
+function slotId(serverId: string, userId: string | null): string {
+	return userId ? `${serverId}:${userId}` : serverId;
 }
 
 function isClientClosed(conn: ServerConnection): boolean {
@@ -122,9 +156,9 @@ export function sweepIdleMcpClients(now = Date.now(), idleMs = MCP_IDLE_MS): num
 	return closed;
 }
 
-function open(row: McpServerRow, key: string): Entry {
+function open(row: McpServerRow, key: string, userId: string | null): Entry {
 	const connect = async () => {
-		const conn = await connectServer(row, POOL_CTX);
+		const conn = await connectServer(row, userId ? { ...POOL_CTX, userId } : POOL_CTX);
 		try {
 			const tools = (await withTimeout(
 				conn.client.tools(),
@@ -141,6 +175,7 @@ function open(row: McpServerRow, key: string): Entry {
 	const entry: Entry = {
 		key,
 		serverId: row.id,
+		userId,
 		leases: 0,
 		lastUsed: Date.now(),
 		evicted: false,
@@ -150,14 +185,16 @@ function open(row: McpServerRow, key: string): Entry {
 	entry.ready.then(
 		({ conn, tools }) => {
 			entry.conn = conn;
-			catalogs.set(key, { serverId: row.id, tools });
+			catalogs.set(key, { serverId: row.id, userId, tools });
 		},
 		() => undefined
 	);
 	entry.ready.catch((e: unknown) => {
 		if (entries.get(key) === entry) entries.delete(key);
-		failures.set(row.id, {
+		failures.set(slotId(row.id, userId), {
 			key,
+			serverId: row.id,
+			userId,
 			until: Date.now() + MCP_FAILURE_BACKOFF_MS,
 			error: e instanceof Error ? e : new Error(String(e))
 		});
@@ -170,17 +207,22 @@ function open(row: McpServerRow, key: string): Entry {
  * one if needed. Concurrent callers share one connect. A server that just
  * failed to connect is not retried until the backoff expires.
  */
-export async function acquireMcpServer(row: McpServerRow): Promise<McpLease> {
+export async function acquireMcpServer(
+	row: McpServerRow,
+	userId?: string | null
+): Promise<McpLease> {
 	if (row.transport === 'builtin') throw new Error('Builtin MCP servers are not pooled');
-	const key = poolKey(row);
+	const user = connectionUser(row, userId);
+	const key = poolKey(row, user);
 	// Settings changed: connections under the old settings are never used again.
 	for (const entry of [...entries.values()]) {
-		if (entry.serverId === row.id && entry.key !== key) evict(entry);
+		if (entry.serverId === row.id && entry.userId === user && entry.key !== key) evict(entry);
 	}
-	const failure = failures.get(row.id);
+	const slot = slotId(row.id, user);
+	const failure = failures.get(slot);
 	if (failure) {
 		if (failure.key === key && failure.until > Date.now()) throw failure.error;
-		failures.delete(row.id);
+		failures.delete(slot);
 	}
 	let entry = entries.get(key);
 	if (entry) {
@@ -191,7 +233,7 @@ export async function acquireMcpServer(row: McpServerRow): Promise<McpLease> {
 		}
 	}
 	if (!entry) {
-		entry = open(row, key);
+		entry = open(row, key, user);
 		entries.set(key, entry);
 		ensureSweep();
 	}
@@ -220,19 +262,34 @@ export async function acquireMcpServer(row: McpServerRow): Promise<McpLease> {
  * settings, or undefined if it never did or its last connect just failed.
  * Their `execute` belongs to that connection: call tools through a lease.
  */
-export function cachedMcpTools(row: McpServerRow): Record<string, Tool> | undefined {
-	const key = poolKey(row);
-	const failure = failures.get(row.id);
+export function cachedMcpTools(
+	row: McpServerRow,
+	userId?: string | null
+): Record<string, Tool> | undefined {
+	const user = connectionUser(row, userId);
+	const key = poolKey(row, user);
+	const failure = failures.get(slotId(row.id, user));
 	if (failure && failure.key === key && failure.until > Date.now()) return undefined;
 	return catalogs.get(key)?.tools;
 }
 
 /** Drops (and closes, once idle) every pooled connection of a server, e.g. after it was edited or deleted. */
 export function invalidateMcpServer(serverId: string): void {
-	failures.delete(serverId);
+	for (const [slot, failure] of failures) if (failure.serverId === serverId) failures.delete(slot);
 	for (const [key, catalog] of catalogs) if (catalog.serverId === serverId) catalogs.delete(key);
 	for (const entry of [...entries.values()]) {
 		if (entry.serverId === serverId) evict(entry);
+	}
+}
+
+/** Drops one user's connection to an OAuth server, e.g. after they signed in or out. */
+export function invalidateMcpServerForUser(serverId: string, userId: string): void {
+	failures.delete(slotId(serverId, userId));
+	for (const [key, catalog] of catalogs) {
+		if (catalog.serverId === serverId && catalog.userId === userId) catalogs.delete(key);
+	}
+	for (const entry of [...entries.values()]) {
+		if (entry.serverId === serverId && entry.userId === userId) evict(entry);
 	}
 }
 

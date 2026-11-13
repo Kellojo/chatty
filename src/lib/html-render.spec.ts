@@ -47,6 +47,16 @@ describe('readHtmlRender', () => {
 		const out = readHtmlRender(part({ htmlRender: { ...ref, attachmentId: '../x' } }));
 		expect(out?.attachmentId).toBeNull();
 	});
+
+	it('reads a page whose input T3 shortened, through its stored copy only', () => {
+		const shortened = {
+			...part({ htmlRender: ref }),
+			input: { summary: '{"html":…', truncated: true }
+		};
+		expect(readHtmlRender(shortened)?.attachmentId).toBe('abc-123-html');
+		const noCopy = { ...shortened, output: { htmlRender: { ...ref, attachmentId: undefined } } };
+		expect(readHtmlRender(noCopy)).toBeNull();
+	});
 });
 
 describe('htmlRenderHeightAt', () => {

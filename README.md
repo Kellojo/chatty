@@ -82,6 +82,18 @@ services:
 
 Admins can add `stdio` MCP servers, which run the configured command inside the Chatty container/host. Only add commands you trust.
 
+### MCP servers with OAuth sign-in
+
+Remote (HTTP/SSE) MCP servers can use OAuth instead of a fixed token: set **Authentication → OAuth** on the server under Settings → MCP servers. Every user then connects their own account under **Settings → Connected apps**, and the assistant uses the server's tools as that user. Tokens are stored per user, encrypted with the app secret, and refreshed automatically.
+
+Chatty finds the authorization server through the MCP server's protected resource metadata and registers itself, in this order:
+
+1. a client you registered by hand (client ID and optional secret on the server),
+2. a **client ID metadata document**: Chatty's client ID is `<ORIGIN>/api/mcp-oauth/client-metadata.json` (needs a public `https` `ORIGIN`),
+3. dynamic client registration, when the authorization server offers it.
+
+The redirect URL to allow is `<ORIGIN>/api/mcp-oauth/callback`. Set `ORIGIN` so these URLs are stable. With Pocket ID, add the client ID URL to **Allowed metadata document URLs** and enable **Allow all metadata document clients** on the API, or register Chatty as an OIDC client with that redirect URL.
+
 ## Development
 
 ```sh

@@ -35,7 +35,6 @@
 	import { START_MODE_COOKIE } from '$lib/coding-environments.js';
 	import { sharedDraft, takeSharedFiles } from '$lib/share-target.js';
 	import { onLaunchFiles } from '$lib/launch-files.js';
-	import ScreenshotButton from '$lib/components/app/ScreenshotButton.svelte';
 	import type { Conversation } from '$lib/types.js';
 	import type { PageData } from './$types';
 
@@ -362,7 +361,6 @@
 							<PaperclipIcon class="size-4" />
 						</Button>
 					{/if}
-					<ScreenshotButton onfile={(file) => (selectedFiles = [...selectedFiles, file])} />
 					<MicButton {speech} />
 				</div>
 				<Button

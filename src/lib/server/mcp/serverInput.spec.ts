@@ -18,6 +18,11 @@ function row(overrides: Partial<McpServerRow> = {}): McpServerRow {
 		enabled: 1,
 		builtin: 0,
 		load_mode: 'always',
+		auth: 'token',
+		oauth_client_id: null,
+		oauth_client_secret_enc: null,
+		oauth_scope: null,
+		oauth_client_info_enc: null,
 		...overrides
 	};
 }
@@ -77,7 +82,25 @@ describe('resolveMcpServerPatch', () => {
 			resolveMcpServerPatch(row(), { transport: 'stdio', command: 'node', args: ['srv.js'] })
 		).toEqual({
 			ok: true,
-			value: { transport: 'stdio', command: 'node', args: ['srv.js'], url: null, token: null }
+			value: {
+				transport: 'stdio',
+				command: 'node',
+				args: ['srv.js'],
+				url: null,
+				token: null,
+				auth: 'token',
+				oauthClientId: null,
+				oauthClientSecret: null,
+				oauthScope: null
+			}
+		});
+	});
+
+	it('rejects OAuth for stdio servers', () => {
+		const stdio = row({ transport: 'stdio', command: 'node', args: '[]', url: null });
+		expect(resolveMcpServerPatch(stdio, { auth: 'oauth' })).toEqual({
+			ok: false,
+			error: 'OAuth needs an HTTP or SSE server'
 		});
 	});
 

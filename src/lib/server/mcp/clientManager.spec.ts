@@ -30,7 +30,12 @@ function stdioRow(command: string | null, args: string[]): McpServerRow {
 		token_enc: null,
 		enabled: 1,
 		builtin: 0,
-		load_mode: 'always'
+		load_mode: 'always',
+		auth: 'token',
+		oauth_client_id: null,
+		oauth_client_secret_enc: null,
+		oauth_scope: null,
+		oauth_client_info_enc: null
 	};
 }
 

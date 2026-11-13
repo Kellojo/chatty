@@ -60,7 +60,6 @@
 	import { clipboardFiles } from '$lib/state/clipboard-files.js';
 	import { haptic } from '$lib/haptics.svelte.js';
 	import MicButton from '$lib/components/app/MicButton.svelte';
-	import ScreenshotButton from '$lib/components/app/ScreenshotButton.svelte';
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import {
@@ -1317,7 +1316,6 @@
 					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 						<PaperclipIcon class="size-4" />
 					</Button>
-					<ScreenshotButton onfile={(file) => addFiles([file])} />
 					<MicButton {speech} />
 				</div>
 				{#if streaming && !canSend}

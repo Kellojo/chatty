@@ -169,16 +169,20 @@ describe('importCodingConversation', () => {
 			MAX_THREAD_CONVERSATIONS_PER_ENV - 3
 		);
 		expect(importBudget(db, environmentId)).toBe(3);
-		for (let i = 0; i < 3; i++) importOne(false, `x${i}`);
+		const open = Array.from({ length: 3 }, (_, i) => importOne(false, `x${i}`));
+		expect(importBudget(db, environmentId)).toBe(0);
+		// Settled conversations don't count.
+		importOne(true, 'done');
+		expect(importBudget(db, environmentId)).toBe(0);
+		conversations.settleConversation(db, 'u1', open[0]);
+		expect(importBudget(db, environmentId)).toBe(1);
+		importOne(false, 'again');
 		expect(importBudget(db, environmentId)).toBe(0);
 		// Deleted conversations don't count.
 		const id = importOne(false, 'extra');
 		conversations.purgeConversation(db, id);
 		expect(importBudget(db, environmentId)).toBe(0);
-		conversations.purgeConversation(
-			db,
-			coding.listThreadCodingConversations(db, environmentId)[0].conversation_id
-		);
+		conversations.purgeConversation(db, open[1]);
 		expect(importBudget(db, environmentId)).toBe(1);
 	});
 

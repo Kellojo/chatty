@@ -5,6 +5,7 @@ import { testConnection } from '$lib/server/mcp/clientManager.js';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ locals, params }) => {
-	requireAdmin(locals);
-	return json(await testConnection(getDb(), params.id));
+	const user = requireAdmin(locals);
+	// OAuth servers are tested with the admin's own sign-in.
+	return json(await testConnection(getDb(), params.id, user.id));
 };

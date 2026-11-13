@@ -8,6 +8,7 @@ import {
 	HOST_CONTEXT_CHANGED_METHOD,
 	OPEN_LINK_METHOD,
 	SIZE_CHANGED_METHOD,
+	inlineHtml,
 	isHtmlRenderToolName,
 	readHtmlRender
 } from '$lib/html-render.js';
@@ -99,8 +100,9 @@ export async function fetchHtmlRenderPage(
 			}
 		}
 	}
-	const input = part.input as { html: string };
-	return { html: injectHtmlRenderBootstrap(input.html), source: 'local' };
+	const html = inlineHtml(part);
+	if (!html) throw new CodingTaskError(404, 'This page is no longer available from T3 Code');
+	return { html: injectHtmlRenderBootstrap(html), source: 'local' };
 }
 
 async function fetchFromT3(
