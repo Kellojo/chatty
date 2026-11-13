@@ -2,7 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { createLogger } from '$lib/server/logger.js';
-import { disconnectMcpOAuth, startMcpOAuth } from '$lib/server/mcp/oauth.js';
+import { describeError, disconnectMcpOAuth, startMcpOAuth } from '$lib/server/mcp/oauth.js';
 import { invalidateMcpServerForUser } from '$lib/server/mcp/pool.js';
 import type { RequestHandler } from './$types';
 
@@ -20,7 +20,8 @@ export const POST: RequestHandler = async ({ locals, params, url }) => {
 		if (result.connected) invalidateMcpServerForUser(params.id, user.id);
 		return json(result);
 	} catch (e) {
-		const message = e instanceof Error ? e.message : String(e);
+		// Include the underlying cause: fetch alone only says "fetch failed".
+		const message = describeError(e);
 		log.warn('Starting MCP OAuth sign-in failed', { serverId: params.id, error: message });
 		error(400, { message });
 	}

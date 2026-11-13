@@ -13,7 +13,8 @@ const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { createMcpServer, getMcpServer, updateMcpServer } =
 	await import('$lib/server/db/repo/mcp-servers.js');
 const { getMcpOAuthSession } = await import('$lib/server/db/repo/mcp-oauth-sessions.js');
-const { finishMcpOAuth, startMcpOAuth, McpSignInRequiredError } = await import('./oauth.js');
+const { describeError, finishMcpOAuth, startMcpOAuth, McpSignInRequiredError } =
+	await import('./oauth.js');
 const { connectServer } = await import('./clientManager.js');
 
 /** How the mock authorization server lets clients register. */
@@ -209,5 +210,20 @@ describe('MCP OAuth sign-in', () => {
 		updateMcpServer(getDb(), server.id, { url: `${base}/other` });
 		expect(getMcpOAuthSession(getDb(), server.id, 'u1')).toBeUndefined();
 		expect(getMcpServer(getDb(), server.id)?.oauth_client_info_enc).toBeNull();
+	});
+});
+
+describe('describeError', () => {
+	it('surfaces the cause behind a bare "fetch failed"', () => {
+		const dns = Object.assign(new Error('getaddrinfo ENOTFOUND auth.example'), {
+			code: 'ENOTFOUND'
+		});
+		const e = new TypeError('fetch failed', { cause: dns });
+		expect(describeError(e)).toBe('fetch failed: getaddrinfo ENOTFOUND auth.example');
+		const blocked = new Error('fetch failed', {
+			cause: new Error('Hostname auth.lan resolved to disallowed IP address 192.168.1.2')
+		});
+		expect(describeError(blocked)).toContain('disallowed IP address 192.168.1.2');
+		expect(describeError('plain')).toBe('plain');
 	});
 });

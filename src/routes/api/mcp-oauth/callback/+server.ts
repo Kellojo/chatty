@@ -1,7 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { getDb } from '$lib/server/db/index.js';
 import { createLogger } from '$lib/server/logger.js';
-import { finishMcpOAuth } from '$lib/server/mcp/oauth.js';
+import { describeError, finishMcpOAuth } from '$lib/server/mcp/oauth.js';
 import { invalidateMcpServerForUser } from '$lib/server/mcp/pool.js';
 import type { RequestHandler } from './$types';
 
@@ -36,7 +36,8 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 		invalidateMcpServerForUser(row.id, locals.user.id);
 		serverName = row.name;
 	} catch (e) {
-		const message = e instanceof Error ? e.message : String(e);
+		// Include the underlying cause: fetch alone only says "fetch failed".
+		const message = describeError(e);
 		log.warn('Completing MCP OAuth sign-in failed', { error: message });
 		back({ error: message });
 	}
