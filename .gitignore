@@ -31,4 +31,5 @@ test-results
 /memory
 /documents
 /workspaces
-/skills
+/skills/*
+!/skills/defaults/

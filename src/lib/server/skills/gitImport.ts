@@ -1,11 +1,11 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import git, { type HttpClient } from 'isomorphic-git';
 import matter from 'gray-matter';
 import { parseFrontmatter } from '../frontmatter.js';
 import { safeFetch } from '../net/safeFetch.js';
-import { walk } from '../mcp/servers/shared.js';
 import { isValidSkillName, skillsRoot, findSkillFile, type SkillScope } from './paths.js';
 import { parseSkillFrontmatter } from './scanner.js';
 
@@ -183,18 +183,11 @@ function assertCloneUrl(gitUrl: string): void {
 // Re-import preserves locally-added files carrying the `.local` suffix
 // (e.g. `notes.md.local`) by leaving them untouched — we only overwrite
 // files that come from the repo.
-function copySkillDir(src: string, dest: string): void {
-	fs.mkdirSync(dest, { recursive: true });
-	for (const entry of walk(src)) {
-		const target = path.join(dest, entry.rel);
-		if (entry.isDir) {
-			fs.mkdirSync(target, { recursive: true });
-			continue;
-		}
-		if (entry.rel.endsWith(LOCAL_SUFFIX)) continue;
-		fs.mkdirSync(path.dirname(target), { recursive: true });
-		fs.copyFileSync(entry.abs, target);
-	}
+async function copySkillDir(src: string, dest: string): Promise<void> {
+	await fsp.cp(src, dest, {
+		recursive: true,
+		filter: (source) => !source.endsWith(LOCAL_SUFFIX)
+	});
 }
 
 export async function importSkillsFromGit(input: GitImportInput): Promise<GitImportResult> {
@@ -204,7 +197,9 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 	const branch = input.branch ?? urlParts.branch;
 	const repoPath = input.path ?? urlParts.path;
 	assertCloneUrl(gitUrl);
-	const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-skill-import-')));
+	const tmp = await fsp.realpath(
+		await fsp.mkdtemp(path.join(os.tmpdir(), 'ai-chat-skill-import-'))
+	);
 	try {
 		await git.clone({
 			fs: limitedCheckoutFs(tmp),
@@ -224,22 +219,22 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 		if (srcRoot !== tmp && !srcRoot.startsWith(tmp + path.sep)) {
 			throw new Error('Invalid path inside repo');
 		}
-		if (!fs.existsSync(srcRoot)) throw new Error(`Path not found in repo: ${subdir || '/'}`);
-		const realRoot = fs.realpathSync(srcRoot);
+		const realRoot = await fsp.realpath(srcRoot).catch(() => null);
+		if (!realRoot) throw new Error(`Path not found in repo: ${subdir || '/'}`);
 		if (realRoot !== tmp && !realRoot.startsWith(tmp + path.sep)) {
 			throw new Error('Invalid path inside repo');
 		}
 
 		// Discover skill directories: any dir containing a skill.md/SKILL.md.
 		const skillDirs: string[] = [];
-		const entries = fs.readdirSync(srcRoot, { withFileTypes: true });
-		if (findSkillFile(srcRoot)) {
+		const entries = await fsp.readdir(srcRoot, { withFileTypes: true });
+		if (await findSkillFile(srcRoot)) {
 			skillDirs.push(srcRoot);
 		} else {
 			for (const entry of entries) {
 				if (!entry.isDirectory()) continue;
 				const dir = path.join(srcRoot, entry.name);
-				if (findSkillFile(dir)) skillDirs.push(dir);
+				if (await findSkillFile(dir)) skillDirs.push(dir);
 			}
 		}
 		if (skillDirs.length === 0) throw new Error('No skill.md found at the given path');
@@ -249,11 +244,11 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 		const result: GitImportResult = { imported: [], skipped: [] };
 		for (const dir of skillDirs) {
 			const dirName = path.basename(dir);
-			const srcSkillFile = findSkillFile(dir)!;
+			const srcSkillFile = (await findSkillFile(dir))!;
 			let name = dirName;
 			let invalid: string | null = null;
 			try {
-				const parsed = parseFrontmatter(fs.readFileSync(srcSkillFile, 'utf8'));
+				const parsed = parseFrontmatter(await fsp.readFile(srcSkillFile, 'utf8'));
 				const fm = parseSkillFrontmatter(parsed.data);
 				name = fm.name;
 				if (fm.name !== dirName)
@@ -269,25 +264,28 @@ export async function importSkillsFromGit(input: GitImportInput): Promise<GitImp
 			}
 			repoNames.add(name);
 			const dest = path.join(destRoot, name);
-			const existed = fs.existsSync(dest);
+			const existed = await fsp.access(dest).then(
+				() => true,
+				() => false
+			);
 			// Stamp the source so re-imports from the same repo are recognizable,
 			// and normalize the file to lowercase skill.md.
-			const parsed = parseFrontmatter(fs.readFileSync(srcSkillFile, 'utf8'));
+			const parsed = parseFrontmatter(await fsp.readFile(srcSkillFile, 'utf8'));
 			parsed.data.source = `git:${gitUrl}`;
 			parsed.data.title ??= name
 				.split('-')
 				.filter(Boolean)
 				.map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
 				.join(' ');
-			fs.writeFileSync(srcSkillFile, matter.stringify(parsed.content, parsed.data));
+			await fsp.writeFile(srcSkillFile, matter.stringify(parsed.content, parsed.data));
 			if (path.basename(srcSkillFile) !== 'skill.md') {
-				fs.renameSync(srcSkillFile, path.join(dir, 'skill.md'));
+				await fsp.rename(srcSkillFile, path.join(dir, 'skill.md'));
 			}
-			copySkillDir(dir, dest);
+			await copySkillDir(dir, dest);
 			result.imported.push({ name, action: existed ? 'updated' : 'created' });
 		}
 		return result;
 	} finally {
-		fs.rmSync(tmp, { recursive: true, force: true });
+		await fsp.rm(tmp, { recursive: true, force: true });
 	}
 }

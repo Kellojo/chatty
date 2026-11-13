@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import type { Dirent } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config.js';
@@ -39,7 +39,7 @@ export interface StoredAttachmentFile {
  */
 export async function listAttachmentFiles(): Promise<StoredAttachmentFile[]> {
 	const files: StoredAttachmentFile[] = [];
-	let entries: fs.Dirent[];
+	let entries: Dirent[];
 	try {
 		entries = await fsp.readdir(root(), { withFileTypes: true });
 	} catch {
@@ -126,9 +126,9 @@ export function workspaceForConversation(
 	return run ? agentWorkspace(run.agent_id, run.id) : null;
 }
 
-export function ensureAgentWorkspace(agentId: string, runId: string): string {
+export async function ensureAgentWorkspace(agentId: string, runId: string): Promise<string> {
 	const dir = agentWorkspace(agentId, runId);
-	fs.mkdirSync(dir, { recursive: true });
+	await fsp.mkdir(dir, { recursive: true });
 	return dir;
 }
 
@@ -138,7 +138,7 @@ export function ensureAgentWorkspace(agentId: string, runId: string): string {
 export async function gcAgentWorkspaces(olderThanDays: number): Promise<string[]> {
 	const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
 	const removed: string[] = [];
-	let entries: fs.Dirent[];
+	let entries: Dirent[];
 	try {
 		entries = await fsp.readdir(root(), { withFileTypes: true });
 	} catch {
@@ -175,7 +175,7 @@ export async function gcOrphanConversationWorkspaces(
 	loadValidIds: () => Set<string>
 ): Promise<string[]> {
 	const removed: string[] = [];
-	let entries: fs.Dirent[];
+	let entries: Dirent[];
 	try {
 		entries = await fsp.readdir(root(), { withFileTypes: true });
 	} catch {

@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { getDb } from '../../db/index.js';
+import { recordMemoryViews, type MemoryViewInput } from '../../db/repo/memory-views.js';
+import { createLogger } from '../../logger.js';
 import {
 	deleteConcept,
 	listConceptPaths,
@@ -13,6 +15,8 @@ import { memorySummaries, searchMemoryFts } from '../../memory/fts.js';
 import { ftsScope, normalizeConceptPath, type MemoryScope } from '../../memory/paths.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
+
+const log = createLogger('memory');
 
 const scopeSchema = z.enum(['user', 'shared']);
 
@@ -74,6 +78,22 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 
 	const guardPath = (path: string): string | null => normalizeConceptPath(path);
 
+	/** Counts concepts the model came across; tracking never fails the tool call. */
+	const trackViews = (kind: MemoryViewInput['kind'], concepts: MemoryViewInput['concepts']) => {
+		try {
+			recordMemoryViews(getDb(), {
+				kind,
+				concepts,
+				userId: ctx.userId,
+				agent: !!ctx.agentRunId
+			});
+		} catch (e) {
+			log.warn(`Recording memory ${kind} views failed:`, {
+				error: e instanceof Error ? e.message : String(e)
+			});
+		}
+	};
+
 	const guardSharedWrite = (scope: MemoryScope): string | null =>
 		scope === 'shared' && ctx.role !== 'admin' ? 'shared bundle requires admin role' : null;
 
@@ -87,6 +107,10 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		async ({ query, limit }) => {
 			if (!query.trim()) return err('query must not be empty');
 			const hits = searchMemoryFts(getDb(), [`user:${ctx.userId}`, 'shared'], query, limit);
+			trackViews(
+				'search',
+				hits.map((h) => ({ scope: h.scope === 'shared' ? 'shared' : 'user', path: h.path }))
+			);
 			return text(JSON.stringify(hits));
 		}
 	);
@@ -100,8 +124,9 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		async ({ path, scope }) => {
 			const normalized = guardPath(path);
 			if (!normalized) return err('invalid concept path');
-			const concept = readConcept(scope ?? 'user', ctx.userId, normalized);
+			const concept = await readConcept(scope ?? 'user', ctx.userId, normalized);
 			if (!concept) return err('concept not found');
+			trackViews('read', [{ scope: concept.scope, path: concept.path }]);
 			return text(
 				JSON.stringify({
 					path: concept.path,
@@ -128,7 +153,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				}
 			}
 			const bundleScope = scope ?? 'user';
-			const paths = listConceptPaths(bundleScope, ctx.userId, prefix);
+			const paths = await listConceptPaths(bundleScope, ctx.userId, prefix);
 			const summaries = memorySummaries(getDb(), ftsScope(bundleScope, ctx.userId));
 			return text(
 				JSON.stringify(
@@ -165,9 +190,9 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			const s = scope ?? 'user';
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
-			if (readConcept(s, ctx.userId, normalized)) return err('concept already exists');
+			if (await readConcept(s, ctx.userId, normalized)) return err('concept already exists');
 			try {
-				writeConcept(
+				await writeConcept(
 					getDb(),
 					s,
 					ctx.userId,
@@ -202,7 +227,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			const s = scope ?? 'user';
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
-			const existing = readConcept(s, ctx.userId, normalized);
+			const existing = await readConcept(s, ctx.userId, normalized);
 			if (!existing) return err('concept not found');
 			const next = {
 				frontmatter: {
@@ -214,7 +239,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				body: body ?? existing.body
 			};
 			try {
-				writeConcept(getDb(), s, ctx.userId, normalized, next, audit());
+				await writeConcept(getDb(), s, ctx.userId, normalized, next, audit());
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
@@ -240,10 +265,10 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			const s = scope ?? 'user';
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
-			const existing = readConcept(s, ctx.userId, normalized);
+			const existing = await readConcept(s, ctx.userId, normalized);
 			if (!existing) return err('concept not found');
 			try {
-				deleteConcept(getDb(), s, ctx.userId, normalized, audit());
+				await deleteConcept(getDb(), s, ctx.userId, normalized, audit());
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}

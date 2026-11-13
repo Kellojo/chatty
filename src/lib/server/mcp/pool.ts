@@ -2,12 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Tool } from 'ai';
 import type { McpServerRow } from '../db/repo/mcp-servers.js';
 import { createLogger } from '../logger.js';
-import {
-	connectServer,
-	MCP_LIST_TIMEOUT_MS,
-	withTimeout,
-	type ServerConnection
-} from './clientManager.js';
+import { connectServer, listServerTools, type ServerConnection } from './clientManager.js';
 import type { CallerContext } from './types.js';
 
 const log = createLogger('mcp-pool');
@@ -160,12 +155,7 @@ function open(row: McpServerRow, key: string, userId: string | null): Entry {
 	const connect = async () => {
 		const conn = await connectServer(row, userId ? { ...POOL_CTX, userId } : POOL_CTX);
 		try {
-			const tools = (await withTimeout(
-				conn.client.tools(),
-				`Listing tools of MCP server ${row.name}`,
-				undefined,
-				MCP_LIST_TIMEOUT_MS
-			)) as unknown as Record<string, Tool>;
+			const tools = (await listServerTools(conn, row)) as unknown as Record<string, Tool>;
 			return { conn, tools };
 		} catch (e) {
 			await conn.close().catch(() => undefined);

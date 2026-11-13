@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -24,7 +24,7 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 			inputSchema: { name: z.string().describe('Skill name, e.g. "summarize-conversation"') }
 		},
 		async ({ name }) => {
-			const skill = resolveSkill(ctx.userId, name);
+			const skill = await resolveSkill(ctx.userId, name);
 			if (!skill) return err(`skill not found: ${name}`);
 			if (!skill.enabled) return err(`skill is disabled: ${name}`);
 			recordSkillInvocation(getDb(), {
@@ -67,7 +67,7 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 			}
 		},
 		async ({ name, path: relPath }) => {
-			const skill = resolveSkill(ctx.userId, name);
+			const skill = await resolveSkill(ctx.userId, name);
 			if (!skill) return err(`skill not found: ${name}`);
 			const refPath = relPath.startsWith('references/') ? relPath : `references/${relPath}`;
 			if (!skill.references.includes(refPath)) return err(`reference not found: ${relPath}`);
@@ -75,9 +75,9 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 			if (!abs) return err('invalid reference path');
 			let content: string;
 			try {
-				const stat = fs.statSync(abs);
+				const stat = await fsp.stat(abs);
 				if (stat.size > MAX_REFERENCE_BYTES) return err('reference too large');
-				content = fs.readFileSync(abs, 'utf8');
+				content = await fsp.readFile(abs, 'utf8');
 			} catch {
 				return err(`reference not found: ${relPath}`);
 			}
@@ -118,13 +118,20 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 			}
 		},
 		async ({ name, description, body, title, when, tools, references }) => {
-			if (resolveSkill(ctx.userId, name)) return err(`skill already exists: ${name}`);
+			if (await resolveSkill(ctx.userId, name)) return err(`skill already exists: ${name}`);
 			let skill;
 			try {
-				skill = writeSkill('user', ctx.userId, { name, title, description, when, tools, body });
-				writeReferences(ctx.userId, name, references);
+				skill = await writeSkill('user', ctx.userId, {
+					name,
+					title,
+					description,
+					when,
+					tools,
+					body
+				});
+				await writeReferences(ctx.userId, name, references);
 			} catch (e) {
-				deleteSkill('user', ctx.userId, name);
+				await deleteSkill('user', ctx.userId, name);
 				return err(e instanceof Error ? e.message : 'failed to create skill');
 			}
 			publishServerEvent(ctx.userId, { type: 'skills.changed' });
@@ -175,11 +182,11 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 			author,
 			references
 		}) => {
-			const existing = resolveSkill(ctx.userId, name);
+			const existing = await resolveSkill(ctx.userId, name);
 			if (!existing) return err(`skill not found: ${name}`);
 			let skill;
 			try {
-				skill = writeSkill('user', ctx.userId, {
+				skill = await writeSkill('user', ctx.userId, {
 					name: existing.name,
 					title: title ?? existing.title,
 					description: description ?? existing.description,
@@ -190,7 +197,7 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 					author: author === undefined ? existing.author : author,
 					body: body ?? existing.body
 				});
-				writeReferences(ctx.userId, name, references);
+				await writeReferences(ctx.userId, name, references);
 			} catch (e) {
 				return err(e instanceof Error ? e.message : 'failed to update skill');
 			}
@@ -208,15 +215,15 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 			inputSchema: { name: z.string().describe('Skill name') }
 		},
 		async ({ name }) => {
-			const existing = readSkill('user', ctx.userId, name);
+			const existing = await readSkill('user', ctx.userId, name);
 			if (!existing) {
 				return err(
-					resolveSkill(ctx.userId, name)
+					(await resolveSkill(ctx.userId, name))
 						? `skill "${name}" is shared and cannot be deleted with this tool`
 						: `skill not found: ${name}`
 				);
 			}
-			deleteSkill('user', ctx.userId, name);
+			await deleteSkill('user', ctx.userId, name);
 			publishServerEvent(ctx.userId, { type: 'skills.changed' });
 			publishServerEvent(ctx.userId, { type: 'skill.deleted', name, scope: 'user' });
 			return text(`deleted skill: ${name}`);
@@ -226,11 +233,11 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 	return server;
 }
 
-function writeReferences(
+async function writeReferences(
 	userId: string,
 	name: string,
 	references: Array<{ path: string; content: string }> | undefined
-): void {
+): Promise<void> {
 	for (const ref of references ?? []) {
 		const posix = ref.path.split('\\').join('/');
 		if (posix === 'skill.md' || posix.toUpperCase() === 'SKILL.MD') {
@@ -241,9 +248,9 @@ function writeReferences(
 		const abs = resolveSkillReference('user', userId, name, rel);
 		if (!abs) throw new Error(`invalid reference path: ${ref.path}`);
 		const dir = resolveSkillDir('user', userId, name);
-		if (!dir || !findSkillFile(dir)) throw new Error(`skill not found: ${name}`);
-		fs.mkdirSync(path.dirname(abs), { recursive: true });
-		fs.writeFileSync(abs, ref.content);
+		if (!dir || !(await findSkillFile(dir))) throw new Error(`skill not found: ${name}`);
+		await fsp.mkdir(path.dirname(abs), { recursive: true });
+		await fsp.writeFile(abs, ref.content);
 	}
 	invalidateSkillCache();
 }

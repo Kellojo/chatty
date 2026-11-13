@@ -79,6 +79,8 @@ export interface McpServerInfo {
 	oauthClientId: string | null;
 	hasOauthClientSecret: boolean;
 	oauthScope: string | null;
+	/** Tools listed on the last successful connect; null before the first. */
+	toolCount: number | null;
 }
 
 /** A server's tool calls over the usage window (Settings → MCP servers). */

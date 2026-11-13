@@ -771,7 +771,7 @@ export async function runChatTurn(
 	const assistantMessageId = randomUUID();
 	let errorText: string | null = null;
 	let replyBranch: MessageBranch | undefined;
-	let promptParts: ReturnType<typeof buildSystemPromptParts>;
+	let promptParts: Awaited<ReturnType<typeof buildSystemPromptParts>>;
 	let system: string;
 	let history: UIMessage[];
 	let promptHistory: UIMessage[];
@@ -804,7 +804,7 @@ export async function runChatTurn(
 		const boundSkillNames = [...agentSkillNames];
 		let manualSkillWarning: string | null = null;
 		if (body.skill) {
-			const skill = resolveSkill(userId, body.skill);
+			const skill = await resolveSkill(userId, body.skill);
 			if (!skill) {
 				manualSkillWarning = `The requested skill "${body.skill}" was not found.`;
 			} else if (!skill.enabled) {
@@ -821,7 +821,7 @@ export async function runChatTurn(
 				});
 			}
 		}
-		promptParts = buildSystemPromptParts(conversation, {
+		promptParts = await buildSystemPromptParts(conversation, {
 			// Hidden agent runs get neither: nobody renders widgets there, and the
 			// user's instructions would leak into what memory agents distill.
 			globalInstructions: visibleChat ? getGlobalInstructions(db, userId) : '',

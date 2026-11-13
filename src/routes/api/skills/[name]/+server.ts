@@ -13,10 +13,10 @@ function scopeFrom(url: URL): SkillScope {
 	return url.searchParams.get('scope') === 'shared' ? 'shared' : 'user';
 }
 
-export const GET: RequestHandler = ({ locals, params, url }) => {
+export const GET: RequestHandler = async ({ locals, params, url }) => {
 	const user = requireUser(locals);
 	const scope = scopeFrom(url);
-	const skill = readSkill(scope, user.id, params.name);
+	const skill = await readSkill(scope, user.id, params.name);
 	if (!skill) error(404, { message: 'Skill not found' });
 	const invocations = listSkillInvocations(getDb(), {
 		userId: user.id,
@@ -49,12 +49,12 @@ export const PUT: RequestHandler = async ({ locals, params, url, request }) => {
 	const user = requireUser(locals);
 	const scope = scopeFrom(url);
 	if (scope === 'shared') requireAdmin(locals);
-	const existing = readSkill(scope, user.id, params.name);
+	const existing = await readSkill(scope, user.id, params.name);
 	if (!existing) error(404, { message: 'Skill not found' });
 	const parsed = putSchema.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });
 	try {
-		const skill = writeSkill(scope, user.id, {
+		const skill = await writeSkill(scope, user.id, {
 			name: existing.name,
 			title: parsed.data.title ?? existing.title,
 			description: parsed.data.description ?? existing.description,
@@ -73,11 +73,11 @@ export const PUT: RequestHandler = async ({ locals, params, url, request }) => {
 	}
 };
 
-export const DELETE: RequestHandler = ({ locals, params, url }) => {
+export const DELETE: RequestHandler = async ({ locals, params, url }) => {
 	const user = requireUser(locals);
 	const scope = scopeFrom(url);
 	if (scope === 'shared') requireAdmin(locals);
-	if (!deleteSkill(scope, user.id, params.name)) error(404, { message: 'Skill not found' });
+	if (!(await deleteSkill(scope, user.id, params.name))) error(404, { message: 'Skill not found' });
 	publishServerEvent(user.id, { type: 'skills.changed' });
 	publishServerEvent(user.id, { type: 'skill.deleted', name: params.name, scope });
 	return json({ ok: true });
@@ -90,7 +90,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const parsed = postSchema.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) error(400, { message: 'Invalid body' });
 	try {
-		const skill = duplicateSkill(user.id, params.name, parsed.data.newName);
+		const skill = await duplicateSkill(user.id, params.name, parsed.data.newName);
 		publishServerEvent(user.id, { type: 'skills.changed' });
 		return json({ skill }, { status: 201 });
 	} catch (e) {

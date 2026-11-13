@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { applyPatch, parsePatch, reversePatch } from 'diff';
 import { error, json } from '@sveltejs/kit';
@@ -38,9 +38,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	}
 	const abs = resolveConceptAbs(scope, user.id, relPath);
 	let currentRaw = '';
-	if (abs && fs.existsSync(abs)) {
+	if (abs) {
 		try {
-			currentRaw = fs.readFileSync(abs, 'utf8');
+			currentRaw = await fsp.readFile(abs, 'utf8');
 		} catch {
 			currentRaw = '';
 		}
@@ -53,7 +53,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	}
 	const { data: fm, content } = parseFrontmatter(restored);
 	try {
-		const concept = writeConcept(
+		const concept = await writeConcept(
 			db,
 			scope,
 			user.id,

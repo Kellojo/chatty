@@ -3,10 +3,18 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { decryptSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
-import { getMcpServer, parseMcpArgs, type McpServerRow } from '../db/repo/mcp-servers.js';
+import {
+	getMcpServer,
+	parseMcpArgs,
+	setMcpToolCount,
+	type McpServerRow
+} from '../db/repo/mcp-servers.js';
+import { createLogger } from '../logger.js';
 import { connectionAuthProvider, oauthFetch, toSignInError } from './oauth.js';
 import { BUILTIN_SERVERS } from './servers/index.js';
 import type { CallerContext } from './types.js';
+
+const log = createLogger('mcp-client');
 
 export interface ServerConnection {
 	client: MCPClient;
@@ -42,6 +50,29 @@ export async function withTimeout<T>(
 		clearTimeout(timer);
 		if (timedOut && onLate) promise.then(onLate, () => undefined);
 	}
+}
+
+/**
+ * Lists a connected server's tools within MCP_LIST_TIMEOUT_MS and remembers how
+ * many there are, for Settings → MCP servers.
+ */
+export async function listServerTools(
+	conn: ServerConnection,
+	row: McpServerRow
+): Promise<Awaited<ReturnType<MCPClient['tools']>>> {
+	const tools = await withTimeout(
+		conn.client.tools(),
+		`Listing tools of MCP server ${row.name}`,
+		undefined,
+		MCP_LIST_TIMEOUT_MS
+	);
+	try {
+		setMcpToolCount(getDb(), row.id, Object.keys(tools).length);
+	} catch (e) {
+		// Only shown in settings: never fail a turn over it.
+		log.warn(`Recording the tool count of ${row.name} failed`, { error: String(e) });
+	}
+	return tools;
 }
 
 /** Connects to an MCP server; a dead or slow server fails after MCP_TIMEOUT_MS. */
@@ -161,12 +192,7 @@ export async function testConnection(
 	try {
 		const conn = await connectServer(row, userId ? { ...TEST_CTX, userId } : TEST_CTX);
 		try {
-			const tools = await withTimeout(
-				conn.client.tools(),
-				`Listing tools of ${row.name}`,
-				undefined,
-				MCP_LIST_TIMEOUT_MS
-			);
+			const tools = await listServerTools(conn, row);
 			return {
 				ok: true,
 				tools: Object.entries(tools).map(([name, tool]) => ({

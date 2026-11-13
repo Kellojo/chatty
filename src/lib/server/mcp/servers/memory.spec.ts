@@ -11,6 +11,7 @@ process.env.MEMORY_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-mem-m
 const { createMemoryServer } = await import('./memory.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
+const { getDb } = await import('../../db/index.js');
 
 const userCtx = { userId: 'u1', role: 'user', workspaceDir: null, documentsDir: '' };
 const adminCtx = { userId: 'admin1', role: 'admin', workspaceDir: null, documentsDir: '' };
@@ -260,6 +261,42 @@ describe('memory widget items', () => {
 		};
 		expect(server._registeredTools.create_concept.description).toContain('```memory');
 		expect(server._registeredTools.update_concept.description).toContain('```memory');
+	});
+});
+
+describe('memory views', () => {
+	it('counts search hits and reads per concept, split by chat and agent run', async () => {
+		const db = getDb();
+		db.prepare(
+			`INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, role)
+			 VALUES ('viewer1', 'Viewer', 'viewer@example.com', 0, 0, 0, 'user')`
+		).run();
+		const ctx = { ...userCtx, userId: 'viewer1' };
+		await callTool(ctx, 'create_concept', {
+			path: 'notes/zephyr.md',
+			title: 'Zephyr',
+			body: 'zephyrine weather notes'
+		});
+
+		await callTool(ctx, 'search_memory', { query: 'zephyrine' });
+		await callTool(ctx, 'search_memory', { query: 'zephyrine' });
+		await callTool(ctx, 'read_concept', { path: 'notes/zephyr.md' });
+		await callTool({ ...ctx, agentRunId: 'run1' } as Ctx, 'read_concept', {
+			path: 'notes/zephyr.md'
+		});
+		// Writes and misses are not views.
+		await callTool(ctx, 'read_concept', { path: 'notes/missing.md' });
+
+		const rows = db
+			.prepare(
+				`SELECT scope, concept_path, via, search_hits, reads FROM memory_views
+				 WHERE user_id = 'viewer1' ORDER BY via`
+			)
+			.all();
+		expect(rows).toEqual([
+			{ scope: 'user', concept_path: 'notes/zephyr.md', via: 'agent', search_hits: 0, reads: 1 },
+			{ scope: 'user', concept_path: 'notes/zephyr.md', via: 'chat', search_hits: 2, reads: 1 }
+		]);
 	});
 });
 

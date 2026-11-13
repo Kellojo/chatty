@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import { z } from 'zod';
 import { requireAdmin, requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
+import { getMemoryViewTotals } from '$lib/server/db/repo/memory-views.js';
 import {
 	deleteConcept,
 	moveConcept,
@@ -10,13 +11,14 @@ import {
 } from '$lib/server/memory/bundle.js';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = ({ locals, url }) => {
+export const GET: RequestHandler = async ({ locals, url }) => {
 	const scope = url.searchParams.get('scope') === 'shared' ? 'shared' : 'user';
 	const user = scope === 'shared' ? requireAdmin(locals) : requireUser(locals);
 	const path = url.searchParams.get('path') ?? '';
-	const concept = path ? readConcept(scope, user.id, path) : null;
+	const concept = path ? await readConcept(scope, user.id, path) : null;
 	if (!concept) error(404, { message: 'Concept not found' });
-	return json({ concept });
+	const views = getMemoryViewTotals(getDb(), scope, concept.path, user.id);
+	return json({ concept, views });
 };
 
 const putSchema = z.object({
@@ -44,8 +46,8 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 	try {
 		const concept =
 			data.newPath !== undefined && data.newPath !== data.path
-				? moveConcept(db, scope, user.id, data.path, data.newPath, audit)
-				: writeConcept(
+				? await moveConcept(db, scope, user.id, data.path, data.newPath, audit)
+				: await writeConcept(
 						db,
 						scope,
 						user.id,
@@ -59,7 +61,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 	}
 };
 
-export const DELETE: RequestHandler = ({ locals, url }) => {
+export const DELETE: RequestHandler = async ({ locals, url }) => {
 	const scope = url.searchParams.get('scope') === 'shared' ? 'shared' : 'user';
 	const user = scope === 'shared' ? requireAdmin(locals) : requireUser(locals);
 	const path = url.searchParams.get('path') ?? '';
@@ -67,10 +69,10 @@ export const DELETE: RequestHandler = ({ locals, url }) => {
 	try {
 		deleted =
 			!!path &&
-			deleteConcept(getDb(), scope, user.id, path, {
+			(await deleteConcept(getDb(), scope, user.id, path, {
 				author: `user:${user.id}`,
 				userId: user.id
-			});
+			}));
 	} catch {
 		deleted = false;
 	}

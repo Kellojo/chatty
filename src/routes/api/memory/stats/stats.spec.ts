@@ -55,7 +55,7 @@ describe('GET /api/memory/stats', () => {
 
 	it('returns the concept count for the user', async () => {
 		const db = getDb();
-		writeConcept(
+		await writeConcept(
 			db,
 			'user',
 			'u1',
@@ -63,7 +63,7 @@ describe('GET /api/memory/stats', () => {
 			{ frontmatter: { title: 'John' }, body: 'John likes espresso.' },
 			audit
 		);
-		writeConcept(
+		await writeConcept(
 			db,
 			'user',
 			'u1',

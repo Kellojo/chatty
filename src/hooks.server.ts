@@ -49,9 +49,9 @@ if (!building && !startup.__chattyStartupCleanupDone) {
 			message: e instanceof Error ? e.message : String(e)
 		});
 	}
-	setTimeout(() => {
+	setTimeout(async () => {
 		try {
-			const { upserted, removed } = reconcileMemoryFts(getDb());
+			const { upserted, removed } = await reconcileMemoryFts(getDb());
 			if (upserted > 0 || removed > 0) {
 				log.info(`Memory index reconciled: ${upserted} upserted, ${removed} removed`);
 			}
@@ -61,7 +61,11 @@ if (!building && !startup.__chattyStartupCleanupDone) {
 			});
 		}
 	}, 0);
-	seedDefaultSkills();
+	seedDefaultSkills().catch((e) => {
+		log.error('Failed to seed default skills:', {
+			message: e instanceof Error ? e.message : String(e)
+		});
+	});
 }
 
 if (!building) {

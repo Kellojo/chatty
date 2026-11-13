@@ -32,40 +32,40 @@ function makeConv(overrides: Partial<ConversationRow> = {}): ConversationRow {
 }
 
 describe('buildSystemPrompt', () => {
-	it('returns BASE_PROMPT and the widgets when conversation has no system prompt and no global instructions', () => {
+	it('returns BASE_PROMPT and the widgets when conversation has no system prompt and no global instructions', async () => {
 		const conv = makeConv();
-		expect(buildSystemPrompt(conv)).toBe(basePrompt);
+		expect(await buildSystemPrompt(conv)).toBe(basePrompt);
 	});
 
-	it('replaces BASE_PROMPT with the conversation system prompt but keeps the widgets', () => {
+	it('replaces BASE_PROMPT with the conversation system prompt but keeps the widgets', async () => {
 		const conv = makeConv({ system_prompt: 'You are a pirate.' });
-		expect(buildSystemPrompt(conv)).toBe(`You are a pirate.
+		expect(await buildSystemPrompt(conv)).toBe(`You are a pirate.
 
 ${widgets}`);
 	});
 
-	it('appends global instructions after BASE_PROMPT', () => {
+	it('appends global instructions after BASE_PROMPT', async () => {
 		const conv = makeConv();
-		const result = buildSystemPrompt(conv, 'never use emojis');
+		const result = await buildSystemPrompt(conv, 'never use emojis');
 		expect(result).toBe(`${basePrompt}\n\nnever use emojis`);
 	});
 
-	it('appends global instructions after conversation prompt', () => {
+	it('appends global instructions after conversation prompt', async () => {
 		const conv = makeConv({ system_prompt: 'You are a pirate.' });
-		const result = buildSystemPrompt(conv, 'always answer in German');
+		const result = await buildSystemPrompt(conv, 'always answer in German');
 		expect(result).toBe(`You are a pirate.\n\n${widgets}\n\nalways answer in German`);
 	});
 
-	it('does not append whitespace-only global instructions', () => {
+	it('does not append whitespace-only global instructions', async () => {
 		const conv = makeConv();
-		expect(buildSystemPrompt(conv, '   ')).toBe(basePrompt);
-		expect(buildSystemPrompt(conv, '\t\n')).toBe(basePrompt);
-		expect(buildSystemPrompt(conv, '')).toBe(basePrompt);
+		expect(await buildSystemPrompt(conv, '   ')).toBe(basePrompt);
+		expect(await buildSystemPrompt(conv, '\t\n')).toBe(basePrompt);
+		expect(await buildSystemPrompt(conv, '')).toBe(basePrompt);
 	});
 
-	it('trims global instructions before appending', () => {
+	it('trims global instructions before appending', async () => {
 		const conv = makeConv();
-		const result = buildSystemPrompt(conv, '   hello world   ');
+		const result = await buildSystemPrompt(conv, '   hello world   ');
 		expect(result).toBe(`${basePrompt}\n\nhello world`);
 	});
 });

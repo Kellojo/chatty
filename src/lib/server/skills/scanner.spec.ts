@@ -28,12 +28,12 @@ description: A skill for testing
 Do the test thing.
 `;
 
-afterAll(() => {
+afterAll(async () => {
 	fs.rmSync(VOL, { recursive: true, force: true });
 });
 
 describe('parseSkillFrontmatter', () => {
-	it('applies defaults', () => {
+	it('applies defaults', async () => {
 		const fm = scanner.parseSkillFrontmatter({
 			name: 's',
 			title: 'S',
@@ -48,14 +48,14 @@ describe('parseSkillFrontmatter', () => {
 		expect(fm.author).toBeNull();
 	});
 
-	it('rejects missing required fields', () => {
+	it('rejects missing required fields', async () => {
 		expect(() => scanner.parseSkillFrontmatter({ name: 's' })).toThrow(/frontmatter/i);
 		expect(() => scanner.parseSkillFrontmatter({ name: 's', title: 't', description: '' })).toThrow(
 			/frontmatter/i
 		);
 	});
 
-	it('derives a humanized title when title is omitted', () => {
+	it('derives a humanized title when title is omitted', async () => {
 		const fm = scanner.parseSkillFrontmatter({
 			name: 'agentic-eval',
 			description: 'Patterns for evaluating agent outputs.'
@@ -63,7 +63,7 @@ describe('parseSkillFrontmatter', () => {
 		expect(fm.title).toBe('Agentic Eval');
 	});
 
-	it('parses triggers and tools', () => {
+	it('parses triggers and tools', async () => {
 		const fm = scanner.parseSkillFrontmatter({
 			name: 's',
 			title: 'S',
@@ -81,20 +81,20 @@ describe('parseSkillFrontmatter', () => {
 });
 
 describe('readSkill', () => {
-	it('reads a valid skill from disk', () => {
+	it('reads a valid skill from disk', async () => {
 		writeSkillFile('user', 'test-skill', VALID);
-		const skill = scanner.readSkill('user', 'u1', 'test-skill');
+		const skill = await scanner.readSkill('user', 'u1', 'test-skill');
 		expect(skill).not.toBeNull();
 		expect(skill!.title).toBe('Test Skill');
 		expect(skill!.body).toBe('Do the test thing.');
 		expect(skill!.scope).toBe('user');
 	});
 
-	it('returns null when skill.md is missing', () => {
-		expect(scanner.readSkill('user', 'u1', 'nonexistent')).toBeNull();
+	it('returns null when skill.md is missing', async () => {
+		expect(await scanner.readSkill('user', 'u1', 'nonexistent')).toBeNull();
 	});
 
-	it('reads a SKILL.md file when lowercase skill.md is absent', () => {
+	it('reads a SKILL.md file when lowercase skill.md is absent', async () => {
 		const dir = path.join(skillsRoot('user', 'u1'), 'upper-skill');
 		fs.mkdirSync(dir, { recursive: true });
 		fs.writeFileSync(
@@ -102,23 +102,23 @@ describe('readSkill', () => {
 			VALID.replace('name: test-skill', 'name: upper-skill')
 		);
 		scanner.invalidateSkillCache();
-		const skill = scanner.readSkill('user', 'u1', 'upper-skill');
+		const skill = await scanner.readSkill('user', 'u1', 'upper-skill');
 		expect(skill).not.toBeNull();
 		expect(skill!.name).toBe('upper-skill');
 	});
 
-	it('returns null when frontmatter name does not match directory', () => {
+	it('returns null when frontmatter name does not match directory', async () => {
 		writeSkillFile('user', 'dir-name', VALID.replace('name: test-skill', 'name: other-name'));
-		expect(scanner.readSkill('user', 'u1', 'dir-name')).toBeNull();
+		expect(await scanner.readSkill('user', 'u1', 'dir-name')).toBeNull();
 	});
 
-	it('returns null on invalid frontmatter', () => {
+	it('returns null on invalid frontmatter', async () => {
 		writeSkillFile('user', 'bad-fm', '---\nname: 1\ntitle: t\ndescription: d\n---\nbody\n');
 		// name: 1 is a number → schema rejects
-		expect(scanner.readSkill('user', 'u1', 'bad-fm')).toBeNull();
+		expect(await scanner.readSkill('user', 'u1', 'bad-fm')).toBeNull();
 	});
 
-	it('lists reference markdown files', () => {
+	it('lists reference markdown files', async () => {
 		writeSkillFile('user', 'with-refs', VALID.replace('name: test-skill', 'name: with-refs'));
 		const dir = path.join(skillsRoot('user', 'u1'), 'with-refs');
 		fs.mkdirSync(path.join(dir, 'references', 'nested'), { recursive: true });
@@ -126,24 +126,24 @@ describe('readSkill', () => {
 		fs.writeFileSync(path.join(dir, 'references', 'nested', 'b.md'), 'B');
 		fs.writeFileSync(path.join(dir, 'references', 'ignored.txt'), 'X');
 		scanner.invalidateSkillCache();
-		const skill = scanner.readSkill('user', 'u1', 'with-refs');
+		const skill = await scanner.readSkill('user', 'u1', 'with-refs');
 		expect(skill!.references).toEqual(['references/a.md', 'references/nested/b.md']);
 	});
 });
 
 describe('scanSkills', () => {
-	it('returns sorted summaries and skips invalid dirs', () => {
+	it('returns sorted summaries and skips invalid dirs', async () => {
 		writeSkillFile('user', 'b-skill', VALID.replace('name: test-skill', 'name: b-skill'));
 		writeSkillFile('user', 'a-skill', VALID.replace('name: test-skill', 'name: a-skill'));
 		fs.mkdirSync(path.join(skillsRoot('user', 'u1'), 'INVALID NAME'), { recursive: true });
-		const names = scanner.scanSkills('user', 'u1').map((s) => s.name);
+		const names = (await scanner.scanSkills('user', 'u1')).map((s) => s.name);
 		expect(names.indexOf('a-skill')).toBeLessThan(names.indexOf('b-skill'));
 		expect(names).not.toContain('INVALID NAME');
 	});
 });
 
 describe('resolveSkill / listAllSkills', () => {
-	it('user scope shadows shared scope', () => {
+	it('user scope shadows shared scope', async () => {
 		writeSkillFile(
 			'shared',
 			'shadow-me',
@@ -154,27 +154,27 @@ describe('resolveSkill / listAllSkills', () => {
 			'shadow-me',
 			VALID.replace('name: test-skill', 'name: shadow-me').replace('Test Skill', 'User Title')
 		);
-		const resolved = scanner.resolveSkill('u1', 'shadow-me');
+		const resolved = await scanner.resolveSkill('u1', 'shadow-me');
 		expect(resolved!.scope).toBe('user');
 		expect(resolved!.title).toBe('User Title');
 
-		const all = scanner.listAllSkills('u1');
+		const all = await scanner.listAllSkills('u1');
 		const matches = all.filter((s) => s.name === 'shadow-me');
 		expect(matches).toHaveLength(1);
 		expect(matches[0].scope).toBe('user');
 	});
 
-	it('falls back to shared when no user skill exists', () => {
-		const resolved = scanner.resolveSkill('u1', 'shadow-me');
+	it('falls back to shared when no user skill exists', async () => {
+		const resolved = await scanner.resolveSkill('u1', 'shadow-me');
 		expect(resolved).not.toBeNull();
 		// user version exists from previous test; delete-user-scope check:
-		const onlyShared = scanner.readSkill('shared', 'u1', 'shadow-me');
+		const onlyShared = await scanner.readSkill('shared', 'u1', 'shadow-me');
 		expect(onlyShared!.title).toBe('Shared Title');
 	});
 });
 
 describe('skillsIndexPrompt', () => {
-	it('returns empty string when no enabled skills', () => {
+	it('returns empty string when no enabled skills', async () => {
 		// No user-scope skills for this fresh user id; shared scope may contain skills
 		// from other tests, so instead assert that a fully-disabled set yields ''.
 		writeSkillFile(
@@ -188,11 +188,11 @@ describe('skillsIndexPrompt', () => {
 		// For a user whose only visible skill is disabled and no shared visibility,
 		// the index omits disabled entries. We can't isolate shared here, so assert
 		// the disabled skill never appears in the prompt.
-		const prompt = scanner.skillsIndexPrompt('u1');
+		const prompt = await scanner.skillsIndexPrompt('u1');
 		expect(prompt).not.toContain('only-disabled');
 	});
 
-	it('lists enabled skills only', () => {
+	it('lists enabled skills only', async () => {
 		writeSkillFile(
 			'user',
 			'disabled-skill',
@@ -208,7 +208,7 @@ describe('skillsIndexPrompt', () => {
 			)
 		);
 		scanner.invalidateSkillCache();
-		const prompt = scanner.skillsIndexPrompt('u1');
+		const prompt = await scanner.skillsIndexPrompt('u1');
 		expect(prompt).toContain('test-skill');
 		expect(prompt).not.toContain('disabled-skill');
 	});

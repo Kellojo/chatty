@@ -5,6 +5,9 @@
 	import McpUsageStats from '$lib/components/app/settings/McpUsageStats.svelte';
 	import { DEFAULT_USAGE_PERIOD, type UsagePeriod } from '$lib/components/app/usage/usage.js';
 	import McpUsageDialog from '$lib/components/app/settings/McpUsageDialog.svelte';
+	import McpTestDialog, {
+		type McpTestResult
+	} from '$lib/components/app/settings/McpTestDialog.svelte';
 	import { fadeWhenScrollable } from '$lib/fade-when-scrollable.js';
 	import { toast } from 'svelte-sonner';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
@@ -87,13 +90,6 @@
 	}
 
 	type ConfigurableTransport = 'http' | 'sse' | 'stdio';
-	type TestResult = {
-		name: string;
-		ok: boolean;
-		tools: { name: string; description?: string }[];
-		error?: string;
-	};
-
 	const transportLabels: Record<ConfigurableTransport, string> = {
 		http: 'HTTP',
 		sse: 'SSE',
@@ -247,7 +243,8 @@
 
 	let testBusyId = $state<string | null>(null);
 	let testOpen = $state(false);
-	let testResult = $state<TestResult | null>(null);
+	let testServer = $state<McpServerInfo | null>(null);
+	let testResult = $state<McpTestResult | null>(null);
 
 	let enabledOverride = $state<Record<string, boolean>>({});
 	let loadModeOverride = $state<Record<string, McpServerInfo['loadMode']>>({});
@@ -377,15 +374,28 @@
 
 	async function runTest(server: McpServerInfo) {
 		testBusyId = server.id;
+		// Open at once with a loading state; a retest keeps the last result until the new one lands.
+		if (testServer?.id !== server.id || !testOpen) testResult = null;
+		testServer = server;
+		testOpen = true;
+		let result: McpTestResult;
 		try {
 			const res = await api(`/api/mcp-servers/${server.id}/test`, 'POST');
-			testResult = { name: server.name, ...((await res.json()) as Omit<TestResult, 'name'>) };
-			testOpen = true;
+			result = (await res.json()) as McpTestResult;
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Connection test failed');
+			result = {
+				ok: false,
+				tools: [],
+				error: e instanceof Error ? e.message : 'Connection test failed'
+			};
 		} finally {
-			testBusyId = null;
+			if (testBusyId === server.id) testBusyId = null;
 		}
+		// A test of another server started meanwhile owns the dialog now.
+		if (testServer?.id !== server.id) return;
+		testResult = result;
+		// The test records the server's tool count.
+		if (result.ok) void invalidateAll();
 	}
 
 	let usageOpen = $state(false);
@@ -610,6 +620,15 @@
 			<Icon class="size-4" />
 		{/snippet}
 		{#snippet badges()}
+			{#if server.toolCount}
+				<Badge
+					variant="outline"
+					class="text-muted-foreground tabular-nums"
+					title="Tools listed the last time Chatty connected"
+				>
+					{plural(server.toolCount, 'tool')}
+				</Badge>
+			{/if}
 			{#if !server.builtin && server.transport !== 'builtin'}
 				<Badge variant="outline">{transportLabels[server.transport]}</Badge>
 			{/if}
@@ -890,47 +909,14 @@
 	</Dialog.Content>
 </Dialog.Root>
 
-<Dialog.Root bind:open={testOpen}>
-	<Dialog.Content class="flex max-h-[85vh] flex-col">
-		<Dialog.Header class="shrink-0">
-			<Dialog.Title>Connection test — {testResult?.name}</Dialog.Title>
-			<Dialog.Description>
-				{#if testResult?.ok}
-					Connected successfully. Tools exposed by this server:
-				{:else}
-					The connection failed.
-				{/if}
-			</Dialog.Description>
-		</Dialog.Header>
-		{#if testResult}
-			<div class="min-h-0 overflow-y-auto">
-				{#if testResult.ok}
-					{#if testResult.tools.length > 0}
-						<ul class="flex flex-col gap-2">
-							{#each testResult.tools as tool (tool.name)}
-								<li class="flex flex-col gap-0.5">
-									<Badge variant="secondary" class="self-start">{tool.name}</Badge>
-									{#if tool.description}
-										<span class="text-xs text-muted-foreground">{tool.description}</span>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{:else}
-						<p class="text-sm text-muted-foreground">The server exposes no tools.</p>
-					{/if}
-				{:else}
-					<p class="text-sm wrap-break-word text-destructive">
-						{testResult.error ?? 'Unknown error'}
-					</p>
-				{/if}
-			</div>
-		{/if}
-		<Dialog.Footer class="shrink-0">
-			<Button variant="outline" onclick={() => (testOpen = false)}>Close</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+<McpTestDialog
+	bind:open={testOpen}
+	serverName={testServer?.name ?? ''}
+	result={testResult}
+	expectedTools={testServer?.toolCount ?? null}
+	busy={!!testServer && testBusyId === testServer.id}
+	onRetest={testServer ? () => runTest(testServer!) : undefined}
+/>
 
 <McpUsageDialog
 	bind:open={usageOpen}

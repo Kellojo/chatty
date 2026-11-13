@@ -1,5 +1,5 @@
 import path from 'node:path';
-import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import { config } from '../config.js';
 
 export type SkillScope = 'user' | 'shared';
@@ -7,10 +7,14 @@ export type SkillScope = 'user' | 'shared';
 export const SKILL_FILE_NAMES = ['skill.md', 'SKILL.md'] as const;
 
 // Returns the skill file path inside dir, preferring lowercase skill.md.
-export function findSkillFile(dir: string): string | null {
+export async function findSkillFile(dir: string): Promise<string | null> {
 	for (const name of SKILL_FILE_NAMES) {
 		const abs = path.join(dir, name);
-		if (fs.existsSync(abs)) return abs;
+		const found = await fsp.access(abs).then(
+			() => true,
+			() => false
+		);
+		if (found) return abs;
 	}
 	return null;
 }
