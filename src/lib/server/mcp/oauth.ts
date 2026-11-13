@@ -32,6 +32,17 @@ import {
 } from '../db/repo/mcp-oauth-sessions.js';
 
 export const OAUTH_CALLBACK_PATH = '/api/mcp-oauth/callback';
+
+/**
+ * The fetch for an MCP server's OAuth requests (metadata, token exchange, refresh).
+ * Without one, @ai-sdk/mcp refuses authorization servers that resolve to private
+ * addresses unless they share the MCP server's origin, which rules out the usual
+ * self-hosted setup (MCP server and identity provider on separate hostnames on the
+ * LAN). These endpoints come from a server an admin configured, which Chatty already
+ * connects to without that restriction. A wrapper, not `fetch` itself: the library
+ * treats the global fetch as "no fetch given".
+ */
+export const oauthFetch: typeof fetch = (input, init) => fetch(input, init);
 export const CLIENT_METADATA_PATH = '/api/mcp-oauth/client-metadata.json';
 const DISCOVERY_TIMEOUT_MS = 10_000;
 
@@ -387,7 +398,8 @@ export async function startMcpOAuth(
 	const provider = new McpOAuthProvider(db, row.id, userId, origin);
 	const result = await auth(provider, {
 		serverUrl: row.url!,
-		scope: row.oauth_scope ?? undefined
+		scope: row.oauth_scope ?? undefined,
+		fetchFn: oauthFetch
 	});
 	if (result === 'AUTHORIZED') return { connected: true };
 	if (!provider.authorizationUrl)
@@ -414,7 +426,8 @@ export async function finishMcpOAuth(
 			serverUrl: row.url!,
 			authorizationCode: params.code,
 			callbackState: params.state,
-			callbackIssuer: params.issuer ?? undefined
+			callbackIssuer: params.issuer ?? undefined,
+			fetchFn: oauthFetch
 		});
 		if (result !== 'AUTHORIZED') throw new Error('Sign-in wasn’t completed');
 	} finally {
@@ -443,4 +456,25 @@ export function connectionAuthProvider(
 /** Maps the transport's "needs interactive sign-in" failure to a message users can act on. */
 export function toSignInError(e: unknown, row: McpServerRow): unknown {
 	return e instanceof UnauthorizedError ? new McpSignInRequiredError(row.name) : e;
+}
+
+/**
+ * An error's message plus the reasons underneath it. Node's fetch rejects with a bare
+ * "fetch failed" and keeps the actual reason (DNS, refused connection, TLS) in `cause`.
+ */
+export function describeError(e: unknown): string {
+	const parts: string[] = [];
+	let current: unknown = e;
+	for (let depth = 0; current && depth < 4; depth++) {
+		if (current instanceof Error) {
+			const code = (current as { code?: unknown }).code;
+			const text = current.message || String(current);
+			parts.push(typeof code === 'string' && !text.includes(code) ? `${code} ${text}` : text);
+			current = current.cause;
+		} else {
+			parts.push(String(current));
+			break;
+		}
+	}
+	return [...new Set(parts)].join(': ');
 }

@@ -4,7 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { decryptSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
 import { getMcpServer, parseMcpArgs, type McpServerRow } from '../db/repo/mcp-servers.js';
-import { connectionAuthProvider, toSignInError } from './oauth.js';
+import { connectionAuthProvider, oauthFetch, toSignInError } from './oauth.js';
 import { BUILTIN_SERVERS } from './servers/index.js';
 import type { CallerContext } from './types.js';
 
@@ -80,7 +80,8 @@ async function openServer(row: McpServerRow, ctx: CallerContext): Promise<Server
 		const authProvider = connectionAuthProvider(getDb(), row, ctx.userId);
 		try {
 			const client = await createMCPClient({
-				transport: { type, url: row.url, authProvider },
+				// Token refreshes go through oauthFetch too (see there).
+				transport: { type, url: row.url, authProvider, fetch: oauthFetch },
 				maxRetries: 2
 			});
 			return { client, close: () => client.close() };
