@@ -4,13 +4,14 @@ import type { ToolInfo } from '$lib/types.js';
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
 import { listEnabledMcpServers, type McpServerRow } from '../db/repo/mcp-servers.js';
+import { recordMcpToolCall } from '../db/repo/mcp-tool-usage.js';
 import { createLogger } from '../logger.js';
 import { connectServer, MCP_LIST_TIMEOUT_MS, withTimeout } from '../mcp/clientManager.js';
 import { McpSignInRequiredError } from '../mcp/oauth.js';
 import { acquireMcpServer, cachedMcpTools, type McpLease } from '../mcp/pool.js';
 import type { CallerContext } from '../mcp/types.js';
 import { pickDeferredTools, SEARCH_TOOLS_NAME, type ToolCatalog } from './toolSearch.js';
-import { wrapMcpTools } from './wrap.js';
+import { wrapMcpTools, type McpToolCallOutcome } from './wrap.js';
 
 const log = createLogger('tools');
 
@@ -64,7 +65,10 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 			continue;
 		}
 		closers.push(result.value.close);
-		const set = wrapMcpTools(result.value.tools, row.name, result.value.onError);
+		const set = wrapMcpTools(result.value.tools, row.name, {
+			onError: result.value.onError,
+			onCall: (outcome) => trackCall(row, ctx.userId, outcome)
+		});
 		for (const [name, tool] of Object.entries(set)) {
 			if (tools[name] || name === SEARCH_TOOLS_NAME) {
 				log.warn(`MCP tool name collision: "${name}" from ${row.name} skipped`);
@@ -178,6 +182,23 @@ async function openPooled(row: McpServerRow, userId: string): Promise<OpenedServ
 				);
 		}
 	};
+}
+
+/** Counts a tool call towards the server's usage; tracking never fails the call. */
+function trackCall(row: McpServerRow, userId: string, outcome: McpToolCallOutcome): void {
+	try {
+		recordMcpToolCall(getDb(), {
+			serverId: row.id,
+			toolName: outcome.tool,
+			userId,
+			ok: outcome.ok,
+			durationMs: outcome.durationMs
+		});
+	} catch (e) {
+		log.warn(`Recording usage of ${row.name}/${outcome.tool} failed:`, {
+			error: e instanceof Error ? e.message : String(e)
+		});
+	}
 }
 
 function isConnectionError(e: unknown): boolean {

@@ -31,10 +31,17 @@ import {
 import type { CodingEnvironmentRow } from '../db/repo/coding-environments.js';
 import { getConversation, touchConversation } from '../db/repo/conversations.js';
 import {
+	compareMessageParts,
 	createMessage,
 	getMessage,
+	getMessageMeta,
+	messageConversationId,
 	insertMessageBefore,
-	updateMessage
+	partialSaveIntervalMs,
+	reopenMessage,
+	updateMessage,
+	updateMessageParts,
+	type MessageMeta
 } from '../db/repo/messages.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
@@ -47,6 +54,7 @@ import {
 	copyThreadRecords,
 	emptyThreadState,
 	hasRunningSubagent,
+	hasUnloadedOutput,
 	isAgentNotification,
 	isRunActive,
 	isRunFinished,
@@ -60,6 +68,7 @@ import {
 	runFailureText,
 	runForUserMessage,
 	sortedRuns,
+	storedOutputs,
 	streamItemRun,
 	summarizeTask,
 	type RenderedEntry,
@@ -77,6 +86,11 @@ import { queueThreadStatePush, reconcileThreadState, remoteThreadState } from '.
 const log = createLogger('t3-follower');
 
 const RENDER_DEBOUNCE_MS = 120;
+/**
+ * Least time between saves of a reply that is still streaming; larger replies
+ * wait longer (see partialSaveIntervalMs). Live clients follow the stream, and
+ * the run itself stays on T3, so the saved copy only serves reloads.
+ */
 const PERSIST_INTERVAL_MS = 1000;
 const IDLE_STOP_MS = 5 * 60 * 1000;
 const MIN_RECONNECT_MS = 2000;
@@ -105,6 +119,14 @@ const OUTPUT_FETCH_RUNS = 3;
 const DIFF_DEBOUNCE_MS = 2000;
 
 type Rec = Record<string, unknown>;
+
+/** The fields of a reply's row that saving it compares against. */
+interface StoredReply {
+	/** Null when not known to equal anything rendered here (compared in SQL, see persistSegment). */
+	parts: string | null;
+	status: string;
+	error: string | null;
+}
 
 interface EmittedPart {
 	started: boolean;
@@ -160,12 +182,39 @@ export class CodingFollower {
 	private renderTimer: ReturnType<typeof setTimeout> | null = null;
 	private idleTimer: ReturnType<typeof setTimeout> | null = null;
 	private live: LiveTurn | null = null;
-	private readonly persisted = new Map<string, { json: string; at: number; status: string }>();
+	private readonly persisted = new Map<
+		string,
+		{
+			json: string;
+			at: number;
+			status: string;
+			/** The reply's entries and their states (see entryShape) when last saved. */
+			shape: string;
+			/**
+			 * What the reply's row holds, as last written or read here: the
+			 * follower is the only writer of its replies, so saves compare against
+			 * this instead of reading the whole (possibly huge) row back each time.
+			 * Null when unknown.
+			 */
+			row: StoredReply | null;
+		}
+	>();
 	private readonly commandOutputs = new Map<string, string>();
+	/**
+	 * Replies whose stored outputs were looked at (see seedStoredOutputs): once
+	 * per reply and follower, on its first render here.
+	 */
+	private readonly outputsChecked = new Set<string>();
 	/** Omitted outputs queued or being fetched. */
 	private readonly fetchingOutputs = new Set<string>();
 	private readonly outputQueue: { id: string; runId: string }[] = [];
 	private activeOutputFetches = 0;
+	/** Per run: its output fetches queued or in flight, and whether one brought output. */
+	private readonly runOutputFetches = new Map<string, { pending: number; loaded: boolean }>();
+	/** Runs with a throttled save still to write, and the timer that renders them then. */
+	private readonly flushRuns = new Set<string>();
+	private flushTimer: ReturnType<typeof setTimeout> | null = null;
+	private flushAt = 0;
 	/** Omitted outputs whose fetch failed: when last tried, and how often. */
 	private readonly failedOutputs = new Map<string, { at: number; attempts: number }>();
 	/**
@@ -396,6 +445,7 @@ export class CodingFollower {
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
 		this.clearSnapshotTimer();
 		if (this.renderTimer) clearTimeout(this.renderTimer);
+		if (this.flushTimer) clearTimeout(this.flushTimer);
 		if (this.diffTimer) clearTimeout(this.diffTimer);
 		this.stream?.cancel();
 		this.stream = null;
@@ -547,12 +597,9 @@ export class CodingFollower {
 		const live = this.live;
 		if (!live || live.runId) return;
 		this.endLive({ interrupted: false });
-		const row = this.ownMessage(live.messageId);
-		if (row && row.parts === '[]') {
-			this.db
-				.prepare('DELETE FROM messages WHERE id = ? AND conversation_id = ?')
-				.run(live.messageId, this.conversationId);
-		}
+		this.db
+			.prepare("DELETE FROM messages WHERE id = ? AND conversation_id = ? AND parts = '[]'")
+			.run(live.messageId, this.conversationId);
 	}
 
 	/**
@@ -566,9 +613,31 @@ export class CodingFollower {
 		return row && row.conversation_id === this.conversationId ? row : undefined;
 	}
 
+	/** {@link ownMessage} without the (possibly huge) parts. */
+	private ownMessageMeta(id: string): MessageMeta | undefined {
+		const row = getMessageMeta(this.db, id);
+		return row && row.conversation_id === this.conversationId ? row : undefined;
+	}
+
+	/** `id` when it is a message of this conversation (see {@link ownMessage}). */
+	private ownId(id: string): string | undefined {
+		return this.isOwnMessage(id) ? id : undefined;
+	}
+
+	/** A reply's stored status: as last written here when known, else read (without its parts). */
+	private storedStatus(id: string): string | undefined {
+		const known = this.persisted.get(id)?.row;
+		if (known && this.isOwnMessage(id)) return known.status;
+		return this.ownMessageMeta(id)?.status;
+	}
+
 	private isForeignMessage(id: string): boolean {
-		const row = getMessage(this.db, id);
-		return !!row && row.conversation_id !== this.conversationId;
+		const owner = messageConversationId(this.db, id);
+		return owner !== undefined && owner !== this.conversationId;
+	}
+
+	private isOwnMessage(id: string): boolean {
+		return messageConversationId(this.db, id) === this.conversationId;
 	}
 
 	/**
@@ -581,7 +650,7 @@ export class CodingFollower {
 	 */
 	private localMessageId(remoteId: string): string {
 		const scoped = `${this.conversationId}:${remoteId}`;
-		if (this.ownMessage(scoped)) return scoped;
+		if (this.isOwnMessage(scoped)) return scoped;
 		return this.isForeignMessage(remoteId) ? scoped : remoteId;
 	}
 
@@ -610,7 +679,7 @@ export class CodingFollower {
 		};
 		this.live = turn;
 		if (!runId) this.armBindTimer(turn);
-		if (!getMessage(this.db, messageId)) {
+		if (messageConversationId(this.db, messageId) === undefined) {
 			createMessage(this.db, {
 				id: messageId,
 				conversationId: this.conversationId,
@@ -623,7 +692,9 @@ export class CodingFollower {
 			// local user message): it orders the sidebar like a sent message does.
 			if (!this.quietHistory) touchConversation(this.db, this.conversationId);
 		} else {
-			updateMessage(this.db, messageId, { status: 'partial', error: null });
+			reopenMessage(this.db, messageId);
+			const prev = this.persisted.get(messageId);
+			if (prev?.row) prev.row = { ...prev.row, status: 'partial', error: null };
 		}
 		appendChunk(this.conversationId, { type: 'start', messageId }, controller);
 		publishServerEvent(this.userId, {
@@ -692,11 +763,7 @@ export class CodingFollower {
 		if (opts.keepPendingInterrupt && turn.userMessageId) {
 			this.pendingInterruptFor = turn.userMessageId;
 		}
-		if (
-			opts.settleError &&
-			!shuttingDown &&
-			this.ownMessage(turn.messageId)?.status === 'partial'
-		) {
+		if (opts.settleError && !shuttingDown && this.storedStatus(turn.messageId) === 'partial') {
 			updateMessage(this.db, turn.messageId, { status: 'failed', error: opts.settleError });
 			// A later render of the run must write its state again.
 			this.persisted.delete(turn.messageId);
@@ -829,7 +896,7 @@ export class CodingFollower {
 		if (!userMessageId) return null;
 		const localUserMessageId = this.localMessageId(userMessageId);
 		if (isAgentNotification(this.state, userMessageId)) {
-			if (this.ownMessage(localUserMessageId)?.role !== 'user') return null;
+			if (this.ownMessageMeta(localUserMessageId)?.role !== 'user') return null;
 			// Mirrored before notices were told apart.
 			db.prepare('DELETE FROM messages WHERE id = ? AND conversation_id = ?').run(
 				localUserMessageId,
@@ -837,7 +904,7 @@ export class CodingFollower {
 			);
 			return 'removed';
 		}
-		if (getMessage(db, localUserMessageId)) return null;
+		if (messageConversationId(db, localUserMessageId) !== undefined) return null;
 		const text = messageText(this.state, userMessageId);
 		if (!text) return null;
 		const message = {
@@ -847,8 +914,8 @@ export class CodingFollower {
 			parts: [{ type: 'text', text }],
 			createdAt: Date.parse(String(run.requestedAt)) || now
 		};
-		const reply = this.ownMessage(this.localMessageId(replyMessageId(run)));
-		if (!reply || !insertMessageBefore(db, reply.id, message)) createMessage(db, message);
+		const replyId = this.ownId(this.localMessageId(replyMessageId(run)));
+		if (!replyId || !insertMessageBefore(db, replyId, message)) createMessage(db, message);
 		return 'created';
 	}
 
@@ -860,7 +927,7 @@ export class CodingFollower {
 		const remoteId = segment.userMessageId;
 		if (!remoteId || !segment.item) return false;
 		const id = this.localMessageId(remoteId);
-		if (getMessage(this.db, id)) return false;
+		if (messageConversationId(this.db, id) !== undefined) return false;
 		const itemText = typeof segment.item.text === 'string' ? segment.item.text : null;
 		const text = messageText(this.state, remoteId) ?? itemText;
 		if (!text) return false;
@@ -871,23 +938,81 @@ export class CodingFollower {
 			parts: [{ type: 'text', text }],
 			createdAt: Date.parse(String(segment.item.startedAt ?? segment.item.updatedAt)) || now
 		};
-		const reply = this.ownMessage(replyId);
-		if (!reply || !insertMessageBefore(this.db, reply.id, message)) createMessage(this.db, message);
+		const ownReplyId = this.ownId(replyId);
+		if (!ownReplyId || !insertMessageBefore(this.db, ownReplyId, message)) {
+			createMessage(this.db, message);
+		}
 		return true;
+	}
+
+	/**
+	 * On a reply's first render here, takes the outputs its stored row already
+	 * holds for omitted outputs that aren't in memory (see storedOutputs).
+	 * Fetched outputs live only in memory, so without this a new follower (after
+	 * a restart or an idle stop) would save "Output not loaded" over outputs an
+	 * earlier one fetched. Returns the rows it read, for persistSegment, and
+	 * whether any output was taken (the run then needs rendering again).
+	 */
+	private seedStoredOutputs(
+		segments: RunSegment[],
+		replyIds: string[]
+	): { rows: Map<string, StoredReply>; seeded: boolean } {
+		const rows = new Map<string, StoredReply>();
+		let seeded = false;
+		for (const [i, segment] of segments.entries()) {
+			const id = replyIds[i];
+			if (this.outputsChecked.has(id)) continue;
+			this.outputsChecked.add(id);
+			if (!hasUnloadedOutput(segment.entries)) continue;
+			const row = this.ownMessage(id);
+			if (!row) continue;
+			rows.set(id, { parts: row.parts, status: row.status, error: row.error });
+			for (const [itemId, output] of storedOutputs(segment.entries, JSON.parse(row.parts))) {
+				this.commandOutputs.set(itemId, output);
+				seeded = true;
+			}
+		}
+		return { rows, seeded };
+	}
+
+	/** What a reply's row holds, with its parts compared to `json` in SQL rather than read. */
+	private storedReply(messageId: string, json: string): StoredReply | undefined {
+		const row = compareMessageParts(this.db, messageId, this.conversationId, json);
+		return row && { parts: row.partsEqual ? json : null, status: row.status, error: row.error };
+	}
+
+	/** Renders `runId` again once its throttled save is due, in `wait` ms. */
+	private scheduleFlush(runId: string, wait: number): void {
+		this.flushRuns.add(runId);
+		const at = Date.now() + wait;
+		if (this.flushTimer) {
+			if (this.flushAt <= at) return;
+			clearTimeout(this.flushTimer);
+		}
+		this.flushAt = at;
+		this.flushTimer = setTimeout(() => {
+			this.flushTimer = null;
+			this.markDirty(this.flushRuns);
+			this.flushRuns.clear();
+			this.scheduleRender();
+		}, wait);
+		this.flushTimer.unref?.();
 	}
 
 	/**
 	 * Saves one segment of a run as the reply `messageId` (throttled while the
 	 * run streams) and streams it when it's the live reply. Earlier segments
 	 * ended when the next message came in; the last one carries the run's
-	 * status. True when the reply was created.
+	 * status. `stored` is the reply's row when this render already read it.
+	 * True when the reply was created.
 	 */
 	private persistSegment(
 		run: Rec,
 		segment: RunSegment,
 		messageId: string,
 		isLast: boolean,
-		now: number
+		now: number,
+		stored?: StoredReply
 	): boolean {
 		if (this.isForeignMessage(messageId)) return false;
 		const db = this.db;
@@ -908,12 +1033,37 @@ export class CodingFollower {
 		// message added mid-run gets one only when the agent got to it.
 		const first = segment.item === null;
 		const json = JSON.stringify(parts);
+		const shape = entryShape(entries);
 		const prev = this.persisted.get(messageId);
 		const changed = !prev || prev.json !== json || prev.status !== status;
-		const due = !prev || finished || now - prev.at >= PERSIST_INTERVAL_MS;
+		// Every save rewrites the whole row, so a streaming reply is saved less
+		// often the larger it gets. A finished run or a changed status is saved
+		// at once; a new entry, or one changing state (a tool call completing),
+		// after the base interval, so a reload mid-run still shows recent steps.
+		const wait =
+			!prev || finished || prev.status !== status
+				? 0
+				: Math.max(
+						0,
+						prev.at +
+							(prev.shape !== shape
+								? PERSIST_INTERVAL_MS
+								: partialSaveIntervalMs(json.length, PERSIST_INTERVAL_MS)) -
+							now
+					);
+		const due = wait === 0;
 		let created = false;
-		if (changed && due && (parts.length > 0 || (first && finished) || this.ownMessage(messageId))) {
-			const existing = this.ownMessage(messageId);
+		if (
+			changed &&
+			due &&
+			(parts.length > 0 || (first && finished) || this.isOwnMessage(messageId))
+		) {
+			// The row may have been removed meanwhile (e.g. its branch deleted).
+			const existing: StoredReply | undefined =
+				prev?.row && this.isOwnMessage(messageId)
+					? prev.row
+					: (stored ?? this.storedReply(messageId, json));
+			let row: StoredReply | null = existing ?? null;
 			const error =
 				isLast && finished && run.status !== 'completed' ? runFailureText(this.state, run) : null;
 			if (existing) {
@@ -925,7 +1075,16 @@ export class CodingFollower {
 				const keepParts = finished && runItemsEvicted(this.state, runId);
 				const partsChanged = !keepParts && existing.parts !== json;
 				if (partsChanged || existing.status !== status || existing.error !== error) {
-					updateMessage(db, messageId, keepParts ? { status, error } : { parts, status, error });
+					// Only the parts of a streaming reply changed: one plain UPDATE.
+					const partsOnly =
+						partsChanged &&
+						status === 'partial' &&
+						existing.status === status &&
+						existing.error === error;
+					if (!partsOnly || !updateMessageParts(db, messageId, json)) {
+						updateMessage(db, messageId, keepParts ? { status, error } : { parts, status, error });
+					}
+					row = { parts: keepParts ? existing.parts : json, status, error };
 					// Nothing streams this reply (e.g. a background subagent still at
 					// work after its turn ended), so tell an open chat to reload it.
 					if (this.live?.messageId !== messageId) {
@@ -938,7 +1097,7 @@ export class CodingFollower {
 			} else if (parts.length > 0 || (first && finished)) {
 				const userMessage = first
 					? undefined
-					: this.ownMessage(this.localMessageId(segment.userMessageId!));
+					: this.ownMessageMeta(this.localMessageId(segment.userMessageId!));
 				createMessage(db, {
 					id: messageId,
 					conversationId: this.conversationId,
@@ -951,12 +1110,12 @@ export class CodingFollower {
 						: (userMessage?.created_at ?? now) + 1,
 					parentId: userMessage?.id
 				});
+				row = { parts: json, status, error };
 				created = true;
 			}
-			this.persisted.set(messageId, { json, at: now, status });
+			this.persisted.set(messageId, { json, at: now, status, shape, row });
 		} else if (changed && !due) {
-			this.dirtyRuns.add(runId);
-			this.scheduleRender(); // flush the throttled update later
+			this.scheduleFlush(runId, wait);
 		}
 		return created;
 	}
@@ -1027,10 +1186,15 @@ export class CodingFollower {
 			else if (mirrored === 'removed') removedNotices = true;
 
 			const finished = isRunFinished(run);
-			const segments = renderRunSegments(this.state, run, this.commandOutputs, answers);
+			let segments = renderRunSegments(this.state, run, this.commandOutputs, answers);
 			const replyIds = segments.map((segment, i) =>
 				this.localMessageId(i === 0 ? replyMessageId(run) : `${segment.userMessageId}:reply`)
 			);
+			const stored = this.seedStoredOutputs(segments, replyIds);
+			// Outputs don't change how a run splits into segments, so the ids hold.
+			if (stored.seeded) {
+				segments = renderRunSegments(this.state, run, this.commandOutputs, answers);
+			}
 			// The agent moved on to a message added mid-run: stream that reply instead.
 			const last = segments.length - 1;
 			if (
@@ -1043,12 +1207,15 @@ export class CodingFollower {
 			) {
 				this.endLive({ interrupted: false });
 				if (this.mirrorSegmentMessage(segments[last], replyIds[last], now)) touched = true;
-				const userMessage = this.ownMessage(this.localMessageId(segments[last].userMessageId!));
-				this.openLive(replyIds[last], segments[last].userMessageId, runId, userMessage?.id);
+				const userMessageId = this.ownId(this.localMessageId(segments[last].userMessageId!));
+				this.openLive(replyIds[last], segments[last].userMessageId, runId, userMessageId);
 			}
 			for (const [i, segment] of segments.entries()) {
 				if (i > 0 && this.mirrorSegmentMessage(segment, replyIds[i], now)) touched = true;
-				if (this.persistSegment(run, segment, replyIds[i], i === last, now)) touched = true;
+				const saved = stored.rows.get(replyIds[i]);
+				if (this.persistSegment(run, segment, replyIds[i], i === last, now, saved)) {
+					touched = true;
+				}
 			}
 
 			if (finished && this.live?.runId === runId) {
@@ -1201,7 +1368,10 @@ export class CodingFollower {
 			const was = this.lastStatus;
 			this.lastStatus = summary.status;
 			const ended =
-				(was === 'running' || was === 'awaiting_input' || was === 'starting') &&
+				(was === 'running' ||
+					was === 'awaiting_input' ||
+					was === 'starting' ||
+					was === 'waiting') &&
 				(summary.status === 'idle' ||
 					summary.status === 'failed' ||
 					summary.status === 'interrupted');
@@ -1229,6 +1399,8 @@ export class CodingFollower {
 		if (
 			summary.status === 'running' ||
 			summary.status === 'awaiting_input' ||
+			// The agent resumes when its background work reports back.
+			summary.status === 'waiting' ||
 			this.live ||
 			// Background subagents keep reporting after the turn that started them.
 			hasRunningSubagent(this.state)
@@ -1272,9 +1444,29 @@ export class CodingFollower {
 				continue;
 			}
 			this.fetchingOutputs.add(id);
-			this.outputQueue.push({ id, runId: String(item.runId) });
+			const runId = String(item.runId);
+			this.outputQueue.push({ id, runId });
+			const fetches = this.runOutputFetches.get(runId);
+			if (fetches) fetches.pending++;
+			else this.runOutputFetches.set(runId, { pending: 1, loaded: false });
 		}
 		this.pumpOutputFetches();
+	}
+
+	/**
+	 * One of the run's output fetches ended. Once none is left, a run that got
+	 * output is rendered (and saved) again: once for the batch, not per output.
+	 */
+	private outputFetchEnded(runId: string, loaded: boolean): void {
+		const fetches = this.runOutputFetches.get(runId);
+		if (!fetches) return;
+		fetches.loaded ||= loaded;
+		if (--fetches.pending > 0) return;
+		this.runOutputFetches.delete(runId);
+		if (fetches.loaded && !this.stopped) {
+			this.markDirty(runId);
+			this.scheduleRender();
+		}
 	}
 
 	/** Starts queued output fetches, at most {@link MAX_OUTPUT_FETCHES} at a time. */
@@ -1284,9 +1476,11 @@ export class CodingFollower {
 			// Evicted, or the follower stopped, while it waited.
 			if (this.stopped || !this.threadId || !this.state.turnItems.has(id)) {
 				this.fetchingOutputs.delete(id);
+				this.outputFetchEnded(runId, false);
 				continue;
 			}
 			this.activeOutputFetches++;
+			let loaded = false;
 			this.rpc('orchestration.getTurnItem', { threadId: this.threadId, itemId: id })
 				.then((result) => {
 					const output = (result as { item?: { output?: unknown } } | null)?.item?.output;
@@ -1303,8 +1497,7 @@ export class CodingFollower {
 							: text
 					);
 					this.failedOutputs.delete(id);
-					this.markDirty(runId);
-					this.scheduleRender();
+					loaded = true;
 				})
 				.catch(() => {
 					this.failedOutputs.set(id, {
@@ -1315,6 +1508,7 @@ export class CodingFollower {
 				.finally(() => {
 					this.fetchingOutputs.delete(id);
 					this.activeOutputFetches--;
+					this.outputFetchEnded(runId, loaded);
 					this.pumpOutputFetches();
 				});
 		}
@@ -1330,6 +1524,14 @@ export class CodingFollower {
 		if (this.idleTimer) clearTimeout(this.idleTimer);
 		this.idleTimer = null;
 	}
+}
+
+/**
+ * A reply's entries and the state of each: a change here (a new step, a tool
+ * call completing) is saved sooner than more text in an existing one.
+ */
+function entryShape(entries: readonly RenderedEntry[]): string {
+	return entries.map((e) => `${e.key}:${e.part.state ?? ''}`).join('\n');
 }
 
 // ── registry ─────────────────────────────────────────────────────────────

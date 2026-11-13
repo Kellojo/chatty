@@ -276,7 +276,7 @@ export function listLiveCodingConversations(
 			`SELECT cc.*, c.user_id AS user_id FROM coding_conversations cc
 			 JOIN conversations c ON c.id = cc.conversation_id
 			 WHERE c.deleted_at IS NULL AND cc.thread_id IS NOT NULL
-			   AND cc.status IN ('starting', 'running', 'awaiting_input')`
+			   AND cc.status IN ('starting', 'running', 'awaiting_input', 'waiting')`
 		)
 		.all() as (CodingConversationRow & { user_id: string })[];
 }
@@ -293,6 +293,50 @@ export function listThreadCodingConversations(
 			 WHERE c.deleted_at IS NULL AND cc.thread_id IS NOT NULL AND cc.environment_id = ?`
 		)
 		.all(environmentId) as (CodingConversationRow & { user_id: string })[];
+}
+
+/**
+ * `listThreadCodingConversations` narrowed to the given threads. Looked up by
+ * thread (CROSS JOIN and `+` keep the planner off the per-environment and
+ * per-user indexes), so a live update about one thread reads only its rows.
+ */
+export function listThreadCodingConversationsFor(
+	db: Db,
+	environmentId: string,
+	threadIds: readonly string[]
+): (CodingConversationRow & { user_id: string })[] {
+	if (threadIds.length === 0) return [];
+	return db
+		.prepare(
+			`SELECT cc.*, c.user_id AS user_id FROM coding_conversations cc
+			 CROSS JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE cc.thread_id IN (SELECT value FROM json_each(?))
+			   AND +cc.environment_id = ? AND c.deleted_at IS NULL`
+		)
+		.all(JSON.stringify(threadIds), environmentId) as (CodingConversationRow & {
+		user_id: string;
+	})[];
+}
+
+/** Which of `threadIds` are among `listKnownThreadIds(db, environmentId)`. */
+export function knownThreadIdsAmong(
+	db: Db,
+	environmentId: string,
+	threadIds: readonly string[]
+): Set<string> {
+	if (threadIds.length === 0) return new Set();
+	const ids = JSON.stringify(threadIds);
+	const rows = db
+		.prepare(
+			`SELECT cc.thread_id FROM coding_conversations cc
+			 CROSS JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE cc.thread_id IN (SELECT value FROM json_each(?))
+			   AND c.user_id = (SELECT user_id FROM coding_environments WHERE id = ?)
+			 UNION SELECT thread_id FROM coding_dismissed_threads
+			 WHERE environment_id = ? AND thread_id IN (SELECT value FROM json_each(?))`
+		)
+		.all(ids, environmentId, environmentId, ids) as { thread_id: string }[];
+	return new Set(rows.map((r) => r.thread_id));
 }
 
 /**

@@ -36,17 +36,17 @@ const log = createLogger('jobs');
 const PURGE_SOFT_DELETED_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function purgeSoftDeletedConversations(
+export async function purgeSoftDeletedConversations(
 	db: Db,
 	olderThanDays: number = PURGE_SOFT_DELETED_DAYS
-): number {
+): Promise<number> {
 	const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
 	const ids = listSoftDeletedBefore(db, cutoff);
 	let purged = 0;
 	for (const id of ids) {
 		try {
 			purgeConversation(db, id);
-			removeConversationWorkspace(id);
+			await removeConversationWorkspace(id);
 			purged++;
 			log.info(`Purged conversation ${id} (soft-deleted > ${olderThanDays}d ago)`);
 		} catch (e) {
@@ -154,18 +154,18 @@ export async function runDailyJobs(db: Db = getDb()): Promise<void> {
 	expireAgentQuestions(db);
 	pruneAgentRunChats(db);
 
-	const purged = purgeSoftDeletedConversations(db);
+	const purged = await purgeSoftDeletedConversations(db);
 	if (purged > 0) log.info(`Purged ${purged} soft-deleted conversation(s)`);
 
 	const stalePush = deleteStalePushSubscriptions(db);
 	if (stalePush > 0) log.info(`Removed ${stalePush} push subscription(s) of ended sessions`);
 
-	const agentRemoved = gcAgentWorkspaces(config.WORKSPACE_GC_DAYS);
+	const agentRemoved = await gcAgentWorkspaces(config.WORKSPACE_GC_DAYS);
 	for (const name of agentRemoved) {
 		log.info(`Removed stale agent workspace ${name} (idle > ${config.WORKSPACE_GC_DAYS}d)`);
 	}
 
-	const orphanRemoved = gcOrphanConversationWorkspaces(listAllConversationIds(db));
+	const orphanRemoved = await gcOrphanConversationWorkspaces(() => listAllConversationIds(db));
 	for (const name of orphanRemoved) {
 		log.info(`Removed orphan conversation workspace ${name} (no matching conversation row)`);
 	}

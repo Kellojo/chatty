@@ -13,6 +13,7 @@
 import { randomBytes } from 'node:crypto';
 import {
 	auth,
+	AuthorizationServerMismatchError,
 	UnauthorizedError,
 	type OAuthAuthorizationServerInformation,
 	type OAuthClientInformation,
@@ -395,12 +396,33 @@ export async function startMcpOAuth(
 	assertOAuthServer(row);
 	const origin = appOrigin(requestOrigin);
 	await ensureRegistration(db, row, origin);
+	const session = getMcpOAuthSession(db, row.id, userId);
+	if (session && !session.tokens_enc) {
+		// An unfinished earlier sign-in pinned its authorization server (and left a PKCE
+		// verifier); a new one starts clean, so stale details can't block it.
+		updateMcpOAuthSession(db, row.id, userId, {
+			auth_server_info: null,
+			state: null,
+			code_verifier_enc: null
+		});
+	}
 	const provider = new McpOAuthProvider(db, row.id, userId, origin);
-	const result = await auth(provider, {
-		serverUrl: row.url!,
-		scope: row.oauth_scope ?? undefined,
-		fetchFn: oauthFetch
-	});
+	const start = () =>
+		auth(provider, {
+			serverUrl: row.url!,
+			scope: row.oauth_scope ?? undefined,
+			fetchFn: oauthFetch
+		});
+	let result: Awaited<ReturnType<typeof start>>;
+	try {
+		result = await start();
+	} catch (e) {
+		// The tokens were issued by an authorization server that no longer matches the
+		// server's metadata: they can't be used or refreshed, so sign in again from scratch.
+		if (!(e instanceof AuthorizationServerMismatchError)) throw e;
+		deleteMcpOAuthSession(db, row.id, userId);
+		result = await start();
+	}
 	if (result === 'AUTHORIZED') return { connected: true };
 	if (!provider.authorizationUrl)
 		throw new Error('The authorization server didn’t return a sign-in URL');

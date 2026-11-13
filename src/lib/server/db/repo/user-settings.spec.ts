@@ -51,6 +51,42 @@ describe('user-settings repo', () => {
 		expect(repo.getSuggestions(db, 'u1').length).toBeGreaterThan(0);
 	});
 
+	it('reads every stored setting the same as the single-key getters', () => {
+		repo.setUserSetting(db, 'u1', 'theme', 'dark');
+		repo.setUserSetting(db, 'u1', 'suggestions', ['a', ' ', 3]);
+		repo.setUserSetting(db, 'u1', 'codingSuggestions', 'bogus');
+		repo.setUserSetting(db, 'u1', 'globalInstructions', '  be brief  ');
+		repo.setUserSetting(db, 'u1', 'timeFormat', 'nope');
+		repo.setUserSetting(db, 'u1', 'sidebarOpen', false);
+		repo.setUserSetting(db, 'u1', 'favoriteModels', ['p/m', 'p/m', 'bad', 1]);
+		repo.setUserSetting(db, 'u1', 'notificationTriggers', { replies: false, agentRuns: true });
+		repo.setUserSetting(db, 'u1', 'pushTriggers', { needsYou: false });
+		seedUser(db, 'u2');
+		repo.setUserSetting(db, 'u2', 'theme', 'light');
+
+		const settings = repo.getUserSettings(db, 'u1');
+		expect(settings).toEqual({
+			theme: repo.getTheme(db, 'u1'),
+			suggestions: repo.getSuggestions(db, 'u1'),
+			codingSuggestions: repo.getCodingSuggestions(db, 'u1'),
+			globalInstructions: repo.getGlobalInstructions(db, 'u1'),
+			timeFormat: repo.getTimeFormat(db, 'u1'),
+			sidebarOpen: repo.getSidebarOpen(db, 'u1'),
+			favoriteModels: repo.getFavoriteModels(db, 'u1'),
+			notificationTriggers: repo.getNotificationTriggers(db, 'u1'),
+			pushTriggers: repo.getPushTriggers(db, 'u1')
+		});
+		expect(settings).toMatchObject({
+			theme: 'dark',
+			suggestions: ['a'],
+			globalInstructions: 'be brief',
+			timeFormat: 'auto',
+			sidebarOpen: false,
+			favoriteModels: ['p/m'],
+			pushTriggers: { replies: false, needsYou: false, agentRuns: true }
+		});
+	});
+
 	it('merges stored notification triggers over the defaults', () => {
 		repo.setUserSetting(db, 'u1', 'notificationTriggers', {
 			replies: false,

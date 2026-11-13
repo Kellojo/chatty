@@ -236,7 +236,8 @@ export function deleteCodingEnvironment(
 			if (
 				task.status === 'starting' ||
 				task.status === 'running' ||
-				task.status === 'awaiting_input'
+				task.status === 'awaiting_input' ||
+				task.status === 'waiting'
 			) {
 				endTask.run(now, task.id);
 				endedIds.push(task.id);

@@ -4,6 +4,7 @@ import { error } from '@sveltejs/kit';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getConversation } from '$lib/server/db/repo/conversations.js';
+import { fileResponse } from '$lib/server/http/fileResponse.js';
 import { contentDisposition, untrustedFileHeaders } from '$lib/server/http/untrustedFile.js';
 import { resolveInsideReal } from '$lib/server/safePath.js';
 import { workspaceForConversation } from '$lib/server/workspaces.js';
@@ -46,7 +47,7 @@ const MIME_MAP: Record<string, string> = {
 	'.gz': 'application/gzip'
 };
 
-export const GET: RequestHandler = async ({ locals, params }) => {
+export const GET: RequestHandler = async ({ locals, params, request }) => {
 	const user = requireUser(locals);
 	const db = getDb();
 	const conversation = getConversation(db, user.id, params.id);
@@ -71,17 +72,15 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 
 	const ext = path.extname(filePath).toLowerCase();
 	const mime = MIME_MAP[ext] ?? 'application/octet-stream';
-	const content = await fsp.readFile(abs);
 	const disposition =
 		mime.startsWith('text/') || mime === 'application/json' ? 'inline' : 'attachment';
 
-	return new Response(new Uint8Array(content), {
-		headers: {
-			...untrustedFileHeaders(mime),
-			'content-type': mime,
-			'content-length': String(content.length),
-			'content-disposition': contentDisposition(disposition, path.basename(filePath)),
-			'cache-control': 'private, max-age=3600'
-		}
-	});
+	// Agents rewrite workspace files, so browsers must revalidate (a cheap 304
+	// via ETag / Last-Modified) rather than cache them for a fixed time.
+	return fileResponse(abs, request, {
+		...untrustedFileHeaders(mime),
+		'content-type': mime,
+		'content-disposition': contentDisposition(disposition, path.basename(filePath)),
+		'cache-control': 'private, no-cache'
+	}).catch(() => error(404, { message: 'File not found' }));
 };

@@ -21,7 +21,14 @@ import { resumeCodingTasks } from '$lib/server/t3/tasks.js';
 
 const log = createLogger('server');
 
-if (!building) {
+// The dev server re-evaluates this module whenever a server module it imports
+// changes. The startup cleanup must run once per process only: a rerun would
+// fail agent runs and replies that are live right now, and it rescans the
+// messages table each time.
+const startup = globalThis as { __chattyStartupCleanupDone?: boolean };
+
+if (!building && !startup.__chattyStartupCleanupDone) {
+	startup.__chattyStartupCleanupDone = true;
 	try {
 		seedBuiltinAgent(getDb());
 		seedMemoryCleanupAgent(getDb());
@@ -55,6 +62,9 @@ if (!building) {
 		}
 	}, 0);
 	seedDefaultSkills();
+}
+
+if (!building) {
 	startAgentEventDispatcher();
 	startPushDispatcher();
 	startAgentScheduler(getDb());

@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import ModelSelect from './ModelSelect.svelte';
 	import { registerModelPicker, shortcutLabel } from '$lib/state/shortcuts.js';
-	import type { ModelMapping, ModelsByProvider } from '$lib/types.js';
+	import type { ModelMapping, PickerModelGroup } from '$lib/types.js';
 
 	let {
 		groups,
@@ -14,7 +14,7 @@
 		align = 'start',
 		class: className = 'w-40 min-w-0 shrink sm:w-64'
 	}: {
-		groups: ModelsByProvider[];
+		groups: PickerModelGroup[];
 		mappings?: ModelMapping[];
 		value: string;
 		onselect: (value: string) => void;

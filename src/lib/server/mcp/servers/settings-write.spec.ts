@@ -47,6 +47,12 @@ describe('settings server (writes enabled)', () => {
 		expect(resultText(res)).toContain('requires an admin');
 	});
 
+	it('rejects update_setting without a value', async () => {
+		const res = await callTool('update_setting', { key: 'theme' }, 'admin');
+		// Input validation stops it before an undefined reaches the NOT NULL column.
+		expect(isErr(res)).toBe(true);
+	});
+
 	it('allows admins to update and read back a setting', async () => {
 		const res = await callTool('update_setting', { key: 'theme', value: 'light' }, 'admin');
 		expect(isErr(res)).toBe(false);

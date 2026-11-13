@@ -43,15 +43,6 @@ export function createDatetimeServer(): McpServer {
 	);
 
 	server.registerTool(
-		'get_timezone',
-		{
-			description: 'Configured default timezone (TZ env setting)',
-			inputSchema: {}
-		},
-		async () => text(JSON.stringify({ timezone: config.TZ }))
-	);
-
-	server.registerTool(
 		'format',
 		{
 			description: 'Format an ISO timestamp using a luxon format string',

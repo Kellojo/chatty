@@ -10,7 +10,7 @@ import {
 	listUnreadChatIds,
 	toPublic
 } from '$lib/server/db/repo/conversations.js';
-import { getSidebarOpen, getUserSettings } from '$lib/server/db/repo/user-settings.js';
+import { getUserSettings } from '$lib/server/db/repo/user-settings.js';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals, depends }) => {
@@ -18,6 +18,7 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 	// Read markers and stream events refresh just this (see invalidateWhenIdle).
 	depends(CONVERSATIONS_KEY);
 	const db = getDb();
+	const settings = getUserSettings(db, locals.user.id);
 	const rows = listConversations(db, locals.user.id, { limit: CONVERSATIONS_PAGE_SIZE + 1 });
 	return {
 		user: {
@@ -33,7 +34,7 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 		settledCount: countSettledConversations(db, locals.user.id),
 		autoSettleDays: config.CONVERSATION_AUTO_SETTLE_DAYS,
 		unreadIds: listUnreadChatIds(db, locals.user.id),
-		sidebarOpen: getSidebarOpen(db, locals.user.id),
-		settings: getUserSettings(db, locals.user.id)
+		sidebarOpen: settings.sidebarOpen,
+		settings
 	};
 };

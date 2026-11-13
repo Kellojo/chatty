@@ -73,6 +73,11 @@ describe('math server', () => {
 			expect(isErr(res), bad).toBe(true);
 		}
 		expect(isErr(await calc('10^1000'))).toBe(true);
+		// Overflows quickly instead of looping 5e14 times.
+		expect(isErr(await calc('nCr(1e15, 5e14)'))).toBe(true);
+		const nested = await calc(`${'('.repeat(900)}1${')'.repeat(900)}`);
+		expect(resultText(nested)).toContain('nested too deeply');
+		expect(resultNum(await calc(`${'('.repeat(50)}1${')'.repeat(50)}`))).toBe(1);
 		expect(resultText(await calc('foo(1)'))).toContain('unknown function');
 	});
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -39,19 +39,21 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { signOutToLogin } from '$lib/auth-client.js';
+	import { syncAnimation } from '$lib/sync-animation.js';
 	import UserAvatar from './UserAvatar.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
 	import { serverActiveChats } from '$lib/state/chat-status.svelte.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
-	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
+	import { invalidateWhenIdle, scheduleInvalidate } from '$lib/state/invalidate-when-idle.js';
 	import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
 	import { shortcutLabel } from '$lib/state/shortcuts.js';
 	import { formatAge, formatCount } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { CodingTaskStatus } from '$lib/coding-environments.js';
-	import { CODING_PR_STATE_STYLE } from '$lib/coding-status.js';
+	import { CODING_PR_STATE_STYLE, WAITING_HINT } from '$lib/coding-status.js';
 	import CodingRunTimer from './CodingRunTimer.svelte';
+	import WaitingMark from './WaitingMark.svelte';
 	import PullRequestIcon from './PullRequestIcon.svelte';
 	import SidebarPlanLimits from './usage/SidebarPlanLimits.svelte';
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
@@ -98,13 +100,23 @@
 		if (isMobile.current) onclose();
 	}
 
-	let extraState = $state<{ base: Conversation[]; extra: Conversation[]; hasMore: boolean }>(
-		(() => ({ base: conversations, extra: [], hasMore }))()
+	/**
+	 * Rows paged in below the layout's first page, and the first page (`base`)
+	 * they continue. A sidebar refresh brings a new base; the paged rows then
+	 * stay (minus any the new base now holds) while the same range is fetched
+	 * again, so scrolling down isn't undone by every refresh.
+	 */
+	let paged = $state.raw<{ base: Conversation[]; rows: Conversation[]; hasMore: boolean }>(
+		(() => ({ base: conversations, rows: [], hasMore }))()
 	);
 	let loadingMore = $state(false);
 
-	const extras = $derived(extraState.base === conversations ? extraState.extra : []);
-	const hasMorePages = $derived(extraState.base === conversations ? extraState.hasMore : hasMore);
+	const extras = $derived.by(() => {
+		if (paged.base === conversations) return paged.rows;
+		const inBase = new Set(conversations.map((c) => c.id));
+		return paged.rows.filter((c) => !inBase.has(c.id));
+	});
+	const hasMorePages = $derived(paged.rows.length > 0 ? paged.hasMore : hasMore);
 
 	function observeSentinel(node: HTMLElement) {
 		const observer = new IntersectionObserver((entries) => {
@@ -114,25 +126,75 @@
 		return () => observer.disconnect();
 	}
 
+	/** One page of the active list; `limit` is capped at 200 by the endpoint. */
+	async function fetchConversations(
+		offset: number,
+		limit?: number
+	): Promise<{ conversations: Conversation[]; hasMore: boolean } | null> {
+		const res = await fetch(
+			`/api/conversations?offset=${offset}${limit ? `&limit=${limit}` : ''}`
+		).catch(() => null);
+		if (!res?.ok) return null;
+		return (await res.json()) as { conversations: Conversation[]; hasMore: boolean };
+	}
+
+	function appendNew(known: Conversation[], rows: Conversation[]): Conversation[] {
+		const ids = new Set(known.map((c) => c.id));
+		// Pages fetched while the list shifts can overlap, also with each other.
+		return rows.filter((c, i) => !ids.has(c.id) && rows.findIndex((r) => r.id === c.id) === i);
+	}
+
 	async function loadMore() {
 		if (loadingMore || !hasMorePages) return;
 		loadingMore = true;
 		try {
 			const base = conversations;
-			const offset = base.length + extras.length;
-			const res = await fetch(`/api/conversations?offset=${offset}`);
-			if (!res.ok) return;
-			const data = (await res.json()) as { conversations: Conversation[]; hasMore: boolean };
-			const known = new Set([...base, ...extras].map((c) => c.id));
-			extraState = {
+			const rows = extras;
+			const data = await fetchConversations(base.length + rows.length);
+			if (!data) return;
+			// Kept against the base it continues; if that was replaced meanwhile,
+			// the effect below fetches the whole range again.
+			paged = {
 				base,
-				extra: [...extras, ...data.conversations.filter((c) => !known.has(c.id))],
+				rows: [...rows, ...appendNew([...base, ...rows], data.conversations)],
 				hasMore: data.hasMore
 			};
 		} finally {
 			loadingMore = false;
 		}
 	}
+
+	/** Fetches the paged-in range again after the first page was refreshed. */
+	async function refreshPaged(base: Conversation[], count: number) {
+		loadingMore = true;
+		try {
+			const rows: Conversation[] = [];
+			let more = true;
+			while (more && rows.length < count) {
+				const data = await fetchConversations(
+					base.length + rows.length,
+					Math.min(200, count - rows.length)
+				);
+				if (!data) {
+					// Keep what's showing rather than retrying in a loop.
+					paged = { base, rows: extras, hasMore: paged.hasMore };
+					return;
+				}
+				rows.push(...data.conversations);
+				more = data.hasMore && data.conversations.length > 0;
+			}
+			paged = { base, rows: appendNew(base, rows), hasMore: more };
+		} finally {
+			loadingMore = false;
+		}
+	}
+
+	$effect(() => {
+		if (loadingMore || paged.base === conversations || paged.rows.length === 0) return;
+		const base = conversations;
+		const count = paged.rows.length;
+		untrack(() => void refreshPaged(base, count));
+	});
 
 	const allConversations = $derived([...conversations, ...extras]);
 
@@ -206,8 +268,8 @@
 	 * rows, the settled shelf, search results); the layout data is reloaded separately.
 	 */
 	function forgetConversation(id: string) {
-		if (extraState.extra.some((c) => c.id === id)) {
-			extraState = { ...extraState, extra: extraState.extra.filter((c) => c.id !== id) };
+		if (paged.rows.some((c) => c.id === id)) {
+			paged = { ...paged, rows: paged.rows.filter((c) => c.id !== id) };
 		}
 		if (settledItems?.some((c) => c.id === id)) {
 			settledItems = settledItems.filter((c) => c.id !== id);
@@ -309,18 +371,16 @@
 		refreshActiveChats().catch(() => {});
 		// Stream and new-chat events only change the sidebar's list, so they
 		// refresh just that; conversation changes may also show on the open page.
-		let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
-		let invalidatePage = false;
-		const scheduleInvalidate = (page = true) => {
-			invalidatePage ||= page;
-			if (invalidateTimer) return;
-			invalidateTimer = setTimeout(() => {
-				invalidateTimer = null;
-				const all = invalidatePage;
-				invalidatePage = false;
-				void invalidateWhenIdle(all ? undefined : CONVERSATIONS_KEY);
-			}, 200);
-		};
+		// An open chat reloads only for its own changes: its page load is the
+		// heaviest one (a page of messages), and a running coding task elsewhere
+		// changes often. Other pages may show any conversation, so they reload.
+		const affectsOpenPage = (conversationIds: string[]) =>
+			page.route.id !== '/(app)/chat/[id]' || conversationIds.includes(page.params.id ?? '');
+		const isOpenChat = (conversationId: string) =>
+			page.route.id === '/(app)/chat/[id]' && page.params.id === conversationId;
+		// Batched with the open chat's own read-marker refresh (see scheduleInvalidate).
+		const refresh = (reloadPage = true) =>
+			void scheduleInvalidate(reloadPage ? undefined : CONVERSATIONS_KEY);
 		const offEvents = onServerEvent((event) => {
 			switch (event.type) {
 				case 'chat.stream.started':
@@ -328,35 +388,36 @@
 					break;
 				case 'chat.stream.finished':
 					serverActiveChats.delete(event.conversationId);
-					scheduleInvalidate(false);
+					refresh(false);
 					break;
 				case 'chat.created':
-					scheduleInvalidate(false);
+					refresh(false);
 					break;
 				case 'conversation.updated':
 				case 'coding.task.updated':
-					scheduleInvalidate();
+					refresh(affectsOpenPage([event.conversationId]));
 					break;
 				case 'conversation.settle_changed':
-					scheduleInvalidate();
+					refresh(affectsOpenPage(event.conversationIds));
 					void refreshSettled();
 					break;
 				case 'conversation.snooze_changed':
-					scheduleInvalidate();
+					refresh(affectsOpenPage(event.conversationIds));
 					if (searchResults) void search();
 					break;
 				case 'conversation.deleted':
 					forgetConversation(event.conversationId);
-					scheduleInvalidate(false);
+					refresh(false);
 					break;
 				case 'agent.run.started':
 				case 'agent.run.finished':
 					refreshAgentStats();
-					// Dispatched runs are chats: their row's state changes with the run.
-					if (event.conversationId) scheduleInvalidate(false);
+					// Dispatched runs are chats: their row's state changes with the run,
+					// and so does the open one's header.
+					if (event.conversationId) refresh(isOpenChat(event.conversationId));
 					break;
 				case 'agent.run.awaiting_input':
-					scheduleInvalidate(false);
+					refresh(false);
 					break;
 				case 'proxy.request.started':
 				case 'proxy.request.finished':
@@ -380,7 +441,6 @@
 		return () => {
 			offEvents();
 			offResync();
-			if (invalidateTimer) clearTimeout(invalidateTimer);
 		};
 	});
 
@@ -428,6 +488,26 @@
 			{ kind: 'header', key: `group:${g.label}`, label: g.label },
 			...g.items.map((c): ListEntry => ({ kind: 'row', key: c.id, conversation: c }))
 		])
+	);
+
+	// The list renders from keys alone, and keeps the same array while they're
+	// unchanged: a refresh that only updates rows' contents then doesn't rerun
+	// the keyed each, whose `animate:flip` measures every row on each run.
+	// Rows read their conversation from `entryRows` instead.
+	type ListSlot = Exclude<ListEntry, { kind: 'row' }> | { kind: 'row'; key: string };
+	let lastSlots: ListSlot[] = [];
+	const listSlots = $derived.by(() => {
+		// A header's key holds its label, so equal keys mean an equal list.
+		const next = visibleEntries.map((e): ListSlot =>
+			e.kind === 'row' ? { kind: 'row', key: e.key } : e
+		);
+		const same =
+			next.length === lastSlots.length && next.every((s, i) => s.key === lastSlots[i].key);
+		if (!same) lastSlots = next;
+		return lastSlots;
+	});
+	const entryRows = $derived(
+		new Map(visibleEntries.flatMap((e) => (e.kind === 'row' ? [[e.key, e.conversation]] : [])))
 	);
 
 	const reducedMotion = new MediaQuery('(prefers-reduced-motion: reduce)');
@@ -558,15 +638,17 @@
 
 	/**
 	 * One inbox-style state for every row, chat or coding task. Anything but
-	 * `working` and `idle` asks the user to look at the conversation.
+	 * `working`, `waiting` and `idle` asks the user to look at the conversation.
 	 */
-	type RowState = 'working' | 'needs-you' | 'failed' | 'unread' | 'idle';
+	type RowState = 'working' | 'waiting' | 'needs-you' | 'failed' | 'unread' | 'idle';
 
 	/** The status words on a row's second line, in the same tone as its mark. */
 	function rowStatus(c: Conversation, state: RowState): RowStatus | null {
 		switch (state) {
 			case 'working':
 				return { label: 'Working', tone: 'text-info-foreground' };
+			case 'waiting':
+				return { label: 'Waiting', tone: 'text-muted-foreground' };
 			case 'needs-you':
 				return { label: 'Needs you', tone: 'text-warning-foreground' };
 			case 'failed':
@@ -591,6 +673,9 @@
 			status === 'starting'
 		)
 			return 'working';
+		// The run ended, but the agent picks up again once its background work
+		// (a delegated task, a watched pull request) reports back: not done yet.
+		if (status === 'waiting') return 'waiting';
 		// Failures, like replies, stop asking for attention once they've been seen.
 		const unread = unreadIds.includes(c.id) && page.url.pathname !== `/chat/${c.id}`;
 		if (!unread) return 'idle';
@@ -607,7 +692,7 @@
 		const details = [
 			c.coding ? 'Coding task' : null,
 			c.coding ? c.coding.projectTitle : chatSource(c),
-			rowStatus(c, state)?.label
+			state === 'waiting' ? WAITING_HINT : rowStatus(c, state)?.label
 		].filter(Boolean);
 		return details.length ? `${title}\n${details.join(' · ')}` : title;
 	}
@@ -684,7 +769,7 @@
 	{@const attention =
 		!settled && (state === 'needs-you' || state === 'failed' || state === 'unread')}
 	{@const status = rowStatus(c, state)}
-	{@const leads = state === 'working' || attention}
+	{@const leads = state === 'working' || state === 'waiting' || attention}
 	{@const source = c.coding ? c.coding.projectTitle : chatSource(c)}
 	<!-- The type icon takes the title's emphasis: full strength on rows that need you. -->
 	{@const iconTone =
@@ -743,15 +828,17 @@
 							<span class="inline-flex shrink-0 items-center gap-1 {status.tone}">
 								<span class="flex size-3 items-center justify-center" aria-hidden="true">
 									{#if state === 'working'}
-										<LoaderCircleIcon
-											class="size-3 animate-spin motion-reduce:hidden"
-											strokeWidth={2.5}
-										/>
+										<!-- Synced so every working row's spinner turns together. -->
+										<span class="flex animate-spin motion-reduce:hidden" {@attach syncAnimation}>
+											<LoaderCircleIcon class="size-3" strokeWidth={2.5} />
+										</span>
 										<!-- A frozen spinner looks broken; reduced motion gets a still mark. -->
 										<CircleDotDashedIcon
 											class="hidden size-3 motion-reduce:block"
 											strokeWidth={2.5}
 										/>
+									{:else if state === 'waiting'}
+										<WaitingMark />
 									{:else if state === 'needs-you'}
 										<CircleAlertIcon class="size-3" strokeWidth={2.5} />
 									{:else if state === 'failed'}
@@ -953,7 +1040,7 @@
 					onchanged={() => invalidateAll()}
 					oncustom={() => (snoozeTarget = c)}
 				/>
-				{#if state !== 'working' && state !== 'needs-you' && c.id !== currentId}
+				{#if state !== 'working' && state !== 'waiting' && state !== 'needs-you' && c.id !== currentId}
 					{@const read = state === 'idle'}
 					<DropdownMenu.Item onSelect={() => void setRead(c, !read)}>
 						{#if read}
@@ -1066,15 +1153,16 @@
 		bind:this={listEl}
 		class="flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)] px-2 pb-2"
 	>
-		{#each visibleEntries as entry (entry.key)}
+		{#each listSlots as entry (entry.key)}
+			{@const conversation = entry.kind === 'row' ? entryRows.get(entry.key) : undefined}
 			<div
 				animate:flip={{ duration: flipDuration, easing: cubicOut }}
 				transition:fade={{ duration: fadeDuration }}
 			>
 				{#if entry.kind === 'header'}
 					<p class="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">{entry.label}</p>
-				{:else}
-					{@render row(entry.conversation)}
+				{:else if conversation}
+					{@render row(conversation)}
 				{/if}
 			</div>
 		{:else}

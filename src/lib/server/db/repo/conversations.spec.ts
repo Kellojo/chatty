@@ -10,6 +10,7 @@ import {
 	listSettledConversations,
 	markConversationRead,
 	searchConversations,
+	searchConversationsRanked,
 	searchConversationsSql,
 	listSnoozedConversations,
 	settleConversation,
@@ -187,6 +188,83 @@ describe('conversations repo', () => {
 		db.prepare('UPDATE conversations SET active_leaf_id = NULL WHERE id = ?').run(c.id);
 		expect(searchConversations(db, 'u1', 'okapi').map((h) => h.id)).toEqual([c.id]);
 		expect(searchConversations(db, 'u2', 'okapi')).toEqual([]);
+	});
+
+	describe('searchConversationsRanked', () => {
+		const say = (conversationId: string, text: string) =>
+			createMessage(db, { conversationId, role: 'user', parts: [{ type: 'text', text }] });
+		const age = (id: string, updatedAt: number) =>
+			db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(updatedAt, id);
+
+		it('matches words spread over different messages', () => {
+			const c = createConversation(db, 'u1', { title: 'ideas' });
+			say(c.id, 'which PWA capabilities matter?');
+			say(c.id, 'besides notifications, file sharing');
+			expect(searchConversations(db, 'u1', 'PWA notifications')).toEqual([]);
+			expect(searchConversationsRanked(db, 'u1', 'PWA notifications').map((h) => h.id)).toEqual([
+				c.id
+			]);
+		});
+
+		it('ranks chats covering more words above more recent partial matches', () => {
+			const full = createConversation(db, 'u1', { title: 'a' });
+			say(full.id, 'the keyboard shortcuts we could add');
+			age(full.id, 1000);
+			const partial = createConversation(db, 'u1', { title: 'b' });
+			say(partial.id, 'press the keyboard key');
+			age(partial.id, 2000);
+			expect(searchConversationsRanked(db, 'u1', 'keyboard shortcuts').map((h) => h.id)).toEqual([
+				full.id,
+				partial.id
+			]);
+		});
+
+		it('boosts title matches and breaks ties by recency', () => {
+			const inBody = createConversation(db, 'u1', { title: 'misc' });
+			say(inBody.id, 'some notes on haptics');
+			age(inBody.id, 3000);
+			const inTitle = createConversation(db, 'u1', { title: 'Add haptics to mobile' });
+			age(inTitle.id, 1000);
+			const older = createConversation(db, 'u1', { title: 'misc older' });
+			say(older.id, 'haptics again');
+			age(older.id, 2000);
+			expect(searchConversationsRanked(db, 'u1', 'haptics').map((h) => h.id)).toEqual([
+				inTitle.id,
+				inBody.id,
+				older.id
+			]);
+		});
+
+		it('stems words', () => {
+			const c = createConversation(db, 'u1', { title: 'x' });
+			say(c.id, 'the request was stuck pending');
+			expect(searchConversationsRanked(db, 'u1', 'requests stuck').map((h) => h.id)).toEqual([
+				c.id
+			]);
+			expect(searchConversations(db, 'u1', 'requests').map((h) => h.id)).toEqual([c.id]);
+		});
+
+		it("only finds the user's own chats, on the shown version", () => {
+			const c = createConversation(db, 'u1', { title: 'x' });
+			say(c.id, 'okapi sighting');
+			say(createConversation(db, 'u2', { title: 'y' }).id, 'okapi too');
+			createMessage(db, {
+				conversationId: c.id,
+				role: 'user',
+				parts: [{ type: 'text', text: 'edited giraffe' }],
+				parentId: null
+			});
+			expect(searchConversationsRanked(db, 'u1', 'okapi')).toEqual([]);
+			expect(searchConversationsRanked(db, 'u1', 'giraffe okapi').map((h) => h.id)).toEqual([c.id]);
+		});
+
+		it('never throws on FTS syntax and honours the limit', () => {
+			for (let i = 0; i < 3; i++) say(createConversation(db, 'u1', { title: 't' }).id, 'zebra');
+			for (const q of ['"', 'OR', 'NEAR(', 'content:', '*', '-', '{x y}: z', '']) {
+				expect(() => searchConversationsRanked(db, 'u1', q)).not.toThrow();
+			}
+			expect(searchConversationsRanked(db, 'u1', 'zebra', { limit: 2 })).toHaveLength(2);
+		});
 	});
 
 	it('searchConversations matches a coding task by its project name', () => {

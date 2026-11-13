@@ -607,6 +607,92 @@ export function searchConversations(
 	return db.prepare(searchConversationsSql(ftsQuery !== null)).all(...params) as ConversationRow[];
 }
 
+/** How many matching conversations relevance ranking considers before it sorts. */
+const RANKED_CANDIDATES = 1000;
+const MAX_RANKED_TERMS = 12;
+
+function searchTerms(query: string): string[] {
+	const terms = (query.match(/[\p{L}\p{N}\p{M}_]+/gu) ?? []).map((t) => foldWord(t));
+	return [...new Set(terms)].slice(0, MAX_RANKED_TERMS);
+}
+
+function foldWord(word: string): string {
+	return word.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+}
+
+/** Whether a title word stands for a query term: a prefix either way, ignoring short stubs. */
+function titleWordMatches(word: string, term: string): boolean {
+	return word.startsWith(term) || (word.length >= 4 && term.startsWith(word));
+}
+
+/**
+ * Searches conversations by relevance, for callers that rank rather than
+ * filter (the model's chat search). Any word may match, and words may sit in
+ * different messages of a chat. A chat scores the summed rarity (IDF) of the
+ * words it covers in its messages or title, plus a bonus for words in its
+ * title; pin and recency only break ties. Coverage counts every message, not
+ * only the shown version: membership still comes from the version-aware
+ * search, so this only shifts the order.
+ */
+export function searchConversationsRanked(
+	db: Db,
+	userId: string,
+	query: string,
+	options: { limit?: number } = {}
+): ConversationRow[] {
+	const terms = searchTerms(query);
+	if (terms.length === 0) return searchConversations(db, userId, query, options);
+	const limit = Math.min(
+		MAX_SEARCH_PAGE_SIZE,
+		Math.max(1, Math.floor(options.limit ?? SEARCH_PAGE_SIZE))
+	);
+
+	const ftsAny = terms.map((t) => `"${t}"*`).join(' OR ');
+	const like = `%${escapeLike(query.trim())}%`;
+	const byId = new Map<string, ConversationRow>();
+	const add = (rows: ConversationRow[]) => {
+		for (const row of rows) if (!byId.has(row.id)) byId.set(row.id, row);
+	};
+	add(
+		db
+			.prepare(searchConversationsSql(true))
+			.all(ftsAny, userId, userId, like, like, RANKED_CANDIDATES, 0) as ConversationRow[]
+	);
+	for (const term of terms) {
+		const termLike = `%${escapeLike(term)}%`;
+		add(
+			db
+				.prepare(searchConversationsSql(false))
+				.all(userId, termLike, termLike, RANKED_CANDIDATES, 0) as ConversationRow[]
+		);
+	}
+	if (byId.size === 0) return [];
+
+	const total = Math.max(1, countConversations(db));
+	const inMessages = terms.map((term) => {
+		const ids = db
+			.prepare('SELECT DISTINCT conversation_id AS id FROM messages_fts WHERE messages_fts MATCH ?')
+			.all(`"${term}"*`) as { id: string }[];
+		return new Set(ids.map((r) => r.id));
+	});
+	const idf = inMessages.map((ids) => Math.log(1 + total / (1 + ids.size)));
+
+	const scored = [...byId.values()].map((row) => {
+		const titleWords = searchTerms(`${row.title ?? ''} ${row.coding_project_title ?? ''}`);
+		let score = 0;
+		terms.forEach((term, i) => {
+			const inTitle = titleWords.some((w) => titleWordMatches(w, term));
+			if (inTitle || inMessages[i].has(row.id)) score += idf[i];
+			if (inTitle) score += idf[i] / 2;
+		});
+		return { row, score, activity: Math.max(row.updated_at, row.woke_at ?? 0) };
+	});
+	scored.sort(
+		(a, b) => b.score - a.score || b.row.pinned - a.row.pinned || b.activity - a.activity
+	);
+	return scored.slice(0, limit).map((s) => s.row);
+}
+
 /**
  * The search statement. Message text counts only on the version a conversation
  * shows: FTS runs once (an uncorrelated lookup, one index probe per term), then

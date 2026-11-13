@@ -15,8 +15,10 @@ import { getDb, type Db } from '../db/index.js';
 import {
 	countThreadCodingConversations,
 	importCodingConversation,
+	knownThreadIdsAmong,
 	listKnownThreadIds,
 	listThreadCodingConversations,
+	listThreadCodingConversationsFor,
 	relinkOrphanedThreads,
 	updateCodingConversation
 } from '../db/repo/coding-conversations.js';
@@ -37,6 +39,7 @@ import {
 	threadSettled,
 	threadTitle
 } from './thread-state.js';
+import { isAwaitedBackgroundTask } from './projection.js';
 
 const log = createLogger('t3-thread-sync');
 
@@ -60,6 +63,10 @@ const time = (v: unknown): number | null => {
 	return Number.isNaN(ms) ? null : ms;
 };
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+/** Whether a thread shell says the agent waits on background work (T3's "Waiting"). */
+const waitsOnBackgroundWork = (t: Rec): boolean =>
+	list(t.pendingBackgroundTasks).some(isAwaitedBackgroundTask);
 
 export interface ImportableThread {
 	threadId: string;
@@ -139,7 +146,9 @@ export function parseImportableThread(
 			? 'awaiting_input'
 			: str(t.activeRunId)
 				? 'running'
-				: 'idle',
+				: waitsOnBackgroundWork(t)
+					? 'waiting'
+					: 'idle',
 		settled: threadSettled(t) === true,
 		pinned: t.pinnedAt !== null && t.pinnedAt !== undefined,
 		visitedAt: time(t.lastVisitedAt) ?? 0,
@@ -236,7 +245,8 @@ const diffBackfilled = new Set<string>();
 const ACTIVE_STATUSES: ReadonlySet<CodingTaskStatus> = new Set([
 	'starting',
 	'running',
-	'awaiting_input'
+	'awaiting_input',
+	'waiting'
 ]);
 
 const MISSING_THREAD_ERROR = 'The coding thread no longer exists on the coding machine';
@@ -267,10 +277,16 @@ function followThreads(
 		const t = rec(entry);
 		if (!t || typeof t.id !== 'string') continue;
 		listed.add(t.id);
-		if (str(t.activeRunId) || rec(t.pendingRuntimeRequest)) active.add(t.id);
+		if (str(t.activeRunId) || rec(t.pendingRuntimeRequest) || waitsOnBackgroundWork(t)) {
+			active.add(t.id);
+		}
 	}
 	let started = 0;
-	for (const row of listThreadCodingConversations(db, env.id)) {
+	// A live update carries a thread or a few: read only their tasks.
+	const rows = onlyListed
+		? listThreadCodingConversationsFor(db, env.id, [...listed])
+		: listThreadCodingConversations(db, env.id);
+	for (const row of rows) {
 		if (started >= MAX_IMPORTS_PER_PASS) break;
 		if (getFollower(row.conversation_id)) continue;
 		if (onlyListed && !listed.has(row.thread_id!)) continue;
@@ -300,7 +316,7 @@ async function reconcileThreadStates(db: Db, env: CodingEnvironmentRow, threads:
 		if (thread && typeof thread.id === 'string') remote.set(thread.id, thread);
 	}
 	if (remote.size === 0) return;
-	const rows = listThreadCodingConversations(db, env.id);
+	const rows = listThreadCodingConversationsFor(db, env.id, [...remote.keys()]);
 	const toPush = new Map<string, string[]>();
 	for (const row of rows) {
 		const thread = remote.get(row.thread_id!);
@@ -454,8 +470,9 @@ function hasUnknownThread(db: Db, env: CodingEnvironmentRow, threads: unknown[])
 		);
 	});
 	if (candidates.length === 0) return false;
-	const known = listKnownThreadIds(db, env.id);
-	return candidates.some((t) => !known.has(String(rec(t)!.id)));
+	const ids = candidates.map((t) => String(rec(t)!.id));
+	const known = knownThreadIdsAmong(db, env.id, ids);
+	return ids.some((id) => !known.has(id));
 }
 
 class ShellWatcher {

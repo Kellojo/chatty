@@ -12,7 +12,8 @@ process.env.ORIGIN = 'https://chatty.example';
 const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { createMcpServer, getMcpServer, updateMcpServer } =
 	await import('$lib/server/db/repo/mcp-servers.js');
-const { getMcpOAuthSession } = await import('$lib/server/db/repo/mcp-oauth-sessions.js');
+const { getMcpOAuthSession, updateMcpOAuthSession } =
+	await import('$lib/server/db/repo/mcp-oauth-sessions.js');
 const { describeError, finishMcpOAuth, startMcpOAuth, McpSignInRequiredError } =
 	await import('./oauth.js');
 const { connectServer } = await import('./clientManager.js');
@@ -175,6 +176,26 @@ describe('MCP OAuth sign-in', () => {
 		updateMcpServer(getDb(), server.id, { oauthClientId: 'manual-client' });
 		const query = await start(server.id, 'u1');
 		expect(query.get('client_id')).toBe('manual-client');
+	});
+
+	it('is not blocked by details left over from an unfinished sign-in', async () => {
+		// Metadata documents: the client registration exists up front, so the library
+		// checks the stored authorization-server pin before starting.
+		as.metadataDocuments = true;
+		as.dynamicRegistration = false;
+		const server = oauthServer();
+		// As left by an attempt that couldn't read the authorization server's metadata.
+		updateMcpOAuthSession(getDb(), server.id, 'u1', {
+			auth_server_info: JSON.stringify({
+				issuer: base,
+				authorizationServerUrl: `${base}/`,
+				tokenEndpoint: `${base}/token-that-does-not-exist`
+			}),
+			state: 'stale-state',
+			code_verifier_enc: null
+		});
+		const query = await start(server.id, 'u1');
+		expect(query.get('state')).not.toBe('stale-state');
 	});
 
 	it('explains what to do when the client can’t register itself', async () => {

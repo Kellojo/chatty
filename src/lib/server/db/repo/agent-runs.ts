@@ -12,6 +12,8 @@ export interface AgentRunRow {
 	error: string | null;
 	started_at: number;
 	ended_at: number | null;
+	/** The API key that started the run over HTTP, if any. */
+	api_key_id: string | null;
 }
 
 export function toPublic(row: AgentRunRow): AgentRun {
@@ -34,14 +36,23 @@ export interface CreateAgentRunInput {
 	userId: string;
 	trigger: AgentRunTrigger;
 	conversationId?: string | null;
+	apiKeyId?: string | null;
 }
 
 export function createAgentRun(db: Db, input: CreateAgentRunInput): AgentRunRow {
 	const id = input.id ?? randomUUID();
 	db.prepare(
-		`INSERT INTO agent_runs (id, agent_id, user_id, trigger, conversation_id, status, started_at)
-		 VALUES (?, ?, ?, ?, ?, 'running', ?)`
-	).run(id, input.agentId, input.userId, input.trigger, input.conversationId ?? null, Date.now());
+		`INSERT INTO agent_runs (id, agent_id, user_id, trigger, conversation_id, status, started_at, api_key_id)
+		 VALUES (?, ?, ?, ?, ?, 'running', ?, ?)`
+	).run(
+		id,
+		input.agentId,
+		input.userId,
+		input.trigger,
+		input.conversationId ?? null,
+		Date.now(),
+		input.apiKeyId ?? null
+	);
 	return getAgentRun(db, id)!;
 }
 
@@ -289,7 +300,7 @@ export function failRunningAgentRuns(db: Db): number {
 			       JOIN conversations c ON c.id = cc.conversation_id
 			       WHERE cc.conversation_id = agent_runs.conversation_id
 			         AND c.deleted_at IS NULL AND cc.thread_id IS NOT NULL
-			         AND cc.status IN ('starting', 'running', 'awaiting_input')
+			         AND cc.status IN ('starting', 'running', 'awaiting_input', 'waiting')
 			   )`
 		)
 		.run(Date.now()).changes;

@@ -20,6 +20,11 @@ export function formatCount(n: number): string {
 	return `${sign}${abs}`;
 }
 
+/** `formatCount` for a chart axis of whole things: fractional ticks ("1.5 calls") stay unlabelled. */
+export function formatWholeCountTick(n: number): string {
+	return Number.isInteger(n) ? formatCount(n) : '';
+}
+
 /** Precise cost of a single call: "$0", "$0.00042", "$1.23". */
 export function formatCost(usd: number | null): string {
 	if (usd == null) return '—';

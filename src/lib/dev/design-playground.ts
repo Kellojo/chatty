@@ -354,7 +354,6 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 			{},
 			{ iso: '2026-11-07T17:02:11+01:00', timezone: 'Europe/Berlin', human: '2026-11-07 17:02' }
 		),
-		mcp('get_timezone', {}, { timezone: 'Europe/Berlin' }),
 		mcp(
 			'format',
 			{ iso: '2026-11-07T16:02:11Z', fmt: 'cccc, d LLLL', tz: 'Europe/Berlin' },
@@ -431,7 +430,10 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 				snippet: '…prefers <mark>coffee</mark> over tea…'
 			}
 		]),
-		mcp('list_concepts', {}, ['preferences.md', 'projects/chatty.md']),
+		mcp('list_concepts', {}, [
+			{ path: 'preferences.md', title: 'Preferences' },
+			{ path: 'projects/chatty.md', title: 'Chatty', description: 'Self-hosted AI chat app' }
+		]),
 		mcp(
 			'read_concept',
 			{ path: 'preferences.md' },

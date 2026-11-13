@@ -28,9 +28,25 @@ export function withLatestPage<T extends HasId>(
 
 type HasContent = HasId & { role: string; parts: readonly unknown[]; metadata?: unknown };
 
+/**
+ * Keys already computed, by message object. The shown messages are deep
+ * `$state` proxies, so stringifying one walks every nested part (large tool
+ * input and output in coding chats) through the proxy on every reload.
+ *
+ * This relies on messages being replaced, never changed in place: the chat
+ * state swaps in a new object (a new proxy) for every update, and the app only
+ * ever assigns whole message lists.
+ */
+const keys = new WeakMap<object, string>();
+
 /** Cheap identity of what a message shows: equal for an unchanged message. */
 function contentKey(message: HasContent): string {
-	return JSON.stringify([message.role, message.parts, message.metadata ?? null]);
+	let key = keys.get(message);
+	if (key === undefined) {
+		key = JSON.stringify([message.role, message.parts, message.metadata ?? null]);
+		keys.set(message, key);
+	}
+	return key;
 }
 
 /**

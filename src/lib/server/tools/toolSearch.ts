@@ -64,7 +64,7 @@ const ON_DEMAND_BUILTIN_TOOLS: Record<string, readonly string[]> = {
 	fs: ['fs_curl', 'fs_mkdir', 'fs_rm'],
 	memory: ['delete_concept'],
 	// `now` takes a timezone, which covers the common case.
-	datetime: ['get_timezone', 'format', 'convert']
+	datetime: ['format', 'convert']
 };
 
 /**

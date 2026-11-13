@@ -9,13 +9,15 @@ import type { CallerContext } from '../types.js';
 import { readBodyLimited } from '../../net/readBody.js';
 import { safeFetch } from '../../net/safeFetch.js';
 import { resolveInsideReal } from '../../safePath.js';
-import { err, looksTextualAsync, text, toPosix, walkAsync } from './shared.js';
+import { err, HEAVY_DIRS, namesHeavyDir, text, toPosix, walkIter } from './shared.js';
 
 const MAX_OUT = 64 * 1024;
 const MAX_FILE = 1024 * 1024;
 const MAX_SCAN = 5 * 1024 * 1024;
 const MAX_MATCHES = 200;
 const MAX_GLOB = 500;
+const MAX_GLOB_SCAN = 50_000;
+const MAX_GREP_FILES = 5000;
 const MAX_DOWNLOAD = 100 * 1024 * 1024;
 const MAX_PATTERN = 1000;
 const MAX_GREP_LINE = 10_000;
@@ -25,6 +27,91 @@ const SCOPE = z.enum(['workspace', 'documents']);
 
 function cap(out: string): string {
 	return out.length > MAX_OUT ? `${out.slice(0, MAX_OUT)}\n… truncated` : out;
+}
+
+const CHUNK = 64 * 1024;
+// Bytes of line content that always decode to more than MAX_OUT UTF-16 units
+// (a UTF-8 char is at most 3 bytes per unit, `\r\n` 2 bytes per output unit),
+// so reading no more than this keeps cap()'s result unchanged.
+const LINES_READ_LIMIT = 4 * MAX_OUT;
+
+type FileHandle = fsp.FileHandle;
+
+/** Reads up to `length` bytes at `position`, fewer only at end of file. */
+async function readAt(fh: FileHandle, position: number, length: number): Promise<Buffer> {
+	const buf = Buffer.alloc(length);
+	let total = 0;
+	while (total < length) {
+		const { bytesRead } = await fh.read(buf, total, length - total, position + total);
+		if (bytesRead === 0) break;
+		total += bytesRead;
+	}
+	return buf.subarray(0, total);
+}
+
+/** First `n` lines, as `content.split(/\r?\n/).slice(0, n).join('\n')` would give them. */
+async function readHead(fh: FileHandle, n: number): Promise<string> {
+	if (n === 0) return '';
+	const chunks: Buffer[] = [];
+	let bytes = 0;
+	let newlines = 0;
+	while (newlines < n && bytes < LINES_READ_LIMIT) {
+		const chunk = await readAt(fh, bytes, CHUNK);
+		if (chunk.length === 0) break;
+		chunks.push(chunk);
+		bytes += chunk.length;
+		for (let i = chunk.indexOf(10); i !== -1; i = chunk.indexOf(10, i + 1)) newlines++;
+	}
+	return Buffer.concat(chunks).toString('utf-8').split(/\r?\n/).slice(0, n).join('\n');
+}
+
+/** Last `n` lines, as `content.split(/\r?\n/).slice(-n).join('\n')` would give them. */
+async function readTail(fh: FileHandle, size: number, n: number): Promise<string> {
+	if (n === 0) return '';
+	// Scan backwards for the n-th newline from the end: the tail starts after it.
+	let start = 0;
+	let seen = 0;
+	scan: for (let end = size; end > 0;) {
+		const from = Math.max(0, end - CHUNK);
+		const chunk = await readAt(fh, from, end - from);
+		for (let i = chunk.lastIndexOf(10); i !== -1; i = i > 0 ? chunk.lastIndexOf(10, i - 1) : -1) {
+			if (++seen === n) {
+				start = from + i + 1;
+				break scan;
+			}
+		}
+		end = from;
+	}
+	const toEnd = size - start;
+	const buf = await readAt(fh, start, Math.min(toEnd, LINES_READ_LIMIT));
+	const lines = buf.toString('utf-8').split(/\r?\n/);
+	// Past the read limit the output is cut by cap() anyway, which keeps its start.
+	return (buf.length < toEnd ? lines : lines.slice(Math.max(0, lines.length - n))).join('\n');
+}
+
+/** `wc`-style line, word and byte counts, streamed so memory stays flat. */
+async function countFile(fh: FileHandle): Promise<{ lines: number; words: number; bytes: number }> {
+	// ignoreBOM keeps a leading U+FEFF in the text, like Buffer#toString.
+	const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
+	let lines = 0;
+	let words = 0;
+	let bytes = 0;
+	let inWord = false;
+	const countText = (s: string) => {
+		if (s.length === 0) return;
+		words += s.match(/\S+/g)?.length ?? 0;
+		if (inWord && /^\S/.test(s)) words--; // the word continues across the chunk boundary
+		inWord = /\S$/.test(s);
+	};
+	for (;;) {
+		const chunk = await readAt(fh, bytes, CHUNK);
+		if (chunk.length === 0) break;
+		bytes += chunk.length;
+		for (let i = chunk.indexOf(10); i !== -1; i = chunk.indexOf(10, i + 1)) lines++;
+		countText(decoder.decode(chunk, { stream: true }));
+	}
+	countText(decoder.decode());
+	return { lines, words, bytes };
 }
 
 type GlobNode =
@@ -127,17 +214,31 @@ export function globMatcher(glob: string): (p: string) => boolean {
 const GREP_WORKER_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads');
 const fs = require('node:fs');
-const { pattern, flags, files, maxMatches, maxLine } = workerData;
+const { pattern, flags, files, maxMatches, maxLine, maxBytes, skipBinary } = workerData;
 const re = new RegExp(pattern, flags);
 const out = [];
+// One open per file: size limit, binary sniff (a NUL in the first 8KB) and
+// the read all go through the same descriptor.
+function readText(abs) {
+	const fd = fs.openSync(abs, 'r');
+	try {
+		if (maxBytes !== undefined && fs.fstatSync(fd).size > maxBytes) return null;
+		const buf = fs.readFileSync(fd);
+		if (skipBinary && buf.subarray(0, 8192).includes(0)) return null;
+		return buf.toString('utf-8');
+	} finally {
+		fs.closeSync(fd);
+	}
+}
 for (const f of files) {
 	if (out.length >= maxMatches) break;
 	let content;
 	try {
-		content = fs.readFileSync(f.abs, 'utf-8');
+		content = readText(f.abs);
 	} catch {
 		continue;
 	}
+	if (content === null) continue;
 	const lines = content.split(/\\r?\\n/);
 	for (let i = 0; i < lines.length && out.length < maxMatches; i++) {
 		const line = lines[i].length > maxLine ? lines[i].slice(0, maxLine) : lines[i];
@@ -153,6 +254,10 @@ export interface GrepJob {
 	files: Array<{ abs: string; rel: string }>;
 	maxMatches: number;
 	maxLine: number;
+	/** Files larger than this are skipped (default: no limit). */
+	maxBytes?: number;
+	/** Skip files whose first 8KB contain a NUL byte. */
+	skipBinary?: boolean;
 }
 
 export type GrepResult = { ok: true; lines: string[] } | { ok: false; error: string };
@@ -195,10 +300,17 @@ export function createFsServer(ctx: CallerContext): McpServer {
 
 	type Resolved = { ok: true; base: string; abs: string } | { ok: false; error: CallToolResult };
 
+	// The scope roots may not exist yet (resolveInsideReal rejects a missing
+	// root); create each at most once per server instance.
+	const ensuredRoots = new Set<string>();
+
 	async function resolveIn(scope: z.infer<typeof SCOPE>, rel: string): Promise<Resolved> {
 		const dir = scope === 'workspace' ? ctx.workspaceDir : ctx.documentsDir;
 		if (!dir) return { ok: false, error: err('no workspace available') };
-		await fsp.mkdir(dir, { recursive: true });
+		if (!ensuredRoots.has(dir)) {
+			await fsp.mkdir(dir, { recursive: true });
+			ensuredRoots.add(dir);
+		}
 		const abs = await resolveInsideReal(dir, rel);
 		if (!abs) return { ok: false, error: err(`path escapes ${scope} root`) };
 		return { ok: true, base: dir, abs };
@@ -247,28 +359,32 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		async ({ scope, path: rel, head, tail, stats }) => {
 			const r = await resolveIn(scope, rel);
 			if (!r.ok) return r.error;
-			let buf: Buffer;
+			let fh: FileHandle;
 			try {
-				buf = await fsp.readFile(r.abs);
+				fh = await fsp.open(r.abs, 'r');
 			} catch {
 				return err(`not a file: ${rel}`);
 			}
-			if (stats) {
-				const content = buf.toString('utf-8');
-				const lines = content === '' ? 0 : (content.match(/\n/g)?.length ?? 0);
-				const words = content.split(/\s+/).filter(Boolean).length;
-				return text(`${lines} ${words} ${buf.length} ${toPosix(rel)}`);
+			// Only the bytes the answer needs are read, so a huge file can't exhaust memory.
+			try {
+				const st = await fh.stat();
+				if (!st.isFile()) return err(`not a file: ${rel}`);
+				if (stats) {
+					const c = await countFile(fh);
+					return text(`${c.lines} ${c.words} ${c.bytes} ${toPosix(rel)}`);
+				}
+				if (head !== undefined) return text(cap(await readHead(fh, head)));
+				if (tail !== undefined) return text(cap(await readTail(fh, st.size, tail)));
+				const buf = await readAt(fh, 0, Math.min(st.size, MAX_FILE) + 1);
+				if (buf.length > MAX_FILE) {
+					return text(`${buf.subarray(0, MAX_FILE).toString('utf-8')}\n… truncated`);
+				}
+				return text(cap(buf.toString('utf-8')));
+			} catch {
+				return err(`not a file: ${rel}`);
+			} finally {
+				await fh.close();
 			}
-			if (head !== undefined || tail !== undefined) {
-				const all = buf.toString('utf-8').split(/\r?\n/);
-				const slice =
-					head !== undefined ? all.slice(0, head) : all.slice(Math.max(0, all.length - tail!));
-				return text(cap(slice.join('\n')));
-			}
-			if (buf.length > MAX_FILE) {
-				return text(`${buf.subarray(0, MAX_FILE).toString('utf-8')}\n… truncated`);
-			}
-			return text(cap(buf.toString('utf-8')));
 		}
 	);
 
@@ -303,13 +419,22 @@ export function createFsServer(ctx: CallerContext): McpServer {
 				return err(`path not found: ${rel ?? '.'}`);
 			}
 			const targets: Array<{ abs: string; rel: string }> = [];
+			let fileLimitHit = false;
 			if (stat.isFile()) {
+				if (stat.size > MAX_SCAN) {
+					return err(`file too large to search: ${rel} (max ${MAX_SCAN / 1024 / 1024} MB)`);
+				}
 				targets.push({ abs: r.abs, rel: toPosix(path.relative(r.base, r.abs)) });
 			} else {
-				for (const e of await walkAsync(r.abs)) {
-					if (!e.isDir && (await looksTextualAsync(e.abs, MAX_SCAN))) {
-						targets.push({ abs: e.abs, rel: toPosix(path.relative(r.base, e.abs)) });
+				// Size and binary checks happen in the worker, on its single read of each file.
+				const skipDirs = namesHeavyDir(path.relative(r.base, r.abs)) ? undefined : HEAVY_DIRS;
+				for await (const e of walkIter(r.abs, { skipDirs, relTo: r.base })) {
+					if (e.isDir) continue;
+					if (targets.length >= MAX_GREP_FILES) {
+						fileLimitHit = true;
+						break;
 					}
+					targets.push({ abs: e.abs, rel: e.rel });
 				}
 			}
 			const result = await grepInWorker({
@@ -317,10 +442,19 @@ export function createFsServer(ctx: CallerContext): McpServer {
 				flags,
 				files: targets,
 				maxMatches: MAX_MATCHES,
-				maxLine: MAX_GREP_LINE
+				maxLine: MAX_GREP_LINE,
+				maxBytes: MAX_SCAN,
+				skipBinary: !stat.isFile()
 			});
 			if (!result.ok) return err(result.error);
-			return text(cap(result.lines.join('\n')));
+			const out = cap(result.lines.join('\n'));
+			// Only worth mentioning when the search could have gone on finding more.
+			if (fileLimitHit && result.lines.length < MAX_MATCHES) {
+				return text(
+					`${out}${out ? '\n' : ''}… searched only the first ${MAX_GREP_FILES} files; narrow the path to search the rest`
+				);
+			}
+			return text(out);
 		}
 	);
 
@@ -343,13 +477,36 @@ export function createFsServer(ctx: CallerContext): McpServer {
 				return err(`pattern too long (max ${MAX_PATTERN} characters)`);
 			}
 			const matchGlob = globMatcher(normalized);
+			// Only the subtree under the pattern's literal directory prefix can match.
+			const segments = normalized === '.' ? [] : normalized.split('/');
+			const firstWild = segments.findIndex((s) => /[*?]/.test(s));
+			const prefix = segments.slice(0, firstWild === -1 ? segments.length - 1 : firstWild);
+			let start = r.base;
+			for (const seg of prefix) {
+				start = path.join(start, seg);
+				// lstat: like the walk, don't follow symlinked directories.
+				const st = await fsp.lstat(start).catch(() => null);
+				if (!st?.isDirectory()) return text('[]');
+			}
+			const skipDirs = namesHeavyDir(normalized) ? undefined : HEAVY_DIRS;
 			const matches: string[] = [];
-			for (const e of await walkAsync(r.base)) {
+			let visited = 0;
+			let scanLimitHit = false;
+			for await (const e of walkIter(start, { skipDirs, relTo: r.base })) {
 				if (matchGlob(e.rel)) matches.push(e.rel);
 				if (matches.length >= MAX_GLOB) break;
+				if (++visited >= MAX_GLOB_SCAN) {
+					scanLimitHit = true;
+					break;
+				}
 			}
 			matches.sort();
-			return text(JSON.stringify(matches));
+			const out = JSON.stringify(matches);
+			return text(
+				scanLimitHit
+					? `${out}\n… stopped after ${MAX_GLOB_SCAN} paths; use a more specific pattern`
+					: out
+			);
 		}
 	);
 
@@ -383,7 +540,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		'fs_edit',
 		{
 			description:
-				'Replace text in a file. By default replaces the first occurrence; replaceAll replaces every occurrence.',
+				'Replace text in a file. `old` must match exactly once unless replaceAll is set, which replaces every occurrence.',
 			inputSchema: {
 				scope: SCOPE,
 				path: z.string(),
@@ -401,10 +558,17 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			} catch {
 				return err(`not a file: ${rel}`);
 			}
-			if (!content.includes(find)) return err(`text not found in ${rel}`);
+			const matches = content.split(find).length - 1;
+			if (matches === 0) return err(`text not found in ${rel}`);
+			if (matches > 1 && !replaceAll) {
+				return err(
+					`text matches ${matches} times in ${rel}; add surrounding context to make it unique, or set replaceAll`
+				);
+			}
+			// A replacer function, so `$&`, `$$` etc. in the new text stay literal.
 			const updated = replaceAll
 				? content.split(find).join(replacement)
-				: content.replace(find, replacement);
+				: content.replace(find, () => replacement);
 			await fsp.writeFile(r.abs, updated, 'utf-8');
 			return text(`edited ${toPosix(rel)}`);
 		}
@@ -433,6 +597,12 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		async ({ scope, path: rel }) => {
 			const r = await resolveIn(scope, rel);
 			if (!r.ok) return r.error;
+			if (path.relative(r.base, r.abs) === '') return err(`refusing to delete the ${scope} root`);
+			try {
+				await fsp.lstat(r.abs);
+			} catch {
+				return err(`not found: ${rel}`);
+			}
 			try {
 				await fsp.rm(r.abs, { recursive: true, force: true });
 			} catch (e) {

@@ -116,6 +116,35 @@ describe('code-exec server', () => {
 		expect(rejected).toHaveLength(1);
 	});
 
+	it('formats object results as JSON', async () => {
+		const res = await callCodeExec({ code: '({ a: 1, b: [2, 3] })' });
+		expect(resultText(res)).toContain('Result: {"a":1,"b":[2,3]}');
+	});
+
+	it('awaits promise results', async () => {
+		const res = await callCodeExec({ code: 'Promise.resolve(41).then((n) => n + 1)' });
+		expect(resultText(res)).toContain('Result: 42');
+	});
+
+	it('times out a promise that never settles', async () => {
+		const res = await callCodeExec({ code: 'new Promise(() => {})', timeoutMs: 300 });
+		expect((res as { isError?: boolean }).isError).toBe(true);
+	});
+
+	it('stops collecting console output past the output cap', async () => {
+		const res = await callCodeExec({
+			code: "for (let i = 0; i < 200; i++) console.log('x'.repeat(1024)); 'end'"
+		});
+		const text = resultText(res);
+		expect(text).toContain('... truncated');
+		expect(text.length).toBeLessThan(70 * 1024);
+	});
+
+	it('refuses to write oversized files', async () => {
+		const res = await callCodeExec({ code: "writeFile('big.txt', 'x'.repeat(6 * 1024 * 1024))" });
+		expect((res as { isError?: boolean }).isError).toBe(true);
+	});
+
 	it('handles undefined return value gracefully', async () => {
 		const res = await callCodeExec({ code: 'var x = 1;' });
 		const text = resultText(res);

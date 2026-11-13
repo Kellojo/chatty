@@ -132,12 +132,15 @@ export function ensureAgentWorkspace(agentId: string, runId: string): string {
 	return dir;
 }
 
-export function gcAgentWorkspaces(olderThanDays: number): string[] {
+// Recursive deletes go through fs/promises: rmSync on a large tree (an
+// agent's node_modules) can block the event loop for seconds.
+
+export async function gcAgentWorkspaces(olderThanDays: number): Promise<string[]> {
 	const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
 	const removed: string[] = [];
 	let entries: fs.Dirent[];
 	try {
-		entries = fs.readdirSync(root(), { withFileTypes: true });
+		entries = await fsp.readdir(root(), { withFileTypes: true });
 	} catch {
 		return removed;
 	}
@@ -145,8 +148,8 @@ export function gcAgentWorkspaces(olderThanDays: number): string[] {
 		if (!entry.isDirectory() || !entry.name.startsWith('agent-')) continue;
 		const dir = safeJoin(entry.name);
 		try {
-			if (fs.statSync(dir).mtimeMs >= cutoff) continue;
-			fs.rmSync(dir, { recursive: true, force: true });
+			if ((await fsp.stat(dir)).mtimeMs >= cutoff) continue;
+			await fsp.rm(dir, { recursive: true, force: true });
 			removed.push(entry.name);
 		} catch {
 			// ignore individual failures
@@ -155,27 +158,35 @@ export function gcAgentWorkspaces(olderThanDays: number): string[] {
 	return removed;
 }
 
-export function removeConversationWorkspace(conversationId: string): void {
+export async function removeConversationWorkspace(conversationId: string): Promise<void> {
 	try {
-		fs.rmSync(conversationWorkspace(conversationId), { recursive: true, force: true });
+		await fsp.rm(conversationWorkspace(conversationId), { recursive: true, force: true });
 	} catch {
 		// ignore individual failures
 	}
 }
 
-export function gcOrphanConversationWorkspaces(validIds: Set<string>): string[] {
+/**
+ * Removes conversation workspaces without a conversation row. The ids are
+ * loaded only after listing the directory: a conversation's row is created
+ * before its workspace, so one created mid-GC can't be mistaken for an orphan.
+ */
+export async function gcOrphanConversationWorkspaces(
+	loadValidIds: () => Set<string>
+): Promise<string[]> {
 	const removed: string[] = [];
 	let entries: fs.Dirent[];
 	try {
-		entries = fs.readdirSync(root(), { withFileTypes: true });
+		entries = await fsp.readdir(root(), { withFileTypes: true });
 	} catch {
 		return removed;
 	}
+	const validIds = loadValidIds();
 	for (const entry of entries) {
 		if (!entry.isDirectory() || entry.name.startsWith('agent-')) continue;
 		if (validIds.has(entry.name)) continue;
 		try {
-			fs.rmSync(safeJoin(entry.name), { recursive: true, force: true });
+			await fsp.rm(safeJoin(entry.name), { recursive: true, force: true });
 			removed.push(entry.name);
 		} catch {
 			// ignore individual failures

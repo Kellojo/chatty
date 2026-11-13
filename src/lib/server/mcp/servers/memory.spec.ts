@@ -72,9 +72,13 @@ describe('memory server round trip', () => {
 		expect(concept.body).toContain('chamomile fuel');
 
 		const listed = await callTool(userCtx, 'list_concepts', {});
-		expect(JSON.parse(resultText(listed))).toContain('projects/rocket.md');
+		expect(JSON.parse(resultText(listed))).toContainEqual(
+			expect.objectContaining({ path: 'projects/rocket.md', title: 'Rocket' })
+		);
 		const listedPrefix = await callTool(userCtx, 'list_concepts', { prefix: 'projects' });
-		expect(JSON.parse(resultText(listedPrefix))).toEqual(['projects/rocket.md']);
+		expect(
+			(JSON.parse(resultText(listedPrefix)) as Array<{ path: string }>).map((c) => c.path)
+		).toEqual(['projects/rocket.md']);
 
 		const updated = await callTool(userCtx, 'update_concept', {
 			path: 'projects/rocket.md',
@@ -196,7 +200,9 @@ describe('shared scope', () => {
 		expect(concept.body).toContain('shared zelda marker');
 
 		const listed = await callTool(userCtx, 'list_concepts', { scope: 'shared' });
-		expect(JSON.parse(resultText(listed))).toContain('team/values.md');
+		expect(JSON.parse(resultText(listed))).toContainEqual(
+			expect.objectContaining({ path: 'team/values.md' })
+		);
 	});
 
 	it('search_memory spans user and shared scopes', async () => {

@@ -95,7 +95,8 @@ describe('memory bundle', () => {
 		expect(rows[0].diff).toContain('+John likes espresso and runs marathons.');
 	});
 
-	it('index.md lists child concept titles', () => {
+	it('index.md lists child concept titles', async () => {
+		await bundle.flushMemoryIndexes();
 		const indexAbs = path.join(paths.bundleDir('user', 'u1'), 'people', 'index.md');
 		expect(fs.existsSync(indexAbs)).toBe(true);
 		const content = fs.readFileSync(indexAbs, 'utf8');
@@ -121,7 +122,7 @@ describe('memory bundle', () => {
 		expect(bundle.listConceptPaths('user', 'u1', '../')).toEqual([]);
 	});
 
-	it('moveConcept relocates the file and records a rename diff', () => {
+	it('moveConcept relocates the file and records a rename diff', async () => {
 		const moved = bundle.moveConcept(
 			db,
 			'user',
@@ -143,6 +144,7 @@ describe('memory bundle', () => {
 		expect(fts.searchMemoryFts(db, ['user:u1'], 'marathons').map((h) => h.path)).toEqual([
 			'people/jonathan.md'
 		]);
+		await bundle.flushMemoryIndexes();
 		const indexContent = fs.readFileSync(
 			path.join(paths.bundleDir('user', 'u1'), 'people', 'index.md'),
 			'utf8'

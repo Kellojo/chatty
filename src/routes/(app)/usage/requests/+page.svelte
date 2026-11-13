@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Popover } from 'bits-ui';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
@@ -28,6 +28,8 @@
 	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
 	import { formatCount, formatLatency, formatTokens } from '$lib/formats.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
+	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
+	import { PROXY_REQUESTS_KEY } from '$lib/load-keys.js';
 	import type { ProxyRequestStatus } from '$lib/types.js';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
 	import { resolveBrand } from '$lib/provider-brand.js';
@@ -35,15 +37,22 @@
 
 	let { data }: { data: PageData } = $props();
 
+	// Reload just this page's data once a burst of request events has passed
+	// (but at least every few seconds while requests keep coming).
+	const QUIET_MS = 500;
+	const MAX_DELAY_MS = 3000;
 	onMount(() => {
 		let timer: ReturnType<typeof setTimeout> | null = null;
+		let firstAt = 0;
 		const off = onServerEvent((event) => {
 			if (!event.type.startsWith('proxy.request.')) return;
-			if (timer) return;
+			if (timer) clearTimeout(timer);
+			else firstAt = Date.now();
+			const delay = Math.min(QUIET_MS, Math.max(0, firstAt + MAX_DELAY_MS - Date.now()));
 			timer = setTimeout(() => {
 				timer = null;
-				void invalidateAll();
-			}, 300);
+				void invalidateWhenIdle(PROXY_REQUESTS_KEY);
+			}, delay);
 		});
 		return () => {
 			off();

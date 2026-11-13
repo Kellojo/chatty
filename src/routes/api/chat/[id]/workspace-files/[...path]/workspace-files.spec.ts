@@ -18,13 +18,14 @@ const { GET } = await import('./+server.js');
 async function call(
 	user: { id: string } | null,
 	id: string,
-	filePath: string
+	filePath: string,
+	headers: Record<string, string> = {}
 ): Promise<{ status: number; text: string; headers: Headers | null }> {
 	const url = new URL(`http://localhost/api/chat/${id}/workspace-files/${filePath}`);
 	const event = {
 		locals: { user, session: null } as unknown as App.Locals,
 		params: { id, path: filePath },
-		request: new Request(url),
+		request: new Request(url, { headers }),
 		url
 	};
 	try {
@@ -103,6 +104,36 @@ describe('GET /api/chat/[id]/workspace-files/[...path]', () => {
 		const { conversation, dir } = seedAgentRun();
 		write(path.dirname(dir), 'outside.txt', 'x');
 		expect((await call(u1, conversation.id, '../outside.txt')).status).toBe(404);
+	});
+
+	it('revalidates with ETag and answers a matching If-None-Match with 304', async () => {
+		const conversation = createConversation(getDb(), 'u1');
+		write(conversationWorkspace(conversation.id), 'page.html', '<p>v1</p>');
+		const first = await call(u1, conversation.id, 'page.html');
+		expect(first.headers?.get('cache-control')).toBe('private, no-cache');
+		const etag = first.headers?.get('etag');
+		expect(etag).toBeTruthy();
+		const again = await call(u1, conversation.id, 'page.html', { 'if-none-match': etag! });
+		expect(again.status).toBe(304);
+		expect(again.text).toBe('');
+		// An agent rewrites the file: the old ETag no longer matches.
+		const file = path.join(conversationWorkspace(conversation.id), 'page.html');
+		fs.writeFileSync(file, '<p>version 2</p>');
+		fs.utimesSync(file, new Date(), new Date(Date.now() + 10_000));
+		const changed = await call(u1, conversation.id, 'page.html', { 'if-none-match': etag! });
+		expect(changed.status).toBe(200);
+		expect(changed.text).toBe('<p>version 2</p>');
+	});
+
+	it('serves byte ranges so media can seek', async () => {
+		const conversation = createConversation(getDb(), 'u1');
+		write(conversationWorkspace(conversation.id), 'clip.mp4', '0123456789');
+		const res = await call(u1, conversation.id, 'clip.mp4', { range: 'bytes=3-6' });
+		expect(res.status).toBe(206);
+		expect(res.text).toBe('3456');
+		expect(res.headers?.get('content-range')).toBe('bytes 3-6/10');
+		expect(res.headers?.get('accept-ranges')).toBe('bytes');
+		expect(res.headers?.get('content-type')).toBe('video/mp4');
 	});
 
 	it('returns 404 for an agent-run conversation without a run', async () => {

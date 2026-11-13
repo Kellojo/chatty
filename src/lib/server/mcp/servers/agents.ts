@@ -15,8 +15,10 @@ import {
 	createAgent,
 	deleteAgent,
 	getAgent,
+	listAgentOverrides,
 	listAgents,
 	toPublic,
+	toPublicWithOverrides,
 	updateAgent,
 	type AgentRow
 } from '../../db/repo/agents.js';
@@ -33,10 +35,11 @@ const MODEL_FIELD_DESCRIPTIONS = {
 	modelId: 'Model id (must be given together with providerId)'
 };
 
+/** Card instructions, given once (create_agent); get/update_agent point at them. */
 const CARD_HINT =
-	'To show the agent as a card with Open and Run buttons, reply with a ```agent fenced code block containing the result JSON (systemPrompt may be left out).';
+	'To show the agent as a card, reply with a ```agent fenced block of the result JSON (systemPrompt may be omitted).';
+const SAME_CARD = 'Returns the same JSON as create_agent (```agent card).';
 
-/** The public agent plus its model's display name, which the ```agent card shows. */
 /** A run as start_agent / get_agent_run return it (the chat's agent run row reads this). */
 function runResult(db: Db, run: AgentRunRow, agent: AgentRow) {
 	return text(
@@ -51,6 +54,7 @@ function runResult(db: Db, run: AgentRunRow, agent: AgentRow) {
 	);
 }
 
+/** The public agent plus its model's display name, which the ```agent card shows. */
 function agentResult(db: Db, row: AgentRow) {
 	const agent = toPublic(row);
 	const model =
@@ -70,11 +74,13 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		async () => {
 			const db = getDb();
 			const rows = listAgents(db, ctx.userId);
+			// Built-in agents can be switched off per user; report what the user sees.
+			const overrides = listAgentOverrides(db, ctx.userId);
 			log.info('list_agents', { userId: ctx.userId, count: rows.length });
 			return text(
 				JSON.stringify(
 					rows.map((r) => {
-						const pub = toPublic(r);
+						const pub = toPublicWithOverrides(r, overrides);
 						return {
 							id: pub.id,
 							name: pub.name,
@@ -96,7 +102,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'get_agent',
 		{
-			description: `Get the full configuration of one agent by id. ${CARD_HINT}`,
+			description: `Get the full configuration of one agent by id. ${SAME_CARD}`,
 			inputSchema: { agentId: z.string() }
 		},
 		async ({ agentId }) => {
@@ -143,8 +149,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'update_agent',
 		{
-			description:
-				'Update an existing agent owned by the current user. Only provided fields are changed. Built-in agents cannot be modified. Returns the same JSON as get_agent (```agent card).',
+			description: `Update an agent owned by the current user; only given fields change. ${SAME_CARD}`,
 			inputSchema: {
 				agentId: z.string(),
 				...agentPatchSchema.shape,
@@ -207,7 +212,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		'start_agent',
 		{
 			description:
-				"Start a run of an agent owned by the current user. By default the run works in the background and this returns right away. With wait: true it returns once the run has finished (or asks the user a question), with the agent's reply as `result`; the chat shows the run live meanwhile. Optional instructions replace the agent's saved instructions for this run. Coding agents always run their saved task.",
+				"Start a run of the user's agent. Returns right away unless wait: true, which returns the agent's reply as `result` once the run finishes or asks a question.",
 			inputSchema: {
 				agentId: z.string(),
 				instructions: z

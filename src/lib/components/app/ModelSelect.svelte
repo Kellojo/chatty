@@ -14,7 +14,7 @@
 		type Brand
 	} from '$lib/provider-brand.js';
 	import { getFavoriteModels } from '$lib/state/favorite-models.svelte.js';
-	import type { ChatModel, ModelMapping, ModelsByProvider, Provider } from '$lib/types.js';
+	import type { ModelMapping, PickerModelGroup } from '$lib/types.js';
 
 	let {
 		groups,
@@ -33,7 +33,7 @@
 		standalone = false,
 		class: className = 'w-64'
 	}: {
-		groups: ModelsByProvider[];
+		groups: PickerModelGroup[];
 		mappings?: ModelMapping[];
 		value: string;
 		/** Whether the list is showing. */
@@ -83,7 +83,10 @@
 			(mapping.targets[0] ? resolveModelBrand(mapping.targets[0]) : null)
 	});
 
-	const modelOption = (model: ChatModel, provider: Provider): Option => ({
+	const modelOption = (
+		model: PickerModelGroup['models'][number],
+		provider: PickerModelGroup['provider']
+	): Option => ({
 		value: `${model.providerId}/${model.modelId}`,
 		name: model.displayName,
 		source: provider.name,

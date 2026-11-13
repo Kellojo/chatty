@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
@@ -9,6 +8,8 @@
 	import { formatCount, formatLatency } from '$lib/formats.js';
 	import { billedParts } from '$lib/components/app/usage/usage.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
+	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
+	import { PROXY_REQUESTS_KEY } from '$lib/load-keys.js';
 	import type { ProxyRequestStatus } from '$lib/types.js';
 	import type { PageData } from './$types';
 
@@ -19,13 +20,23 @@
 	const sourceLabel = $derived(request.source.charAt(0).toUpperCase() + request.source.slice(1));
 
 	onMount(() => {
-		return onServerEvent((event) => {
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const off = onServerEvent((event) => {
 			if (event.type !== 'proxy.request.started' && event.type !== 'proxy.request.finished') {
 				return;
 			}
 			if (event.requestId !== request.id) return;
-			void invalidateAll();
+			// Trailing: a quick request's start and finish reload this page once.
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(() => {
+				timer = null;
+				void invalidateWhenIdle(PROXY_REQUESTS_KEY);
+			}, 300);
 		});
+		return () => {
+			off();
+			if (timer) clearTimeout(timer);
+		};
 	});
 
 	function statusTone(status: ProxyRequestStatus): string {

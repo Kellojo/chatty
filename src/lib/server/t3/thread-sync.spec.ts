@@ -84,16 +84,22 @@ describe('importableThreads', () => {
 	});
 
 	it('derives provisional status, settled state and workspace mode', () => {
-		const [running, waiting, settled] = importableThreads(
+		const [running, waiting, background, settled] = importableThreads(
 			shell([
 				thread({ id: 'a', activeRunId: 'r1', updatedAt: '2026-11-02T01:00:00Z' }),
 				thread({ id: 'b', pendingRuntimeRequest: { id: 'q' }, updatedAt: '2026-11-02T02:00:00Z' }),
+				thread({
+					id: 'd',
+					pendingBackgroundTasks: [{ taskId: 'x', kind: 'monitor', awaited: true }],
+					updatedAt: '2026-11-02T03:00:00Z'
+				}),
 				thread({ id: 'c', settledAt: '2026-11-04T00:00:00Z', worktreePath: null })
 			]),
 			{ known: new Set(), since }
 		);
 		expect(running.status).toBe('running');
 		expect(waiting.status).toBe('awaiting_input');
+		expect(background.status).toBe('waiting');
 		expect(settled).toMatchObject({ settled: true, workspaceMode: 'local' });
 	});
 });
@@ -194,6 +200,7 @@ describe('importCodingConversation', () => {
 			token: 'token'
 		}).id;
 		expect(coding.listKnownThreadIds(db, second)).toEqual(new Set(['t1']));
+		expect(coding.knownThreadIdsAmong(db, second, ['t1', 'nope'])).toEqual(new Set(['t1']));
 		db.prepare(
 			`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u2', 'u2', 'u2@example.com', 0, 0, 0, 'user')`
 		).run();
@@ -203,6 +210,17 @@ describe('importCodingConversation', () => {
 			token: 'token'
 		}).id;
 		expect(coding.listKnownThreadIds(db, foreign)).toEqual(new Set());
+		expect(coding.knownThreadIdsAmong(db, foreign, ['t1'])).toEqual(new Set());
+	});
+
+	it('lists the tasks of just the given threads', () => {
+		const a = importOne(false, 'ta');
+		importOne(false, 'tb');
+		const gone = importOne(false, 'tc');
+		conversations.softDeleteConversation(db, 'u1', gone);
+		const rows = coding.listThreadCodingConversationsFor(db, environmentId, ['ta', 'tc', 'zz']);
+		expect(rows.map((r) => [r.conversation_id, r.user_id])).toEqual([[a, 'u1']]);
+		expect(coding.listThreadCodingConversationsFor(db, environmentId, [])).toEqual([]);
 	});
 
 	it('relinks conversations of a removed environment to one serving their thread', () => {
@@ -225,6 +243,7 @@ describe('importCodingConversation', () => {
 		conversations.purgeConversation(db, id);
 		expect(coding.getCodingConversation(db, id)).toBeUndefined();
 		expect(coding.listKnownThreadIds(db, environmentId)).toEqual(new Set(['t1']));
+		expect(coding.knownThreadIdsAmong(db, environmentId, ['t1', 't2'])).toEqual(new Set(['t1']));
 	});
 
 	it('does not import a thread that is already linked, even on another environment', () => {

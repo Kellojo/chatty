@@ -187,14 +187,24 @@
 								>{part.text}</MessageContent
 							>
 						{:else}
-							<Markdown class="w-full max-w-none" content={part.text} {conversationId} />
+							<Markdown
+								class="w-full max-w-none"
+								content={part.text}
+								{conversationId}
+								streaming={messageActive}
+							/>
 						{/if}
 					{:else if part && isAskUserPart(part)}
 						{@const ask = part.state === 'input-streaming' ? null : askUserInput(part)}
 						<!-- The question reads as the agent's words; it's answered in the
 						     composer's answer panel. One question per turn: only the first. -->
 						{#if ask && partIndex === askIndex}
-							<Markdown class="w-full max-w-none" content={ask.question} {conversationId} />
+							<Markdown
+								class="w-full max-w-none"
+								content={ask.question}
+								{conversationId}
+								streaming={messageActive}
+							/>
 						{/if}
 					{:else if part && conversationId && readHtmlRender(part)}
 						<HtmlRenderFrame {conversationId} {part} />

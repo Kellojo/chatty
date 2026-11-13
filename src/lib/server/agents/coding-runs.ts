@@ -101,7 +101,8 @@ export async function startCodingAgentRun(
 	const run = createAgentRun(db, {
 		agentId: agent.id,
 		userId: input.userId,
-		trigger: input.trigger
+		trigger: input.trigger,
+		apiKeyId: input.apiKeyId
 	});
 	publishServerEvent(input.userId, { type: 'agent.run.started', agentId: agent.id, runId: run.id });
 

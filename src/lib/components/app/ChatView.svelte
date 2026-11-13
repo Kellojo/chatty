@@ -3,6 +3,7 @@
 	import { DefaultChatTransport } from 'ai';
 	import { onMount, tick, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
+	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import {
 		ChatContainer,
@@ -39,7 +40,7 @@
 		type CodingRecoveryAction
 	} from '$lib/coding-task-details.js';
 	import { onServerEvent, onServerEventResync } from '$lib/state/events.svelte.js';
-	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
+	import { scheduleInvalidate } from '$lib/state/invalidate-when-idle.js';
 	import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
 	import { askUserInput, askUserRequest, isAskUserPart, type AskUserPart } from '$lib/ask-user.js';
 	import { drafts } from '$lib/state/drafts.js';
@@ -69,7 +70,7 @@
 		type Conversation,
 		type DispatchInfo,
 		type ModelMapping,
-		type ModelsByProvider,
+		type PickerModelGroup,
 		type UIMessage,
 		type UIMessageMetadata
 	} from '$lib/types.js';
@@ -102,7 +103,7 @@
 		initialMessages: ChatMessage[];
 		/** Messages exist before `initialMessages`. */
 		hasOlderMessages?: boolean;
-		groups: ModelsByProvider[];
+		groups: PickerModelGroup[];
 		mappings?: ModelMapping[];
 		defaultModel?: { providerId: string; modelId: string } | null;
 		sttModel?: { providerId: string; modelId: string } | null;
@@ -302,13 +303,32 @@
 	}
 
 	/** Shows the reloaded newest page of messages, keeping earlier pages already loaded. */
-	function showLatest() {
-		recordTimes(initialMessages);
-		const latest = withLatestPage(chat.messages, initialMessages.map(chatMessageToUIMessage));
-		if (!latest.keptOlder) hasOlder = hasOlderMessages;
+	function showLatest(messages = initialMessages, older = hasOlderMessages) {
+		recordTimes(messages);
+		const latest = withLatestPage(chat.messages, messages.map(chatMessageToUIMessage));
+		if (!latest.keptOlder) hasOlder = older;
 		// Unchanged messages keep their objects, so the timeline only re-renders
 		// what actually changed (background updates arrive often on long tasks).
 		chat.messages = reuseUnchanged(chat.messages, latest.messages);
+	}
+
+	/**
+	 * The newest page of messages, as the page load sends it. Reloading just these
+	 * after a reply is far cheaper than rerunning the page and layout loads (which
+	 * would also drop SvelteKit's hover preloads); conversation changes such as a
+	 * new title arrive as their own server events.
+	 */
+	async function fetchLatest(
+		id: string
+	): Promise<{ messages: ChatMessage[]; hasOlder: boolean } | null> {
+		const res = await fetch(`/api/conversations/${encodeURIComponent(id)}/messages`).catch(
+			() => null
+		);
+		if (!res?.ok) return null;
+		return (await res.json().catch(() => null)) as {
+			messages: ChatMessage[];
+			hasOlder: boolean;
+		} | null;
 	}
 
 	const streaming = $derived(
@@ -365,12 +385,13 @@
 	});
 	let sending = $state(false);
 
-	async function markRead() {
+	async function markRead({ refresh = true } = {}) {
 		await fetch(`/api/conversations/${conversation.id}/read`, { method: 'POST' }).catch(
 			() => undefined
 		);
 		// Only the sidebar's unread markers change; the page itself is current.
-		await invalidateWhenIdle(CONVERSATIONS_KEY);
+		// Batched with the sidebar's own refresh for the same reply finishing.
+		if (refresh) await scheduleInvalidate(CONVERSATIONS_KEY);
 	}
 
 	const localBusy = () => chat.status === 'streaming' || chat.status === 'submitted' || sending;
@@ -386,14 +407,27 @@
 			.finally(() => {
 				if (chat.status !== 'streaming' && chat.status !== 'submitted') {
 					remoteGenerating = false;
-					void invalidateWhenIdle();
+					void reloadLatest(conversation.id);
 				}
 			});
 	}
 
+	/** Shows the persisted newest messages, unless a new reply has started meanwhile. */
+	async function reloadLatest(id: string) {
+		const latest = await fetchLatest(id);
+		if (!latest || conversation.id !== id || localBusy()) return;
+		showLatest(latest.messages, latest.hasOlder);
+	}
+
+	const wasUnread = untrack(
+		() => (page.data.unreadIds as string[] | undefined)?.includes(conversation.id) ?? true
+	);
+
 	onMount(() => {
 		if (remoteGenerating) resumeRemoteStream();
-		else markRead();
+		// Opening a chat that was already read changes no marker, so skip the
+		// sidebar reload (it would also drop SvelteKit's hover preloads).
+		else markRead({ refresh: wasUnread });
 	});
 
 	// A reply started elsewhere while this view is open (another tab, a turn
@@ -411,10 +445,9 @@
 	async function followRemoteStream(id: string) {
 		remoteGenerating = true;
 		// Pick up the user message that started the turn before attaching.
-		await invalidateWhenIdle();
-		await tick();
+		const latest = await fetchLatest(id);
 		if (!remoteGenerating || localBusy() || conversation.id !== id) return;
-		showLatest();
+		if (latest) showLatest(latest.messages, latest.hasOlder);
 		resumeRemoteStream();
 	}
 
@@ -446,12 +479,15 @@
 			if (finishing || !remoteGenerating) return;
 			finishing = true;
 			remoteGenerating = false;
-			await invalidateWhenIdle();
-			await tick();
+			// One sidebar reload (batched with the sidebar's own for this event) and
+			// the new messages, instead of reloading the whole page as well.
+			const read = markRead();
+			const latest = await fetchLatest(id);
 			// A queued message may already be on its way; don't wipe it.
-			if (chat.status === 'streaming' || chat.status === 'submitted') return;
-			showLatest();
-			await markRead();
+			if (latest && conversation.id === id && !localBusy()) {
+				showLatest(latest.messages, latest.hasOlder);
+			}
+			await read;
 		};
 		const offEvent = onServerEvent((event) => {
 			if (event.type === 'chat.stream.finished' && event.conversationId === id) {
@@ -474,6 +510,8 @@
 
 	// Replies can change with no stream attached (a coding task's background
 	// subagent reporting progress after its turn ended); reload them while idle.
+	// Only the newest page is fetched: these updates can arrive every second, and
+	// reloading the whole page data would also re-send the layout and model list.
 	$effect(() => {
 		if (!isCoding) return;
 		const id = conversation.id;
@@ -481,10 +519,9 @@
 		const reload = async () => {
 			timer = null;
 			if (streaming || conversation.id !== id) return;
-			await invalidateWhenIdle();
-			await tick();
-			if (streaming || conversation.id !== id) return;
-			showLatest();
+			const latest = await fetchLatest(id);
+			if (!latest || streaming || sending || conversation.id !== id) return;
+			showLatest(latest.messages, latest.hasOlder);
 		};
 		const off = onServerEvent((event) => {
 			if (event.type !== 'chat.messages.updated' || event.conversationId !== id) return;
@@ -520,10 +557,9 @@
 				.catch(() => {});
 		});
 		if (conversation.id !== id || chat.status !== 'error') return;
-		await invalidateWhenIdle();
-		await tick();
-		if (conversation.id !== id || chat.status !== 'error') return;
-		showLatest();
+		const latest = await fetchLatest(id);
+		if (!latest || conversation.id !== id || chat.status !== 'error') return;
+		showLatest(latest.messages, latest.hasOlder);
 	}
 
 	$effect(() => {

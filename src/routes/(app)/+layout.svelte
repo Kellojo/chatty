@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
-	import { afterNavigate, goto } from '$app/navigation';
+	import { afterNavigate, goto, preloadData } from '$app/navigation';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
@@ -157,19 +157,43 @@
 		else if (rowBox.bottom > listBox.bottom) list.scrollTop += rowBox.bottom - listBox.bottom;
 	}
 
+	/** The sidebar's conversation links, top to bottom, and the open one's index (or -1). */
+	function conversationLinks() {
+		const links = [...document.querySelectorAll<HTMLAnchorElement>('a[data-conversation-id]')];
+		const current = links.findIndex((a) => a.dataset.conversationId === page.params.id);
+		return { links, current };
+	}
+
 	/** Moves to the conversation above or below the open one, in sidebar order. */
 	function stepConversation(step: 1 | -1): boolean {
-		const links = [...document.querySelectorAll<HTMLAnchorElement>('a[data-conversation-id]')];
+		const { links, current } = conversationLinks();
 		if (links.length === 0) return false;
-		const current = links.findIndex((a) => a.dataset.conversationId === page.params.id);
 		// From a page that isn't a listed chat, both directions start at the top (the newest).
 		const next = current === -1 ? 0 : current + step;
 		const target = links[next];
 		const id = target?.dataset.conversationId;
 		if (!id) return false;
 		scrollIntoList(target);
-		void goto(resolve(`/chat/${id}`));
+		void goto(resolve(`/chat/${id}`)).then(() => {
+			if (page.params.id === id) preloadNextStep(step);
+		});
 		return true;
+	}
+
+	// Stepping through chats tends to go on in the same direction, so once a step
+	// has landed, the next chat that way is preloaded while the browser is idle
+	// (SvelteKit keeps one preload, so only that one; hovering a link replaces it).
+	let preloadHandle: number | undefined;
+	function preloadNextStep(step: 1 | -1) {
+		const idle = window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 200));
+		const cancel = window.cancelIdleCallback ?? window.clearTimeout;
+		if (preloadHandle !== undefined) cancel(preloadHandle);
+		preloadHandle = idle(() => {
+			preloadHandle = undefined;
+			const { links, current } = conversationLinks();
+			const id = current === -1 ? undefined : links[current + step]?.dataset.conversationId;
+			if (id) void preloadData(resolve(`/chat/${id}`)).catch(() => undefined);
+		});
 	}
 
 	let shortcutsOpen = $state(false);

@@ -49,12 +49,6 @@ describe('datetime server', () => {
 		expect(parsed.human).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
 	});
 
-	it('get_timezone returns the configured TZ', async () => {
-		const res = await callTool('get_timezone', {});
-		expect(isErr(res)).toBe(false);
-		expect(JSON.parse(resultText(res))).toEqual({ timezone: 'UTC' });
-	});
-
 	it('format renders a luxon format string', async () => {
 		const res = await callTool('format', { iso: '2024-01-15T10:00:00', fmt: 'yyyy', tz: 'UTC' });
 		expect(resultText(res)).toBe('2024');

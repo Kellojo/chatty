@@ -14,6 +14,16 @@ const MAX_MEMORY = 512; // 512MB
 const DEFAULT_TIMEOUT = 5000; // 5 seconds
 const DEFAULT_MEMORY = 128; // 128MB
 const MAX_CONCURRENT = 4;
+/** Largest file readFile/writeFile move between host and sandbox. */
+const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB
+
+/** Formats the script's result inside the isolate, so any value comes out as a string. */
+const FORMAT_RESULT = `(() => {
+	const r = globalThis.__result;
+	if (r === undefined) return undefined;
+	if (typeof r === 'string') return r;
+	try { return JSON.stringify(r) ?? String(r); } catch { return String(r); }
+})()`;
 
 let activeExecutions = 0;
 
@@ -65,6 +75,10 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 					if (stat.isSymbolicLink()) {
 						throw new Error('accessing symlinks is not allowed');
 					}
+					// The isolate's memory limit doesn't cover the host-side copy.
+					if (stat.size > MAX_FILE_BYTES) {
+						throw new Error(`file too large (max ${MAX_FILE_BYTES / 1024 / 1024}MB)`);
+					}
 					return fs.readFileSync(abs, 'utf-8');
 				})
 			);
@@ -74,6 +88,10 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 				new ivm.Callback((relPath: string, content: string) => {
 					const abs = resolveInsideRealSync(workspaceDir, relPath);
 					if (!abs) throw new Error('path escapes workspace root');
+					if (typeof content !== 'string') throw new Error('content must be a string');
+					if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_BYTES) {
+						throw new Error(`content too large (max ${MAX_FILE_BYTES / 1024 / 1024}MB)`);
+					}
 					try {
 						fs.lstatSync(abs);
 					} catch (e) {
@@ -84,7 +102,10 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 				})
 			);
 
+			// Logs live in host memory, outside the isolate's limit: stop collecting
+			// once they exceed what the output can hold anyway (it's truncated below).
 			const logs: string[] = [];
+			let logChars = 0;
 			const formatArg = (a: unknown): string => {
 				if (typeof a === 'string') return a;
 				try {
@@ -96,7 +117,10 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 			await jail.set(
 				'log',
 				new ivm.Callback((...args: unknown[]) => {
-					logs.push(args.map(formatArg).join(' '));
+					if (logChars > MAX_OUTPUT) return;
+					const line = args.map(formatArg).join(' ');
+					logChars += line.length + 1;
+					logs.push(line);
 				})
 			);
 
@@ -113,7 +137,23 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 			};
 		`);
 			await bootstrap.run(context);
-			const result = await script.run(context, { timeout: timeoutMs });
+			// `promise` awaits a returned promise; the run timeout only covers the
+			// synchronous part, so a never-settling promise is cut off here.
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const deadline = new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error('Script execution timed out.')), timeoutMs);
+			});
+			let result: unknown;
+			try {
+				const ref = await Promise.race([
+					script.run(context, { timeout: timeoutMs, promise: true, reference: true }),
+					deadline
+				]);
+				await jail.set('__result', ref.derefInto());
+				result = await context.eval(FORMAT_RESULT, { timeout: timeoutMs });
+			} finally {
+				clearTimeout(timer);
+			}
 
 			let output = '';
 			if (logs.length > 0) {

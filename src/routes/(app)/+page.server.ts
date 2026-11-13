@@ -12,10 +12,10 @@ import {
 } from '$lib/server/db/repo/model-mappings.js';
 import { findModel, findRoleModel, listEnabledModels } from '$lib/server/db/repo/models.js';
 import { getUserSettings } from '$lib/server/db/repo/user-settings.js';
-import { listModelsGrouped } from '$lib/server/llm/registry.js';
+import { modelCatalogInfo } from '$lib/server/llm/model-catalog.js';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals, cookies }) => {
+export const load: PageServerLoad = ({ locals, cookies, isDataRequest }) => {
 	const user = locals.user;
 	if (!user) error(401, { message: 'Unauthorized' });
 	const db = getDb();
@@ -38,7 +38,8 @@ export const load: PageServerLoad = ({ locals, cookies }) => {
 		sttModel = { providerId: sttRoleModel.provider_id, modelId: sttRoleModel.model_id };
 	}
 	return {
-		groups: listModelsGrouped(),
+		// The models themselves only on a full page load; see model-catalog.
+		modelCatalog: modelCatalogInfo(isDataRequest),
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		defaultModel,
 		sttModel,

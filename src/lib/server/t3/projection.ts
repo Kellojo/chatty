@@ -22,6 +22,8 @@ export interface ThreadState {
 	messages: Map<string, Rec>;
 	turnItems: Map<string, Rec>;
 	runtimeRequests: Map<string, Rec>;
+	/** The provider sessions behind the thread; they list background work the agent waits on. */
+	providerThreads: Map<string, Rec>;
 	/** Runs some of whose turn items were dropped by {@link MAX_THREAD_RECORDS}. */
 	evictedItemRuns: Set<string>;
 	lastSequence: number | null;
@@ -42,6 +44,7 @@ export function emptyThreadState(): ThreadState {
 		messages: new Map(),
 		turnItems: new Map(),
 		runtimeRequests: new Map(),
+		providerThreads: new Map(),
 		evictedItemRuns: new Set(),
 		lastSequence: null,
 		itemsByRun: new Map(),
@@ -220,6 +223,7 @@ export function applyStreamItem(state: ThreadState, item: unknown): boolean {
 		state.evictedItemRuns.clear();
 		fillItems(state, projection.turnItems);
 		fill(state.runtimeRequests, projection.runtimeRequests);
+		fill(state.providerThreads, projection.providerThreads);
 		state.lastSequence = num(it.snapshotSequence) ?? state.lastSequence;
 		return true;
 	}
@@ -238,6 +242,7 @@ export function applyStreamItem(state: ThreadState, item: unknown): boolean {
 	else if (type.startsWith('message.')) upsert(state.messages, payload);
 	else if (type.startsWith('turn-item.')) putItem(state, payload);
 	else if (type.startsWith('runtime-request.')) upsert(state.runtimeRequests, payload);
+	else if (type.startsWith('provider-thread.')) upsert(state.providerThreads, payload);
 	else if (type.startsWith('thread.')) {
 		const record = obj(payload);
 		// Most thread.* events carry the full thread; others (e.g. PR link
@@ -262,7 +267,7 @@ export function streamItemRun(item: unknown, state?: ThreadState): string | 'all
 	const event = obj(it.event);
 	const type = str(event?.type) ?? '';
 	const payload = obj(event?.payload);
-	if (type.startsWith('thread.')) return null;
+	if (type.startsWith('thread.') || type.startsWith('provider-thread.')) return null;
 	if (type.startsWith('run.')) return str(payload?.id) ?? 'all';
 	if (type.startsWith('turn-item.')) return str(payload?.runId) ?? 'all';
 	const id = str(payload?.id);
@@ -513,6 +518,51 @@ function requestDecision(state: ThreadState, requestId: unknown): string | null 
 /** Command output fetched separately (the live stream omits it). */
 export type CommandOutputs = ReadonlyMap<string, string>;
 
+/** Shown for omitted output that hasn't been fetched (see {@link CommandOutputs}). */
+const OUTPUT_NOT_LOADED = 'Output not loaded';
+
+function isOutputNotLoaded(part: RenderedPart): boolean {
+	return (
+		part.type === 'dynamic-tool' &&
+		part.state === 'output-available' &&
+		obj(part.output)?.note === OUTPUT_NOT_LOADED
+	);
+}
+
+/** Whether some tool part in `entries` shows omitted output that isn't loaded. */
+export function hasUnloadedOutput(entries: readonly RenderedEntry[]): boolean {
+	return entries.some((e) => isOutputNotLoaded(e.part));
+}
+
+/**
+ * The outputs a stored reply already holds for the tool parts of `entries`
+ * that render without theirs, by item id, in the form {@link CommandOutputs}
+ * takes. Fetched outputs live only in memory, so a fresh follower would
+ * otherwise render (and save) the placeholder over outputs fetched before.
+ */
+export function storedOutputs(
+	entries: readonly RenderedEntry[],
+	storedParts: unknown
+): Map<string, string> {
+	const found = new Map<string, string>();
+	if (!Array.isArray(storedParts)) return found;
+	const stored = new Map<string, Rec>();
+	for (const part of storedParts) {
+		const p = obj(part);
+		if (p?.type === 'dynamic-tool' && p.state === 'output-available') {
+			stored.set(String(p.toolCallId), p);
+		}
+	}
+	for (const { part } of entries) {
+		if (part.type !== 'dynamic-tool' || !isOutputNotLoaded(part)) continue;
+		const output = stored.get(part.toolCallId)?.output;
+		// A command's output sits beside its exit code; another tool's is the whole output.
+		const text = 'exitCode' in obj(part.output)! ? str(obj(output)?.output) : str(output);
+		if (text !== null) found.set(part.toolCallId, text);
+	}
+	return found;
+}
+
 /** What the user answered, per request id (Chatty keeps it; T3 only reports the outcome). */
 export type RequestAnswers = Readonly<Record<string, string>>;
 
@@ -628,7 +678,7 @@ export function renderRunSegments(
 						{ command: item.input ?? item.title ?? '' },
 						{
 							exitCode,
-							...(output !== null ? { output } : { note: 'Output not loaded' })
+							...(output !== null ? { output } : { note: OUTPUT_NOT_LOADED })
 						},
 						status === 'completed' && item.outputIndicatesFailure === true ? 'failed' : status
 					)
@@ -711,7 +761,7 @@ export function renderRunSegments(
 						: fetched !== undefined
 							? fetched
 							: item.outputOmitted === true
-								? { note: 'Output not loaded' }
+								? { note: OUTPUT_NOT_LOADED }
 								: { status };
 				entries.push(toolEntry(item, toolName, item.input ?? {}, output, status));
 				break;
@@ -945,6 +995,63 @@ function pullRequestOf(thread: Rec): { url: string | null; state: CodingPullRequ
 	return { url, state };
 }
 
+// ── background work ──────────────────────────────────────────────────────
+// Mirrors T3's "Waiting" thread state: the latest run has ended, but the agent
+// still waits on work it started (a background task, a delegated thread, a
+// watched pull request) and resumes when that reports back.
+
+/** Latest-run statuses after which T3 counts pending background work as waiting. */
+const SETTLED_FOR_BACKGROUND_WAIT = new Set([
+	'cancelled',
+	'completed',
+	'failed',
+	'interrupted',
+	'waiting'
+]);
+const ACTIVE_ITEM = new Set(['pending', 'running', 'waiting']);
+
+/** Whether one of T3's pending background tasks keeps the thread waiting (plain commands don't). */
+export function isAwaitedBackgroundTask(task: unknown): boolean {
+	const t = obj(task);
+	return !!t && (t.awaited === true || t.kind === 'subagent' || t.kind === 'background_task');
+}
+
+/** Pull requests T3 watches for the agent (each one keeps the thread waiting). */
+function hasWatchedPullRequest(thread: Rec): boolean {
+	const links = Array.isArray(thread.pullRequests) ? thread.pullRequests.map(obj) : [];
+	return links.some(
+		(link) =>
+			link !== null &&
+			link.watch !== undefined &&
+			link.source !== 'stack-dismissed' &&
+			obj(link.snapshot)?.state !== 'merged'
+	);
+}
+
+function isWaitingOnBackgroundWork(state: ThreadState, latestRun: Rec | undefined): boolean {
+	const thread = state.thread ?? {};
+	if (!latestRun) return hasWatchedPullRequest(thread);
+	if (!SETTLED_FOR_BACKGROUND_WAIT.has(String(latestRun.status))) return false;
+	const activeProvider = str(thread.activeProviderThreadId);
+	for (const provider of state.providerThreads.values()) {
+		if (activeProvider && provider.id !== activeProvider) continue;
+		const tasks = Array.isArray(provider.pendingBackgroundTasks)
+			? provider.pendingBackgroundTasks
+			: [];
+		if (tasks.some(isAwaitedBackgroundTask)) return true;
+	}
+	// A tool call still at work after its run ended (unless persistent or rolled
+	// back). Plain commands running on don't hold the thread; running subagents
+	// already count as running.
+	const waitingTool = itemsOfType(state, 'dynamic_tool').some(
+		(item) =>
+			ACTIVE_ITEM.has(String(item.status)) &&
+			obj(item.input)?.persistent !== true &&
+			state.runs.get(String(item.runId))?.status !== 'rolled_back'
+	);
+	return waitingTool || hasWatchedPullRequest(thread);
+}
+
 export function summarizeTask(state: ThreadState): TaskSummary {
 	const thread = state.thread ?? {};
 	const { url: prUrl, state: prState } = pullRequestOf(thread);
@@ -956,6 +1063,7 @@ export function summarizeTask(state: ThreadState): TaskSummary {
 	// Background subagents keep working after their turn ends; the task isn't
 	// done until they are.
 	else if (runs.some(isRunActive) || hasRunningSubagent(state)) status = 'running';
+	else if (isWaitingOnBackgroundWork(state, last)) status = 'waiting';
 	else if (!last) status = 'starting';
 	else if (last.status === 'completed') status = 'idle';
 	else if (last.status === 'failed') status = 'failed';

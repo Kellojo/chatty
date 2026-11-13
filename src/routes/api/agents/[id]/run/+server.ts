@@ -44,6 +44,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	let trigger: 'http' | 'manual';
 	let runUserId: string;
 	let rateKey: string;
+	let apiKeyId: string | undefined;
 
 	if (authorization) {
 		const identity = await resolveApiKeyIdentity(db, authorization);
@@ -57,6 +58,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		trigger = 'http';
 		runUserId = identity.userId;
 		rateKey = `key:${identity.keyId}`;
+		apiKeyId = identity.keyId;
 	} else {
 		const user = requireUser(locals);
 		const found = getAgent(db, params.id);
@@ -103,7 +105,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			agentId: agent.id,
 			trigger,
 			userId: runUserId,
-			instructions: parsed.data.instructions
+			instructions: parsed.data.instructions,
+			apiKeyId
 		});
 		done.catch(() => undefined);
 		return json({ run: toPublic(run) }, { status: 202 });
