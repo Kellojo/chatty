@@ -43,4 +43,22 @@ describe('ToolAllowlist', () => {
 		await page.getByRole('button', { name: 'Remove gone_tool' }).click();
 		await expect.element(page.getByText('gone_tool')).not.toBeInTheDocument();
 	});
+
+	it('groups built-in servers apart from added ones', async () => {
+		render(ToolAllowlist, {
+			tools: [
+				{ name: 'fs_ls', description: 'List a directory', server: 'fs', builtin: true },
+				{ name: 'search_issues', description: 'Search issues', server: 'github', builtin: false }
+			],
+			value: []
+		});
+		await expect.element(page.getByRole('heading', { name: 'Built-in' })).toBeVisible();
+		await expect.element(page.getByRole('heading', { name: 'Added servers' })).toBeVisible();
+	});
+
+	it('shows no section headings when every server is of one kind', async () => {
+		render(ToolAllowlist, { tools, value: [] });
+		await expect.element(page.getByText('List files')).toBeVisible();
+		expect(page.getByRole('heading', { name: 'Built-in' }).elements()).toHaveLength(0);
+	});
 });

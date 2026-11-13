@@ -403,19 +403,61 @@
 
 	const localBusy = () => chat.status === 'streaming' || chat.status === 'submitted' || sending;
 
+	/** Whether the server is still generating a reply for `id`; null when it couldn't be asked. */
+	async function isGeneratingRemotely(id: string): Promise<boolean | null> {
+		const res = await fetch('/api/chat/active').catch(() => null);
+		if (!res?.ok) return null;
+		const data = (await res.json().catch(() => null)) as { conversationIds?: unknown } | null;
+		return Array.isArray(data?.conversationIds) ? data.conversationIds.includes(id) : null;
+	}
+
+	const RESUME_RETRY_MAX_MS = 10_000;
+	/** A connection that lasted this long was working: the next drop retries quickly again. */
+	const RESUME_HEALTHY_MS = 10_000;
+	/** Bumped when this view stops following (stop, a new message, unmount): pending retries drop out. */
+	let resumeEpoch = 0;
+	let resumeTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function cancelResumeRetry() {
+		resumeEpoch++;
+		clearTimeout(resumeTimer);
+	}
+	onMount(() => cancelResumeRetry);
+
 	/**
-	 * A stream is (or was) running server-side. Attach to it for live tokens;
-	 * a 204 means it already finished, so just reload the persisted state.
+	 * A stream is (or was) running server-side. Attach to it for live tokens.
+	 * When the connection ends, the reply may still be running: the connection
+	 * dropped, or the server had nothing to replay (a 204 when its replay buffer
+	 * overflowed). Then keep showing it as live, with the persisted progress, and
+	 * attach again until the server says it's done.
 	 */
-	function resumeRemoteStream() {
+	function resumeRemoteStream(attempt = 0) {
+		const id = conversation.id;
+		const epoch = resumeEpoch;
+		const startedAt = Date.now();
 		chat
 			.resumeStream()
 			.catch(() => undefined)
-			.finally(() => {
-				if (chat.status !== 'streaming' && chat.status !== 'submitted') {
+			.finally(async () => {
+				if (chat.status === 'streaming' || chat.status === 'submitted') return;
+				const generating = epoch === resumeEpoch ? await isGeneratingRemotely(id) : false;
+				if (conversation.id !== id || localBusy()) return;
+				if (generating === false || epoch !== resumeEpoch || !remoteGenerating) {
 					remoteGenerating = false;
-					void reloadLatest(conversation.id);
+					void reloadLatest(id);
+					return;
 				}
+				// Still running, or the server couldn't be asked (offline): the
+				// finish event or a resync settles it; until then keep reattaching.
+				void reloadLatest(id);
+				const next = Date.now() - startedAt >= RESUME_HEALTHY_MS ? 0 : attempt + 1;
+				resumeTimer = setTimeout(
+					() => {
+						if (epoch !== resumeEpoch || !remoteGenerating || localBusy()) return;
+						if (conversation.id === id) resumeRemoteStream(next);
+					},
+					Math.min(1000 * 2 ** next, RESUME_RETRY_MAX_MS)
+				);
 			});
 	}
 
@@ -503,10 +545,7 @@
 		});
 		const offResync = onServerEventResync(() => {
 			void (async () => {
-				const res = await fetch('/api/chat/active');
-				if (!res.ok) return;
-				const { conversationIds } = (await res.json()) as { conversationIds: string[] };
-				if (!conversationIds.includes(id)) await finish();
+				if ((await isGeneratingRemotely(id)) === false) await finish();
 			})().catch(() => {});
 		});
 		return () => {
@@ -541,6 +580,21 @@
 	});
 
 	/**
+	 * The reply this view was receiving errored. If the server is still generating
+	 * it, only the connection dropped: follow the reply instead of showing it as
+	 * ended, and let the queue go on as before. Otherwise show the failure.
+	 */
+	async function recoverFromError(id: string, queueWasPaused: boolean) {
+		if ((await isGeneratingRemotely(id)) === true) {
+			if (conversation.id !== id || chat.status !== 'error' || remoteGenerating) return;
+			if (!queueWasPaused) messageQueue.resume(id);
+			await followRemoteStream(id);
+			return;
+		}
+		await reloadAfterError(id);
+	}
+
+	/**
 	 * After a failed stream, reload the persisted messages so the failed response
 	 * (with its error) shows inline instead of only in a toast. The server persists
 	 * it just before announcing `chat.stream.finished`, so wait for that first.
@@ -556,10 +610,9 @@
 				off();
 				resolve();
 			}
-			fetch('/api/chat/active')
-				.then((res) => (res.ok ? res.json() : null))
-				.then((data: { conversationIds: string[] } | null) => {
-					if (data && !data.conversationIds.includes(id)) done();
+			isGeneratingRemotely(id)
+				.then((generating) => {
+					if (generating === false) done();
 				})
 				.catch(() => {});
 		});
@@ -581,8 +634,9 @@
 					if (!remoteGenerating) void followRemoteStream(id);
 					return;
 				}
+				const queueWasPaused = messageQueue.isPaused(id);
 				messageQueue.pause(id);
-				void reloadAfterError(id);
+				void recoverFromError(id, queueWasPaused);
 			});
 		}
 		if (prevStatus !== 'ready' && current === 'ready') {
@@ -806,6 +860,7 @@
 	// its side when the new message arrives; calling the abort endpoint here could
 	// reach it after that message and kill the new response instead.
 	async function interruptResponse() {
+		cancelResumeRetry();
 		remoteGenerating = false;
 		await chat.stop();
 		const deadline = Date.now() + INTERRUPT_TIMEOUT_MS;
@@ -817,6 +872,7 @@
 	async function stop() {
 		// Stopping means "wait for me": don't fire the next queued message.
 		messageQueue.pause(conversation.id);
+		cancelResumeRetry();
 		fetch(`/api/chat/${conversation.id}/abort`, { method: 'POST' }).catch(() => undefined);
 		await chat.stop();
 	}

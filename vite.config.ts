@@ -54,6 +54,10 @@ export default defineConfig(({ mode }) => {
 						filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 				},
 
+				// The cross-site form check moves to src/lib/server/csrf.ts, which exempts the
+				// OAuth token endpoints other apps' servers post to (no Origin header).
+				csrf: { trustedOrigins: ['*'] },
+
 				csp: {
 					mode: 'nonce',
 					directives: {
@@ -134,8 +138,9 @@ export default defineConfig(({ mode }) => {
 					// Serve the precached app shell for navigations when offline.
 					navigateFallback: '/',
 					// Server endpoints that are navigated to (OAuth callbacks, file
-					// downloads) must reach the server, not get the cached shell.
-					navigateFallbackDenylist: [/^\/api\//],
+					// downloads) and the MCP gateway's OAuth approval page must reach
+					// the server, not get the cached shell.
+					navigateFallbackDenylist: [/^\/api\//, /^\/oauth\//, /^\/\.well-known\//],
 					// Notification click handling (see static/notification-sw.js).
 					// Shares from other apps (see static/share-target-sw.js).
 					importScripts: ['/notification-sw.js', '/share-target-sw.js'],

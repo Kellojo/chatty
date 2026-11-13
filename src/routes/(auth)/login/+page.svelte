@@ -2,6 +2,8 @@
 	import { authClient } from '$lib/auth-client.js';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { safeRedirectPath } from '$lib/redirect-to.js';
 	import { tick } from 'svelte';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -15,6 +17,12 @@
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	/** Where to go once signed in: back to e.g. an OAuth approval, else home. */
+	const redirectTo = $derived(safeRedirectPath(page.url.searchParams.get('redirectTo')));
+	/** Keeps ?redirectTo= when switching between sign-in and sign-up. */
+	const withRedirect = (path: string) =>
+		redirectTo === '/' ? path : `${path}?redirectTo=${encodeURIComponent(redirectTo)}`;
 
 	let email = $state('');
 	let password = $state('');
@@ -33,7 +41,7 @@
 		const { error } = await authClient.signIn.email({
 			email,
 			password,
-			callbackURL: '/'
+			callbackURL: redirectTo
 		});
 		if (error) {
 			errorMessage = error.message ?? 'Sign in failed';
@@ -43,7 +51,9 @@
 			passwordInput?.select();
 			return;
 		}
-		await goto(resolve('/'), { invalidateAll: true });
+		// A same-site path from ?redirectTo= (safeRedirectPath), e.g. an OAuth approval.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		await goto(redirectTo, { invalidateAll: true });
 	}
 </script>
 
@@ -53,10 +63,12 @@
 
 {#snippet signupLink()}
 	Don't have an account?
+	<!-- eslint-disable svelte/no-navigation-without-resolve -- resolve()d inside withRedirect -->
 	<a
-		href={resolve('/signup')}
+		href={withRedirect(resolve('/signup'))}
 		class="font-medium text-foreground underline-offset-4 hover:underline">Create one</a
 	>
+	<!-- eslint-enable svelte/no-navigation-without-resolve -->
 {/snippet}
 
 <AuthCard
@@ -68,6 +80,7 @@
 >
 	{#if data.authConfig.oidc}
 		<SsoButton
+			callbackURL={redirectTo}
 			primary={!data.authConfig.passwordLogin}
 			divider={data.authConfig.passwordLogin}
 			disabled={loading}
