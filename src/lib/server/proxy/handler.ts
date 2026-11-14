@@ -43,6 +43,7 @@ import {
 	toResponsesSdkTools
 } from './openaiResponses.js';
 import { cacheTokens, computeUsageCostUsd } from './pricing.js';
+import { NO_TIMING, stepTiming, type InferenceTiming } from '../llm/inferenceTiming.js';
 
 export interface OpenAiModelEntry {
 	id: string;
@@ -254,9 +255,11 @@ async function respondNonStreaming(
 		try {
 			const model = resolveModel(target);
 			const result = startStream(prepared, model, request.signal);
+			let timing = NO_TIMING;
 			for await (const part of result.fullStream) {
 				if (part.type === 'error') throw part.error;
 				if (part.type === 'abort') throw new Error('Upstream aborted the request');
+				if (part.type === 'finish-step') timing = stepTiming(part.performance);
 				if (!isContentful(part)) continue;
 				contentful = true;
 				assembler.add(part);
@@ -273,7 +276,8 @@ async function respondNonStreaming(
 				inputTokens: usage?.inputTokens ?? null,
 				outputTokens: usage?.outputTokens ?? null,
 				...cacheTokens(usage),
-				costUsd: servedCost(db, target, usage)
+				costUsd: servedCost(db, target, usage),
+				...timing
 			});
 			return new Response(JSON.stringify(assembler.build()), {
 				status: 200,
@@ -333,6 +337,7 @@ function respondStreaming(
 					target: ModelMappingTarget;
 					index: number;
 					usage: LanguageModelUsage | null;
+					timing: InferenceTiming;
 				} | null = null;
 				let lastError: unknown = null;
 				for (let i = 0; i < resolved.targets.length; i++) {
@@ -341,15 +346,17 @@ function respondStreaming(
 					try {
 						const model = resolveModel(target);
 						const result = startStream(prepared, model, abort.signal);
+						let timing = NO_TIMING;
 						for await (const part of result.fullStream) {
 							if (part.type === 'error') throw part.error;
 							if (part.type === 'abort') {
 								throw abort.signal.reason ?? new Error('Upstream aborted the request');
 							}
+							if (part.type === 'finish-step') timing = stepTiming(part.performance);
 							if (!isContentful(part)) continue;
 							contentful = true;
 							if (part.type === 'finish') {
-								served = { target, index: i, usage: part.totalUsage };
+								served = { target, index: i, usage: part.totalUsage, timing };
 							}
 							format.part(part, emit);
 						}
@@ -375,7 +382,8 @@ function respondStreaming(
 					inputTokens: served.usage?.inputTokens ?? null,
 					outputTokens: served.usage?.outputTokens ?? null,
 					...cacheTokens(served.usage),
-					costUsd: servedCost(db, served.target, served.usage)
+					costUsd: servedCost(db, served.target, served.usage),
+					...served.timing
 				});
 				controller.close();
 			};

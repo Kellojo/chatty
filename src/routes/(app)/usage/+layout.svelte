@@ -20,6 +20,7 @@
 	const path = $derived(page.url.pathname.replace(/\/$/, ''));
 	const onRequests = $derived(path.startsWith('/usage/requests'));
 	const onSubscriptions = $derived(path.startsWith('/usage/subscriptions'));
+	const onSpeed = $derived(path.startsWith('/usage/speed'));
 	// A single request has no time range to pick.
 	const onRequestDetail = $derived(/^\/usage\/requests\/[^/]+$/.test(path));
 
@@ -27,7 +28,8 @@
 	const tabs = $derived([
 		{ href: resolve('/usage'), label: 'Overview', active: path === '/usage' },
 		{ href: resolve('/usage/requests'), label: 'Requests', active: onRequests },
-		{ href: resolve('/usage/subscriptions'), label: 'Subscriptions', active: onSubscriptions }
+		{ href: resolve('/usage/subscriptions'), label: 'Subscriptions', active: onSubscriptions },
+		{ href: resolve('/usage/speed'), label: 'Speed', active: onSpeed }
 	]);
 	const tabQuery = $derived(rangeQuery(page.url.searchParams));
 
@@ -102,7 +104,7 @@
 		<PageHeader
 			title="Usage"
 			icon={GaugeIcon}
-			description="Tokens, cost and requests across your chats, agents and API keys."
+			description="Tokens, cost, requests and model speed across your chats, agents and API keys."
 		/>
 		<!-- Tabs, with the time control right of them on one baseline; phones get a select
 		     under the tabs instead. -->

@@ -14,6 +14,7 @@ import {
 	proxyRequestFirstStartedAt,
 	proxyRequestTopModels,
 	proxyRequestProviderUsage,
+	proxyRequestSpeedSamples,
 	proxyRequestStats,
 	toPublic
 } from './proxy-requests.js';
@@ -227,6 +228,39 @@ describe('proxy-requests repo', () => {
 		expect(u1.outputTokens).toBe(20);
 
 		expect(proxyRequestStats(db, { model: 'nope' }).total).toBe(0);
+	});
+
+	it('stores call timing and lists timed, completed calls for speed stats', () => {
+		const timed = logRequest('u1', 'fast', true);
+		finalizeProxyRequest(db, timed.id, {
+			status: 'complete',
+			providerId: 'p1',
+			modelId: 'm1',
+			inputTokens: 1200,
+			outputTokens: 300,
+			ttftMs: 400,
+			decodeMs: 6000
+		});
+		const untimed = logRequest('u1', 'fast');
+		finalizeProxyRequest(db, untimed.id, { status: 'complete', providerId: 'p1', modelId: 'm1' });
+		const failed = logRequest('u1', 'fast', true);
+		finalizeProxyRequest(db, failed.id, { status: 'failed', ttftMs: 100, decodeMs: 50 });
+		const otherUser = logRequest('u2', 'fast', true);
+		finalizeProxyRequest(db, otherUser.id, { status: 'complete', ttftMs: 100, decodeMs: 50 });
+
+		expect(toPublic(getProxyRequest(db, timed.id)!)).toMatchObject({ ttftMs: 400, decodeMs: 6000 });
+		expect(proxyRequestSpeedSamples(db, { userId: 'u1' })).toEqual([
+			{
+				providerId: 'p1',
+				providerName: null,
+				model: 'm1',
+				inputTokens: 1200,
+				outputTokens: 300,
+				cacheReadTokens: null,
+				ttftMs: 400,
+				decodeMs: 6000
+			}
+		]);
 	});
 
 	it('failRunningProxyRequests marks only running rows', () => {

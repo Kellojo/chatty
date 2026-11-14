@@ -6,6 +6,7 @@ import type {
 	RequestSource
 } from '$lib/types.js';
 import { publishServerEvent } from '../../events/bus.js';
+import type { KeyedSpeedSample } from '$lib/inference-speed.js';
 import type { Db } from '../index.js';
 
 export interface ProxyRequestRow {
@@ -27,6 +28,8 @@ export interface ProxyRequestRow {
 	cache_read_tokens: number | null;
 	cache_write_tokens: number | null;
 	cost_usd: number | null;
+	ttft_ms: number | null;
+	decode_ms: number | null;
 	stream: number;
 	error: string | null;
 	source: string;
@@ -57,6 +60,8 @@ export function toPublic(row: ProxyRequestRow): ProxyRequest {
 		cacheReadTokens: row.cache_read_tokens ?? null,
 		cacheWriteTokens: row.cache_write_tokens ?? null,
 		costUsd: row.cost_usd,
+		ttftMs: row.ttft_ms ?? null,
+		decodeMs: row.decode_ms ?? null,
 		stream: row.stream === 1,
 		error: row.error,
 		source: row.source as ProxyRequest['source'],
@@ -119,6 +124,10 @@ export interface FinalizeProxyRequestInput {
 	cacheReadTokens?: number | null;
 	cacheWriteTokens?: number | null;
 	costUsd?: number | null;
+	/** Model call start -> first generated token. */
+	ttftMs?: number | null;
+	/** First generated token -> end of the model call. */
+	decodeMs?: number | null;
 	error?: string | null;
 }
 
@@ -126,7 +135,8 @@ export function finalizeProxyRequest(db: Db, id: string, patch: FinalizeProxyReq
 	db.prepare(
 		`UPDATE proxy_requests SET status = ?, http_status = ?, latency_ms = ?, mapping_id = ?,
 		 provider_id = ?, model_id = ?, fallback_index = ?, input_tokens = ?, output_tokens = ?,
-		 cache_read_tokens = ?, cache_write_tokens = ?, cost_usd = ?, error = ?
+		 cache_read_tokens = ?, cache_write_tokens = ?, cost_usd = ?, ttft_ms = ?, decode_ms = ?,
+		 error = ?
 		 WHERE id = ?`
 	).run(
 		patch.status,
@@ -141,6 +151,8 @@ export function finalizeProxyRequest(db: Db, id: string, patch: FinalizeProxyReq
 		patch.cacheReadTokens ?? null,
 		patch.cacheWriteTokens ?? null,
 		patch.costUsd ?? null,
+		patch.ttftMs ?? null,
+		patch.decodeMs ?? null,
 		patch.error ?? null,
 		id
 	);
@@ -494,6 +506,50 @@ export function proxyRequestProviderUsage(
 		cacheReadTokens: r.cache_read_tokens,
 		cacheWriteTokens: r.cache_write_tokens,
 		costUsd: r.cost_usd
+	}));
+}
+
+/**
+ * Timed, completed model calls matching `filters`, for tokens/sec stats. Only the columns
+ * the stats need, newest first, capped at `limit` so a long range stays cheap.
+ */
+export function proxyRequestSpeedSamples(
+	db: Db,
+	filters: ProxyRequestFilters = {},
+	limit = 20_000
+): KeyedSpeedSample[] {
+	const { where, args } = buildWhere({ ...filters, status: 'complete' });
+	const rows = db
+		.prepare(
+			`SELECT pr.provider_id AS provider_id, p.name AS provider_name,
+				COALESCE(pr.model_id, pr.requested_model) AS model,
+				pr.input_tokens, pr.output_tokens, pr.cache_read_tokens, pr.ttft_ms, pr.decode_ms
+			 FROM (
+				SELECT * FROM proxy_requests ${where} AND ttft_ms IS NOT NULL
+				ORDER BY started_at DESC
+				LIMIT ?
+			 ) pr
+			 LEFT JOIN providers p ON p.id = pr.provider_id`
+		)
+		.all(...args, limit) as {
+		provider_id: string | null;
+		provider_name: string | null;
+		model: string;
+		input_tokens: number | null;
+		output_tokens: number | null;
+		cache_read_tokens: number | null;
+		ttft_ms: number | null;
+		decode_ms: number | null;
+	}[];
+	return rows.map((r) => ({
+		providerId: r.provider_id,
+		providerName: r.provider_name,
+		model: r.model,
+		inputTokens: r.input_tokens,
+		outputTokens: r.output_tokens,
+		cacheReadTokens: r.cache_read_tokens,
+		ttftMs: r.ttft_ms,
+		decodeMs: r.decode_ms
 	}));
 }
 

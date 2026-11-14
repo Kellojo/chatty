@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { formatCost, formatLatency, formatToken } from '$lib/formats.js';
+	import { formatMs, formatTps, tokensPerSecond } from '$lib/inference-speed.js';
 	import type { MessageUsage } from '$lib/types.js';
 
 	let {
@@ -57,10 +58,16 @@
 		return out;
 	}
 
+	// Timed replies measure generation only; older ones fall back to the whole latency.
+	const timed = $derived(usage.decodeMs != null);
 	const throughput = $derived(
-		usage.outputTokens == null || usage.latencyMs == null || usage.latencyMs <= 0
-			? null
-			: usage.outputTokens / (usage.latencyMs / 1000)
+		tokensPerSecond(usage.outputTokens, timed ? usage.decodeMs : usage.latencyMs)
+	);
+	const inputThroughput = $derived(tokensPerSecond(usage.inputTokens, usage.ttftMs));
+	const speedTitle = $derived(
+		timed
+			? 'Output tokens per second while generating (time to first token and tool runs excluded)'
+			: 'Output tokens per second, including time to first token'
 	);
 
 	function formatPct(fraction: number): string {
@@ -103,18 +110,15 @@
 				</dd>
 			</div>
 			<div class="rounded-xl border border-border/60 px-3 py-2.5">
-				<dt
-					class="truncate text-xs text-muted-foreground"
-					title="Output tokens per second, including time to first token"
-				>
-					Speed<span class="sr-only">, output tokens per second including time to first token</span>
+				<dt class="truncate text-xs text-muted-foreground" title={speedTitle}>
+					{timed ? 'Output speed' : 'Speed'}<span class="sr-only">, {speedTitle}</span>
 				</dt>
 				<dd class="mt-0.5 text-base font-semibold whitespace-nowrap tabular-nums">
 					{#if throughput == null}
 						{@render empty()}
 					{:else}
-						{throughput >= 100 ? Math.round(throughput) : throughput.toFixed(1)}<span
-							class="ml-0.5 text-xs font-normal text-muted-foreground">tok/s</span
+						{formatTps(throughput)}<span class="ml-0.5 text-xs font-normal text-muted-foreground"
+							>tok/s</span
 						>
 					{/if}
 				</dd>
@@ -130,6 +134,49 @@
 				{/if}
 			</div>
 		</dl>
+
+		{#if usage.ttftMs != null}
+			<section class="rounded-xl border border-border/60 p-3">
+				<h3 class="text-xs font-medium text-muted-foreground">Timing</h3>
+				<dl class="-mx-3 mt-2 grid grid-cols-3 gap-2">
+					<div class="px-3">
+						<dt
+							class="text-xs text-muted-foreground"
+							title="Time to first token: waiting for the model's first output, summed over the reply's model calls"
+						>
+							Waiting
+						</dt>
+						<dd class="text-sm font-semibold tabular-nums">{formatMs(usage.ttftMs)}</dd>
+					</div>
+					<div class="px-3">
+						<dt
+							class="text-xs text-muted-foreground"
+							title="From first to last output token, summed over the reply's model calls"
+						>
+							Generating
+						</dt>
+						<dd class="text-sm font-semibold tabular-nums">{formatMs(usage.decodeMs)}</dd>
+					</div>
+					<div class="px-3">
+						<dt
+							class="text-xs text-muted-foreground"
+							title="Input tokens per second of time to first token (prompt processing). Cached input makes this read high."
+						>
+							Input
+						</dt>
+						<dd class="text-sm font-semibold whitespace-nowrap tabular-nums">
+							{#if inputThroughput == null}{@render empty()}{:else}{formatTps(inputThroughput)}<span
+									class="ml-0.5 text-xs font-normal text-muted-foreground">tok/s</span
+								>{/if}
+						</dd>
+					</div>
+				</dl>
+				<p class="mt-2 text-xs text-muted-foreground">
+					Summed over the reply's model calls. Tool runs and other overhead make up the rest of the
+					latency.
+				</p>
+			</section>
+		{/if}
 
 		<section class="rounded-xl border border-border/60 p-3">
 			<h3 class="text-xs font-medium text-muted-foreground">Tokens</h3>

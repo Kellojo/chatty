@@ -7,6 +7,7 @@
 	import { formatDateTime } from '$lib/datetime.js';
 	import { formatCount, formatLatency } from '$lib/formats.js';
 	import { billedParts } from '$lib/components/app/usage/usage.js';
+	import { formatMs, formatTps, inputSpeed, outputSpeed } from '$lib/inference-speed.js';
 	import { onServerEvent } from '$lib/state/events.svelte.js';
 	import { invalidateWhenIdle } from '$lib/state/invalidate-when-idle.js';
 	import { PROXY_REQUESTS_KEY } from '$lib/load-keys.js';
@@ -17,6 +18,8 @@
 
 	const request = $derived(data.request);
 	const billed = $derived(billedParts(request.costUsd, { precise: true }));
+	const outputTps = $derived(outputSpeed(request));
+	const inputTps = $derived(inputSpeed(request));
 	const sourceLabel = $derived(request.source.charAt(0).toUpperCase() + request.source.slice(1));
 
 	onMount(() => {
@@ -120,6 +123,16 @@
 					<dd>{formatDateTime(request.startedAt, data.timeFormat)}</dd>
 					<dt class="text-muted-foreground">Latency</dt>
 					<dd>{formatLatency(request.latencyMs)}</dd>
+					{#if request.ttftMs != null}
+						<dt class="text-muted-foreground">Speed</dt>
+						<dd class="tabular-nums">
+							{formatMs(request.ttftMs)} to first token
+							{#if outputTps != null}
+								· {formatTps(outputTps)} tok/s output{/if}
+							{#if inputTps != null}
+								· {formatTps(inputTps)} tok/s input{/if}
+						</dd>
+					{/if}
 					<dt class="text-muted-foreground">Requested model</dt>
 					<dd>{request.requestedModel}</dd>
 					<dt class="text-muted-foreground">Served provider / model</dt>

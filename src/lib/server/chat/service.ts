@@ -69,6 +69,7 @@ import { loadUnsummarizedMessages } from '../db/repo/conversation-summaries.js';
 import { findModel, findRoleModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
+import { addTiming, NO_TIMING, stepTiming, type InferenceTiming } from '../llm/inferenceTiming.js';
 import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
 import { getGlobalInstructions } from '../db/repo/user-settings.js';
 import { publishServerEvent } from '../events/bus.js';
@@ -910,9 +911,12 @@ export async function runChatTurn(
 					let stepIndex = 0;
 					let lastStepAt = startedAt;
 					const priceRow = findModel(db, target.providerId, target.modelId);
+					// Summed over the reply's model calls, for its tokens/sec.
+					let turnTiming: InferenceTiming = NO_TIMING;
 					const recordStep = (patch: {
 						status: 'complete' | 'failed';
 						usage?: { inputTokens?: number | null; outputTokens?: number | null };
+						timing?: InferenceTiming;
 						error?: string | null;
 					}) => {
 						const now = Date.now();
@@ -937,8 +941,10 @@ export async function runChatTurn(
 							outputTokens: patch.usage?.outputTokens ?? null,
 							...cacheTokens(patch.usage),
 							costUsd: computeUsageCostUsd(priceRow, patch.usage),
+							...(patch.timing ?? NO_TIMING),
 							error: patch.error ?? null
 						});
+						if (patch.timing) turnTiming = addTiming(turnTiming, patch.timing);
 						lastStepAt = now;
 					};
 					log.info('LLM inference started', {
@@ -1003,7 +1009,11 @@ export async function runChatTurn(
 							? { maxOutputTokens: conversation.max_tokens }
 							: {}),
 						onStepEnd: (step) => {
-							recordStep({ status: 'complete', usage: step.usage });
+							recordStep({
+								status: 'complete',
+								usage: step.usage,
+								timing: stepTiming(step.performance)
+							});
 							for (const tr of step.toolResults) {
 								if (tr.toolName === 'generate_image' || tr.toolName === 'edit_image') {
 									// Only ids belonging to this conversation: tool output is untrusted.
@@ -1072,6 +1082,7 @@ export async function runChatTurn(
 						totalTokens: totalTokensUsed?.totalTokens ?? null,
 						latencyMs: Date.now() - startedAt,
 						costUsd: computeUsageCostUsd(priceRow, totalTokensUsed),
+						...turnTiming,
 						promptChars: {
 							system:
 								promptParts.base.length + promptParts.widgets.length + promptParts.system.length,

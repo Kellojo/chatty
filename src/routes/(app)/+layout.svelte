@@ -360,6 +360,14 @@
 	style:--sidebar-width={sidebarOpen ? '288px' : '0px'}
 	aria-hidden="true"
 ></div>
+<!-- A solid bar under a phone's status bar (zero tall elsewhere). iOS 26 standalone web
+     apps otherwise draw a progressive "glass" blur over the top edge that smears the
+     header below it; a fixed, opaque element at the top makes Safari tint the status bar
+     with its colour instead. -->
+<div
+	class="pointer-events-none fixed inset-x-0 top-0 z-10 h-[env(safe-area-inset-top)] bg-background"
+	aria-hidden="true"
+></div>
 <div class="flex h-screen overflow-hidden pt-(--titlebar-height)">
 	<!-- While a finger drags it, it follows without a transition; letting go settles it
 	     open or closed at the finger's speed (settleMs), as iOS does. -->

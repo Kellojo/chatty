@@ -436,6 +436,10 @@ export interface ProxyRequest {
 	cacheReadTokens: number | null;
 	cacheWriteTokens: number | null;
 	costUsd: number | null;
+	/** Model call start -> first generated token; null when not timed. */
+	ttftMs: number | null;
+	/** First generated token -> end of the model call; null when not timed. */
+	decodeMs: number | null;
 	stream: boolean;
 	error: string | null;
 	source: RequestSource;
@@ -470,6 +474,9 @@ export interface MessageUsage {
 	totalTokens: number | null;
 	latencyMs: number | null;
 	costUsd: number | null;
+	/** Summed over the reply's model calls (tool runs excluded); absent on untimed rows. */
+	ttftMs?: number | null;
+	decodeMs?: number | null;
 	/** Present on newer messages; absent on pre-breakdown rows. */
 	promptChars?: PromptCharBreakdown;
 }

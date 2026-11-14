@@ -6,7 +6,7 @@
 	// (see `urlTransform` in markdown.svelte).
 	import { onMount } from 'svelte';
 	import { cn } from '$lib/utils';
-	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import ImageViewer from '$lib/components/app/ImageViewer.svelte';
 
 	type Props = {
 		src?: string | null;
@@ -62,12 +62,5 @@
 			onerror={() => (failed = true)}
 		/>
 	</button>
-	<Dialog.Root bind:open>
-		<Dialog.Content
-			class="w-auto max-w-[calc(100vw-2rem)] bg-transparent p-0 shadow-none ring-0 sm:max-w-[calc(100vw-4rem)] dark:ring-0"
-		>
-			<Dialog.Title class="sr-only">{alt || fileName || 'Image'}</Dialog.Title>
-			<img {src} {alt} class="max-h-[calc(100dvh-4rem)] max-w-full rounded-lg object-contain" />
-		</Dialog.Content>
-	</Dialog.Root>
+	<ImageViewer bind:open {src} {alt} filename={fileName} />
 {/if}
