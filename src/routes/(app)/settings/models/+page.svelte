@@ -5,6 +5,7 @@
 	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import CoinsIcon from '@lucide/svelte/icons/coins';
+	import StarIcon from '@lucide/svelte/icons/star';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
@@ -21,31 +22,25 @@
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
+	import ModelEditDialog, {
+		type ModelEditTab
+	} from '$lib/components/app/settings/models/ModelEditDialog.svelte';
+	import {
+		capabilityIcon,
+		capabilityLabel
+	} from '$lib/components/app/settings/models/capabilities.js';
+	import ArtificialAnalysisFooter from '$lib/components/app/settings/ArtificialAnalysisFooter.svelte';
 	import { MODEL_ROLE_LABEL } from '$lib/model-roles.js';
 	import type { ModelRole } from '$lib/types.js';
 	import { formatCount } from '$lib/formats.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
-	import { resolveModelBrand, resolveProviderBrand } from '$lib/provider-brand.js';
+	import { resolveBrand, resolveProviderBrand, type Brand } from '$lib/provider-brand.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
 
 	type Model = PageData['models'][number];
-	type Capability =
-		'chat' | 'vision' | 'tool_use' | 'streaming' | 'image' | 'decisions' | 'transcription';
-
-	const CAPABILITY_LABEL: Record<Capability, string> = {
-		chat: 'Chat',
-		vision: 'Vision (image input)',
-		tool_use: 'Tool use',
-		streaming: 'Streaming',
-		image: 'Image generation',
-		decisions: 'Decisions API',
-		transcription: 'Speech to text'
-	};
-	const allCapabilities = Object.keys(CAPABILITY_LABEL) as Capability[];
-	const capLabel = (cap: string) => CAPABILITY_LABEL[cap as Capability] ?? cap;
 
 	let addOpen = $state(false);
 	let addProviderId = $state('');
@@ -53,17 +48,20 @@
 	let addDisplayName = $state('');
 	let addBusy = $state(false);
 
-	let capsModel = $state<Model | null>(null);
-	let capsSelected = $state<Capability[]>([]);
-	let capsBusy = $state(false);
-
-	let pricingModel = $state<Model | null>(null);
-	let pricingInput = $state('');
-	let pricingOutput = $state('');
-	let pricingCacheRead = $state('');
-	let pricingCacheWrite = $state('');
-	let pricingContext = $state('');
-	let pricingBusy = $state(false);
+	/** The model in the edit dialog, and which tab it opened on. */
+	let editModel = $state<Model | null>(null);
+	let editTab = $state<ModelEditTab>('capabilities');
+	function openEdit(model: Model, tab: ModelEditTab = 'capabilities') {
+		editTab = tab;
+		editModel = model;
+	}
+	const editVisual = $derived.by(() => {
+		if (!editModel) return null;
+		const provider = providersById.get(editModel.providerId);
+		const visual = modelName(editModel);
+		const providerBrand = provider ? resolveProviderBrand(provider) : null;
+		return { ...visual, brand: visual.brand ?? (visual.maker ? null : providerBrand) };
+	});
 
 	let deleteId = $state<string | null>(null);
 	let deleteBusy = $state(false);
@@ -82,10 +80,18 @@
 	let expanded = $state<Record<string, boolean>>({});
 
 	/** Capabilities nearly every model has; listing them on each row is noise. */
-	const COMMON_CAPS: ReadonlySet<string> = new Set<Capability>(['chat', 'streaming']);
+	const COMMON_CAPS: ReadonlySet<string> = new Set(['chat', 'streaming']);
+
+	/** Artificial Analysis Intelligence Index scores; empty without an API key. */
+	const hasScores = $derived(Object.keys(data.scores).length > 0);
+	const maxScore = $derived(Math.max(1, ...Object.values(data.scores).map((s) => s.index)));
+	const formatScore = (index: number) => index.toFixed(1);
+
+	type SortKey = 'name' | 'intelligence';
+	let sort = $state<SortKey>('name');
 
 	function modelsFor(providerId: string): Model[] {
-		return data.models.filter(
+		const list = data.models.filter(
 			(m) =>
 				m.providerId === providerId &&
 				(status === 'all' || m.enabled === (status === 'enabled')) &&
@@ -93,6 +99,10 @@
 					m.displayName.toLowerCase().includes(needle) ||
 					m.modelId.toLowerCase().includes(needle))
 		);
+		if (sort !== 'intelligence' || !hasScores) return list;
+		// Best first; unscored models keep their name order at the end.
+		const score = (m: Model) => data.scores[m.id]?.index ?? -1;
+		return [...list].sort((a, b) => score(b) - score(a));
 	}
 
 	const enabledCount = $derived(data.models.filter((m) => m.enabled).length);
@@ -228,109 +238,58 @@
 		}
 	}
 
-	function openCaps(model: Model) {
-		capsModel = model;
-		capsSelected = model.capabilities.filter((c): c is Capability =>
-			allCapabilities.includes(c as Capability)
-		);
+	/** Company names for the brands that are also model makers ("anthropic/…" reads as Anthropic). */
+	const MAKER_LABEL: Partial<Record<Brand, string>> = {
+		claude: 'Anthropic',
+		openai: 'OpenAI',
+		gemini: 'Google',
+		grok: 'xAI',
+		deepseek: 'DeepSeek',
+		mistral: 'Mistral',
+		qwen: 'Qwen',
+		meta: 'Meta'
+	};
+
+	/** "vendor/model" ids read as the model's name, with the vendor moved to the line below. */
+	function modelName(model: Model): { name: string; maker: string | null; brand: Brand | null } {
+		const slash = model.displayName.lastIndexOf('/');
+		const name = slash > 0 ? model.displayName.slice(slash + 1) : model.displayName;
+		const vendor = slash > 0 ? model.displayName.slice(0, slash) : null;
+		// The vendor prefix wins over the name: "aion-labs/aion-rp-llama" is by aion-labs, not Meta.
+		const brand = vendor ? resolveBrand(`${vendor}/`) : resolveBrand(model.modelId, name);
+		const maker = (brand && MAKER_LABEL[brand]) ?? vendor;
+		return { name, maker, brand };
 	}
 
-	function toggleCap(cap: Capability) {
-		capsSelected = capsSelected.includes(cap)
-			? capsSelected.filter((c) => c !== cap)
-			: [...capsSelected, cap];
+	/** Stand-in for makers without a brand icon: initials for multi-word names ("aion-labs" →
+	 *  "AL"), the first three letters for one word ("alibaba" → "ALI"), so the two differ. */
+	function monogram(maker: string): string {
+		const words = maker.split(/[\s_.-]+/).filter(Boolean);
+		if (words.length > 1) return (words[0][0] + words[1][0]).toUpperCase();
+		return maker.slice(0, 3).toUpperCase();
 	}
 
-	async function submitCaps() {
-		if (!capsModel) return;
-		capsBusy = true;
-		try {
-			// Keep anything this dialog doesn't list, so saving never drops it.
-			const unlisted = capsModel.capabilities.filter(
-				(c) => !allCapabilities.includes(c as Capability)
-			);
-			await api(`/api/models/${capsModel.id}`, 'PATCH', {
-				capabilities: [...capsSelected, ...unlisted]
-			});
-			toast.success('Capabilities updated');
-			capsModel = null;
-			await invalidateAll();
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to update capabilities');
-		} finally {
-			capsBusy = false;
-		}
+	/** Stable hue per maker; the golden-angle step spreads similar names around the wheel. */
+	function makerHue(maker: string): number {
+		let hash = 0;
+		for (const char of maker) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+		return Math.round((Math.abs(hash) * 137.508) % 360);
 	}
 
-	function openPricing(model: Model) {
-		pricingModel = model;
-		pricingInput = model.priceInput !== null ? String(model.priceInput) : '';
-		pricingOutput = model.priceOutput !== null ? String(model.priceOutput) : '';
-		pricingCacheRead = model.priceCacheRead !== null ? String(model.priceCacheRead) : '';
-		pricingCacheWrite = model.priceCacheWrite !== null ? String(model.priceCacheWrite) : '';
-		pricingContext = model.contextLength !== null ? String(model.contextLength) : '';
+	/** Capability icons shown per row; the rest collapse into "+n". */
+	const MAX_CAP_ICONS = 3;
+
+	function formatUsd(value: number): string {
+		if (value === 0) return '$0';
+		return value < 0.01 ? `$${Number(value.toPrecision(2))}` : `$${value.toFixed(2)}`;
 	}
 
-	function parsePrice(raw: string): number | null {
-		const trimmed = raw.trim();
-		if (trimmed === '') return null;
-		const value = Number(trimmed);
-		if (!Number.isFinite(value) || value < 0)
-			throw new Error('Prices must be non-negative numbers');
-		return value;
-	}
-
-	function parseContext(raw: string): number | null {
-		const trimmed = raw.trim();
-		if (trimmed === '') return null;
-		const value = Number(trimmed);
-		if (!Number.isInteger(value) || value <= 0)
-			throw new Error('Context length must be a positive integer');
-		return value;
-	}
-
-	async function submitPricing(event: SubmitEvent) {
-		event.preventDefault();
-		if (!pricingModel) return;
-		pricingBusy = true;
-		try {
-			await api(`/api/models/${pricingModel.id}`, 'PATCH', {
-				priceInput: parsePrice(pricingInput),
-				priceOutput: parsePrice(pricingOutput),
-				priceCacheRead: parsePrice(pricingCacheRead),
-				priceCacheWrite: parsePrice(pricingCacheWrite),
-				contextLength: parseContext(pricingContext)
-			});
-			toast.success('Pricing updated');
-			pricingModel = null;
-			await invalidateAll();
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to update pricing');
-		} finally {
-			pricingBusy = false;
-		}
-	}
-
-	function formatUsdPerMillion(value: number): string {
-		return `$${Number(value.toPrecision(6))}`;
-	}
-
-	/** Secondary line: the API id (when it differs from the name), price and context window. */
-	function modelDetails(model: Model): { text: string; title?: string; mono?: boolean }[] {
-		const parts: { text: string; title?: string; mono?: boolean }[] = [];
-		if (model.modelId !== model.displayName) parts.push({ text: model.modelId, mono: true });
-		if (model.priceInput !== null || model.priceOutput !== null) {
-			const input = model.priceInput !== null ? formatUsdPerMillion(model.priceInput) : '?';
-			const output = model.priceOutput !== null ? formatUsdPerMillion(model.priceOutput) : '?';
-			parts.push({
-				text: `${input} / ${output} per 1M`,
-				title: 'Input / output price per 1M tokens (USD)'
-			});
-		}
-		if (model.contextLength !== null) {
-			parts.push({ text: `${formatCount(model.contextLength)} context` });
-		}
-		return parts;
+	function priceText(model: Model): string | null {
+		if (model.priceInput === null && model.priceOutput === null) return null;
+		if (model.priceInput === 0 && model.priceOutput === 0) return 'Free';
+		const input = model.priceInput !== null ? formatUsd(model.priceInput) : '?';
+		const output = model.priceOutput !== null ? formatUsd(model.priceOutput) : '?';
+		return `${input} / ${output}`;
 	}
 
 	async function confirmDelete() {
@@ -351,10 +310,25 @@
 
 <svelte:head><title>Models · Settings · Chatty</title></svelte:head>
 
+<!-- The maker's mark, else a tinted monogram of the maker, else a generic glyph. -->
+{#snippet modelTile(brand: Brand | null, maker: string | null)}
+	{#if brand}<ProviderIcon {brand} decorative class="size-5" />{:else if maker}<span
+			class="flex size-full items-center justify-center rounded-lg bg-[oklch(0.6_0.12_var(--hue)/0.14)] text-[10px] font-bold tracking-wide text-[oklch(0.5_0.14_var(--hue))] ring-1 ring-[oklch(0.6_0.12_var(--hue)/0.25)] ring-inset dark:text-[oklch(0.86_0.1_var(--hue))]"
+			style="--hue: {makerHue(maker)}"
+			aria-hidden="true">{monogram(maker)}</span
+		>{:else}<BoxesIcon class="size-4 opacity-70" />{/if}
+{/snippet}
+
+{#snippet notReported()}
+	<span class="text-muted-foreground/70" aria-hidden="true">—</span><span class="sr-only"
+		>Not reported</span
+	>
+{/snippet}
+
 <SettingsHeader title="Models">
 	{#snippet description()}
-		Models offered in the model picker.{#if data.providers.length > 1}
-			{enabledCount} of {data.models.length} enabled.{/if}
+		Models offered in the model picker. {#if data.providers.length > 1}{enabledCount} of {data
+				.models.length} enabled.{/if}
 		<span class="max-md:hidden"
 			>Pick the model for each purpose (chat, titles, memory, images…) in
 			<a
@@ -405,6 +379,26 @@
 				</button>
 			{/each}
 		</div>
+		{#if hasScores}
+			<div
+				class="flex h-9 shrink-0 items-stretch self-start rounded-full border p-0.5 sm:self-auto"
+				role="group"
+				aria-label="Sort by"
+			>
+				{#each [['name', 'Name'], ['intelligence', 'Intelligence']] as [value, label] (value)}
+					<button
+						type="button"
+						class="rounded-full px-3 text-xs {sort === value
+							? 'bg-accent font-medium text-accent-foreground'
+							: 'text-muted-foreground hover:text-foreground'}"
+						aria-pressed={sort === value}
+						onclick={() => (sort = value as SortKey)}
+					>
+						{label}
+					</button>
+				{/each}
+			</div>
+		{/if}
 	</div>
 {/if}
 
@@ -413,14 +407,18 @@
 	{@const collapsed = !filtering && !expanded[provider.id] && models.length > COLLAPSED_ROWS}
 	{@const shown = collapsed ? models.slice(0, COLLAPSED_ROWS) : models}
 	{@const providerBrand = resolveProviderBrand(provider)}
-	{@const showBrandIcons = models.some((m) => resolveModelBrand(m, provider) !== providerBrand)}
+	<!-- Context and price columns only for providers that report them (local servers don't). -->
+	{@const showContext = models.some((m) => m.contextLength !== null)}
+	{@const showPrice = models.some((m) => priceText(m) !== null)}
+	{@const showScore = models.some((m) => data.scores[m.id])}
+	{@const showStats = showContext || showPrice || showScore}
 	<SettingsSection
 		title={provider.name}
 		description={provider.enabled
 			? `${models.filter((m) => m.enabled).length} of ${models.length} enabled`
 			: 'Provider disabled, so its models are hidden from the picker.'}
 		flush
-		class={provider.enabled ? '' : 'opacity-70'}
+		class="{provider.enabled ? '' : 'opacity-70'} {showStats ? 'overflow-visible' : ''}"
 	>
 		{#snippet icon()}
 			{#if providerBrand}<ProviderIcon brand={providerBrand} class="size-4 shrink-0" />{/if}
@@ -456,67 +454,140 @@
 				or add one manually.
 			</p>
 		{:else}
+			{#if showStats}
+				<!-- Column labels; mirrors the row's trailing layout (stats, switch, menu). -->
+				<div
+					class="sticky top-0 z-20 flex items-center gap-2 border-b border-border/60 bg-card px-(--card-spacing) py-1.5 text-xs font-medium text-foreground/70 max-sm:hidden"
+					aria-hidden="true"
+				>
+					<span class="flex-1"></span>
+					<span class="mr-4 flex gap-4">
+						{#if showScore}<span
+								class="w-20 text-right"
+								title="Artificial Analysis Intelligence Index">Intelligence</span
+							>{/if}
+						{#if showContext}<span class="w-16 text-right">Context</span>{/if}
+						{#if showPrice}<span class="w-28 text-right" title="Input / output, USD"
+								>Price / 1M tokens</span
+							>{/if}
+					</span>
+					<span class="w-11"></span>
+					<span class="w-8"></span>
+				</div>
+			{/if}
+			<!-- The column header carries the top edge on desktop. -->
 			<ul
-				class="divide-y divide-border/60 border-t border-border/60"
+				class="divide-y divide-border/60 border-t border-border/60 {showStats
+					? 'sm:border-t-0'
+					: ''}"
 				aria-label="{provider.name} models"
 			>
 				{#each shown as model (model.id)}
-					{@const brand = resolveModelBrand(model, provider)}
-					{@const details = modelDetails(model)}
+					{@const { name, maker, brand: makerBrand } = modelName(model)}
+					<!-- The maker's mark, else its monogram; the provider's mark only when the maker is unknown. -->
+					{@const brand = makerBrand ?? (maker ? null : providerBrand)}
+					{@const price = priceText(model)}
+					{@const context = model.contextLength !== null ? formatCount(model.contextLength) : null}
 					{@const caps = model.capabilities.filter((c) => !COMMON_CAPS.has(c))}
-					<!-- "vendor/model" ids may wrap after the slash, never mid-name. -->
-					{@const title = model.displayName.replace('/', '/' + String.fromCharCode(0x200b))}
-					{#snippet modelIcon()}
-						{#if brand !== providerBrand}
-							{#if brand}<ProviderIcon {brand} class="size-4" />{:else}<BoxesIcon
-									class="size-4"
-								/>{/if}
-						{/if}
-					{/snippet}
+					<!-- On phones the stat columns become a short line under the maker. -->
+					{@const score = data.scores[model.id]}
+					{@const mobileStats = [
+						score && `AAI ${formatScore(score.index)}`,
+						context && `${context} ctx`,
+						price
+					]
+						.filter(Boolean)
+						.join(' · ')}
+					{#snippet modelIcon()}{@render modelTile(brand, maker)}{/snippet}
 					{#snippet modelMeta()}
-						<!-- Each separator travels with the part after it (nowrap), so a wrapped line
-							     never ends on a dangling dot; <wbr> marks the only break points. -->
-						{#each details as part, i (i)}{#if i > 0}<wbr />{/if}<span
-								class="whitespace-nowrap {i > 0 ? 'ml-1' : ''} {part.mono
-									? 'font-mono'
-									: 'tabular-nums'}"
-								title={part.title}
-								>{#if i > 0}<span class="mr-1" aria-hidden="true">·</span>{/if}{part.text}</span
-							>{/each}{#if caps.length > 0}<wbr /><span
-								class="sm:hidden {details.length > 0 ? 'ml-1' : ''}"
-								>{#if details.length > 0}<span class="mr-1" aria-hidden="true">·</span>{/if}{caps
-									.map(capLabel)
-									.join(', ')}</span
+						{#if maker}<span class="block truncate">{maker}</span>{/if}{#if mobileStats}<span
+								class="block truncate tabular-nums sm:hidden"
+								title="Context window · USD per 1M tokens, input / output">{mobileStats}</span
 							>{/if}
 					{/snippet}
 					<SettingsListItem
-						{title}
+						title={name}
 						titleAttr={model.modelId}
-						onclick={() => openCaps(model)}
+						onclick={() => openEdit(model)}
 						muted={!model.enabled}
-						leading={showBrandIcons ? modelIcon : undefined}
-						meta={details.length > 0 ? modelMeta : undefined}
+						leading={modelIcon}
+						meta={maker || mobileStats ? modelMeta : undefined}
 					>
 						{#snippet badges()}
+							{#if caps.length > 0}
+								<span class="flex items-center gap-1.5 text-muted-foreground/80">
+									{#each caps.slice(0, MAX_CAP_ICONS) as cap (cap)}
+										{@const Icon = capabilityIcon(cap)}
+										{#if Icon}
+											<span title={capabilityLabel(cap)}
+												><Icon class="size-3.5" /><span class="sr-only">{capabilityLabel(cap)}</span
+												></span
+											>
+										{:else}
+											<Badge variant="secondary" class="font-normal">{capabilityLabel(cap)}</Badge>
+										{/if}
+									{/each}
+									{#if caps.length > MAX_CAP_ICONS}
+										{@const rest = caps.slice(MAX_CAP_ICONS).map(capabilityLabel).join(', ')}
+										<span class="text-[11px] font-medium" title={rest}
+											>+{caps.length - MAX_CAP_ICONS}<span class="sr-only">: {rest}</span></span
+										>
+									{/if}
+								</span>
+							{/if}
 							{#if defaultIds.has(model.id)}
 								<Badge
 									variant="outline"
-									class="font-normal"
+									class="border-primary/30 font-normal text-primary"
 									title="Used in Defaults for: {rolesByModel[model.id]?.join(', ')}"
-									>In Defaults</Badge
+									><StarIcon class="size-3" />Default</Badge
 								>
 							{/if}
-							{#each caps as cap (cap)}
-								<!-- Phones: chips wrapped rows to double height, so a meta line lists them
-									instead. Without a meta line there's nothing to wrap under, so keep the chips. -->
-								<Badge
-									variant="secondary"
-									class="font-normal {details.length > 0 ? 'max-sm:hidden' : ''}"
-									>{capLabel(cap)}</Badge
-								>
-							{/each}
 						{/snippet}
 						{#snippet trailing()}
+							{#if showStats}
+								<span
+									class="mr-4 flex gap-4 text-xs text-muted-foreground tabular-nums max-sm:hidden"
+								>
+									{#if showScore}
+										<span
+											class="flex w-20 items-center justify-end gap-1.5"
+											title={score
+												? `Artificial Analysis Intelligence Index · matched to ${score.aaName}`
+												: 'No Artificial Analysis score found for this model'}
+										>
+											{#if score}
+												<!-- Bar relative to the best score on the page, for a quick ranking read. -->
+												<span
+													class="h-1 w-6 overflow-hidden rounded-full bg-muted"
+													aria-hidden="true"
+													><span
+														class="block h-full rounded-full bg-primary/60"
+														style="width: {Math.round((score.index / maxScore) * 100)}%"
+													></span></span
+												>
+												<span class="font-medium text-foreground/80"
+													>{formatScore(score.index)}</span
+												>
+											{:else}{@render notReported()}{/if}
+										</span>
+									{/if}
+									{#if showContext}
+										<span class="w-16 text-right" title="Context window (tokens)"
+											>{#if context}{context}{:else}{@render notReported()}{/if}</span
+										>
+									{/if}
+									{#if showPrice}
+										<span
+											class="w-28 text-right"
+											title={price && price !== 'Free'
+												? `${price.replace(' / ', ' in / ')} out per 1M tokens (USD)`
+												: 'USD per 1M tokens, input / output'}
+											>{#if price}{price}{:else}{@render notReported()}{/if}</span
+										>
+									{/if}
+								</span>
+							{/if}
 							<Switch
 								checked={model.enabled}
 								aria-label="Enable {model.displayName}"
@@ -528,12 +599,12 @@
 									{
 										label: 'Edit capabilities',
 										icon: SparklesIcon,
-										onSelect: () => openCaps(model)
+										onSelect: () => openEdit(model, 'capabilities')
 									},
 									{
 										label: 'Edit pricing & context',
 										icon: CoinsIcon,
-										onSelect: () => openPricing(model)
+										onSelect: () => openEdit(model, 'pricing')
 									},
 									'separator',
 									{
@@ -587,6 +658,10 @@
 	</SettingsSection>
 {/each}
 
+{#if data.providers.length > 0}
+	<ArtificialAnalysisFooter aa={data.aa} />
+{/if}
+
 <Dialog.Root bind:open={addOpen}>
 	<Dialog.Content>
 		<Dialog.Header>
@@ -629,121 +704,18 @@
 	</Dialog.Content>
 </Dialog.Root>
 
-<Dialog.Root open={capsModel !== null} onOpenChange={(open) => !open && (capsModel = null)}>
-	<Dialog.Content>
-		<Dialog.Header>
-			<Dialog.Title>Edit capabilities · {capsModel?.displayName}</Dialog.Title>
-			<Dialog.Description>
-				Vision enables image attachments; tool use is required for MCP tools. Image generation,
-				Decisions API and Speech to text make the model selectable for that role in Defaults.
-			</Dialog.Description>
-		</Dialog.Header>
-		<div class="flex flex-col gap-3">
-			{#each allCapabilities as cap (cap)}
-				<label class="flex items-center gap-3 text-sm">
-					<Switch checked={capsSelected.includes(cap)} onCheckedChange={() => toggleCap(cap)} />
-					{CAPABILITY_LABEL[cap]}
-				</label>
-			{/each}
-		</div>
-		<Dialog.Footer>
-			{#if capsModel}
-				{@const model = capsModel}
-				<Button
-					variant="ghost"
-					class="sm:mr-auto"
-					onclick={() => {
-						capsModel = null;
-						openPricing(model);
-					}}>Pricing &amp; context…</Button
-				>
-			{/if}
-			<Button variant="outline" onclick={() => (capsModel = null)}>Cancel</Button>
-			<Button disabled={capsBusy} onclick={submitCaps}>
-				{capsBusy ? 'Saving…' : 'Save changes'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
-
-<Dialog.Root open={pricingModel !== null} onOpenChange={(open) => !open && (pricingModel = null)}>
-	<Dialog.Content>
-		<Dialog.Header>
-			<Dialog.Title>Edit pricing &amp; context · {pricingModel?.displayName}</Dialog.Title>
-			<Dialog.Description>
-				USD per 1M tokens. Leave empty when unknown; cost is only reported when both prices are set.
-				Cached prompt tokens use the input price unless a cache price is set. Context length drives
-				automatic chat compaction; providers like OpenRouter fill it when you sync models.
-			</Dialog.Description>
-		</Dialog.Header>
-		<form onsubmit={submitPricing} class="flex flex-col gap-4">
-			<div class="flex flex-col gap-2">
-				<Label for="price-input">Input price</Label>
-				<Input
-					id="price-input"
-					bind:value={pricingInput}
-					type="number"
-					min="0"
-					step="any"
-					placeholder="e.g. 0.15"
-				/>
-			</div>
-			<div class="flex flex-col gap-2">
-				<Label for="price-output">Output price</Label>
-				<Input
-					id="price-output"
-					bind:value={pricingOutput}
-					type="number"
-					min="0"
-					step="any"
-					placeholder="e.g. 0.60"
-				/>
-			</div>
-			<div class="grid grid-cols-2 gap-4">
-				<div class="flex flex-col gap-2">
-					<Label for="price-cache-read">Cache read price</Label>
-					<Input
-						id="price-cache-read"
-						bind:value={pricingCacheRead}
-						type="number"
-						min="0"
-						step="any"
-						placeholder="= input price"
-					/>
-				</div>
-				<div class="flex flex-col gap-2">
-					<Label for="price-cache-write">Cache write price</Label>
-					<Input
-						id="price-cache-write"
-						bind:value={pricingCacheWrite}
-						type="number"
-						min="0"
-						step="any"
-						placeholder="= input price"
-					/>
-				</div>
-			</div>
-			<div class="flex flex-col gap-2">
-				<Label for="price-context">Context length (tokens)</Label>
-				<Input
-					id="price-context"
-					bind:value={pricingContext}
-					type="number"
-					min="1"
-					step="1"
-					placeholder="e.g. 200000"
-				/>
-			</div>
-			<Dialog.Footer>
-				<Button type="button" variant="outline" onclick={() => (pricingModel = null)}>Cancel</Button
-				>
-				<Button type="submit" disabled={pricingBusy}>
-					{pricingBusy ? 'Saving…' : 'Save changes'}
-				</Button>
-			</Dialog.Footer>
-		</form>
-	</Dialog.Content>
-</Dialog.Root>
+{#if editVisual}
+	{@const visual = editVisual}
+	{#snippet editIcon()}{@render modelTile(visual.brand, visual.maker)}{/snippet}
+	<ModelEditDialog
+		model={editModel}
+		bind:tab={editTab}
+		name={visual.name}
+		maker={visual.maker}
+		icon={editIcon}
+		onClose={() => (editModel = null)}
+	/>
+{/if}
 
 <Dialog.Root open={deleteId !== null} onOpenChange={(open) => !open && (deleteId = null)}>
 	<Dialog.Content>

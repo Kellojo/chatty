@@ -61,7 +61,10 @@ const schema = z.object({
 			message: 'must be a mailto: address or https:// URL'
 		})
 		.optional(),
-	APP_SECRET: z.string().min(16).optional()
+	APP_SECRET: z.string().min(16).optional(),
+	// Artificial Analysis API key for model Intelligence Index scores. Optional: the key can
+	// also be saved in Settings → Services; this one takes precedence when set.
+	ARTIFICIAL_ANALYSIS_API_KEY: z.string().min(1).optional()
 });
 
 export type Config = z.infer<typeof schema>;

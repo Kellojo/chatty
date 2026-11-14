@@ -11,6 +11,7 @@
 	import Link2Icon from '@lucide/svelte/icons/link-2';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import PlugIcon from '@lucide/svelte/icons/plug';
+	import PlugZapIcon from '@lucide/svelte/icons/plug-zap';
 	import RouteIcon from '@lucide/svelte/icons/route';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
@@ -107,6 +108,13 @@
 			href: '/settings/mcp',
 			label: 'MCP servers',
 			icon: BlocksIcon,
+			adminOnly: true,
+			group: 'Integrations'
+		},
+		{
+			href: '/settings/services',
+			label: 'Services',
+			icon: PlugZapIcon,
 			adminOnly: true,
 			group: 'Integrations'
 		},
