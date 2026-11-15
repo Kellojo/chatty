@@ -37,6 +37,20 @@ describe('mealplan-payload', () => {
 		});
 	});
 
+	it('drops remote image URLs, keeping inline data:image ones', () => {
+		const plan = parseMealPlan(
+			JSON.stringify([
+				norishItem({ id: 'a', recipeImage: 'https://evil.example/x.jpg?d=secret' }),
+				norishItem({ id: 'b', recipeImage: 'data:image/png;base64,AAAA', sortOrder: 1 })
+			])
+		);
+		const images = plan?.days[0].meals.map((m) => [m.key, m.image]);
+		expect(images).toEqual([
+			['a', null],
+			['b', 'data:image/png;base64,AAAA']
+		]);
+	});
+
 	it('fills empty days of a week and orders meals by slot', () => {
 		const plan = parseMealPlan(
 			JSON.stringify({

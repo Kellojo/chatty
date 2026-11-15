@@ -11,6 +11,10 @@
 		MAX_GLOBAL_INSTRUCTIONS_LENGTH
 	} from '$lib/user-settings.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import { onMount, untrack } from 'svelte';
+	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
+	import SpeechPreviewButton from '$lib/components/app/settings/SpeechPreviewButton.svelte';
+	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -23,6 +27,7 @@
 		suggestions?: string[];
 		codingSuggestions?: string[];
 		globalInstructions?: string;
+		speechVolume?: number;
 	}) {
 		const res = await fetch('/api/user/settings', {
 			method: 'PUT',
@@ -48,6 +53,27 @@
 			toast.error(e instanceof Error ? e.message : 'Failed to save instructions');
 		} finally {
 			instructionsBusy = false;
+		}
+	}
+
+	// Read-aloud volume, as a percentage; saved when the slider is released.
+	let volume = $state(untrack(() => Math.round(data.settings.speechVolume * 100)));
+	let savedVolume = untrack(() => data.settings.speechVolume);
+	const playback = createSpeechPlayback({
+		serverTts: () => data.serverTts,
+		onerror: (message) => toast.error(message),
+		volume: () => volume / 100
+	});
+	onMount(() => playback.stop);
+
+	async function saveVolume() {
+		const next = volume / 100;
+		if (next === savedVolume) return;
+		try {
+			await putSettings({ speechVolume: next });
+			savedVolume = next;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to save volume');
 		}
 	}
 
@@ -98,6 +124,35 @@
 			{instructionsBusy ? 'Saving…' : 'Save'}
 		</Button>
 	</div>
+</SettingsSection>
+
+<SettingsSection
+	title="Read aloud"
+	description="How replies sound when you use the read-aloud button."
+>
+	<SettingsRow label="Volume" for="speech-volume" stack>
+		<div class="flex w-full items-center gap-3 sm:w-auto">
+			<input
+				id="speech-volume"
+				type="range"
+				min="0"
+				max="100"
+				step="5"
+				bind:value={volume}
+				onchange={saveVolume}
+				aria-valuetext={`${volume}%`}
+				class="h-2 w-full cursor-pointer accent-primary sm:w-48"
+			/>
+			<span class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
+				>{volume}%</span
+			>
+			<SpeechPreviewButton
+				{playback}
+				label="Test"
+				text="This is how loud replies will be read aloud."
+			/>
+		</div>
+	</SettingsRow>
 </SettingsSection>
 
 <SuggestionsEditor

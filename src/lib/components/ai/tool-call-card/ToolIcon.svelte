@@ -11,6 +11,7 @@
 	import BookmarkIcon from '@lucide/svelte/icons/bookmark';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import ImageIcon from '@lucide/svelte/icons/image';
+	import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
 	import CalculatorIcon from '@lucide/svelte/icons/calculator';
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
@@ -38,6 +39,7 @@
 		memory: BookmarkIcon,
 		skill: SparklesIcon,
 		image: ImageIcon,
+		audio: AudioLinesIcon,
 		math: CalculatorIcon,
 		time: ClockIcon,
 		settings: SettingsIcon,

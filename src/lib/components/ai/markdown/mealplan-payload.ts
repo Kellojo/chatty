@@ -5,6 +5,8 @@
  * few friendlier aliases (`name`, `image`, `minutes`, `url`).
  */
 
+import { inlineImageUrl } from './image-url.js';
+
 export const SLOTS = ['Breakfast', 'Lunch', 'Dinner', 'Snack'] as const;
 export type Slot = (typeof SLOTS)[number];
 
@@ -74,14 +76,6 @@ function slotOf(v: unknown): Slot | null {
 	return SLOTS.find((slot) => slot.toLowerCase() === s) ?? null;
 }
 
-/** Absolute http(s) or inline data:image URLs only; Norish's relative `/recipes/…` paths are dropped. */
-function imageUrl(v: unknown): string | null {
-	const s = str(v);
-	if (!s) return null;
-	if (/^data:image\//i.test(s)) return s;
-	return URL.canParse(s) && /^https?:$/.test(new URL(s).protocol) ? new URL(s).href : null;
-}
-
 function webUrl(v: unknown): string | null {
 	const s = str(v);
 	return s && URL.canParse(s) && /^https?:$/.test(new URL(s).protocol) ? new URL(s).href : null;
@@ -100,7 +94,7 @@ function parseMeal(v: unknown, i: number): Meal | null {
 		slot,
 		name,
 		recipeId: str(m.recipeId),
-		image: imageUrl(m.recipeImage ?? m.image),
+		image: inlineImageUrl(m.recipeImage ?? m.image),
 		url: webUrl(m.url ?? m.recipeUrl),
 		servings: num(m.servings),
 		calories: num(m.calories),

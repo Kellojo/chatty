@@ -1,4 +1,5 @@
 import type { Component } from 'svelte';
+import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
 import BotIcon from '@lucide/svelte/icons/bot';
 import BrainIcon from '@lucide/svelte/icons/brain';
 import CalculatorIcon from '@lucide/svelte/icons/calculator';
@@ -25,6 +26,7 @@ export const BUILTIN_PURPOSE: Record<string, string> = {
 	skills: 'Load skills and their reference files',
 	'code-exec': 'Run code in a sandbox',
 	image: 'Generate and edit images',
+	speech: 'Transcribe uploaded audio files',
 	wait: 'Pause, then check back on long tasks',
 	math: 'Evaluate math expressions',
 	weather: 'Current weather and forecasts'
@@ -42,6 +44,7 @@ export const BUILTIN_ICON: Record<string, Component<{ class?: string }>> = {
 	skills: SparklesIcon,
 	'code-exec': TerminalIcon,
 	image: ImageIcon,
+	speech: AudioLinesIcon,
 	wait: HourglassIcon,
 	math: CalculatorIcon,
 	weather: CloudSunIcon

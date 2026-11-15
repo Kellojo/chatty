@@ -73,6 +73,26 @@
   -H "Content-Type: application/json" \\
   -d '{"model":"<model>","input":"I was charged twice for my order.","questions":[{"type":"choice","name":"department","instructions":"Which department should handle this complaint?","choices":[{"value":"billing","description":"Payments, invoices, and refunds."},{"value":"technical","description":"Problems using the product."},{"value":"shipping","description":"Delivery and tracking."},{"value":"other","description":"Requests outside these categories."}]}]}'`
 	);
+
+	const transcribeSnippet = $derived(
+		`curl ${baseUrl}/audio/transcriptions \\
+  -H "Authorization: Bearer aic_..." \\
+  -F model="<model>" \\
+  -F file="@recording.mp3"`
+	);
+
+	const speechSnippet = $derived(
+		`curl ${baseUrl}/audio/speech \\
+  -H "Authorization: Bearer aic_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"<model>","input":"Hello from Chatty.","voice":"alloy"}' \\
+  -o speech.mp3`
+	);
+
+	const voicesSnippet = $derived(
+		`curl "${baseUrl}/audio/voices?model=<model>" \\
+  -H "Authorization: Bearer aic_..."`
+	);
 </script>
 
 {#snippet code(text: string)}<code class="rounded bg-muted px-1 py-0.5 text-xs">{text}</code
@@ -133,7 +153,7 @@
 			</Tabs.Content>
 		</Tabs.Root>
 	</GuideStep>
-	<GuideStep n={4} title="Optional: classify and route with decisions" last>
+	<GuideStep n={4} title="Optional: classify and route with decisions">
 		<p class="text-sm text-muted-foreground">
 			Answer predicate, choice and score questions about an input in one call. Needs a model with
 			the {@render code('decisions')} capability, set in
@@ -147,5 +167,40 @@
 			{/if}
 		</p>
 		<CodeBlock code={decisionsSnippet} label="curl" />
+	</GuideStep>
+	<GuideStep n={5} title="Optional: speech to text and text to speech" last>
+		<p class="text-sm text-muted-foreground">
+			The same key works with OpenAI's audio endpoints. Use a model with the
+			{@render code('Speech to text')} or {@render code('Text to speech')} capability; mappings fall back
+			as they do for chat when a provider is down or busy, but not when it rejects the request itself
+			(an unknown voice, for example).
+		</p>
+		<Tabs.Root value="transcribe" class="gap-3">
+			<Tabs.List>
+				<Tabs.Trigger value="transcribe">Transcribe</Tabs.Trigger>
+				<Tabs.Trigger value="speech">Speak</Tabs.Trigger>
+			</Tabs.List>
+			<Tabs.Content value="transcribe" class="flex flex-col gap-3">
+				<p class="text-sm text-muted-foreground">
+					Upload audio and get its text back. {@render code('language')},
+					{@render code('prompt')} and {@render code('response_format')} are passed through.
+				</p>
+				<CodeBlock code={transcribeSnippet} label="curl" />
+			</Tabs.Content>
+			<Tabs.Content value="speech" class="flex flex-col gap-3">
+				<p class="text-sm text-muted-foreground">
+					Send up to 4,096 characters and get audio back. {@render code('voice')} defaults to the one
+					set in Defaults, or the model's own default when it doesn't offer that one;
+					{@render code('response_format')}, {@render code('speed')} and
+					{@render code('instructions')} are passed through.
+				</p>
+				<CodeBlock code={speechSnippet} label="curl" />
+				<p class="text-sm text-muted-foreground">
+					List a model's voices. The list is empty when its provider doesn't publish them; any name
+					the provider knows still works.
+				</p>
+				<CodeBlock code={voicesSnippet} label="curl" />
+			</Tabs.Content>
+		</Tabs.Root>
 	</GuideStep>
 </ol>

@@ -709,6 +709,42 @@ describe('handleChatRequest', () => {
 		}
 	});
 
+	it('sends audio as a note for transcribe_audio, never as bytes', async () => {
+		const db = getDb();
+		const conversation = seed(db);
+		const { createAttachment } = await import('../db/repo/attachments.js');
+		const att = createAttachment(db, {
+			kind: 'file',
+			path: `${conversation.id}/attachments/memo.mp3`,
+			mime: 'audio/mpeg',
+			sha256: 'x'
+		});
+		try {
+			const out = await inlineAttachmentParts(db, conversation.id, [
+				{
+					id: 'msg-1',
+					role: 'user',
+					parts: [
+						{
+							type: 'file',
+							url: `/api/conversations/${conversation.id}/attachments/${att.id}`,
+							mediaType: 'audio/mpeg',
+							filename: 'memo.mp3'
+						}
+					]
+				}
+			]);
+			expect(out[0].parts).toEqual([
+				{
+					type: 'text',
+					text: `[audio file memo.mp3; attachment id: ${att.id} — use transcribe_audio to read it]`
+				}
+			]);
+		} finally {
+			closeDb();
+		}
+	});
+
 	it('replaces an attachment whose file is missing with a text note', async () => {
 		const db = getDb();
 		const conversation = seed(db);

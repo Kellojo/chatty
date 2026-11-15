@@ -8,6 +8,7 @@ export const MODEL_ROLES = [
 	'image',
 	'compaction',
 	'speech-to-text',
+	'text-to-speech',
 	'decisions'
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
@@ -24,6 +25,8 @@ export interface ModelRow {
 	price_cache_read: number | null;
 	price_cache_write: number | null;
 	context_length: number | null;
+	/** JSON array of voice names a text-to-speech model accepts; NULL when unknown. */
+	voices?: string | null;
 }
 
 export interface ChatModel {
@@ -215,6 +218,28 @@ export interface FetchedModel {
 	priceCacheRead?: number | null;
 	priceCacheWrite?: number | null;
 	contextLength?: number | null;
+	/** Voices a text-to-speech model accepts, when the provider lists them. */
+	voices?: string[];
+}
+
+/** The voices stored for `row`, or null when unknown. */
+export function modelVoices(row: Pick<ModelRow, 'voices'>): string[] | null {
+	if (!row.voices) return null;
+	try {
+		const parsed = JSON.parse(row.voices) as unknown;
+		if (!Array.isArray(parsed)) return null;
+		const voices = parsed.filter((v): v is string => typeof v === 'string' && v.length > 0);
+		return voices.length ? voices : null;
+	} catch {
+		return null;
+	}
+}
+
+function setModelVoices(db: Db, id: string, voices: string[]): void {
+	db.prepare('UPDATE models SET voices = ? WHERE id = ?').run(
+		voices.length ? JSON.stringify(voices) : null,
+		id
+	);
 }
 
 export function upsertFetchedModels(
@@ -242,6 +267,7 @@ export function upsertFetchedModels(
 						contextLength: model.contextLength ?? null
 					});
 				}
+				if (model.voices) setModelVoices(db, created.id, model.voices);
 				added++;
 			} else {
 				const existingCaps = JSON.parse(existing.capabilities) as string[];
@@ -256,6 +282,7 @@ export function upsertFetchedModels(
 					priceCacheWrite: model.priceCacheWrite ?? null,
 					contextLength: model.contextLength ?? undefined
 				});
+				if (model.voices) setModelVoices(db, existing.id, model.voices);
 			}
 		}
 		// Models we have stored that the provider no longer lists. They're reported

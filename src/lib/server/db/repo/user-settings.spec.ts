@@ -43,7 +43,8 @@ describe('user-settings repo', () => {
 				codingFinished: true,
 				failures: true,
 				agentRuns: false
-			}
+			},
+			speechVolume: 1
 		});
 		expect(repo.getTheme(db, 'u1')).toBe('system');
 		expect(repo.getTimeFormat(db, 'u1')).toBe('auto');
@@ -61,6 +62,7 @@ describe('user-settings repo', () => {
 		repo.setUserSetting(db, 'u1', 'favoriteModels', ['p/m', 'p/m', 'bad', 1]);
 		repo.setUserSetting(db, 'u1', 'notificationTriggers', { replies: false, agentRuns: true });
 		repo.setUserSetting(db, 'u1', 'pushTriggers', { needsYou: false });
+		repo.setUserSetting(db, 'u1', 'speechVolume', 0.4);
 		seedUser(db, 'u2');
 		repo.setUserSetting(db, 'u2', 'theme', 'light');
 
@@ -74,7 +76,8 @@ describe('user-settings repo', () => {
 			sidebarOpen: repo.getSidebarOpen(db, 'u1'),
 			favoriteModels: repo.getFavoriteModels(db, 'u1'),
 			notificationTriggers: repo.getNotificationTriggers(db, 'u1'),
-			pushTriggers: repo.getPushTriggers(db, 'u1')
+			pushTriggers: repo.getPushTriggers(db, 'u1'),
+			speechVolume: 0.4
 		});
 		expect(settings).toMatchObject({
 			theme: 'dark',
@@ -117,6 +120,15 @@ describe('user-settings repo', () => {
 		repo.updatePushTriggers(db, 'u1', { agentRuns: true });
 		repo.updateNotificationTriggers(db, 'u1', { agentRuns: false, replies: true });
 		expect(repo.getPushTriggers(db, 'u1')).toMatchObject({ replies: true, agentRuns: true });
+	});
+
+	it('falls back to full speech volume for out-of-range stored values', () => {
+		for (const bad of [1.5, -0.1, 'loud', null]) {
+			repo.setUserSetting(db, 'u1', 'speechVolume', bad);
+			expect(repo.getUserSettings(db, 'u1').speechVolume).toBe(1);
+		}
+		repo.setUserSetting(db, 'u1', 'speechVolume', 0);
+		expect(repo.getUserSettings(db, 'u1').speechVolume).toBe(0);
 	});
 
 	it('round-trips sidebarOpen per user', () => {

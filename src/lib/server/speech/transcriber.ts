@@ -1,10 +1,9 @@
-import type { ModelMappingTarget } from '$lib/types.js';
+import type { ModelMappingTarget, RequestSource } from '$lib/types.js';
 import { getDb } from '../db/index.js';
-import { findModel } from '../db/repo/models.js';
-import { getProvider } from '../db/repo/providers.js';
-import { decryptSecret } from '../crypto.js';
-import { ModelUnavailableError, resolveRefTargets } from '../llm/mapped.js';
+import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
+import { resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
+import { resolveAudioEndpoint, upstreamErrorMessage } from './targets.js';
 
 const log = createLogger('speech');
 
@@ -22,20 +21,10 @@ export interface TranscriptionOptions {
 	prompt?: string;
 	responseFormat?: 'json' | 'text' | 'srt' | 'vtt' | 'verbose_json';
 	temperature?: number;
-}
-
-/**
- * Transcribe audio via a provider's /audio/transcriptions endpoint.
- * Returns text or the raw JSON response depending on responseFormat.
- */
-export async function transcribeAudio(
-	buffer: ArrayBuffer,
-	providerId: string,
-	modelId: string,
-	options?: TranscriptionOptions
-): Promise<{ text: string } | string> {
-	const resolved = resolveRefTargets({ providerId, modelId }, getDb());
-	return (await transcribeWithFallbacks(buffer, resolved.targets, options)).result;
+	/** The upload's name; providers read the audio format from its extension. */
+	fileName?: string;
+	/** The upload's media type. */
+	mimeType?: string;
 }
 
 /**
@@ -52,52 +41,25 @@ export async function transcribeWithFallbacks(
 
 	for (let i = 0; i < targets.length; i++) {
 		const target = targets[i];
-		const provider = getProvider(db, target.providerId);
-		if (!provider || provider.enabled !== 1) {
-			lastError = new ModelUnavailableError(`Provider ${target.providerId} is not available`);
-			continue;
-		}
-
-		const model = findModel(db, target.providerId, target.modelId);
-		if (!model || model.enabled !== 1) {
-			lastError = new ModelUnavailableError(`Model ${target.modelId} is not available`);
-			continue;
-		}
-
-		const caps = JSON.parse(model.capabilities) as string[];
-		if (!caps.includes('transcription')) {
-			lastError = new ModelUnavailableError(
-				`Model ${target.modelId} does not support transcription`
-			);
-			continue;
-		}
-
-		if (provider.type === 'anthropic') {
-			lastError = new ModelUnavailableError(
-				`Provider "${provider.name}" does not expose a transcription API`
-			);
-			continue;
-		}
-
-		if (!provider.base_url) {
-			lastError = new ModelUnavailableError(`Provider "${provider.name}" is missing a base URL`);
-			continue;
-		}
-
-		const apiKey = provider.api_key_enc ? decryptSecret(provider.api_key_enc) : undefined;
-		const baseUrl = provider.base_url.replace(/\/$/, '');
-
 		try {
+			const { baseUrl, headers } = resolveAudioEndpoint(
+				db,
+				target,
+				'transcription',
+				'transcription'
+			);
+
 			const formData = new FormData();
 			formData.append('model', target.modelId);
-			formData.append('file', new Blob([buffer], { type: 'audio/webm' }), 'recording.webm');
+			formData.append(
+				'file',
+				new Blob([buffer], { type: options?.mimeType || 'audio/webm' }),
+				options?.fileName || 'recording.webm'
+			);
 			if (options?.language) formData.append('language', options.language);
 			if (options?.prompt) formData.append('prompt', options.prompt);
 			if (options?.responseFormat) formData.append('response_format', options.responseFormat);
 			if (options?.temperature != null) formData.append('temperature', String(options.temperature));
-
-			const headers: Record<string, string> = {};
-			if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
 			log.info('Transcription request', {
 				providerId: target.providerId,
@@ -111,17 +73,7 @@ export async function transcribeWithFallbacks(
 				body: formData
 			});
 
-			if (!res.ok) {
-				const raw = await res.text().catch(() => 'Unknown error');
-				let message = raw;
-				try {
-					const parsed = JSON.parse(raw) as { error?: { message?: string } };
-					if (parsed.error?.message) message = parsed.error.message;
-				} catch {
-					/* not JSON, use raw text */
-				}
-				throw new TranscriptionError(res.status, message);
-			}
+			if (!res.ok) throw new TranscriptionError(res.status, await upstreamErrorMessage(res));
 
 			const result =
 				options?.responseFormat === 'text'
@@ -130,7 +82,6 @@ export async function transcribeWithFallbacks(
 			return { result, index: i, target };
 		} catch (e) {
 			lastError = e;
-			if (i < targets.length - 1) continue;
 		}
 	}
 
@@ -139,4 +90,62 @@ export async function transcribeWithFallbacks(
 		502,
 		lastError instanceof Error ? lastError.message : 'Transcription failed'
 	);
+}
+
+/**
+ * Transcribes `buffer` with `ref` (a model or a mapping), logged with the other
+ * model calls (Usage → Requests) for `userId`. Returns the transcript text.
+ */
+export async function transcribeLogged(
+	buffer: ArrayBuffer,
+	ref: { providerId: string; modelId: string },
+	log: {
+		userId: string;
+		source: RequestSource;
+		conversationId?: string | null;
+		runId?: string | null;
+	},
+	options?: TranscriptionOptions
+): Promise<string> {
+	const db = getDb();
+	const row = createProxyRequest(db, {
+		userId: log.userId,
+		source: log.source,
+		purpose: 'transcription',
+		endpoint: 'audio.transcriptions',
+		requestedModel: ref.modelId,
+		stream: false,
+		conversationId: log.conversationId ?? null,
+		runId: log.runId ?? null
+	});
+	const startedAt = Date.now();
+	let mappingId: string | null = null;
+	try {
+		const resolved = resolveRefTargets(ref, db);
+		mappingId = resolved.mappingId;
+		const { result, index, target } = await transcribeWithFallbacks(
+			buffer,
+			resolved.targets,
+			options
+		);
+		finalizeProxyRequest(db, row.id, {
+			status: 'complete',
+			httpStatus: 200,
+			latencyMs: Date.now() - startedAt,
+			mappingId,
+			providerId: target.providerId,
+			modelId: target.modelId,
+			fallbackIndex: index
+		});
+		return typeof result === 'string' ? result : result.text;
+	} catch (e) {
+		finalizeProxyRequest(db, row.id, {
+			status: 'failed',
+			httpStatus: e instanceof TranscriptionError ? e.status : 500,
+			latencyMs: Date.now() - startedAt,
+			mappingId,
+			error: e instanceof Error ? e.message : String(e)
+		});
+		throw e;
+	}
 }

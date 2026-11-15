@@ -3,10 +3,16 @@
 	import { toast } from 'svelte-sonner';
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
 	import ModelSelect from '$lib/components/app/ModelSelect.svelte';
+	import SpeechPreviewButton from '$lib/components/app/settings/SpeechPreviewButton.svelte';
+	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { ModelRole } from '$lib/types.js';
 	import { MODEL_ROLE_LABEL } from '$lib/model-roles.js';
 	import type { PageData } from './$types';
@@ -47,6 +53,11 @@
 				"Transcribes voice input. When unset, the browser's built-in speech recognition is used instead."
 		},
 		{
+			role: 'text-to-speech',
+			label: MODEL_ROLE_LABEL['text-to-speech'],
+			description: "Reads replies aloud. When unset, the browser's built-in voice is used instead."
+		},
+		{
 			role: 'decisions',
 			label: MODEL_ROLE_LABEL['decisions'],
 			description:
@@ -57,6 +68,7 @@
 	const roleCapability: Partial<Record<ModelRole, string>> = {
 		image: 'image',
 		'speech-to-text': 'transcription',
+		'text-to-speech': 'speech',
 		decisions: 'decisions'
 	};
 
@@ -89,6 +101,67 @@
 		if (value.startsWith('mapping:')) return value.split('/')[0];
 		const model = data.models.find((m) => `${m.providerId}/${m.modelId}` === value);
 		return model?.id ?? null;
+	}
+
+	// Edited locally, saved on blur or Enter; follows the saved value when page data reloads.
+	let voice = $derived(data.ttsVoice);
+	let voiceBusy = $state(false);
+
+	/** The voices the Text to speech model offers, or null to type a name instead. */
+	const voiceList = $derived(data.ttsVoices);
+	/** What an empty setting reads with, as the server picks it (see pickVoice). */
+	const modelDefaultVoice = $derived(
+		voiceList
+			? (voiceList.defaultVoice ??
+					(voiceList.voices.includes(data.fallbackVoice)
+						? data.fallbackVoice
+						: voiceList.voices[0]))
+			: data.fallbackVoice
+	);
+	/** A saved voice this model doesn't offer: the model's default is used instead. */
+	const unavailableVoice = $derived(
+		voiceList && data.ttsVoice && !voiceList.voices.includes(data.ttsVoice) ? data.ttsVoice : null
+	);
+
+	// Voice samples play through the Text to speech model at the user's volume.
+	const preview = createSpeechPlayback({
+		serverTts: () => true,
+		onerror: (message) => toast.error(message),
+		volume: () => page.data.settings?.speechVolume ?? 1
+	});
+	onMount(() => preview.stop);
+	const sampleText = (name: string) => `Hi, I'm ${name}. This is how replies will sound.`;
+	/** The voice replies read with now: the saved one if offered, else the model's default. */
+	const previewVoice = $derived(
+		voiceList
+			? !data.ttsVoice || unavailableVoice
+				? modelDefaultVoice
+				: data.ttsVoice
+			: voice.trim() || undefined
+	);
+
+	async function saveVoice(value = voice) {
+		const next = value.trim();
+		if (voiceBusy || next === data.ttsVoice) return;
+		voiceBusy = true;
+		try {
+			const res = await fetch('/api/speech/voice', {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ voice: next })
+			});
+			if (!res.ok) {
+				const payload = (await res.json().catch(() => null)) as { message?: string } | null;
+				throw new Error(payload?.message ?? `Request failed (${res.status})`);
+			}
+			toast.success(next ? 'Voice updated' : 'Voice reset');
+			await invalidateAll();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to update voice');
+			voice = data.ttsVoice;
+		} finally {
+			voiceBusy = false;
+		}
 	}
 
 	async function setRole(role: ModelRole, value: string) {
@@ -148,6 +221,75 @@
 					class="w-full sm:w-72 max-md:[&_[data-model-source]]:hidden"
 				/>
 			</SettingsRow>
+			{#if role === 'text-to-speech' && data.roles['text-to-speech']}
+				<!-- A setting of the Text to speech model above, so it hangs off that row. -->
+				<SettingsRow
+					label="Voice"
+					for="tts-voice"
+					description={voiceList
+						? unavailableVoice
+							? `This model doesn't offer “${unavailableVoice}”, so it reads with ${modelDefaultVoice}.`
+							: `${voiceList.voices.length} voices available for this model.`
+						: `This provider doesn't list its voices, so type one: e.g. alloy or nova for OpenAI, af_heart for Kokoro. Empty uses ${data.fallbackVoice}.`}
+					stack
+					class="ml-1 border-t-0 border-l-2 pt-0 pl-4"
+				>
+					{#if voiceList}
+						<Select.Root
+							type="single"
+							value={unavailableVoice ? '' : data.ttsVoice}
+							onValueChange={(value) => {
+								// Picking a voice plays a sample of it while it saves.
+								preview.play(
+									'settings-preview',
+									sampleText(value || modelDefaultVoice),
+									value || modelDefaultVoice
+								);
+								void saveVoice(value);
+							}}
+						>
+							<Select.Trigger id="tts-voice" class="w-full sm:w-72" disabled={voiceBusy}>
+								<span class="truncate">
+									{data.ttsVoice && !unavailableVoice
+										? data.ttsVoice
+										: `Model default (${modelDefaultVoice})`}
+								</span>
+							</Select.Trigger>
+							<Select.Content class="max-h-80">
+								<Select.Item value="">Model default ({modelDefaultVoice})</Select.Item>
+								<Select.Separator />
+								{#each voiceList.voices as option (option)}
+									<Select.Item value={option}>{option}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					{:else}
+						<Input
+							id="tts-voice"
+							bind:value={voice}
+							placeholder={data.fallbackVoice}
+							maxlength={100}
+							autocomplete="off"
+							spellcheck={false}
+							readonly={voiceBusy}
+							onblur={() => saveVoice()}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									e.preventDefault();
+									void saveVoice();
+								}
+							}}
+							class="w-full sm:w-72"
+						/>
+					{/if}
+					<SpeechPreviewButton
+						playback={preview}
+						text={sampleText(previewVoice ?? data.fallbackVoice)}
+						voice={previewVoice}
+						disabled={voiceBusy}
+					/>
+				</SettingsRow>
+			{/if}
 		{/each}
 	</SettingsSection>
 {/if}

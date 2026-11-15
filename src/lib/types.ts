@@ -27,7 +27,14 @@ export interface ChatModel {
 }
 
 export type ModelRole =
-	'chat' | 'title' | 'memory' | 'image' | 'compaction' | 'speech-to-text' | 'decisions';
+	| 'chat'
+	| 'title'
+	| 'memory'
+	| 'image'
+	| 'compaction'
+	| 'speech-to-text'
+	| 'text-to-speech'
+	| 'decisions';
 
 export type RoleDefaults = Partial<Record<ModelRole, string>>;
 
@@ -222,6 +229,11 @@ export type ServerEvent =
 	| { type: 'chat.stream.finished'; conversationId: string }
 	/** Persisted messages changed outside a live stream; an open chat should reload them. */
 	| { type: 'chat.messages.updated'; conversationId: string }
+	/**
+	 * The conversation's queued messages or its paused state changed. `error`
+	 * is set when the server failed to send the next one (the queue is paused).
+	 */
+	| { type: 'chat.queue.updated'; conversationId: string; error?: string }
 	| { type: 'conversation.updated'; conversationId: string }
 	/**
 	 * The conversation's shown version changed: a branch was switched to or
@@ -415,7 +427,9 @@ export type ProxyRequestStatus = 'running' | 'complete' | 'failed';
 
 export type RequestSource = 'proxy' | 'chat' | 'agent';
 
-export type RequestPurpose = 'completion' | 'title' | 'compaction';
+/** What a logged provider call was for: text generation, or another kind of model call. */
+export type RequestPurpose =
+	'completion' | 'title' | 'compaction' | 'transcription' | 'speech' | 'image';
 
 export interface ProxyRequest {
 	id: string;
@@ -541,4 +555,21 @@ export interface AdminUser {
 	signInMethods: string[];
 	/** Whether they can sign in with an email and password. */
 	hasPassword: boolean;
+}
+
+/** A message waiting to be sent once the conversation's reply finishes. */
+export interface QueuedMessage {
+	id: string;
+	/** The composer text as typed, including a leading `/skill <name>` command. */
+	text: string;
+	/** Attachments, already uploaded to the conversation. */
+	files: { type: 'file'; url: string; mediaType: string; filename: string }[];
+	createdAt: number;
+}
+
+/** A conversation's message queue, as the server keeps it. */
+export interface MessageQueueState {
+	items: QueuedMessage[];
+	/** Waits for the user instead of sending when the reply ends. */
+	paused: boolean;
 }

@@ -2,11 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { generateImage, NoImageGeneratedError } from 'ai';
+import { generateImage, NoImageGeneratedError, type GenerateImageResult } from 'ai';
 import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import { createAttachment, listAttachmentsByConversation } from '../../db/repo/attachments.js';
-import { findRoleModel } from '../../db/repo/models.js';
+import { findModel, findRoleModel } from '../../db/repo/models.js';
+import { createProxyRequest, finalizeProxyRequest } from '../../db/repo/proxy-requests.js';
+import { computeUsageCostUsd } from '../../proxy/pricing.js';
 import { resolveImageModel } from '../../llm/registry.js';
 import { ensureAttachmentsDir, resolveAttachment } from '../../workspaces.js';
 import type { CallerContext } from '../types.js';
@@ -21,6 +23,56 @@ function imageModelRef(): { providerId: string; modelId: string } | null {
 	const row = findRoleModel(getDb(), 'image');
 	if (!row || row.provider_id.startsWith('mapping:')) return null;
 	return { providerId: row.provider_id, modelId: row.model_id };
+}
+
+/**
+ * Runs one image model call, logged with the other model calls (Usage → Requests)
+ * under the chat or agent run that asked for it.
+ */
+async function loggedImageCall(
+	ctx: CallerContext,
+	ref: { providerId: string; modelId: string },
+	endpoint: 'images.generate' | 'images.edit',
+	run: () => Promise<GenerateImageResult>
+): Promise<GenerateImageResult> {
+	const db = getDb();
+	const log = createProxyRequest(db, {
+		userId: ctx.userId,
+		source: ctx.agentRunId ? 'agent' : 'chat',
+		purpose: 'image',
+		endpoint,
+		requestedModel: ref.modelId,
+		stream: false,
+		conversationId: ctx.conversationId ?? null,
+		runId: ctx.agentRunId ?? null
+	});
+	const startedAt = Date.now();
+	try {
+		const result = await run();
+		const usage = {
+			inputTokens: result.usage?.inputTokens ?? undefined,
+			outputTokens: result.usage?.outputTokens ?? undefined
+		};
+		finalizeProxyRequest(db, log.id, {
+			status: 'complete',
+			latencyMs: Date.now() - startedAt,
+			providerId: ref.providerId,
+			modelId: ref.modelId,
+			inputTokens: usage.inputTokens ?? null,
+			outputTokens: usage.outputTokens ?? null,
+			costUsd: computeUsageCostUsd(findModel(db, ref.providerId, ref.modelId), usage)
+		});
+		return result;
+	} catch (e) {
+		finalizeProxyRequest(db, log.id, {
+			status: 'failed',
+			latencyMs: Date.now() - startedAt,
+			providerId: ref.providerId,
+			modelId: ref.modelId,
+			error: e instanceof Error ? e.message : String(e)
+		});
+		throw e;
+	}
 }
 
 const SIZE_RE = /^\d+x\d+$/;
@@ -78,15 +130,17 @@ export function createImageServer(ctx: CallerContext): McpServer {
 			const count = Math.min(n ?? 1, MAX_N);
 			try {
 				const model = resolveImageModel(ref);
-				const result = await generateImage({
-					model,
-					prompt,
-					n: count,
-					maxImagesPerCall: MAX_N,
-					size: size as `${number}x${number}` | undefined,
-					aspectRatio: aspectRatio as `${number}:${number}` | undefined,
-					...(Object.keys(providerOptions).length > 0 ? { providerOptions } : {})
-				});
+				const result = await loggedImageCall(ctx, ref, 'images.generate', () =>
+					generateImage({
+						model,
+						prompt,
+						n: count,
+						maxImagesPerCall: MAX_N,
+						size: size as `${number}x${number}` | undefined,
+						aspectRatio: aspectRatio as `${number}:${number}` | undefined,
+						...(Object.keys(providerOptions).length > 0 ? { providerOptions } : {})
+					})
+				);
 
 				const dir = await ensureAttachmentsDir(ctx.conversationId);
 				const db = getDb();
@@ -201,12 +255,14 @@ export function createImageServer(ctx: CallerContext): McpServer {
 
 			try {
 				const model = resolveImageModel(ref);
-				const result = await generateImage({
-					model,
-					prompt: { images: [normalized], text: prompt },
-					n: 1,
-					maxImagesPerCall: MAX_N
-				});
+				const result = await loggedImageCall(ctx, ref, 'images.edit', () =>
+					generateImage({
+						model,
+						prompt: { images: [normalized], text: prompt },
+						n: 1,
+						maxImagesPerCall: MAX_N
+					})
+				);
 
 				const dir = await ensureAttachmentsDir(ctx.conversationId);
 				const attachmentIds: string[] = [];

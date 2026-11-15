@@ -1220,7 +1220,7 @@ export class CodingFollower {
 
 			if (finished && this.live?.runId === runId) {
 				// Announced before the stream finishes, as for normal chats: clients
-				// read a finish without it as an error or stop (see message-queue-runner).
+				// read a finish without it as an error or stop (see chat/queue.ts).
 				if (run.status === 'completed') {
 					publishServerEvent(this.userId, {
 						type: 'chat.message_completed',

@@ -1,15 +1,20 @@
 # syntax=docker/dockerfile:1
 
+# Dependencies for the target platform (amd64 or arm64), including native
+# modules like better-sqlite3. Only the runtime stage uses these.
 FROM node:24-slim AS deps
 WORKDIR /app
 RUN corepack enable pnpm
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
-FROM node:24-slim AS build
+# The build output is plain JavaScript, so build on the runner's own platform
+# instead of under QEMU emulation when producing the arm64 image.
+FROM --platform=$BUILDPLATFORM node:24-slim AS build
 WORKDIR /app
 RUN corepack enable pnpm
-COPY --from=deps /app/node_modules ./node_modules
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 

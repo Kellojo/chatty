@@ -3,8 +3,20 @@ import { render } from 'vitest-browser-svelte';
 import QueuedMessages from './QueuedMessages.svelte';
 
 const items = [
-	{ id: 'a', text: 'Also add tests', files: [] },
-	{ id: 'b', text: '', files: [new File(['x'], 'notes.md')] }
+	{ id: 'a', text: 'Also add tests', files: [], createdAt: 1 },
+	{
+		id: 'b',
+		text: '',
+		files: [
+			{
+				type: 'file' as const,
+				url: '/api/conversations/c1/attachments/f1',
+				mediaType: 'text/markdown',
+				filename: 'notes.md'
+			}
+		],
+		createdAt: 2
+	}
 ];
 
 function handlers() {

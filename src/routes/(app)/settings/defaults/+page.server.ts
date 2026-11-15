@@ -10,9 +10,11 @@ import {
 	toPublic as mappingToPublic
 } from '$lib/server/db/repo/model-mappings.js';
 import { listProviders, toPublic as providerToPublic } from '$lib/server/db/repo/providers.js';
+import { FALLBACK_VOICE, getDefaultVoice } from '$lib/server/speech/synthesizer.js';
+import { roleVoices } from '$lib/server/speech/voices.js';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = async ({ locals }) => {
 	requireAdmin(locals);
 	const db = getDb();
 	const models = listModels(db).map(modelToPublic);
@@ -30,6 +32,10 @@ export const load: PageServerLoad = ({ locals }) => {
 		providers: listProviders(db).map(providerToPublic),
 		models,
 		mappings,
-		roles: listRoleDefaults(db)
+		roles: listRoleDefaults(db),
+		ttsVoice: getDefaultVoice(db),
+		/** The Text to speech model's voices; null shows a free-text field instead. */
+		ttsVoices: await roleVoices(db),
+		fallbackVoice: FALLBACK_VOICE
 	};
 };

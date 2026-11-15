@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { requestPurposeLabel } from '$lib/request-purposes.js';
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { Badge } from '$lib/components/ui/badge/index.js';
@@ -21,6 +22,7 @@
 	const outputTps = $derived(outputSpeed(request));
 	const inputTps = $derived(inputSpeed(request));
 	const sourceLabel = $derived(request.source.charAt(0).toUpperCase() + request.source.slice(1));
+	const purposeLabel = $derived(requestPurposeLabel(request.purpose));
 
 	onMount(() => {
 		let timer: ReturnType<typeof setTimeout> | null = null;
@@ -75,8 +77,8 @@
 				{sourceLabel} request
 			</h2>
 			<Badge variant="outline">{request.source}</Badge>
-			{#if request.purpose === 'title'}
-				<Badge variant="outline">title</Badge>
+			{#if purposeLabel}
+				<Badge variant="outline">{purposeLabel}</Badge>
 			{/if}
 			<span
 				class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {statusTone(

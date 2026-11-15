@@ -73,6 +73,8 @@ export interface UserSettings {
 	notificationTriggers: NotificationTriggers;
 	/** Pushes the server sends while Chatty is closed; until set, these follow `notificationTriggers`. */
 	pushTriggers: NotificationTriggers;
+	/** Read-aloud volume, from 0 (muted) to 1 (full). */
+	speechVolume: number;
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -84,5 +86,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 	sidebarOpen: true,
 	favoriteModels: [],
 	notificationTriggers: DEFAULT_NOTIFICATION_TRIGGERS,
-	pushTriggers: DEFAULT_NOTIFICATION_TRIGGERS
+	pushTriggers: DEFAULT_NOTIFICATION_TRIGGERS,
+	speechVolume: 1
 };

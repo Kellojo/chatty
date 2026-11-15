@@ -87,6 +87,38 @@ describe('llm registry', () => {
 		expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-local');
 	});
 
+	it('fetchProviderModels reads Speaches tasks and voices', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				Response.json({
+					data: [
+						{
+							id: 'speaches-ai/Kokoro-82M-v1.0-ONNX',
+							task: 'text-to-speech',
+							voices: [
+								{ id: 'af_heart', name: 'af_heart', language: 'en-us' },
+								{ id: 'am_adam', name: 'am_adam', language: 'en-us' }
+							]
+						},
+						{ id: 'Systran/faster-whisper-small', task: 'automatic-speech-recognition', voices: [] }
+					]
+				})
+			)
+		);
+		const { db, providers, registry } = await loadModules();
+		const p = providers.createProvider(db, {
+			name: 'Speaches',
+			type: 'openai-compatible',
+			baseUrl: 'http://localhost:8000/v1'
+		});
+		const [tts, stt] = await registry.fetchProviderModels(p.id);
+		expect(tts.capabilities).toContain('speech');
+		expect(tts.voices).toEqual(['af_heart', 'am_adam']);
+		expect(stt.capabilities).toContain('transcription');
+		expect(stt.voices).toBeUndefined();
+	});
+
 	it('fetchProviderModels parses OpenRouter-style pricing into USD per 1M tokens', async () => {
 		vi.stubGlobal(
 			'fetch',

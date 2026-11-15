@@ -2,6 +2,7 @@ import { resolveApiKeyIdentity } from '$lib/server/auth/apiKey.js';
 import { getDb } from '$lib/server/db/index.js';
 import { createProxyRequest, finalizeProxyRequest } from '$lib/server/db/repo/proxy-requests.js';
 import { resolveTargets } from '$lib/server/proxy/handler.js';
+import { relayUpstreamError } from '$lib/server/speech/targets.js';
 import { transcribeWithFallbacks, TranscriptionError } from '$lib/server/speech/transcriber.js';
 import type { RequestHandler } from './$types';
 
@@ -54,7 +55,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		endpoint: 'audio.transcriptions',
 		requestedModel: modelName,
 		stream: false,
-		source: 'proxy'
+		source: 'proxy',
+		purpose: 'transcription'
 	});
 	const startedAt = Date.now();
 
@@ -67,7 +69,9 @@ export const POST: RequestHandler = async ({ request }) => {
 				typeof responseFormat === 'string'
 					? (responseFormat as 'json' | 'text' | 'srt' | 'vtt' | 'verbose_json')
 					: 'json',
-			temperature: typeof temperatureRaw === 'string' ? parseFloat(temperatureRaw) : undefined
+			temperature: typeof temperatureRaw === 'string' ? parseFloat(temperatureRaw) : undefined,
+			fileName: audioFile.name || undefined,
+			mimeType: audioFile.type || undefined
 		});
 
 		finalizeProxyRequest(db, log.id, {
@@ -92,8 +96,10 @@ export const POST: RequestHandler = async ({ request }) => {
 			headers: { 'content-type': 'application/json' }
 		});
 	} catch (e) {
-		const message = e instanceof Error ? e.message : 'Transcription failed';
-		const status = e instanceof TranscriptionError ? e.status : 502;
+		const { status, message } = relayUpstreamError(
+			e instanceof TranscriptionError ? e.status : 502,
+			e instanceof Error ? e.message : 'Transcription failed'
+		);
 		finalizeProxyRequest(db, log.id, {
 			status: 'failed',
 			httpStatus: status,

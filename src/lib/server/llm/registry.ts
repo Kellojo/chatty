@@ -21,6 +21,7 @@ import {
 	type Provider,
 	type ProviderRow
 } from '../db/repo/providers.js';
+import { voiceNames } from '../speech/voices.js';
 
 type LanguageModelFactory = (modelId: string) => LanguageModel;
 
@@ -220,6 +221,12 @@ async function fetchOpenAICompatibleModels(
 			};
 			context_length?: unknown;
 			top_provider?: { context_length?: unknown };
+			/** OpenRouter: the voices a text-to-speech model accepts. */
+			supported_voices?: unknown;
+			/** Speaches: the model's voices, as `{ id, name, … }` objects. */
+			voices?: unknown;
+			/** Speaches: what the model does, e.g. `text-to-speech`. */
+			task?: unknown;
 		}[];
 	};
 	return (body.data ?? []).map((m) => {
@@ -258,6 +265,11 @@ async function fetchOpenAICompatibleModels(
 			capabilities.add(cap);
 		}
 		if (outputs.includes('image')) capabilities.add('image');
+		// Spoken output means a text-to-speech model.
+		if (outputs.includes('speech')) capabilities.add('speech');
+		// Speaches names each model's task instead of its modalities.
+		if (m.task === 'text-to-speech') capabilities.add('speech');
+		if (m.task === 'automatic-speech-recognition') capabilities.add('transcription');
 
 		return {
 			id: m.id,
@@ -266,7 +278,8 @@ async function fetchOpenAICompatibleModels(
 			priceOutput: pricePerMillion(m.pricing?.completion),
 			priceCacheRead: pricePerMillion(m.pricing?.input_cache_read),
 			priceCacheWrite: pricePerMillion(m.pricing?.input_cache_write),
-			contextLength: contextLength(m)
+			contextLength: contextLength(m),
+			voices: voiceNames(m.supported_voices) ?? voiceNames(m.voices)
 		};
 	});
 }

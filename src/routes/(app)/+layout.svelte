@@ -14,7 +14,8 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { cn } from '$lib/utils.js';
 	import { startServerEvents } from '$lib/state/events.svelte.js';
-	import { startMessageQueueRunner } from '$lib/state/message-queue-runner.js';
+	import { startMessageQueueSync } from '$lib/state/message-queue.svelte.js';
+	import { claimUserDataCaches } from '$lib/offline-cache.js';
 	import { setSidebarState } from '$lib/components/app/sidebar-state.svelte.js';
 	import { drawerSwipe, SETTLE_EASING } from '$lib/components/app/drawer-swipe.js';
 	import { haptic, preloadHaptics } from '$lib/haptics.svelte.js';
@@ -318,15 +319,17 @@
 	}
 
 	onMount(() => {
+		// Drops offline chat caches another account on this device left behind.
+		void claimUserDataCaches(data.user.id);
 		preloadHaptics();
 		document.addEventListener('scroll', onAnyScroll, { capture: true, passive: true });
 		const stopEvents = startServerEvents();
-		const stopQueueRunner = startMessageQueueRunner();
+		const stopQueueSync = startMessageQueueSync();
 		const stopDrawerSwipe = drawerTrack ? startDrawerSwipe(drawerTrack) : undefined;
 		return () => {
 			stopDrawerSwipe?.();
 			clearTimeout(settleTimer);
-			stopQueueRunner();
+			stopQueueSync();
 			stopEvents();
 			document.removeEventListener('scroll', onAnyScroll, { capture: true });
 		};
@@ -358,14 +361,6 @@
 	class="fixed top-0 left-0 h-(--titlebar-height) w-(--sidebar-width) bg-muted/30 transition-[width] duration-200 max-md:hidden"
 	class:border-r={sidebarOpen}
 	style:--sidebar-width={sidebarOpen ? '288px' : '0px'}
-	aria-hidden="true"
-></div>
-<!-- A solid bar under a phone's status bar (zero tall elsewhere). iOS 26 standalone web
-     apps otherwise draw a progressive "glass" blur over the top edge that smears the
-     header below it; a fixed, opaque element at the top makes Safari tint the status bar
-     with its colour instead. -->
-<div
-	class="pointer-events-none fixed inset-x-0 top-0 z-10 h-[env(safe-area-inset-top)] bg-background"
 	aria-hidden="true"
 ></div>
 <div class="flex h-screen overflow-hidden pt-(--titlebar-height)">

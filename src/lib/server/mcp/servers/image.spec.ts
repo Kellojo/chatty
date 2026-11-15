@@ -389,4 +389,52 @@ describe('edit_image', () => {
 		expect((res as { isError?: boolean }).isError).toBe(true);
 		expect(resultText(res)).toContain('does not support image input');
 	});
+
+	it('logs each image call in the requests log', async () => {
+		const db = getDb();
+		seedModel();
+		generateImageMock.mockResolvedValueOnce({
+			image: { base64: pngBase64(), mediaType: 'image/png' },
+			images: [{ base64: pngBase64(), mediaType: 'image/png' }],
+			warnings: [],
+			responses: [],
+			providerMetadata: {},
+			usage: { inputTokens: 12, outputTokens: 4000, totalTokens: 4012 }
+		});
+		await callGenerate({ prompt: 'a cat' });
+		generateImageMock.mockRejectedValueOnce(new Error('content policy'));
+		await callEdit({ prompt: 'x', image: pngBase64() });
+
+		const rows = db
+			.prepare(
+				'SELECT endpoint, purpose, source, status, conversation_id, provider_id, model_id, input_tokens, output_tokens, error FROM proxy_requests ORDER BY started_at, rowid'
+			)
+			.all();
+		expect(rows).toEqual([
+			{
+				endpoint: 'images.generate',
+				purpose: 'image',
+				source: 'chat',
+				status: 'complete',
+				conversation_id: 'conv-1',
+				provider_id: 'p1',
+				model_id: 'img-1',
+				input_tokens: 12,
+				output_tokens: 4000,
+				error: null
+			},
+			{
+				endpoint: 'images.edit',
+				purpose: 'image',
+				source: 'chat',
+				status: 'failed',
+				conversation_id: 'conv-1',
+				provider_id: 'p1',
+				model_id: 'img-1',
+				input_tokens: null,
+				output_tokens: null,
+				error: 'content policy'
+			}
+		]);
+	});
 });

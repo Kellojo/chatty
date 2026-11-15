@@ -8,5 +8,6 @@ export const MODEL_ROLE_LABEL: Record<ModelRole, string> = {
 	image: 'Image generation',
 	compaction: 'Chat compaction',
 	'speech-to-text': 'Speech to text',
+	'text-to-speech': 'Text to speech',
 	decisions: 'Decisions'
 };

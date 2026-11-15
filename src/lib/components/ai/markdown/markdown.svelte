@@ -16,6 +16,7 @@
 	import MealplanWidget from './mealplan-widget.svelte';
 	import EventsWidget from './events-widget.svelte';
 	import { createCachedCodePlugin, streamdownHighlighter } from './code-highlight.js';
+	import { ALLOWED_IMAGE_PREFIXES } from './image-url.js';
 
 	// Import Shiki themes
 	import githubLightDefault from '@shikijs/themes/github-light-default';
@@ -214,6 +215,7 @@
 		{shikiThemes}
 		{plugins}
 		{components}
+		allowedImagePrefixes={ALLOWED_IMAGE_PREFIXES}
 		linkSafety={{ enabled: true, renderModal: linkSafetyModal }}
 		{theme}
 	/>

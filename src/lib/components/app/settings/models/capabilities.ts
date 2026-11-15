@@ -7,12 +7,13 @@ import MessageSquareIcon from '@lucide/svelte/icons/message-square';
 import MicIcon from '@lucide/svelte/icons/mic';
 import SplitIcon from '@lucide/svelte/icons/split';
 import VideoIcon from '@lucide/svelte/icons/video';
+import Volume2Icon from '@lucide/svelte/icons/volume-2';
 import WavesIcon from '@lucide/svelte/icons/waves';
 import WrenchIcon from '@lucide/svelte/icons/wrench';
 
 /** Capabilities an admin can switch on or off (the API accepts exactly these). */
 export type EditableCapability =
-	'chat' | 'streaming' | 'vision' | 'tool_use' | 'image' | 'decisions' | 'transcription';
+	'chat' | 'streaming' | 'vision' | 'tool_use' | 'image' | 'decisions' | 'transcription' | 'speech';
 
 type Icon = Component<{ class?: string }>;
 
@@ -74,6 +75,12 @@ export const CAPABILITY_GROUPS: { title: string; items: CapabilityInfo[] }[] = [
 				label: 'Speech to text',
 				description: 'Transcribes voice messages and audio.',
 				icon: MicIcon
+			},
+			{
+				id: 'speech',
+				label: 'Text to speech',
+				description: 'Reads text aloud.',
+				icon: Volume2Icon
 			}
 		]
 	}

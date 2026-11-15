@@ -9,7 +9,8 @@ Self-hosted AI chat with multi-agent workflows, MCP tools, memory, and an OpenAI
 - **Memory** with full-text search for long-term context
 - **Skills** system to extend agent capabilities
 - **Workspaces** — per-agent sandboxed directories
-- **OpenAI-compatible proxy** (`/v1/chat/completions`) for external tools
+- **OpenAI-compatible proxy** (`/v1/chat/completions`, `/v1/audio/transcriptions`, `/v1/audio/speech`) for external tools
+- **Voice**: dictate messages and have replies read aloud, with a speech-to-text / text-to-speech model or the browser's built-in voice
 - **MCP gateway** (`/api/mcp`) — use Chatty's tools (memory, past chats, skills, agents, …) from Claude Code, Codex or OpenCode
 - Auth via better-auth: password, OIDC, or OIDC-only mode
 - PWA support

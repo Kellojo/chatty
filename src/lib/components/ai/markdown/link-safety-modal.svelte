@@ -16,6 +16,26 @@
 
 	let isCopied = $state(false);
 	let copyTimeout: ReturnType<typeof setTimeout> | undefined;
+	let openButton = $state<HTMLElement | null>(null);
+	// Fades the URL box's bottom edge while more of a long URL is hidden below.
+	let hasMoreBelow = $state(false);
+
+	$effect(() => () => clearTimeout(copyTimeout));
+
+	function trackOverflow(box: HTMLElement) {
+		void url; // re-measure when the URL changes
+		const update = () => {
+			hasMoreBelow = box.scrollTop + box.clientHeight < box.scrollHeight - 1;
+		};
+		update();
+		const observer = new ResizeObserver(update);
+		observer.observe(box);
+		box.addEventListener('scroll', update, { passive: true });
+		return () => {
+			observer.disconnect();
+			box.removeEventListener('scroll', update);
+		};
+	}
 
 	const displayUrl = $derived.by(() => {
 		try {
@@ -49,23 +69,42 @@
 </script>
 
 <Dialog.Root open={isOpen} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="sm:max-w-md">
-		<Dialog.Header>
+	<Dialog.Content
+		class="sm:max-w-md"
+		onOpenAutoFocus={(event) => {
+			event.preventDefault();
+			openButton?.focus();
+		}}
+	>
+		<Dialog.Header class="pr-10">
 			<Dialog.Title>Open external link?</Dialog.Title>
-			<Dialog.Description>
-				You're about to leave this app and visit an external site. Make sure you trust
-				<strong class="font-medium text-foreground">{displayUrl}</strong> before continuing.
+			<Dialog.Description class="text-pretty">
+				This link leaves the app and goes to
+				<strong class="font-medium [overflow-wrap:anywhere] text-foreground">{displayUrl}</strong>.
+				Only continue if you trust this site.
 			</Dialog.Description>
 		</Dialog.Header>
 
+		<!-- Focusable so keyboard users can scroll long URLs. -->
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 		<div
-			class="max-h-32 overflow-y-auto rounded-2xl border border-border bg-muted/50 p-3 font-mono text-xs break-all text-muted-foreground"
+			{@attach trackOverflow}
+			tabindex="0"
+			role="region"
+			aria-label="Full link address"
+			class="max-h-32 overflow-y-auto overscroll-contain rounded-2xl border border-border bg-muted/50 p-3 pb-4 font-mono text-xs break-all text-muted-foreground outline-none select-text focus-visible:ring-3 focus-visible:ring-ring/30"
+			class:fade-bottom={hasMoreBelow}
 		>
 			{url}
 		</div>
 
-		<Dialog.Footer class="gap-2 sm:gap-2">
-			<Button variant="outline" class="flex-1" onclick={() => void handleCopy()}>
+		<!-- Primary action first in the DOM so tab order matches the stacked mobile layout. -->
+		<Dialog.Footer class="flex-col sm:flex-row-reverse">
+			<Button bind:ref={openButton} class="sm:flex-1" onclick={handleConfirm}>
+				<ExternalLinkIcon />
+				Open link
+			</Button>
+			<Button variant="outline" class="sm:flex-1" onclick={() => void handleCopy()}>
 				{#if isCopied}
 					<CheckIcon />
 					Copied
@@ -74,10 +113,13 @@
 					Copy link
 				{/if}
 			</Button>
-			<Button class="flex-1" onclick={handleConfirm}>
-				<ExternalLinkIcon />
-				Open link
-			</Button>
+			<span class="sr-only" aria-live="polite">{isCopied ? 'Link copied to clipboard' : ''}</span>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+<style>
+	.fade-bottom {
+		mask-image: linear-gradient(to bottom, black calc(100% - 2rem), transparent);
+	}
+</style>

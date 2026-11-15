@@ -48,7 +48,8 @@ const putSchema = z
 			.max(MAX_FAVORITE_MODELS)
 			.optional(),
 		notificationTriggers: triggerPatch.optional(),
-		pushTriggers: triggerPatch.optional()
+		pushTriggers: triggerPatch.optional(),
+		speechVolume: z.number().min(0).max(1).optional()
 	})
 	.refine(
 		(data) =>
@@ -60,7 +61,8 @@ const putSchema = z
 			data.sidebarOpen !== undefined ||
 			data.favoriteModels !== undefined ||
 			data.notificationTriggers !== undefined ||
-			data.pushTriggers !== undefined,
+			data.pushTriggers !== undefined ||
+			data.speechVolume !== undefined,
 		{ message: 'Nothing to update' }
 	);
 
@@ -84,6 +86,9 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 	}
 	if (parsed.data.pushTriggers !== undefined) {
 		updatePushTriggers(db, user.id, parsed.data.pushTriggers);
+	}
+	if (parsed.data.speechVolume !== undefined) {
+		setUserSetting(db, user.id, 'speechVolume', parsed.data.speechVolume);
 	}
 	if (parsed.data.suggestions !== undefined) {
 		setUserSetting(db, user.id, 'suggestions', parsed.data.suggestions);

@@ -82,6 +82,7 @@ export const load: PageServerLoad = ({ locals, params, isDataRequest }) => {
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		defaultModel,
 		sttModel,
+		serverTts: findRoleModel(db, 'text-to-speech') !== undefined,
 		timeFormat: getTimeFormat(db, user.id),
 		personas: listPersonaAgents(db, user.id).map(agentToPublic),
 		// For handing a chat off to a coding agent (not needed inside coding tasks).

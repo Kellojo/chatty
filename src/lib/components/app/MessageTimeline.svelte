@@ -24,11 +24,15 @@
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import FileIcon from '@lucide/svelte/icons/file';
+	import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import LoaderIcon from '@lucide/svelte/icons/loader';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import Volume2Icon from '@lucide/svelte/icons/volume-2';
+	import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
+	import type { SpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { DispatchInfo, MessageUsage, UIMessage, UIMessageMetadata } from '$lib/types.js';
 
 	let {
@@ -45,6 +49,7 @@
 		editingId = null,
 		dispatch = null,
 		dispatchMessageId = null,
+		speech = null,
 		class: className
 	}: {
 		messages: UIMessage[];
@@ -66,6 +71,8 @@
 		dispatch?: DispatchInfo | null;
 		/** The message holding that run's instructions, shown as a chip instead of a bubble. */
 		dispatchMessageId?: string | null;
+		/** Reads replies aloud; no read-aloud button without it. */
+		speech?: SpeechPlayback | null;
 		class?: string;
 	} = $props();
 
@@ -180,6 +187,20 @@
 								filename={(part as { filename?: string }).filename}
 								align={message.role === 'user' ? 'end' : 'start'}
 							/>
+						{:else if part.mediaType?.startsWith('audio/')}
+							{@const filename = (part as { filename?: string }).filename ?? 'Audio'}
+							<figure
+								class={cn(
+									'flex w-full max-w-sm flex-col gap-1.5 rounded-md border px-3 py-2',
+									message.role === 'user' && 'self-end'
+								)}
+							>
+								<figcaption class="flex items-center gap-2 truncate text-sm">
+									<AudioLinesIcon class="size-4 shrink-0" />
+									<span class="truncate">{filename}</span>
+								</figcaption>
+								<audio controls preload="metadata" src={url} class="h-9 w-full"></audio>
+							</figure>
 						{:else}
 							<!-- eslint-disable svelte/no-navigation-without-resolve -->
 							<a
@@ -305,6 +326,31 @@
 							onclick={() => shareText({ text: messageText(message) })}
 						>
 							<ShareIcon class="size-3.5" />
+						</button>
+					{/if}
+					{#if visible && speech?.supported && message.role === 'assistant' && !messageActive}
+						{@const speaking = speech.activeId === message.id}
+						<button
+							title={speaking ? (speech.loading ? 'Cancel' : 'Stop reading') : 'Read aloud'}
+							aria-label={speaking
+								? speech.loading
+									? 'Cancel reading aloud'
+									: 'Stop reading aloud'
+								: 'Read message aloud'}
+							aria-busy={speaking && speech.loading}
+							class={cn(
+								'rounded-md p-1.5 hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5',
+								speaking ? 'text-foreground' : 'text-muted-foreground'
+							)}
+							onclick={() => speech.toggle(message.id, messageText(message))}
+						>
+							{#if speaking && speech.loading}
+								<LoaderIcon class="size-3.5 animate-spin" />
+							{:else if speaking}
+								<CircleStopIcon class="size-3.5" />
+							{:else}
+								<Volume2Icon class="size-3.5" />
+							{/if}
 						</button>
 					{/if}
 					{#if message.role === 'user' && onedit && !streaming}

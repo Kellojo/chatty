@@ -94,6 +94,7 @@ import {
 	workspaceForConversation
 } from '../workspaces.js';
 import { attachmentCache } from './attachmentCache.js';
+import { isTranscribable } from '../mcp/servers/speech.js';
 import { estimateTokens, maybeCompactConversation } from './compact.js';
 import { effectiveContextLength } from '../llm/lmstudio.js';
 import {
@@ -132,7 +133,7 @@ function attachmentIdFromUrl(url: string, conversationId: string): string | null
  * anywhere else (another conversation, an arbitrary URL the provider would
  * fetch) is rejected before anything is written.
  */
-function assertValidUserParts(conversationId: string, message: UIMessage): void {
+export function assertValidUserParts(conversationId: string, message: UIMessage): void {
 	for (const part of message.parts) {
 		if (part.type === 'text') continue;
 		if (part.type === 'file') {
@@ -190,6 +191,17 @@ export async function inlineAttachmentParts(
 						const row = getConversationAttachment(db, conversationId, attachmentId);
 						// An internal URL means nothing to the provider, so leave the part out.
 						if (!row) return [];
+						// Chat models can't take audio, so it reaches them as a note that the
+						// transcribe_audio tool can act on, never as bytes.
+						if (isTranscribable(row.mime)) {
+							const name = part.filename ? ` ${part.filename}` : '';
+							return [
+								{
+									type: 'text',
+									text: `[audio file${name}; attachment id: ${attachmentId} — use transcribe_audio to read it]`
+								} as UIMessage['parts'][number]
+							];
+						}
 						const isImage = row.mime.startsWith('image/');
 						if (isImage && index < inlineFrom) {
 							const name = part.filename ? ` ${part.filename}` : '';

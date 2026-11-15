@@ -5,6 +5,8 @@ import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
+// Cleared on sign-out and account change (src/lib/offline-cache.ts).
+import { USER_DATA_CACHES } from './src/lib/offline-cache.js';
 
 // Files other apps may share into Chatty: the composer's attachment types
 // (its file picker's `accept`). Android matches shares by MIME type.
@@ -69,6 +71,9 @@ export default defineConfig(({ mode }) => {
 						'style-src': ['self', 'unsafe-inline'],
 						'img-src': ['self', 'data:', 'blob:', 'https:'],
 						'font-src': ['self', 'data:'],
+						// Read-aloud plays synthesized speech from blob: URLs and unlocks its
+						// audio elements (for Safari) with a silent data: WAV.
+						'media-src': ['self', 'data:', 'blob:'],
 						'connect-src': ['self'],
 						'worker-src': ['self'],
 						'manifest-src': ['self'],
@@ -155,7 +160,7 @@ export default defineConfig(({ mode }) => {
 								/^\/api\/conversations(?:\/search)?$/.test(url.pathname),
 							handler: 'NetworkFirst',
 							options: {
-								cacheName: 'api-conversations',
+								cacheName: USER_DATA_CACHES.conversations,
 								networkTimeoutSeconds: 5,
 								expiration: { maxEntries: 50, maxAgeSeconds: 7 * 24 * 60 * 60 }
 							}
@@ -169,7 +174,7 @@ export default defineConfig(({ mode }) => {
 								/^\/chat\/[^/]+\/__data\.json$/.test(url.pathname),
 							handler: 'NetworkFirst',
 							options: {
-								cacheName: 'chat-page-data',
+								cacheName: USER_DATA_CACHES.chatPageData,
 								networkTimeoutSeconds: 5,
 								expiration: { maxEntries: 100, maxAgeSeconds: 7 * 24 * 60 * 60 }
 							}
@@ -182,7 +187,7 @@ export default defineConfig(({ mode }) => {
 								/^\/api\/conversations\/[^/]+\/messages$/.test(url.pathname),
 							handler: 'NetworkFirst',
 							options: {
-								cacheName: 'chat-older-messages',
+								cacheName: USER_DATA_CACHES.olderMessages,
 								networkTimeoutSeconds: 5,
 								expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 }
 							}

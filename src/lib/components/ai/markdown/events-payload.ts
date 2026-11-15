@@ -5,6 +5,7 @@
  * (`…Z`, `…+01:00`) is shown in the payload's `timeZone` (or the viewer's).
  */
 
+import { inlineImageUrl } from './image-url.js';
 import { isoDay } from './mealplan-payload.js';
 
 export type EventStatus = 'soldout' | 'few' | 'cancelled' | 'postponed' | 'free';
@@ -56,12 +57,6 @@ const str = (v: unknown): string | null =>
 function webUrl(v: unknown): string | null {
 	const s = str(v);
 	return s && URL.canParse(s) && /^https?:$/.test(new URL(s).protocol) ? new URL(s).href : null;
-}
-
-function imageUrl(v: unknown): string | null {
-	const s = str(v);
-	if (s && /^data:image\//i.test(s)) return s;
-	return webUrl(s);
 }
 
 const TIME_RE = /^(\d{1,2}):(\d{2})/;
@@ -160,7 +155,7 @@ function parseEvent(v: unknown, i: number, timeZone: string | undefined): EventI
 			(a) => a.toLowerCase() !== title.toLowerCase()
 		),
 		category: str(e.category) ?? str(e.type),
-		image: imageUrl(e.image),
+		image: inlineImageUrl(e.image),
 		url: webUrl(e.url ?? e.tickets ?? e.ticketUrl ?? e.link),
 		price,
 		status: statusOf(e.status, price),

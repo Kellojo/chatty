@@ -1,85 +1,148 @@
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { SvelteMap } from 'svelte/reactivity';
+import { toast } from 'svelte-sonner';
+import { uploadAttachments } from '$lib/chat-send.js';
+import type { MessageQueueState, QueuedMessage } from '$lib/types.js';
+import { onServerEvent, onServerEventResync } from './events.svelte.js';
 
-export interface QueuedMessage {
-	id: string;
-	text: string;
-	files: File[];
+export type { QueuedMessage };
+
+const EMPTY: MessageQueueState = { items: [], paused: false };
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+	const res = await fetch(url, init);
+	const data = (await res.json().catch(() => null)) as (T & { message?: string }) | null;
+	if (!res.ok || !data) throw new Error(data?.message ?? 'The message queue is unavailable');
+	return data;
 }
 
-// Messages written while a reply is still running, per conversation. They are
-// sent one at a time once the chat is idle, unless the queue is paused (the
-// user stopped the reply, or sending failed). The open chat view sends its own
-// queue; for chats that aren't open, ./message-queue-runner.ts does. Lives in
-// memory only, so a page reload drops it.
+function jsonInit(method: string, body?: unknown): RequestInit {
+	return body === undefined
+		? { method }
+		: { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+// Messages written while a reply is still running, per conversation. The
+// server keeps them and sends them one at a time once the reply finishes (see
+// src/lib/server/chat/queue.ts), so they survive reloads and show on every
+// device. This is the client's synced copy: a chat view loads its queue and
+// changes from anywhere arrive as `chat.queue.updated`.
 class MessageQueues {
-	#queues = new SvelteMap<string, QueuedMessage[]>();
-	#paused = new SvelteSet<string>();
-	#attached = new Map<string, number>();
+	#queues = new SvelteMap<string, MessageQueueState>();
+
+	#base(conversationId: string): string {
+		return `/api/conversations/${encodeURIComponent(conversationId)}/queue`;
+	}
+
+	#set(conversationId: string, state: MessageQueueState): MessageQueueState {
+		this.#queues.set(conversationId, state);
+		return state;
+	}
 
 	list(conversationId: string): QueuedMessage[] {
-		return this.#queues.get(conversationId) ?? [];
-	}
-
-	add(conversationId: string, message: { text: string; files?: File[] }): QueuedMessage {
-		const item: QueuedMessage = {
-			id: crypto.randomUUID(),
-			text: message.text,
-			files: message.files ?? []
-		};
-		this.#queues.set(conversationId, [...this.list(conversationId), item]);
-		return item;
-	}
-
-	/** Puts a message back at the front, e.g. after it failed to send. */
-	prepend(conversationId: string, item: QueuedMessage): void {
-		this.#queues.set(conversationId, [item, ...this.list(conversationId)]);
-	}
-
-	remove(conversationId: string, id: string): QueuedMessage | undefined {
-		const items = this.list(conversationId);
-		const item = items.find((m) => m.id === id);
-		if (!item) return undefined;
-		const rest = items.filter((m) => m !== item);
-		if (rest.length > 0) this.#queues.set(conversationId, rest);
-		else this.#queues.delete(conversationId);
-		return item;
+		return (this.#queues.get(conversationId) ?? EMPTY).items;
 	}
 
 	isPaused(conversationId: string): boolean {
-		return this.#paused.has(conversationId);
+		return (this.#queues.get(conversationId) ?? EMPTY).paused;
 	}
 
-	pause(conversationId: string): void {
-		this.#paused.add(conversationId);
-	}
-
-	resume(conversationId: string): void {
-		this.#paused.delete(conversationId);
-	}
-
-	/** Marks the conversation as open in a chat view, which then sends its queue. */
-	attach(conversationId: string): () => void {
-		this.#attached.set(conversationId, (this.#attached.get(conversationId) ?? 0) + 1);
-		return () => {
-			const count = (this.#attached.get(conversationId) ?? 1) - 1;
-			if (count > 0) this.#attached.set(conversationId, count);
-			else this.#attached.delete(conversationId);
-		};
-	}
-
-	isAttached(conversationId: string): boolean {
-		return this.#attached.has(conversationId);
-	}
-
-	/** Conversations with messages waiting. */
+	/** Conversations whose queue this client has loaded. */
 	conversationIds(): string[] {
 		return [...this.#queues.keys()];
 	}
 
-	clear(conversationId: string): void {
+	/** Fetches the server's copy of the queue. */
+	async load(conversationId: string): Promise<MessageQueueState> {
+		return this.#set(conversationId, await request(this.#base(conversationId)));
+	}
+
+	/** Uploads the files and queues the message on the server. Throws on failure. */
+	async add(conversationId: string, message: { text: string; files?: File[] }): Promise<void> {
+		const files = await uploadAttachments(conversationId, message.files ?? []);
+		this.#set(
+			conversationId,
+			await request(this.#base(conversationId), jsonInit('POST', { text: message.text, files }))
+		);
+	}
+
+	/** Takes a message off the queue; null when it was already sent. */
+	async remove(conversationId: string, id: string): Promise<QueuedMessage | null> {
+		try {
+			const { item, queue } = await request<{ item: QueuedMessage; queue: MessageQueueState }>(
+				`${this.#base(conversationId)}/${encodeURIComponent(id)}`,
+				jsonInit('DELETE')
+			);
+			this.#set(conversationId, queue);
+			return item;
+		} catch {
+			void this.load(conversationId).catch(() => undefined);
+			return null;
+		}
+	}
+
+	/** Sends a queued message now, interrupting a running reply. Throws on failure. */
+	async sendNow(conversationId: string, id: string): Promise<void> {
+		this.#set(
+			conversationId,
+			await request(
+				`${this.#base(conversationId)}/${encodeURIComponent(id)}/send`,
+				jsonInit('POST')
+			)
+		);
+	}
+
+	async setPaused(conversationId: string, paused: boolean): Promise<void> {
+		const current = this.#queues.get(conversationId) ?? EMPTY;
+		if (current.paused === paused) return;
+		this.#set(conversationId, { ...current, paused });
+		try {
+			this.#set(
+				conversationId,
+				await request(this.#base(conversationId), jsonInit('PATCH', { paused }))
+			);
+		} catch (e) {
+			void this.load(conversationId).catch(() => undefined);
+			throw e;
+		}
+	}
+
+	pause(conversationId: string): void {
+		this.setPaused(conversationId, true).catch(() => undefined);
+	}
+
+	resume(conversationId: string): void {
+		this.setPaused(conversationId, false).catch((e) =>
+			toast.error(e instanceof Error ? e.message : 'Failed to resume the queue')
+		);
+	}
+
+	forget(conversationId: string): void {
 		this.#queues.delete(conversationId);
-		this.#paused.delete(conversationId);
 	}
 }
 
 export const messageQueue = new MessageQueues();
+
+/**
+ * Keeps loaded queues in sync with the server and reports queued messages it
+ * failed to send. Returns a stop function.
+ */
+export function startMessageQueueSync(): () => void {
+	const offEvent = onServerEvent((event) => {
+		if (event.type !== 'chat.queue.updated') return;
+		if (event.error) toast.error(event.error);
+		if (messageQueue.conversationIds().includes(event.conversationId)) {
+			void messageQueue.load(event.conversationId).catch(() => undefined);
+		}
+	});
+	// Updates may have been missed while disconnected.
+	const offResync = onServerEventResync(() => {
+		for (const id of messageQueue.conversationIds()) {
+			void messageQueue.load(id).catch(() => undefined);
+		}
+	});
+	return () => {
+		offEvent();
+		offResync();
+	};
+}

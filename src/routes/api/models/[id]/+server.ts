@@ -9,7 +9,7 @@ const patchSchema = z.object({
 	displayName: z.string().min(1).max(200).optional(),
 	capabilities: z
 		.array(
-			z.enum(['chat', 'vision', 'tool_use', 'streaming', 'image', 'decisions', 'transcription'])
+			z.enum(['chat', 'vision', 'tool_use', 'streaming', 'image', 'decisions', 'transcription', 'speech'])
 		)
 		.optional(),
 	enabled: z.boolean().optional(),

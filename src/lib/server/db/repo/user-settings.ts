@@ -65,6 +65,12 @@ function parseFavoriteModels(value: unknown): string[] {
 	return [...new Set(value.filter((v): v is string => typeof v === 'string' && v.includes('/')))];
 }
 
+function parseSpeechVolume(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+		? value
+		: DEFAULT_USER_SETTINGS.speechVolume;
+}
+
 /** Stored trigger flags merged over `base`, so new trigger keys default sensibly. */
 function readTriggers(value: unknown, base: NotificationTriggers): NotificationTriggers {
 	const triggers = { ...base };
@@ -169,6 +175,7 @@ export function getUserSettings(db: Db, userId: string): UserSettings {
 		sidebarOpen: parseSidebarOpen(stored.get('sidebarOpen')),
 		favoriteModels: parseFavoriteModels(stored.get('favoriteModels')),
 		notificationTriggers,
-		pushTriggers: readTriggers(stored.get('pushTriggers'), notificationTriggers)
+		pushTriggers: readTriggers(stored.get('pushTriggers'), notificationTriggers),
+		speechVolume: parseSpeechVolume(stored.get('speechVolume'))
 	};
 }

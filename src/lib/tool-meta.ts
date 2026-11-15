@@ -16,6 +16,7 @@ export type ToolKind =
 	| 'memory'
 	| 'skill'
 	| 'image'
+	| 'audio'
 	| 'math'
 	| 'time'
 	| 'settings'
@@ -81,6 +82,7 @@ const SERVER_LABELS: Record<string, string> = {
 	skills: 'Skills',
 	'code-exec': 'Code',
 	image: 'Images',
+	speech: 'Speech',
 	wait: 'Wait',
 	math: 'Math',
 	weather: 'Weather'
@@ -141,6 +143,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	code_exec: { label: 'Run code', server: 'code-exec', kind: 'code', detail: 'code' },
 	generate_image: { label: 'Generate image', server: 'image', kind: 'image', detail: 'prompt' },
 	edit_image: { label: 'Edit image', server: 'image', kind: 'image', detail: 'prompt' },
+	transcribe_audio: { label: 'Transcribe audio', server: 'speech', kind: 'audio' },
 	wait: { label: 'Wait', server: 'wait', kind: 'wait', detail: 'seconds' },
 	get_weather: { label: 'Get weather', server: 'weather', kind: 'weather', detail: 'location' },
 	calculate: { label: 'Calculate', server: 'math', kind: 'math', detail: 'expression' },

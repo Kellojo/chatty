@@ -593,6 +593,14 @@ BUILTIN_TOOL_EXAMPLES.image = [
 	)
 ];
 
+BUILTIN_TOOL_EXAMPLES.speech = [
+	mcp(
+		'transcribe_audio',
+		{ audio: '0b6a2c1e-7f3d-4c2a-9e1b-5d8f6a4c3b2e', language: 'en' },
+		'Remind me to buy milk on the way home, and call Sam about Friday.'
+	)
+];
+
 function builtinTools(): PlaygroundMessage[] {
 	const messages: PlaygroundMessage[] = [];
 	for (const [server, calls] of Object.entries(BUILTIN_TOOL_EXAMPLES)) {

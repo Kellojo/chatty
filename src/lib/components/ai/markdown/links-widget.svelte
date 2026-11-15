@@ -4,6 +4,7 @@
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import WidgetCard from './widget-card.svelte';
 	import LinkSafetyModal from './link-safety-modal.svelte';
+	import { inlineImageUrl } from './image-url.js';
 	import { cn } from '$lib/utils.js';
 
 	/**
@@ -74,12 +75,6 @@
 		return u.protocol === 'https:' || u.protocol === 'http:' ? u : null;
 	}
 
-	/** Images may also be inline data:image URIs. */
-	function imageUrl(v: unknown): string | null {
-		const s = str(v);
-		if (s && /^data:image\//i.test(s)) return s;
-		return webUrl(s)?.href ?? null;
-	}
 
 	function parseSource(v: unknown): Source | null {
 		const l = rec(v);
@@ -98,8 +93,8 @@
 					: host,
 			site,
 			description: str(l.description) ?? str(l.summary),
-			favicon: imageUrl(l.favicon ?? l.icon),
-			image: imageUrl(l.image)
+			favicon: inlineImageUrl(l.favicon ?? l.icon),
+			image: inlineImageUrl(l.image)
 		};
 	}
 

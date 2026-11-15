@@ -64,6 +64,7 @@
 	import MicButton from '$lib/components/app/MicButton.svelte';
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
+	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import {
 		chatMessageToUIMessage,
 		type Agent,
@@ -93,6 +94,7 @@
 		timeFormat = 'auto',
 		personas,
 		sttModel = null,
+		serverTts = false,
 		initiallyGenerating = false,
 		coding: initialCoding = null,
 		codingEnvironments = [],
@@ -108,6 +110,8 @@
 		mappings?: ModelMapping[];
 		defaultModel?: { providerId: string; modelId: string } | null;
 		sttModel?: { providerId: string; modelId: string } | null;
+		/** A Text to speech default is set; otherwise the browser's voice reads replies. */
+		serverTts?: boolean;
 		timeFormat?: TimeFormat;
 		personas?: Agent[];
 		initiallyGenerating?: boolean;
@@ -126,6 +130,13 @@
 	// The unsent text survives switching chats (this view remounts per chat).
 	let input = $state(drafts.get(untrack(() => initialConversation.id)));
 	const speech = sttModel ? createServerSpeechRecognition(sttModel) : createSpeechRecognition();
+	const playback = createSpeechPlayback({
+		serverTts: () => serverTts,
+		onerror: (message) => toast.error(message),
+		oninfo: (message) => toast.info(message),
+		volume: () => page.data.settings?.speechVolume ?? 1
+	});
+	onMount(() => playback.stop);
 	let selectedFiles = $state<File[]>([]);
 	let fileInput: HTMLInputElement | undefined = $state();
 
@@ -485,10 +496,24 @@
 		const id = conversation.id;
 		return onServerEvent((event) => {
 			if (event.type !== 'chat.stream.started' || event.conversationId !== id) return;
-			if (remoteGenerating || localBusy()) return;
-			void followRemoteStream(id);
+			if (remoteGenerating) return;
+			// Usually this view's own reply; but the server may already have sent
+			// the next queued message while ours winds down: checked once idle.
+			if (localBusy()) startedWhileBusy = true;
+			else void followRemoteStream(id);
 		});
 	});
+
+	let startedWhileBusy = false;
+
+	/** Follows a reply that started while this view was busy with its own, if it still runs. */
+	async function followIfStartedWhileBusy(id: string) {
+		if (!startedWhileBusy) return;
+		startedWhileBusy = false;
+		if ((await isGeneratingRemotely(id)) !== true) return;
+		if (conversation.id !== id || remoteGenerating || localBusy()) return;
+		await followRemoteStream(id);
+	}
 
 	/** Attaches to a reply running server-side that this view didn't start. */
 	async function followRemoteStream(id: string) {
@@ -582,12 +607,12 @@
 	/**
 	 * The reply this view was receiving errored. If the server is still generating
 	 * it, only the connection dropped: follow the reply instead of showing it as
-	 * ended, and let the queue go on as before. Otherwise show the failure.
+	 * ended. Otherwise show the failure. (The server pauses the queue itself when
+	 * a reply fails.)
 	 */
-	async function recoverFromError(id: string, queueWasPaused: boolean) {
+	async function recoverFromError(id: string) {
 		if ((await isGeneratingRemotely(id)) === true) {
 			if (conversation.id !== id || chat.status !== 'error' || remoteGenerating) return;
-			if (!queueWasPaused) messageQueue.resume(id);
 			await followRemoteStream(id);
 			return;
 		}
@@ -634,13 +659,12 @@
 					if (!remoteGenerating) void followRemoteStream(id);
 					return;
 				}
-				const queueWasPaused = messageQueue.isPaused(id);
-				messageQueue.pause(id);
-				void recoverFromError(id, queueWasPaused);
+				void recoverFromError(id);
 			});
 		}
 		if (prevStatus !== 'ready' && current === 'ready') {
 			markRead();
+			void followIfStartedWhileBusy(conversation.id);
 			if (activeChats.get(conversation.id) === chat) {
 				activeChats.delete(conversation.id);
 			}
@@ -651,10 +675,20 @@
 	const INTERRUPT_TIMEOUT_MS = 2000;
 
 	// ── queue ────────────────────────────────────────────────────────────────
-	// Messages written while a reply runs wait here and go out one by one once
-	// the chat is idle. "Send now" interrupts the reply instead.
+	// Messages written while a reply runs wait in the server's queue, which sends
+	// them one by one once the chat is idle (this view follows those replies like
+	// any started elsewhere). "Send now" interrupts the reply instead.
 	const queue = $derived(messageQueue.list(conversation.id));
 	const queuePaused = $derived(messageQueue.isPaused(conversation.id));
+	/** A queue action (send now, edit) is in flight; its buttons would race it. */
+	let queueActing = $state(false);
+	/** The message being delivered, if any: a message queued meanwhile goes after it. */
+	let delivering: Promise<boolean> | null = null;
+
+	$effect(() => {
+		const id = conversation.id;
+		untrack(() => void messageQueue.load(id).catch(() => undefined));
+	});
 
 	/** Sends the composer's message, or queues it while the chat is busy. */
 	async function send(text: string) {
@@ -722,11 +756,44 @@
 	 */
 	function submit(text: string, files: File[]): Promise<boolean> {
 		if (streaming || sending || (queue.length > 0 && !queuePaused)) {
-			messageQueue.add(conversation.id, { text, files });
-			return Promise.resolve(true);
+			return queueMessage(text, files);
 		}
-		messageQueue.resume(conversation.id);
+		if (queuePaused) resumeQueueAfterStart(conversation.id);
 		return deliver(text, files);
+	}
+
+	async function queueMessage(text: string, files: File[]): Promise<boolean> {
+		const id = conversation.id;
+		try {
+			await delivering;
+			await messageQueue.add(id, { text, files });
+			return true;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to queue the message');
+			return false;
+		}
+	}
+
+	/**
+	 * A new message goes ahead of a paused queue, which then goes on after its
+	 * reply. Resumed once that reply has started, so the server doesn't send the
+	 * next queued message first.
+	 */
+	function resumeQueueAfterStart(id: string) {
+		if (messageQueue.list(id).length === 0) {
+			messageQueue.resume(id);
+			return;
+		}
+		const timer = setTimeout(done, 30_000);
+		const off = onServerEvent((event) => {
+			if (event.type !== 'chat.stream.started' || event.conversationId !== id) return;
+			done();
+			messageQueue.resume(id);
+		});
+		function done() {
+			clearTimeout(timer);
+			off();
+		}
 	}
 
 	/**
@@ -767,12 +834,24 @@
 	 * edited message's attachments that were kept are sent along as they are.
 	 * Returns false on failure.
 	 */
-	async function deliver(
+	function deliver(
 		text: string,
 		files: File[],
 		edit?: { messageId: string; keptFiles: FilePart[] }
 	): Promise<boolean> {
-		if (sending) return false;
+		if (sending) return Promise.resolve(false);
+		const done: Promise<boolean> = deliverNow(text, files, edit).finally(() => {
+			if (delivering === done) delivering = null;
+		});
+		delivering = done;
+		return done;
+	}
+
+	async function deliverNow(
+		text: string,
+		files: File[],
+		edit?: { messageId: string; keptFiles: FilePart[] }
+	): Promise<boolean> {
 		sending = true;
 		const { text: trimmed, skill } = parseSkillCommand(text);
 		try {
@@ -823,37 +902,46 @@
 		}
 	}
 
-	/** Sends a queued message; on failure it goes back to the front, paused. */
-	async function deliverQueued(item: QueuedMessage) {
-		const id = conversation.id;
-		if (!messageQueue.remove(id, item.id)) return;
-		if (!(await deliver(item.text, item.files))) {
-			messageQueue.prepend(id, item);
-			messageQueue.pause(id);
+	/**
+	 * Sends a queued message now: the server starts its turn (superseding the
+	 * running reply) and resumes the queue; this view follows the new reply.
+	 */
+	async function sendQueuedNow(item: QueuedMessage) {
+		if (sending || queueActing) return;
+		queueActing = true;
+		try {
+			await interruptResponse();
+			await messageQueue.sendNow(conversation.id, item.id);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to send the queued message');
+		} finally {
+			queueActing = false;
 		}
 	}
 
-	function sendQueuedNow(item: QueuedMessage) {
-		if (sending) return;
-		messageQueue.resume(conversation.id);
-		void deliverQueued(item);
+	/** Takes a queued message back into the composer, attachments included. */
+	async function editQueued(item: QueuedMessage) {
+		if (queueActing) return;
+		queueActing = true;
+		try {
+			const removed = await messageQueue.remove(conversation.id, item.id);
+			if (!removed) return;
+			input = input.trim() ? `${input.trimEnd()}\n${removed.text}` : removed.text;
+			if (removed.files.length === 0) return;
+			const files = await Promise.all(
+				removed.files.map(async (f) => {
+					const res = await fetch(f.url);
+					if (!res.ok) throw new Error(`Failed to load ${f.filename}`);
+					return new File([await res.blob()], f.filename, { type: f.mediaType });
+				})
+			);
+			addFiles(files);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to edit the queued message');
+		} finally {
+			queueActing = false;
+		}
 	}
-
-	function editQueued(item: QueuedMessage) {
-		if (!messageQueue.remove(conversation.id, item.id)) return;
-		input = input.trim() ? `${input.trimEnd()}\n${item.text}` : item.text;
-		if (item.files.length > 0) addFiles(item.files);
-	}
-
-	// While open, this view sends the queue itself (see message-queue-runner).
-	onMount(() => messageQueue.attach(untrack(() => conversation.id)));
-
-	// Drain: the next queued message goes out as soon as the chat is idle.
-	$effect(() => {
-		const next = queue[0];
-		if (!next || streaming || sending || queuePaused || coding?.pendingRequest) return;
-		untrack(() => void deliverQueued(next));
-	});
 
 	// Stops the response being received so a new message can take over. The Chat
 	// can't start a request until the aborted one has settled. The server aborts
@@ -1287,6 +1375,7 @@
 					editingId={editing?.messageId ?? null}
 					{dispatch}
 					{dispatchMessageId}
+					speech={playback}
 				/>
 				{#if waiting}
 					<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
@@ -1353,10 +1442,10 @@
 				items={queue}
 				paused={queuePaused}
 				busy={streaming}
-				disabled={sending}
-				onsendnow={sendQueuedNow}
-				onedit={editQueued}
-				onremove={(item) => messageQueue.remove(conversation.id, item.id)}
+				disabled={sending || queueActing}
+				onsendnow={(item) => void sendQueuedNow(item)}
+				onedit={(item) => void editQueued(item)}
+				onremove={(item) => void messageQueue.remove(conversation.id, item.id)}
 				onresume={() => messageQueue.resume(conversation.id)}
 			/>
 		{/if}
@@ -1463,7 +1552,7 @@
 			bind:this={fileInput}
 			type="file"
 			multiple
-			accept="image/*,application/pdf,.txt,.md,.csv,.json,.xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+			accept="image/*,audio/*,application/pdf,.txt,.md,.csv,.json,.xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
 			class="hidden"
 			onchange={filesChosen}
 		/>

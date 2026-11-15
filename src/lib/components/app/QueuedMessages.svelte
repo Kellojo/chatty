@@ -34,7 +34,7 @@
 	function preview(item: QueuedMessage): string {
 		const text = item.text.replace(/\s+/g, ' ').trim();
 		if (text) return text;
-		return item.files.length === 1 ? item.files[0].name : `${item.files.length} files`;
+		return item.files.length === 1 ? item.files[0].filename : `${item.files.length} files`;
 	}
 </script>
 

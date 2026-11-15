@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { requestPurposeLabel } from '$lib/request-purposes.js';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -780,9 +781,16 @@
 									</div>
 								</Table.Cell>
 								<Table.Cell>
-									<Badge variant={sourceVariant(request.source)} class="capitalize">
-										{request.source}
-									</Badge>
+									<div class="flex flex-col items-start gap-1">
+										<Badge variant={sourceVariant(request.source)} class="capitalize">
+											{request.source}
+										</Badge>
+										{#if requestPurposeLabel(request.purpose)}
+											<span class="text-xs whitespace-nowrap text-muted-foreground">
+												{requestPurposeLabel(request.purpose)}
+											</span>
+										{/if}
+									</div>
 								</Table.Cell>
 								<Table.Cell class="max-w-[160px] text-muted-foreground">
 									<div class="flex flex-col gap-0.5">

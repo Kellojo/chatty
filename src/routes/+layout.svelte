@@ -20,7 +20,10 @@
 	<link rel="icon" href={favicon} />
 	<meta name="mobile-web-app-capable" content="yes" />
 	<meta name="apple-mobile-web-app-capable" content="yes" />
-	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+	<!-- Not black-translucent: iOS 26 draws a "glass" blur over page content under a
+	     translucent status bar, smearing the header. An opaque bar keeps the page below it,
+	     coloured by theme-color (ModeWatcher). iOS reads this only when the app is installed. -->
+	<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 	<link rel="apple-touch-icon" href="/pwa-192x192.png" />
 </svelte:head>
 <!-- Browser/PWA bar colours: --background in each mode (layout.css). -->

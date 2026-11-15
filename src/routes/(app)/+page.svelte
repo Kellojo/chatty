@@ -385,7 +385,7 @@
 			bind:this={fileInput}
 			type="file"
 			multiple
-			accept="image/*,application/pdf,.txt,.md,.csv,.json,.xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+			accept="image/*,audio/*,application/pdf,.txt,.md,.csv,.json,.xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
 			class="hidden"
 			onchange={filesChosen}
 		/>

@@ -18,6 +18,7 @@
 		mappings={data.mappings}
 		defaultModel={data.defaultModel}
 		sttModel={data.sttModel}
+		serverTts={data.serverTts}
 		timeFormat={data.timeFormat}
 		personas={data.personas}
 		initiallyGenerating={data.generating}
