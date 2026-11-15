@@ -301,7 +301,7 @@
 	status={data ? 'ready' : isIncomplete ? 'loading' : 'error'}
 	loadingLabel="Loading weather…"
 	errorLabel="Could not render weather"
-	skeletonClass="h-[38rem] bg-linear-to-b from-sky-500/15 to-transparent @xl:h-[28rem]"
+	skeletonClass="h-[35rem] bg-linear-to-b from-sky-500/15 to-transparent @xl:h-[26rem]"
 	raw={code}
 	divided={false}
 	class="@container"

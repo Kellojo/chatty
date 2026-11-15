@@ -91,3 +91,46 @@ export function speechChunks(text: string, max = 200, firstMax = max): string[] 
 export function serverChunks(text: string, first = 200, later = 1000): string[] {
 	return speechChunks(text, later, first);
 }
+
+/**
+ * The next part of a reply that is still streaming in which is ready to be read
+ * aloud: the markdown from `from` up to its last complete sentence or line
+ * outside a code block, as speakable text, and the offset to go on from next
+ * time. With `final` the reply is complete and the rest is taken.
+ */
+export function speakableUpTo(
+	markdown: string,
+	from: number,
+	final: boolean,
+	/**
+	 * Also cut at a clause (comma, dash) once this many characters are ready
+	 * and no sentence has ended yet: for the start of a reply, so the voice
+	 * starts sooner.
+	 */
+	clauseAfter = Infinity
+): { text: string; next: number } {
+	let end = markdown.length;
+	if (!final) {
+		end = from;
+		let clauseEnd = from;
+		let fenced = (markdown.slice(0, from).match(/```/g)?.length ?? 0) % 2 === 1;
+		// A sentence counts as ended once the space after its full stop has arrived.
+		const boundary = /```|[.!?:;](?=\s)|\n|[,—–](?=\s)/g;
+		boundary.lastIndex = from;
+		for (let m = boundary.exec(markdown); m; m = boundary.exec(markdown)) {
+			if (m[0] === '```') fenced = !fenced;
+			else if (fenced) continue;
+			else if (/[,—–]/.test(m[0])) clauseEnd = m.index + m[0].length;
+			else end = m.index + m[0].length;
+		}
+		if (end === from && clauseEnd - from >= clauseAfter) end = clauseEnd;
+	}
+	if (end <= from) return { text: '', next: from };
+	const text = speakableText(markdown.slice(from, end), Infinity)
+		// Markup cut in half at a sentence end (bold, a link) that the full pass can't match.
+		.replace(/\*+|~~/g, '')
+		.replace(/\]\([^)]*\)?/g, '')
+		.replace(/[[\]]/g, '')
+		.trim();
+	return { text, next: end };
+}

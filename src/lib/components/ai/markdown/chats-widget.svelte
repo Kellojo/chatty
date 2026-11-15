@@ -18,6 +18,7 @@
 	import { pullRequestNumber } from '$lib/coding-task-details.js';
 	import DiffStat from '$lib/components/app/DiffStat.svelte';
 	import WidgetCard from './widget-card.svelte';
+	import LinkSafetyModal from './link-safety-modal.svelte';
 
 	/**
 	 * A ```chats fence: an overview of conversations, typically search_chats
@@ -122,6 +123,14 @@
 		}
 		return 'just now';
 	}
+
+	// External links (pull requests) confirm before opening, like links in the message text.
+	let pendingUrl = $state<string | null>(null);
+	function intercept(event: MouseEvent, url: string) {
+		if (event.type === 'auxclick' && event.button !== 1) return;
+		event.preventDefault();
+		pendingUrl = url;
+	}
 </script>
 
 <WidgetCard
@@ -199,6 +208,8 @@
 										href={coding.pullRequest}
 										target="_blank"
 										rel="noopener noreferrer"
+										onclick={(e) => intercept(e, coding.pullRequest!)}
+										onauxclick={(e) => intercept(e, coding.pullRequest!)}
 										class="relative z-10 inline-flex items-center gap-1 rounded-sm underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
 										title={coding.pullRequestState
 											? `Open pull request (${CODING_PR_STATE_STYLE[coding.pullRequestState].label.toLowerCase()})`
@@ -231,3 +242,12 @@
 		</ul>
 	{/if}
 </WidgetCard>
+
+<LinkSafetyModal
+	url={pendingUrl ?? ''}
+	isOpen={pendingUrl !== null}
+	onClose={() => (pendingUrl = null)}
+	onConfirm={() => {
+		if (pendingUrl) window.open(pendingUrl, '_blank', 'noreferrer');
+	}}
+/>

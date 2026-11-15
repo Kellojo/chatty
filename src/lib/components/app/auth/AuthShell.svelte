@@ -7,7 +7,7 @@
 </script>
 
 <main
-	class="auth-bg flex h-dvh flex-col items-center overflow-y-auto bg-background px-4 pt-[calc(2.5rem+env(safe-area-inset-top))] pb-[calc(2.5rem+env(safe-area-inset-bottom))] sm:px-6"
+	class="auth-bg flex h-dvh flex-col items-center overflow-y-auto bg-background px-4 pt-[calc(2.5rem+var(--safe-top))] pb-[calc(2.5rem+env(safe-area-inset-bottom))] sm:px-6"
 >
 	<!-- body doesn't scroll (the app scrolls inside its panes), so this frame does; my-auto
 		centres short pages without clipping the top of tall ones the way justify-center would. -->

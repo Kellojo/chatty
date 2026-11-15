@@ -4,8 +4,33 @@ import { serverChunks, speakableText, speechChunks } from '$lib/speakable-text.j
 /** Max time to wait for one chunk of server audio. */
 const REQUEST_TIMEOUT = 60_000;
 /** An empty WAV, played on click to unlock the audio element. */
-const SILENT_WAV =
+export const SILENT_WAV =
 	'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+
+/**
+ * Synthesizes `text` with the Text to speech default (or `voice`) and returns
+ * an object URL for the audio, which the caller revokes.
+ */
+export async function fetchSpeech(
+	text: string,
+	signal: AbortSignal,
+	voice?: string
+): Promise<string> {
+	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT);
+	const res = await fetch('/api/speech/synthesize', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(voice ? { text, voice } : { text }),
+		signal: AbortSignal.any([signal, timeout])
+	}).catch((e: unknown) => {
+		throw timeout.aborted ? new Error('Speech timed out') : e;
+	});
+	if (!res.ok) {
+		const payload = (await res.json().catch(() => null)) as { message?: string } | null;
+		throw new Error(payload?.message ?? `Speech failed (${res.status})`);
+	}
+	return URL.createObjectURL(await res.blob());
+}
 
 export type SpeechPlayback = ReturnType<typeof createSpeechPlayback>;
 
@@ -79,20 +104,7 @@ export function createSpeechPlayback(options: {
 	 * which is why it is kept short (see serverChunks).
 	 */
 	async function fetchChunk(text: string, signal: AbortSignal): Promise<string> {
-		const timeout = AbortSignal.timeout(REQUEST_TIMEOUT);
-		const res = await fetch('/api/speech/synthesize', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(voiceOverride ? { text, voice: voiceOverride } : { text }),
-			signal: AbortSignal.any([signal, timeout])
-		}).catch((e: unknown) => {
-			throw timeout.aborted ? new Error('Speech timed out') : e;
-		});
-		if (!res.ok) {
-			const payload = (await res.json().catch(() => null)) as { message?: string } | null;
-			throw new Error(payload?.message ?? `Speech failed (${res.status})`);
-		}
-		const url = URL.createObjectURL(await res.blob());
+		const url = await fetchSpeech(text, signal, voiceOverride);
 		objectUrls.push(url);
 		return url;
 	}

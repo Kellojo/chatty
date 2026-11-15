@@ -329,7 +329,7 @@
 			}}
 		>
 			<div
-				class="flex items-center gap-0.5 bg-gradient-to-b from-black/60 to-transparent px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2"
+				class="flex items-center gap-0.5 bg-gradient-to-b from-black/60 to-transparent px-3 pt-[max(0.5rem,var(--safe-top))] pb-2"
 			>
 				<div class="flex min-w-0 flex-1 items-baseline gap-2 px-1">
 					<DialogPrimitive.Title

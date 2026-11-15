@@ -43,6 +43,8 @@ export const load: PageServerLoad = ({ locals, cookies, isDataRequest }) => {
 		mappings: listEnabledModelMappings(db).map(mappingToPublic),
 		defaultModel,
 		sttModel,
+		/** A Text to speech default is set (voice mode reads with it, else the browser's voice). */
+		serverTts: findRoleModel(db, 'text-to-speech') !== undefined,
 		suggestions: settings.suggestions,
 		codingSuggestions: settings.codingSuggestions,
 		personas: listPersonaAgents(db, user.id).map(toPublic),

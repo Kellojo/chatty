@@ -914,6 +914,7 @@ export async function runChatTurn(
 			for (let i = 0; i < targets.length; i++) {
 				const target = targets[i];
 				let contentful = false;
+				let streamError: unknown = null;
 				const buffer: UIMessageChunk[] = [];
 				// A failed earlier target must not mark a successful fallback as failed.
 				errorText = null;
@@ -1047,6 +1048,7 @@ export async function runChatTurn(
 							}
 						},
 						onError: ({ error }) => {
+							streamError = error;
 							errorText = describe(error);
 							log.error('LLM stream error', {
 								conversationId: conversation.id,
@@ -1068,7 +1070,9 @@ export async function runChatTurn(
 					});
 					for await (const chunk of uiStream) {
 						const c = chunk as { type?: string };
-						if (c.type === 'error') throw new Error(errorText ?? 'An error occurred');
+						// Rethrow the provider's own error: the fallback decision needs its details.
+						if (c.type === 'error')
+							throw streamError ?? new Error(errorText ?? 'An error occurred');
 						// Only the leading `start` chunk is pure framing; everything else is
 						// model output. Buffering only `start` lets us still retry the next
 						// target if this one errors before producing anything, while

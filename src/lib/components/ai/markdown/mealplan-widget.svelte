@@ -172,7 +172,7 @@
 								>{weekdayFmt.format(utc(day.date))}</span
 							>{Number(day.date.slice(8))}
 						</span>
-						<span class="text-xs text-muted-foreground/80" aria-hidden="true">Nothing planned</span>
+						<span class="text-xs text-muted-foreground" aria-hidden="true">Nothing planned</span>
 					</li>
 				{:else}
 					<li class="flex gap-4 px-4 py-3">

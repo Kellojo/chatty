@@ -163,7 +163,10 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 		title: 'Conversation',
 		description: 'In a chat or on the new-chat page.',
 		entries: [
-			{ label: 'Stop the reply or cancel editing', combos: [COMBOS.escape] },
+			{
+				label: 'Stop the reply, cancel editing or end voice mode',
+				combos: [COMBOS.escape]
+			},
 			{ label: 'Copy the last reply', combos: [COMBOS['copy-last-reply']] },
 			{ label: 'Choose a model', combos: [COMBOS['model-picker']] }
 		]

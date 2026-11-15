@@ -17,6 +17,44 @@ interface MediaRecorderLike {
 const MAX_RECORDING_DURATION = 120_000; // hard stop after 120s
 const REQUEST_TIMEOUT = 30_000; // max time to wait for transcription response
 
+/** The best recording format this browser's MediaRecorder offers for speech. */
+export function recordingMimeType(): string {
+	return MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+		? 'audio/webm;codecs=opus'
+		: MediaRecorder.isTypeSupported('audio/webm')
+			? 'audio/webm'
+			: 'audio/mp4';
+}
+
+/** Sends a recording to the server's speech to text endpoint and returns the transcript. */
+export async function transcribeRecording(
+	blob: Blob,
+	sttModel: { providerId: string; modelId: string },
+	signal?: AbortSignal
+): Promise<string> {
+	const formData = new FormData();
+	const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
+	formData.append('audio', blob, `recording.${extension}`);
+	formData.append('providerId', sttModel.providerId);
+	formData.append('modelId', sttModel.modelId);
+
+	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT);
+	const res = await fetch('/api/speech/transcribe', {
+		method: 'POST',
+		credentials: 'include',
+		body: formData,
+		signal: signal ? AbortSignal.any([signal, timeout]) : timeout
+	});
+
+	if (!res.ok) {
+		const data = (await res.json().catch(() => null)) as { error?: string } | null;
+		throw new Error(data?.error ?? `Transcription failed (${res.status})`);
+	}
+
+	const { text } = (await res.json()) as { text: string };
+	return text;
+}
+
 export function createServerSpeechRecognition(sttModel: { providerId: string; modelId: string }) {
 	let recording = $state(false);
 	let busy = $state(false);
@@ -35,33 +73,6 @@ export function createServerSpeechRecognition(sttModel: { providerId: string; mo
 	const supported = $state(browser && !!navigator.mediaDevices?.getUserMedia);
 
 	let mimeType = 'audio/webm';
-
-	async function sendTranscribe(blob: Blob): Promise<string> {
-		const formData = new FormData();
-		formData.append('audio', blob, 'recording.webm');
-		formData.append('providerId', sttModel.providerId);
-		formData.append('modelId', sttModel.modelId);
-
-		const controller = new AbortController();
-		const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-
-		const res = await fetch('/api/speech/transcribe', {
-			method: 'POST',
-			credentials: 'include',
-			body: formData,
-			signal: controller.signal
-		});
-
-		clearTimeout(timeoutId);
-
-		if (!res.ok) {
-			const data = (await res.json().catch(() => null)) as { error?: string } | null;
-			throw new Error(data?.error ?? `Transcription failed (${res.status})`);
-		}
-
-		const { text } = (await res.json()) as { text: string };
-		return text;
-	}
 
 	async function start(options?: { onError?: (message: string) => void }) {
 		if (!supported || recording) return;
@@ -90,11 +101,7 @@ export function createServerSpeechRecognition(sttModel: { providerId: string; mo
 		chunks = [];
 		errorMessage = null;
 
-		mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-			? 'audio/webm;codecs=opus'
-			: MediaRecorder.isTypeSupported('audio/webm')
-				? 'audio/webm'
-				: 'audio/mp4';
+		mimeType = recordingMimeType();
 
 		mediaRecorder = new MediaRecorder(stream, { mimeType }) as unknown as MediaRecorderLike;
 		mediaRecorder.ondataavailable = (event: { data: Blob }) => {
@@ -123,7 +130,7 @@ export function createServerSpeechRecognition(sttModel: { providerId: string; mo
 			chunks = [];
 
 			try {
-				const text = await sendTranscribe(blob);
+				const text = await transcribeRecording(blob, sttModel);
 				if (text) {
 					finalTranscript = text;
 				}

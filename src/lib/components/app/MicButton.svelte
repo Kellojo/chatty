@@ -105,8 +105,16 @@
 			transcribing && 'w-auto cursor-default gap-2 bg-muted pr-3 pl-2.5 text-muted-foreground',
 			!active && 'w-9 hover:bg-accent hover:text-accent-foreground'
 		]}
-		title={recording ? 'Stop recording' : transcribing ? undefined : 'Dictate'}
-		aria-label={recording ? 'Stop recording' : transcribing ? 'Transcribing…' : 'Dictate'}
+		title={recording
+			? 'Stop recording'
+			: transcribing
+				? undefined
+				: 'Dictate: type what you say into the message'}
+		aria-label={recording
+			? 'Stop recording'
+			: transcribing
+				? 'Transcribing…'
+				: 'Dictate (speech to text)'}
 		aria-disabled={transcribing || undefined}
 		onclick={() => {
 			if (transcribing) return;

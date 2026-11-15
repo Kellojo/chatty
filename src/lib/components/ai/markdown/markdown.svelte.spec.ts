@@ -64,4 +64,25 @@ describe('Markdown', () => {
 		const screen = render(Markdown, { content: '$$x^2$$', streaming: false });
 		await expect.poll(() => screen.container.querySelector('.katex')).not.toBeNull();
 	});
+
+	// Without isAnimating, Streamdown treats an unclosed fence as finished and
+	// the widget flashed "Could not render" until the reply completed.
+	it('shows a widget loading state while its fence is still streaming', async () => {
+		const screen = render(Markdown, { content: '```weather\n{"location":', streaming: true });
+		await expect.element(screen.getByText('Loading weather…')).toBeInTheDocument();
+		expect(screen.container.textContent).not.toContain('Could not render');
+	});
+
+	it('keeps links in table cells from breaking mid-word', async () => {
+		const screen = render(Markdown, {
+			content: '| A |\n| --- |\n| [extensions](https://example.com) |',
+			streaming: false
+		});
+		await expect
+			.poll(() => screen.container.querySelector('[data-streamdown="link"]'))
+			.not.toBeNull();
+		const link = screen.container.querySelector('[data-streamdown="link"]')!;
+		expect(link.classList).toContain('wrap-break-word');
+		expect(link.classList).not.toContain('wrap-anywhere');
+	});
 });

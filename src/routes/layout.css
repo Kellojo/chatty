@@ -74,7 +74,8 @@
 	--border: oklch(0.9 0.002 60 / 10%);
 	--input: oklch(0.9 0.002 60 / 18%);
 	--ring: oklch(0.56 0.006 60);
-	--chart-1: oklch(0.488 0.243 264.376);
+	/* Lifted from shadcn's 0.488 blue, which sat heavy and dim on dark cards. */
+	--chart-1: oklch(0.62 0.19 262);
 	--chart-2: oklch(0.696 0.17 162.48);
 	--chart-3: oklch(0.769 0.188 70.08);
 	/* Purple rather than teal: teal sat too close to --chart-2 green in stacked charts. */
@@ -96,12 +97,27 @@
  * window-controls-overlay`): the page reaches the top of the window and the
  * OS window controls float over it. --titlebar-height reserves that strip (the
  * app layouts pad below it, and the strip drags the window); --app-top is where
- * fixed UI starts, below the strip or a phone's notch. Both follow the user
+ * fixed UI starts, below the strip or a phone's notch (--safe-top). Both follow the user
  * switching the overlay off again from the window's chevron.
  */
 :root {
 	--titlebar-height: 0px;
-	--app-top: env(safe-area-inset-top, 0px);
+	/* Where page content may start: below a phone's status bar / notch, and below the edge blur. */
+	--safe-top: calc(env(safe-area-inset-top, 0px) + var(--edge-blur, 0px));
+	--app-top: var(--safe-top);
+}
+
+/*
+ * The installed iOS 26 app draws a "Liquid Glass" blur over the top ~2rem of the page,
+ * whatever the status bar style, and nothing turns it off: text there gets smeared.
+ * Keep content below it. iOS only (-webkit-touch-callout), installed app only.
+ */
+@supports (-webkit-touch-callout: none) {
+	@media (display-mode: standalone) {
+		:root {
+			--edge-blur: 2rem;
+		}
+	}
 }
 
 @media (display-mode: window-controls-overlay) {

@@ -29,7 +29,10 @@
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import { decodeModelRef } from '$lib/model-ref.js';
 	import { pickerModelGroups, syncModelCatalog } from '$lib/state/model-catalog.svelte.js';
-	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
+	import { pendingMessage, pendingVoice } from '$lib/state/pending-message.svelte.js';
+	import { voiceModeSupported } from '$lib/state/voice-mode.svelte.js';
+	import { unlockVoiceAudio } from '$lib/state/voice-audio.js';
+	import VoiceModeButton from '$lib/components/app/VoiceModeButton.svelte';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
 	import { clipboardFiles } from '$lib/state/clipboard-files.js';
 	import { DEFAULT_CODING_SUGGESTIONS, DEFAULT_SUGGESTIONS } from '$lib/user-settings.js';
@@ -245,6 +248,40 @@
 		return conversation;
 	}
 
+	const voiceSupported = $derived(voiceModeSupported(data.sttModel, data.serverTts));
+	const offerVoice = $derived(
+		voiceSupported &&
+			!coding &&
+			!modelMissing &&
+			displayInput.trim() === '' &&
+			selectedFiles.length === 0 &&
+			!speech.recording &&
+			!speech.busy
+	);
+
+	/** Opens a new chat in voice mode. */
+	async function startVoiceChat() {
+		if (busy || modelMissing) return;
+		speech.stop();
+		speech.reset();
+		// Unlocked by this click, for the chat page that voice mode runs on.
+		unlockVoiceAudio();
+		busy = true;
+		try {
+			const conversation = await createChatConversation();
+			pendingVoice.set(conversation.id);
+			const target = resolve(`/chat/${conversation.id}`);
+			await goto(target);
+			if (page.url.pathname !== target && latestNavigation === target) {
+				throw new Error('Could not open the new chat, please try again');
+			}
+		} catch (e) {
+			pendingVoice.clear();
+			toast.error(e instanceof Error ? e.message : 'Failed to start voice mode');
+			busy = false;
+		}
+	}
+
 	async function startChat(text: string) {
 		speech.stop();
 		speech.reset();
@@ -366,19 +403,28 @@
 					{/if}
 					<MicButton {speech} />
 				</div>
-				<Button
-					size="sm"
-					aria-label="Send"
-					disabled={!canSend}
-					title={coding
-						? (codingTask.blocker ?? 'Start coding task')
-						: modelMissing
-							? 'Select a model first'
-							: 'Send'}
-					onclick={() => startChat(displayInput)}
-				>
-					<ArrowUpIcon class="size-4" />
-				</Button>
+				{#if offerVoice}
+					<VoiceModeButton disabled={busy} onclick={startVoiceChat} />
+				{:else if (speech.recording || speech.busy) && !canSend}
+					<!-- Nothing to send yet: the recording pill is the action while dictating. -->
+					{#if voiceSupported && !coding && !modelMissing}
+						<VoiceModeButton blockedReason="Finish dictating first" onclick={startVoiceChat} />
+					{/if}
+				{:else}
+					<Button
+						size="sm"
+						aria-label="Send"
+						disabled={!canSend}
+						title={coding
+							? (codingTask.blocker ?? 'Start coding task')
+							: modelMissing
+								? 'Select a model first'
+								: 'Send'}
+						onclick={() => startChat(displayInput)}
+					>
+						<ArrowUpIcon class="size-4" />
+					</Button>
+				{/if}
 			</PromptInputActions>
 		</PromptInput>
 		<input

@@ -188,7 +188,7 @@
 {#snippet eyebrow(icon: Component, label: string)}
 	{@const Icon = icon}
 	<span
-		class="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold tracking-wider text-white/85 uppercase"
+		class="flex min-w-0 items-center gap-1.5 text-xs font-semibold tracking-wider text-white/85 uppercase"
 	>
 		<Icon class="size-3.5 shrink-0" aria-hidden="true" />
 		<span class="truncate">{label}</span>

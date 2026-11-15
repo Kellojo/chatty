@@ -22,3 +22,24 @@ class PendingMessage {
 }
 
 export const pendingMessage = new PendingMessage();
+
+// Asks the new chat's ChatView to start voice mode (the new-chat page's voice button).
+class PendingVoice {
+	#conversationId: string | null = null;
+
+	set(conversationId: string) {
+		this.#conversationId = conversationId;
+	}
+
+	consume(conversationId: string): boolean {
+		if (this.#conversationId !== conversationId) return false;
+		this.#conversationId = null;
+		return true;
+	}
+
+	clear() {
+		this.#conversationId = null;
+	}
+}
+
+export const pendingVoice = new PendingVoice();

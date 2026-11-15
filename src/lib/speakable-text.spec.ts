@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { serverChunks, speakableText, speechChunks } from './speakable-text.js';
+import { serverChunks, speakableText, speakableUpTo, speechChunks } from './speakable-text.js';
 
 describe('speakableText', () => {
 	it('strips markdown but keeps the words', () => {
@@ -73,5 +73,51 @@ describe('chunk edge cases', () => {
 
 	it('has nothing to read for punctuation only', () => {
 		expect(serverChunks(speakableText('...!!!'))).toEqual([]);
+	});
+});
+
+describe('speakableUpTo', () => {
+	it('waits for a sentence to end before reading it', () => {
+		expect(speakableUpTo('Hello there', 0, false)).toEqual({ text: '', next: 0 });
+		expect(speakableUpTo('Hello there. How', 0, false)).toEqual({
+			text: 'Hello there.',
+			next: 12
+		});
+	});
+
+	it('goes on from the last offset', () => {
+		const md = 'One. Two. Three';
+		const first = speakableUpTo(md, 0, false);
+		expect(first.text).toBe('One. Two.');
+		expect(speakableUpTo(md, first.next, true).text).toBe('Three');
+	});
+
+	it('does not end a sentence inside a code block', () => {
+		const md = 'Run this:\n```js\nfoo. bar();\n';
+		const part = speakableUpTo(md, 0, false);
+		expect(part.text).toBe('Run this:');
+		expect(speakableUpTo(md + '```\nDone. ', part.next, false).text).toBe('Done.');
+	});
+
+	it('drops markup cut in half at a sentence end', () => {
+		expect(speakableUpTo('**This is key. Really** ok', 0, false).text).toBe('This is key.');
+	});
+
+	it('starts on the first clause when asked, once it is long enough', () => {
+		const md = 'Sure, the lighthouse tour runs every Saturday, and the';
+		expect(speakableUpTo(md, 0, false).text).toBe('');
+		expect(speakableUpTo(md, 0, false, 35).text).toBe(
+			'Sure, the lighthouse tour runs every Saturday,'
+		);
+		// Too short a clause: waits for more.
+		expect(speakableUpTo('Sure, the', 0, false, 35).text).toBe('');
+		// A full sentence still wins over a clause.
+		expect(speakableUpTo('Yes. And then, more', 0, false, 3).text).toBe('Yes.');
+		// Not inside numbers.
+		expect(speakableUpTo('It costs 1,000 euros and more', 0, false, 5).text).toBe('');
+	});
+
+	it('reads list items line by line', () => {
+		expect(speakableUpTo('- first\n- sec', 0, false).text).toBe('first');
 	});
 });

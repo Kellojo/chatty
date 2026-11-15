@@ -401,7 +401,7 @@
 		</div>
 		<div class="h-full w-1/2 shrink-0 md:contents">
 			<!-- Every page starts below a phone's status bar / notch (zero elsewhere). -->
-			<main class="relative flex h-full min-w-0 flex-col pt-[env(safe-area-inset-top)] md:flex-1">
+			<main class="relative flex h-full min-w-0 flex-col pt-(--safe-top) md:flex-1">
 				{@render children()}
 			</main>
 		</div>

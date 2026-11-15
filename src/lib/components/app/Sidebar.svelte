@@ -1072,7 +1072,7 @@
 	class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30 max-md:overflow-hidden max-md:bg-[color-mix(in_oklab,var(--muted)_30%,var(--background))]"
 >
 	<div
-		class="flex items-center justify-between gap-2 p-3 pt-[calc(0.75rem+env(safe-area-inset-top))] max-md:pt-[calc(0.25rem+env(safe-area-inset-top))]"
+		class="flex items-center justify-between gap-2 p-3 pt-[calc(0.75rem+var(--safe-top))] max-md:pt-[calc(0.25rem+var(--safe-top))]"
 	>
 		<div class="flex min-w-0 items-center gap-2">
 			<svg

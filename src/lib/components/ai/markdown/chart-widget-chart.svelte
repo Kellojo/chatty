@@ -73,7 +73,7 @@
 
 <div class="px-4 pt-4 pb-3">
 	{#if data.type === 'pie'}
-		<Chart.Container config={pieConfig} class="aspect-auto h-64 w-full">
+		<Chart.Container config={pieConfig} class="aspect-auto h-52 w-full">
 			<PieChart
 				data={pieRows}
 				key="key"

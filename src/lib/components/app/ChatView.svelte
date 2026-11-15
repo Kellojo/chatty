@@ -53,7 +53,7 @@
 		reuseUnchanged,
 		withLatestPage
 	} from '$lib/chat-history.js';
-	import { pendingMessage } from '$lib/state/pending-message.svelte.js';
+	import { pendingMessage, pendingVoice } from '$lib/state/pending-message.svelte.js';
 	import { messageQueue, type QueuedMessage } from '$lib/state/message-queue.svelte.js';
 	import QueuedMessages from './QueuedMessages.svelte';
 	import { parseSkillCommand, uploadAttachments } from '$lib/chat-send.js';
@@ -65,6 +65,9 @@
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
+	import { createVoiceMode, voiceModeSupported } from '$lib/state/voice-mode.svelte.js';
+	import VoiceBar from './VoiceBar.svelte';
+	import VoiceModeButton from './VoiceModeButton.svelte';
 	import {
 		chatMessageToUIMessage,
 		type Agent,
@@ -137,6 +140,57 @@
 		volume: () => page.data.settings?.speechVolume ?? 1
 	});
 	onMount(() => playback.stop);
+
+	// ── voice mode ───────────────────────────────────────────────────────────
+	// A spoken conversation in this chat: each turn is sent as a regular
+	// message and the reply is read aloud as it streams in.
+	const voiceSupported = $derived(voiceModeSupported(sttModel, serverTts));
+	const voice = createVoiceMode({
+		sttModel: untrack(() => sttModel),
+		serverTts: () => serverTts,
+		volume: () => page.data.settings?.speechVolume ?? 1,
+		send: (text) => submit(text, []),
+		// The user went on talking before the reply was heard: their message is
+		// replaced (as an edit, so the cut-off reply stays as an older version).
+		revise: (text) => {
+			const last = chat.messages.findLast((m) => m.role === 'user');
+			return last ? deliver(text, [], { messageId: last.id, keptFiles: [] }) : submit(text, []);
+		},
+		interrupt: () => void stop(),
+		onerror: (message) => toast.error(message)
+	});
+	onMount(() => voice.stop);
+
+	/** Dictation is recording or transcribing: Voice mode isn't offered meanwhile. */
+	const dictating = $derived(speech.recording || speech.busy);
+
+	// Ending voice mode brings the composer back: focus goes to it, as it was
+	// on the Voice button when voice mode started (desktop only, so phones
+	// don't throw up the keyboard).
+	let voiceWasShown = false;
+	let voiceWasActive = false;
+	/** Announces voice mode starting and ending (the bar itself is gone once it ends). */
+	let voiceAnnouncement = $state('');
+	$effect(() => {
+		// Shown also covers a start that failed (mic denied): the composer comes back either way.
+		const shown = voice.active || voice.phase === 'starting';
+		const active = voice.active;
+		if (active && !voiceWasActive) voiceAnnouncement = 'Voice mode on';
+		if (voiceWasActive && !active) voiceAnnouncement = 'Voice mode off';
+		if (voiceWasShown && !shown && window.matchMedia('(pointer: fine)').matches) {
+			void tick().then(() => composerTextarea()?.focus());
+		}
+		voiceWasShown = shown;
+		voiceWasActive = active;
+	});
+
+	function startVoice() {
+		speech.stop();
+		speech.reset();
+		playback.stop();
+		haptic('light');
+		void voice.start();
+	}
 	let selectedFiles = $state<File[]>([]);
 	let fileInput: HTMLInputElement | undefined = $state();
 
@@ -347,6 +401,12 @@
 		chat.status === 'streaming' || chat.status === 'submitted' || remoteGenerating
 	);
 	const lastAssistant = $derived(chat.messages.findLast((m) => m.role === 'assistant'));
+
+	$effect(() => {
+		const reply = lastAssistant ? { id: lastAssistant.id, text: messageText(lastAssistant) } : null;
+		const busy = streaming || sending;
+		untrack(() => voice.observe(reply, busy));
+	});
 	/** The coding agent's browser use in the run in progress, for the preview's picture-in-picture. */
 	const codingBrowserActivity = $derived(
 		coding && (coding.status === 'running' || coding.status === 'starting') && lastAssistant
@@ -526,6 +586,7 @@
 	}
 
 	$effect(() => {
+		if (pendingVoice.consume(conversation.id)) untrack(startVoice);
 		const pending = pendingMessage.consume(conversation.id);
 		if (!pending) return;
 		untrack(() => {
@@ -1160,6 +1221,10 @@
 	onMount(() =>
 		registerChatShortcuts({
 			escape: () => {
+				if (voice.active) {
+					voice.stop();
+					return true;
+				}
 				if (streaming) {
 					void stop();
 					return true;
@@ -1393,6 +1458,7 @@
 		/>
 	</div>
 	<div role="status" class="sr-only">{replyAnnouncement}</div>
+	<div class="sr-only" aria-live="polite">{voiceAnnouncement}</div>
 
 	<div class="relative mx-auto w-full max-w-3xl px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
 		{#if showJumpToLatest}
@@ -1483,71 +1549,83 @@
 				</Button>
 			</div>
 		{/if}
-		<PromptInput
-			value={displayInput}
-			onValueChange={(v) => (input = v)}
-			onSubmit={() => send(displayInput)}
-		>
-			<PendingAttachments files={selectedFiles} onremove={removeFile} />
-			<PromptInputTextarea
-				onkeydown={editLastOnArrowUp}
-				placeholder={editing
-					? 'Edit your message…'
-					: codingAnswerTarget?.kind === 'approval'
-						? 'Or decline with a note…'
-						: agentQuestion || codingAnswerTarget
-							? 'Type your answer…'
-							: streaming
-								? 'Queue a follow-up message…'
-								: 'Ask anything…'}
-			/>
-			<PromptInputActions class="justify-between">
-				<div class="flex items-center gap-1">
-					<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
-						<PaperclipIcon class="size-4" />
-					</Button>
-					<MicButton {speech} />
-				</div>
-				{#if streaming && !canSend}
-					<Button
-						size="sm"
-						variant="destructive"
-						aria-label="Stop"
-						title="Stop ({shortcutLabel('escape')})"
-						onclick={stop}
-					>
-						<SquareIcon class="size-4" />
-					</Button>
-				{:else if recovery}
-					<Button
-						size="sm"
-						disabled={sending}
-						title={recovery.hint}
-						aria-label="{recovery.label}: {recovery.hint}"
-						onclick={() => recoverCodingTask(recovery)}
-					>
-						<RotateCcwIcon class="size-4" />
-						{recovery.label}
-					</Button>
-				{:else}
-					<!-- A waiting task keeps its stream open, but an answer goes out right away. -->
-					{@const queues = (streaming || sending) && !editing && !sendAnswers}
-					<Button
-						size="sm"
-						disabled={!canSend}
-						aria-label={queues ? 'Queue message' : sendAnswers ? 'Send answer' : 'Send'}
-						title={queues ? 'Queue — sends when the reply finishes' : undefined}
-						onclick={() => send(displayInput)}
-					>
-						{#if queues}
-							<ListEndIcon class="size-4" />
-						{:else}
-							<ArrowUpIcon class="size-4" />
+		{#if voice.active || voice.phase === 'starting'}
+			<VoiceBar {voice} />
+		{:else}
+			<PromptInput
+				value={displayInput}
+				onValueChange={(v) => (input = v)}
+				onSubmit={() => send(displayInput)}
+			>
+				<PendingAttachments files={selectedFiles} onremove={removeFile} />
+				<PromptInputTextarea
+					onkeydown={editLastOnArrowUp}
+					placeholder={editing
+						? 'Edit your message…'
+						: codingAnswerTarget?.kind === 'approval'
+							? 'Or decline with a note…'
+							: agentQuestion || codingAnswerTarget
+								? 'Type your answer…'
+								: streaming
+									? 'Queue a follow-up message…'
+									: 'Ask anything…'}
+				/>
+				<PromptInputActions class="justify-between">
+					<div class="flex items-center gap-1">
+						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
+							<PaperclipIcon class="size-4" />
+						</Button>
+						<MicButton {speech} />
+					</div>
+					{#if streaming && !canSend}
+						<Button
+							size="sm"
+							variant="destructive"
+							aria-label="Stop"
+							title="Stop ({shortcutLabel('escape')})"
+							onclick={stop}
+						>
+							<SquareIcon class="size-4" />
+						</Button>
+					{:else if recovery}
+						<Button
+							size="sm"
+							disabled={sending}
+							title={recovery.hint}
+							aria-label="{recovery.label}: {recovery.hint}"
+							onclick={() => recoverCodingTask(recovery)}
+						>
+							<RotateCcwIcon class="size-4" />
+							{recovery.label}
+						</Button>
+					{:else if voiceSupported && !isCoding && !canSend && !editing && !sending && !dictating}
+						<!-- An empty composer offers voice mode where Send would be (Send needs text anyway). -->
+						<VoiceModeButton onclick={startVoice} />
+					{:else if dictating && !canSend}
+						<!-- Nothing to send yet: the recording pill is the action while dictating. -->
+						{#if voiceSupported && !isCoding && !editing}
+							<VoiceModeButton blockedReason="Finish dictating first" onclick={startVoice} />
 						{/if}
-					</Button>
-				{/if}
-			</PromptInputActions>
-		</PromptInput>
+					{:else}
+						<!-- A waiting task keeps its stream open, but an answer goes out right away. -->
+						{@const queues = (streaming || sending) && !editing && !sendAnswers}
+						<Button
+							size="sm"
+							disabled={!canSend}
+							aria-label={queues ? 'Queue message' : sendAnswers ? 'Send answer' : 'Send'}
+							title={queues ? 'Queue — sends when the reply finishes' : undefined}
+							onclick={() => send(displayInput)}
+						>
+							{#if queues}
+								<ListEndIcon class="size-4" />
+							{:else}
+								<ArrowUpIcon class="size-4" />
+							{/if}
+						</Button>
+					{/if}
+				</PromptInputActions>
+			</PromptInput>
+		{/if}
 		<input
 			bind:this={fileInput}
 			type="file"
