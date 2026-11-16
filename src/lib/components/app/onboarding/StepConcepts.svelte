@@ -6,6 +6,7 @@
 	import CompassIcon from '@lucide/svelte/icons/compass';
 	import CodeIcon from '@lucide/svelte/icons/code';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import ConceptScene, { type Concept } from './ConceptScene.svelte';
@@ -14,9 +15,17 @@
 	let {
 		isAdmin,
 		hasModel,
+		privateDataEnabled = false,
 		onback,
 		onnext
-	}: { isAdmin: boolean; hasModel: boolean; onback: () => void; onnext: () => void } = $props();
+	}: {
+		isAdmin: boolean;
+		hasModel: boolean;
+		/** Private data is turned on here; admins see the concept either way, to find it. */
+		privateDataEnabled?: boolean;
+		onback: () => void;
+		onnext: () => void;
+	} = $props();
 
 	const concepts = $derived<
 		{
@@ -44,6 +53,22 @@
 			body: 'Chatty notices lasting facts and preferences in your chats and remembers them, so every new chat already knows your context. You can review or edit what it knows.',
 			where: 'Memory in the sidebar'
 		},
+		...(isAdmin || privateDataEnabled
+			? [
+					{
+						id: 'privacy' as const,
+						icon: LockIcon,
+						title: 'Private data',
+						short: 'Stays with models you trust',
+						body: 'Lock a chat, or mark notes, documents and agents private, and only models trusted with private data ever see them, such as one running on your own machine. Notes with personal details are marked private automatically.',
+						where: isAdmin
+							? privateDataEnabled
+								? 'The lock next to the message box. Trust providers in Settings → Providers'
+								: 'Turn it on in Settings → Private data, then trust a provider in Settings → Providers'
+							: 'The lock next to the message box'
+					}
+				]
+			: []),
 		{
 			id: 'agents',
 			icon: BotIcon,

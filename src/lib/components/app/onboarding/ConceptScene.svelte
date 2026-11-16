@@ -1,9 +1,13 @@
 <script lang="ts" module>
-	export type Concept = 'chats' | 'memory' | 'agents' | 'tools' | 'coding' | 'gateway' | 'api';
+	export type Concept =
+		'chats' | 'memory' | 'privacy' | 'agents' | 'tools' | 'coding' | 'gateway' | 'api';
 </script>
 
 <script lang="ts">
+	import BanIcon from '@lucide/svelte/icons/ban';
 	import BrainIcon from '@lucide/svelte/icons/brain';
+	import LockIcon from '@lucide/svelte/icons/lock';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import CloudSunIcon from '@lucide/svelte/icons/cloud-sun';
@@ -96,6 +100,39 @@
 				<span class="rounded-lg bg-muted px-2 py-1.5 text-xs text-muted-foreground"
 					>Likes short answers</span
 				>
+			</div>
+		</div>
+	{:else if concept === 'privacy'}
+		<div class="flex h-full flex-col justify-center gap-3 px-6 sm:px-10">
+			<div class="priv-msg ml-auto flex max-w-[85%] flex-col items-end gap-1">
+				<span
+					class="priv-lock flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[0.6875rem] font-medium text-emerald-800 dark:text-emerald-300"
+				>
+					<LockIcon class="size-3" />Private chat
+				</span>
+				<span class="rounded-2xl rounded-br-md bg-foreground px-3.5 py-2 text-sm text-background">
+					My blood test results came back
+				</span>
+			</div>
+			<div class="flex flex-col gap-2">
+				<div
+					class="priv-ok flex items-center gap-2.5 rounded-xl border border-emerald-600/40 bg-emerald-500/10 px-3 py-2 text-xs dark:border-emerald-400/40"
+				>
+					<ProviderIcon brand="lmstudio" class="size-4" decorative />
+					<span class="min-w-0 flex-1 font-medium">LM Studio · on your machine</span>
+					<span class="flex items-center gap-1 font-medium text-emerald-800 dark:text-emerald-300">
+						<ShieldCheckIcon class="size-3.5" />Trusted
+					</span>
+				</div>
+				<div
+					class="priv-no flex items-center gap-2.5 rounded-xl border border-dashed border-border px-3 py-2 text-xs text-muted-foreground"
+				>
+					<ProviderIcon brand="openai" class="size-4 opacity-60" decorative />
+					<span class="min-w-0 flex-1">Cloud model</span>
+					<span class="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400">
+						<BanIcon class="size-3.5" />Never sees it
+					</span>
+				</div>
 			</div>
 		</div>
 	{:else if concept === 'agents'}
@@ -609,6 +646,63 @@
 		74%,
 		100% {
 			opacity: 1;
+			transform: none;
+		}
+	}
+
+	/* Private data: a locked message goes to the trusted model; the cloud one stays dark. */
+	.priv-msg {
+		animation: pop-in var(--loop) infinite;
+	}
+	.priv-lock {
+		animation: priv-lock var(--loop) infinite;
+	}
+	.priv-ok {
+		animation: priv-ok var(--loop) infinite;
+	}
+	.priv-no {
+		animation: priv-no var(--loop) infinite;
+	}
+	@keyframes priv-lock {
+		0%,
+		12% {
+			opacity: 0;
+			transform: scale(0.8);
+		}
+		20%,
+		100% {
+			opacity: 1;
+			transform: none;
+		}
+	}
+	@keyframes priv-ok {
+		0%,
+		28% {
+			box-shadow: 0 0 0 0 transparent;
+		}
+		38% {
+			box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-emerald-500) 25%, transparent);
+		}
+		50%,
+		100% {
+			box-shadow: 0 0 0 0 transparent;
+		}
+	}
+	@keyframes priv-no {
+		0%,
+		40% {
+			opacity: 1;
+		}
+		48% {
+			opacity: 1;
+			transform: translateX(-3px);
+		}
+		52% {
+			transform: translateX(3px);
+		}
+		56%,
+		100% {
+			opacity: 0.7;
 			transform: none;
 		}
 	}
