@@ -10,6 +10,8 @@ export interface Provider {
 	baseUrl: string | null;
 	hasApiKey: boolean;
 	enabled: boolean;
+	/** An admin trusts this provider with private data ("Can process private data"). */
+	allowPrivate: boolean;
 	createdAt: number;
 }
 
@@ -92,6 +94,8 @@ export interface McpServerInfo {
 	toolCount: number | null;
 	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
 	toolTokens: number | null;
+	/** An admin allows this server in private chats (not used for builtin servers). */
+	allowPrivate: boolean;
 }
 
 /** A server's tool calls over the usage window (Settings → MCP servers). */
@@ -191,6 +195,8 @@ export interface Conversation {
 	temperature: number | null;
 	maxTokens: number | null;
 	pinned: boolean;
+	/** Private: may only use providers trusted with private data. */
+	private: boolean;
 	agentId: string | null;
 	/** 'dispatch': started by Chatty as an agent run the user can reply to. */
 	origin: ConversationOrigin;
@@ -321,6 +327,8 @@ export interface Agent {
 	/** Set for coding agents: each run is a T3 coding task with this target. */
 	codingTarget: AgentCodingTarget | null;
 	enabled: boolean;
+	/** Private: runs may only use providers trusted with private data. */
+	private: boolean;
 	lastRunAt: number | null;
 	nextRunAt: number | null;
 	createdAt: number;
@@ -420,6 +428,8 @@ export interface ModelMapping {
 	name: string;
 	targets: ModelMappingTarget[];
 	enabled: boolean;
+	/** May only route to providers trusted with private data. */
+	trustedOnly: boolean;
 	createdAt: number;
 	capabilities?: string[];
 }

@@ -41,6 +41,8 @@ export const load: LayoutServerLoad = async ({ locals, depends, url }) => {
 		autoSettleDays: config.CONVERSATION_AUTO_SETTLE_DAYS,
 		unreadIds: listUnreadChatIds(db, locals.user.id),
 		sidebarOpen: settings.sidebarOpen,
-		settings
+		settings,
+		/** Whether chats, memory and agents can be marked private (PRIVATE_DATA_ENABLED). */
+		privateData: config.PRIVATE_DATA_ENABLED
 	};
 };

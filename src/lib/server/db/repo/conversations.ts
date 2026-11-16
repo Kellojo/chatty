@@ -20,6 +20,8 @@ export interface ConversationRow {
 	temperature: number | null;
 	max_tokens: number | null;
 	pinned: number;
+	/** 1: private; its data may only reach providers trusted with private data. */
+	private: number;
 	agent_id: string | null;
 	origin: string;
 	last_read_at: number | null;
@@ -64,6 +66,8 @@ export interface Conversation {
 	temperature: number | null;
 	maxTokens: number | null;
 	pinned: boolean;
+	/** Private: may only use providers trusted with private data. */
+	private: boolean;
 	agentId: string | null;
 	origin: ConversationOrigin;
 	agentRun: { id: string; status: AgentRunStatus } | null;
@@ -96,6 +100,7 @@ export function toPublic(row: ConversationRow): Conversation {
 		temperature: row.temperature,
 		maxTokens: row.max_tokens,
 		pinned: row.pinned === 1,
+		private: row.private === 1,
 		agentId: row.agent_id,
 		origin: row.origin === 'dispatch' ? 'dispatch' : 'user',
 		agentRun:

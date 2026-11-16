@@ -21,6 +21,8 @@ export interface AgentRow {
 	/** JSON AgentCodingTarget; set for coding agents. */
 	coding_target: string | null;
 	enabled: number;
+	/** 1: private; its runs may only use providers trusted with private data. */
+	private: number;
 	last_run_at: number | null;
 	next_run_at: number | null;
 	created_at: number;
@@ -44,6 +46,7 @@ export function toPublic(row: AgentRow): Agent {
 		canAsk: parseCanAsk(row),
 		codingTarget: parseCodingTarget(row),
 		enabled: row.enabled === 1,
+		private: row.private === 1,
 		lastRunAt: row.last_run_at,
 		nextRunAt: row.next_run_at,
 		createdAt: row.created_at,

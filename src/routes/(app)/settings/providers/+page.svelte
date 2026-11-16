@@ -12,11 +12,13 @@
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
+	import ProviderPrivacyField from '$lib/components/app/settings/ProviderPrivacyField.svelte';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
 	import { resolveProviderBrand } from '$lib/provider-brand.js';
 	import { PROVIDER_PRESETS, type ProviderPreset } from '$lib/provider-presets.js';
@@ -32,6 +34,7 @@
 	let addType = $state<ProviderType>('anthropic');
 	let addBaseUrl = $state('');
 	let addApiKey = $state('');
+	let addAllowPrivate = $state(false);
 	let addBusy = $state(false);
 
 	let editId = $state<string | null>(null);
@@ -39,6 +42,8 @@
 	let editType = $state<ProviderType>('anthropic');
 	let editBaseUrl = $state('');
 	let editApiKey = $state('');
+	let editAllowPrivate = $state(false);
+	let editWasAllowed = $state(false);
 	let editBusy = $state(false);
 
 	let deleteId = $state<string | null>(null);
@@ -80,6 +85,7 @@
 		addPreset = 'custom';
 		addBaseUrl = '';
 		addApiKey = '';
+		addAllowPrivate = false;
 		addOpen = true;
 	}
 
@@ -104,7 +110,8 @@
 				name: addName,
 				type: addType,
 				baseUrl: addBaseUrl || null,
-				apiKey: addApiKey || null
+				apiKey: addApiKey || null,
+				allowPrivate: addAllowPrivate
 			});
 			toast.success(`Provider "${addName}" added`);
 			addOpen = false;
@@ -122,6 +129,8 @@
 		editType = provider.type;
 		editBaseUrl = provider.baseUrl ?? '';
 		editApiKey = '';
+		editAllowPrivate = provider.allowPrivate;
+		editWasAllowed = provider.allowPrivate;
 	}
 
 	async function submitEdit(event: SubmitEvent) {
@@ -132,6 +141,7 @@
 			await api(`/api/providers/${editId}`, 'PATCH', {
 				name: editName,
 				baseUrl: editBaseUrl || null,
+				allowPrivate: editAllowPrivate,
 				...(editApiKey ? { apiKey: editApiKey } : {})
 			});
 			toast.success('Provider updated');
@@ -261,6 +271,15 @@
 					muted={!provider.enabled}
 					onclick={() => openEdit(provider)}
 				>
+					{#snippet badges()}
+						{#if provider.allowPrivate}
+							<span class="text-emerald-700 dark:text-emerald-400" title="Can process private data"
+								><ShieldCheckIcon class="size-3.5" /><span class="sr-only"
+									>Can process private data</span
+								></span
+							>
+						{/if}
+					{/snippet}
 					{#snippet leading()}
 						{#if brand}<ProviderIcon {brand} class="size-4" />{:else}<PlugIcon
 								class="size-4"
@@ -371,6 +390,13 @@
 				<Label for="add-apikey">API key {addType === 'anthropic' ? '' : '(optional)'}</Label>
 				<Input id="add-apikey" type="password" bind:value={addApiKey} autocomplete="off" />
 			</div>
+			<ProviderPrivacyField
+				id="add-allow-private"
+				bind:checked={addAllowPrivate}
+				type={addType}
+				baseUrl={addBaseUrl}
+				name={addName}
+			/>
 			<Dialog.Footer>
 				<Dialog.Close>
 					{#snippet child({ props })}
@@ -412,6 +438,14 @@
 					placeholder="Leave empty to keep the current key"
 				/>
 			</div>
+			<ProviderPrivacyField
+				id="edit-allow-private"
+				bind:checked={editAllowPrivate}
+				type={editType}
+				baseUrl={editBaseUrl}
+				name={editName}
+				wasAllowed={editWasAllowed}
+			/>
 			<Dialog.Footer>
 				<Dialog.Close>
 					{#snippet child({ props })}

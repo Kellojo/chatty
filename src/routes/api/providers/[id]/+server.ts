@@ -15,7 +15,8 @@ const patchSchema = z.object({
 	type: z.enum(['anthropic', 'openai-compatible']).optional(),
 	baseUrl: z.url().nullable().optional(),
 	apiKey: z.string().min(1).nullable().optional(),
-	enabled: z.boolean().optional()
+	enabled: z.boolean().optional(),
+	allowPrivate: z.boolean().optional()
 });
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {

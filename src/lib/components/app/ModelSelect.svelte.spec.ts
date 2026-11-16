@@ -14,6 +14,7 @@ const groups: ModelsByProvider[] = [
 			baseUrl: 'https://openrouter.ai/api/v1',
 			hasApiKey: true,
 			enabled: true,
+			allowPrivate: false,
 			createdAt: 0
 		},
 		models: Array.from({ length: 40 }, (_, i) => ({

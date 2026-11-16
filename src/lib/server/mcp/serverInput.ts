@@ -49,7 +49,8 @@ export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 		oauthClientSecret: oauthClientSecretSchema.nullish(),
 		oauthScope: oauthScopeSchema.nullish(),
 		enabled: z.boolean().optional(),
-		loadMode: loadModeSchema.optional()
+		loadMode: loadModeSchema.optional(),
+		allowPrivate: z.boolean().optional()
 	}),
 	z.object({
 		name: nameSchema,
@@ -57,7 +58,8 @@ export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 		command: commandSchema,
 		args: argsSchema.default([]),
 		enabled: z.boolean().optional(),
-		loadMode: loadModeSchema.optional()
+		loadMode: loadModeSchema.optional(),
+		allowPrivate: z.boolean().optional()
 	})
 ]);
 
@@ -73,7 +75,8 @@ export const mcpServerPatchSchema = z.object({
 	command: commandSchema.nullish(),
 	args: argsSchema.optional(),
 	enabled: z.boolean().optional(),
-	loadMode: loadModeSchema.optional()
+	loadMode: loadModeSchema.optional(),
+	allowPrivate: z.boolean().optional()
 });
 
 export type McpServerPatchBody = z.infer<typeof mcpServerPatchSchema>;

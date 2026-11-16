@@ -71,6 +71,7 @@ services:
 | `AGENT_QUESTION_TTL_DAYS`       | `7`                    | Days before an agent's unanswered question is dismissed; `0` disables                   |
 | `AGENT_RUN_CHAT_RETENTION_DAYS` | `30`                   | Days before settled agent-run chats you never replied to are deleted; `0` disables      |
 | `ALLOW_PRIVATE_NETWORK_FETCH`   | `false`                | Let agent fetch tools reach localhost, LAN and metadata addresses                       |
+| `PRIVATE_DATA_ENABLED`          | `false`                | Show the private toggles for chats, memory and agents (see [Private data](#private-data)) |
 | `AUTO_PROMOTE_FIRST_USER`       | `true`                 | First user becomes admin                                                                |
 | `ARTIFICIAL_ANALYSIS_API_KEY`   | —                      | Key for model Intelligence Index scores; overrides the key saved in Settings → Services |
 | `SEARXNG_URL`                   | —                      | SearXNG URL for the `web_search` tool; overrides the one saved in Settings → Services   |

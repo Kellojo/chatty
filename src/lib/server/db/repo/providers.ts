@@ -11,6 +11,8 @@ export interface ProviderRow {
 	base_url: string | null;
 	api_key_enc: string | null;
 	enabled: number;
+	/** 1: an admin trusts this provider with private data. */
+	allow_private: number;
 	created_at: number;
 }
 
@@ -21,6 +23,8 @@ export interface Provider {
 	baseUrl: string | null;
 	hasApiKey: boolean;
 	enabled: boolean;
+	/** An admin trusts this provider with private data ("Can process private data"). */
+	allowPrivate: boolean;
 	createdAt: number;
 }
 
@@ -32,6 +36,7 @@ export function toPublic(row: ProviderRow): Provider {
 		baseUrl: row.base_url,
 		hasApiKey: row.api_key_enc != null && row.api_key_enc.length > 0,
 		enabled: row.enabled === 1,
+		allowPrivate: row.allow_private === 1,
 		createdAt: row.created_at
 	};
 }
@@ -50,12 +55,14 @@ export interface CreateProviderInput {
 	baseUrl?: string | null;
 	apiKey?: string | null;
 	enabled?: boolean;
+	/** Fails closed: a provider is untrusted unless this is true. */
+	allowPrivate?: boolean;
 }
 
 export function createProvider(db: Db, input: CreateProviderInput): ProviderRow {
 	const id = randomUUID();
 	db.prepare(
-		'INSERT INTO providers (id, name, type, base_url, api_key_enc, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+		'INSERT INTO providers (id, name, type, base_url, api_key_enc, enabled, allow_private, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
 	).run(
 		id,
 		input.name,
@@ -63,6 +70,7 @@ export function createProvider(db: Db, input: CreateProviderInput): ProviderRow 
 		input.baseUrl ?? null,
 		input.apiKey ? encryptSecret(input.apiKey) : null,
 		input.enabled === false ? 0 : 1,
+		input.allowPrivate === true ? 1 : 0,
 		Date.now()
 	);
 	return getProvider(db, id)!;
@@ -74,6 +82,7 @@ export interface UpdateProviderInput {
 	baseUrl?: string | null;
 	apiKey?: string | null;
 	enabled?: boolean;
+	allowPrivate?: boolean;
 }
 
 export function updateProvider(
@@ -84,7 +93,7 @@ export function updateProvider(
 	const existing = getProvider(db, id);
 	if (!existing) return undefined;
 	db.prepare(
-		'UPDATE providers SET name = ?, type = ?, base_url = ?, api_key_enc = ?, enabled = ? WHERE id = ?'
+		'UPDATE providers SET name = ?, type = ?, base_url = ?, api_key_enc = ?, enabled = ?, allow_private = ? WHERE id = ?'
 	).run(
 		patch.name ?? existing.name,
 		patch.type ?? existing.type,
@@ -95,6 +104,7 @@ export function updateProvider(
 				: null
 			: existing.api_key_enc,
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
+		patch.allowPrivate !== undefined ? (patch.allowPrivate ? 1 : 0) : existing.allow_private,
 		id
 	);
 	return getProvider(db, id);

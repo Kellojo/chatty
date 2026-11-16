@@ -26,6 +26,7 @@ function conv(id: string, overrides: Partial<Conversation> = {}): Conversation {
 		temperature: null,
 		maxTokens: null,
 		pinned: false,
+		private: false,
 		agentId: null,
 		settledAt: null,
 		settledReason: null,

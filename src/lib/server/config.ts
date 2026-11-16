@@ -47,6 +47,9 @@ const schema = z.object({
 	// Lets agent fetch tools (webfetch, fs_curl) reach localhost, private LAN and
 	// link-local/metadata addresses. Off by default to prevent SSRF.
 	ALLOW_PRIVATE_NETWORK_FETCH: boolFromString('false'),
+	// Lets users mark chats, memory and agents private (only trusted providers may
+	// see them). The checks always run; this only shows the private toggles.
+	PRIVATE_DATA_ENABLED: boolFromString('false'),
 	PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 	ORIGIN: z.string().url().optional(),
 	// Web Push (VAPID). Without keys, a pair is generated once and stored in the
