@@ -24,6 +24,7 @@
 				tools={data.tools}
 				codingEnvironments={data.codingEnvironments}
 				timeFormat={data.timeFormat}
+				privateData={data.privateData}
 			/>
 		</div>
 	</div>

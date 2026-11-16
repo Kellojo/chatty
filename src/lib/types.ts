@@ -50,7 +50,7 @@ export interface ModelsByProvider {
  * ModelsByProvider (which also fits), sent once per change (see model-catalog).
  */
 export interface PickerModelGroup {
-	provider: Pick<Provider, 'id' | 'name' | 'type' | 'baseUrl'>;
+	provider: Pick<Provider, 'id' | 'name' | 'type' | 'baseUrl' | 'allowPrivate'>;
 	models: Pick<ChatModel, 'providerId' | 'modelId' | 'displayName' | 'capabilities'>[];
 }
 

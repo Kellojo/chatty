@@ -25,6 +25,7 @@
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
@@ -96,6 +97,10 @@
 	} = $props();
 
 	const isMobile = new MediaQuery('(max-width: 767px)');
+	// Private chats get a lock, only while the private-data feature is on.
+	const showPrivate = $derived(
+		(page.data?.privateData as { enabled?: boolean } | undefined)?.enabled === true
+	);
 
 	function handleNavigate() {
 		if (isMobile.current) onclose();
@@ -395,6 +400,7 @@
 					refresh(false);
 					break;
 				case 'conversation.updated':
+				case 'conversation.privacy':
 				case 'coding.task.updated':
 					refresh(affectsOpenPage([event.conversationId]));
 					break;
@@ -768,6 +774,13 @@
 	}
 </script>
 
+{#snippet privateMark()}
+	<span class="inline-flex shrink-0 text-muted-foreground" title="Private chat">
+		<LockIcon class="size-3" aria-hidden="true" />
+		<span class="sr-only">, Private chat</span>
+	</span>
+{/snippet}
+
 {#snippet row(c: Conversation)}
 	{@const snoozedUntil = isSnoozed(c) ? c.snoozedUntil : null}
 	<!-- Snoozed rows are put away for now, like settled ones: quiet until they wake. -->
@@ -820,13 +833,18 @@
 			     (project or model) and the PR. While something is happening or new, its
 			     status leads the second line with a mark; settled facts trail it quietly. -->
 			<span class="flex min-w-0 flex-1 flex-col">
-				<span
-					class="min-w-0 truncate leading-5 {attention
-						? 'font-semibold'
-						: state === 'idle' && !settled && c.id !== currentId
-							? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground dark:text-foreground/60'
-							: ''}">{displayTitle(c)}</span
-				>
+				<span class="flex min-w-0 items-center gap-1">
+					<span
+						class="min-w-0 truncate leading-5 {attention
+							? 'font-semibold'
+							: state === 'idle' && !settled && c.id !== currentId
+								? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground dark:text-foreground/60'
+								: ''}">{displayTitle(c)}</span
+					>
+					{#if showPrivate && c.private}
+						{@render privateMark()}
+					{/if}
+				</span>
 				<!-- Nothing to say (a chat with no model on record and no status): one line. -->
 				{#if source || status || snoozedUntil || c.coding?.pullRequest}
 					<span class="flex min-w-0 items-center gap-1 text-xs leading-4 text-muted-foreground">
@@ -930,7 +948,12 @@
 				<MessageCircleIcon class="size-3.5 shrink-0" aria-hidden="true" />
 				<span class="sr-only">Chat:</span>
 			{/if}
-			<span class="min-w-0 flex-1 truncate leading-5">{displayTitle(c)}</span>
+			<span class="flex min-w-0 flex-1 items-center gap-1">
+				<span class="min-w-0 truncate leading-5">{displayTitle(c)}</span>
+				{#if showPrivate && c.private}
+					{@render privateMark()}
+				{/if}
+			</span>
 			<!-- Put away, but still worth a look: a small mark in the status's tone. -->
 			{#if status}
 				<span class="flex size-3 shrink-0 items-center justify-center {status.tone}">

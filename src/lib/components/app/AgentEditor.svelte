@@ -20,6 +20,8 @@
 	import ToolAllowlist from '$lib/components/app/ToolAllowlist.svelte';
 	import FormFooter from '$lib/components/app/FormFooter.svelte';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+	import LockIcon from '@lucide/svelte/icons/lock';
+	import { modelValueTrusted, PRIVATE_DATA_OFF, trustedProviderIds } from '$lib/private-data.js';
 	import { untrack } from 'svelte';
 	import { CodingTaskState } from '$lib/state/coding-task.svelte.js';
 	import type { CodingEnvironment } from '$lib/coding-environments.js';
@@ -31,6 +33,7 @@
 		AgentTriggerType,
 		ModelMapping,
 		ModelsByProvider,
+		PrivateDataStatus,
 		ToolInfo
 	} from '$lib/types.js';
 	import { AGENT_CAN_ASK_VALUES, AGENT_EVENT_NAMES } from '$lib/types.js';
@@ -43,6 +46,7 @@
 		codingEnvironments = [],
 		timeFormat = '24h',
 		readonly = false,
+		privateData = PRIVATE_DATA_OFF,
 		onreset
 	}: {
 		agent: Agent | null;
@@ -52,6 +56,8 @@
 		codingEnvironments?: CodingEnvironment[];
 		timeFormat?: TimeFormat;
 		readonly?: boolean;
+		/** The app shell's private-data switches: the Private agent switch follows them. */
+		privateData?: PrivateDataStatus;
 		/** Discard edits by remounting the editor from the saved agent (resets the coding target too). */
 		onreset?: () => void;
 	} = $props();
@@ -107,8 +113,21 @@
 		maxSteps: (agent?.maxSteps?.toString() ?? '') as string | number,
 		// New agents may ask by default; existing ones keep what they saved.
 		canAsk: (agent?.canAsk ?? 'any') as AgentCanAsk,
-		enabled: agent?.enabled ?? true
+		enabled: agent?.enabled ?? true,
+		private: agent?.private ?? false
 	});
+
+	// Private agents: their runs are private chats, so only trusted models run them.
+	// Coding agents run on a T3 machine and can't be private.
+	const showPrivate = $derived(privateData.enabled && !coding);
+	const isPrivate = $derived(showPrivate && form.private);
+	// Turning it on needs a trusted provider; an agent that already is private can always be turned off.
+	const privateLocked = $derived(readonly || (!privateData.available && !form.private));
+	const untrustedModel = $derived(
+		isPrivate &&
+			form.modelValue !== '' &&
+			!modelValueTrusted(form.modelValue, trustedProviderIds(groups), mappings)
+	);
 
 	let busy = $state(false);
 
@@ -129,6 +148,7 @@
 		if (form.triggerType === 'event' && !isIntIn(String(form.every ?? '').trim(), 1, 1000))
 			return 'The occurrence interval must be a whole number from 1 to 1000.';
 		if (coding && !codingTask.draft) return codingTask.blocker ?? 'Choose where it runs.';
+		if (untrustedModel) return 'Pick a trusted model for a private agent.';
 		return null;
 	});
 
@@ -232,6 +252,8 @@
 				canAsk: showCanAsk ? form.canAsk : undefined,
 				// Existing agents toggle from the header; sending the form copy would undo that.
 				...(agent ? {} : { enabled: form.enabled }),
+				// Only sent while the feature is on; coding agents are never private.
+				...(privateData.enabled ? { private: !coding && form.private } : {}),
 				codingTarget:
 					coding && draft
 						? { ...draft, baseBranch: draft.baseBranch ?? null }
@@ -453,9 +475,44 @@
 						onselect={() => {}}
 						noneValue=""
 						noneLabel="Default chat model"
+						privateOnly={isPrivate}
+						privateNote="Private agent: trusted models only"
 						class="w-full sm:w-72"
 					/>
 				</SettingsRow>
+			{/if}
+			{#if showPrivate}
+				<SettingsRow label="Private agent" for="agent-private">
+					{#snippet description()}
+						<p>Its runs are private: only trusted models, no tools that send data out.</p>
+						{#if !privateData.available && !form.private && !readonly}
+							<p class="mt-1 flex items-center gap-1.5">
+								<LockIcon class="size-3.5 shrink-0" aria-hidden="true" />
+								<span>
+									Needs a provider trusted with private data.
+									<a
+										class="underline underline-offset-4 hover:text-foreground"
+										href={resolve('/settings/providers')}>Settings → Providers</a
+									>
+								</span>
+							</p>
+						{/if}
+					{/snippet}
+					<Switch
+						id="agent-private"
+						checked={form.private}
+						disabled={privateLocked}
+						onCheckedChange={(v) => (form.private = v)}
+					/>
+				</SettingsRow>
+				{#if untrustedModel}
+					<p
+						class="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
+					>
+						<TriangleAlertIcon class="mt-0.5 size-4 shrink-0" />
+						This model isn't trusted with private data. Pick a trusted model, or turn off Private agent.
+					</p>
+				{/if}
 			{/if}
 			<SettingsRow
 				label="Max steps"

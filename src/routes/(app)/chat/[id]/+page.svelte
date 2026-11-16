@@ -26,5 +26,6 @@
 		codingEnvironments={data.codingEnvironments}
 		codingAgents={data.codingAgents}
 		dispatch={data.dispatch}
+		privateData={data.privateData}
 	/>
 {/key}

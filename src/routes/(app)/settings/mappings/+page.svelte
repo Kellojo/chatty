@@ -12,6 +12,8 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import RouteIcon from '@lucide/svelte/icons/route';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+	import ShieldOffIcon from '@lucide/svelte/icons/shield-off';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
@@ -145,6 +147,20 @@
 		}
 	}
 
+	async function setTrustedOnly(mapping: Mapping, trustedOnly: boolean) {
+		try {
+			await api(`/api/model-mappings/${mapping.id}`, 'PATCH', { trustedOnly });
+			toast.success(
+				trustedOnly
+					? `"${mapping.name}" now only uses providers trusted with private data`
+					: `"${mapping.name}" may use any provider again`
+			);
+			await invalidateAll();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to update mapping');
+		}
+	}
+
 	async function toggleEnabled(mapping: Mapping, enabled: boolean) {
 		try {
 			await api(`/api/model-mappings/${mapping.id}`, 'PATCH', { enabled });
@@ -230,11 +246,16 @@
 					>
 						{#each mapping.targets as target, i (i)}
 							{@const t = describeTarget(target)}
-							<li class="flex max-w-full min-w-0 items-center gap-1.5">
+							{@const skipped =
+								mapping.trustedOnly && !providersById.get(target.providerId)?.allowPrivate}
+							<li class={['flex max-w-full min-w-0 items-center gap-1.5', skipped && 'opacity-50']}>
 								{#if i > 0}<span class="text-muted-foreground" aria-hidden="true">→</span>{/if}
 								<span
 									class="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 whitespace-nowrap"
-									title="{t.provider} / {target.modelId}"
+									class:line-through={skipped}
+									title={skipped
+										? `${t.provider} / ${target.modelId}: skipped, this provider may not process private data`
+										: `${t.provider} / ${target.modelId}`}
 								>
 									{#if t.brand}<ProviderIcon brand={t.brand} class="size-3 shrink-0" />{/if}
 									<span class="truncate">{t.name}</span>
@@ -244,6 +265,16 @@
 							</li>
 						{/each}
 					</ol>
+					{#snippet badges()}
+						{#if mapping.trustedOnly}
+							<span
+								class="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400"
+								title="Only routes to providers trusted with private data"
+							>
+								<ShieldCheckIcon class="size-3.5" aria-hidden="true" />Trusted only
+							</span>
+						{/if}
+					{/snippet}
 					{#snippet trailing()}
 						<Switch
 							checked={mapping.enabled}
@@ -254,6 +285,17 @@
 							label="Actions for {mapping.name}"
 							items={[
 								{ label: 'Edit', icon: PencilIcon, onSelect: () => openEdit(mapping) },
+								mapping.trustedOnly
+									? {
+											label: 'Allow any provider',
+											icon: ShieldOffIcon,
+											onSelect: () => setTrustedOnly(mapping, false)
+										}
+									: {
+											label: 'Trusted providers only',
+											icon: ShieldCheckIcon,
+											onSelect: () => setTrustedOnly(mapping, true)
+										},
 								'separator',
 								{
 									label: 'Delete',

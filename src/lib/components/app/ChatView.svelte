@@ -26,6 +26,7 @@
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import ChatTopbar from './ChatTopbar.svelte';
 	import { setChatViewContext } from './chat-view-context.js';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
@@ -77,6 +78,7 @@
 		type DispatchInfo,
 		type ModelMapping,
 		type PickerModelGroup,
+		type PrivateDataStatus,
 		type UIMessage,
 		type UIMessageMetadata
 	} from '$lib/types.js';
@@ -87,6 +89,14 @@
 		type CodingEnvironment
 	} from '$lib/coding-environments.js';
 	import { browserActivity } from '$lib/coding-preview.js';
+	import { PRIVATE_DATA_OFF } from '$lib/private-data.js';
+	import { setPrivateChat } from '$lib/private-context.js';
+	import {
+		micAvailable,
+		PRIVATE_MIC_HINT,
+		voiceModeAvailable,
+		type SpeechPrivacy
+	} from '$lib/private-speech.js';
 
 	let {
 		conversation: initialConversation,
@@ -103,7 +113,8 @@
 		coding: initialCoding = null,
 		codingEnvironments = [],
 		codingAgents = [],
-		dispatch = null
+		dispatch = null,
+		privateData = PRIVATE_DATA_OFF
 	}: {
 		conversation: Conversation;
 		/** The newest page of messages; earlier ones load on scroll. */
@@ -126,6 +137,8 @@
 		codingAgents?: Agent[];
 		/** Set when Chatty started this chat for an agent run. */
 		dispatch?: DispatchInfo | null;
+		/** The app shell's private-data switches (layout data `privateData`). */
+		privateData?: PrivateDataStatus;
 	} = $props();
 
 	// Local edits apply immediately; reloaded page data (e.g. a task settled or
@@ -137,11 +150,59 @@
 		codingEnvironments,
 		codingAgents
 	}));
+	// ── privacy ──────────────────────────────────────────────────────────────
+	// Private chats only run on trusted models. A chat turns private on its own
+	// (for good) when a turn reads private data: the server says so with an event.
+	const isPrivate = $derived(privateData.enabled && conversation.private);
+	/** Shown once a turn made this chat private while it was open; `reason` says what it read. */
+	let privacyNotice = $state<{ reason: string } | null>(null);
+	$effect(() => {
+		const id = conversation.id;
+		return onServerEvent((event) => {
+			if (event.type !== 'conversation.privacy' || event.conversationId !== id) return;
+			conversation = { ...conversation, private: event.private };
+			if (event.private && event.reason) privacyNotice = { reason: event.reason };
+			else if (!event.private) privacyNotice = null;
+		});
+	});
+
+	// Widgets (the map) hold back third-party requests in a private chat.
+	// Speech and widgets follow the stored flag itself (safe side, even with the feature off).
+	setPrivateChat(() => conversation.private);
+
+	// Speech in a private chat stays with trusted server models or on the device:
+	// no browser recognition (Chrome sends the audio to Google), server read-aloud
+	// only when the Text to speech model is trusted (else on-device voices only).
+	const speechPrivacy = (): SpeechPrivacy => ({
+		conversationId: conversation.id,
+		private: conversation.private
+	});
+	const serverTtsUsable = () => serverTts && (!conversation.private || privateData.ttsTrusted);
+	/** Why the mic is off here, when the chat is private and no trusted speech to text is set. */
+	const micBlocked = $derived(
+		isPrivate &&
+			!micAvailable({
+				isPrivate,
+				sttTrusted: privateData.sttTrusted,
+				sttConfigured: sttModel !== null
+			})
+			? PRIVATE_MIC_HINT
+			: undefined
+	);
+
 	// The unsent text survives switching chats (this view remounts per chat).
 	let input = $state(drafts.get(untrack(() => initialConversation.id)));
-	const speech = sttModel ? createServerSpeechRecognition(sttModel) : createSpeechRecognition();
+	const initialSttModel = untrack(() => sttModel);
+	const speech = initialSttModel
+		? createServerSpeechRecognition(initialSttModel, { privacy: speechPrivacy })
+		: createSpeechRecognition({ private: () => conversation.private });
+	// Turned private mid-dictation: stop listening rather than keep sending audio out.
+	$effect(() => {
+		if (micBlocked && (speech.recording || speech.busy)) untrack(() => speech.stop());
+	});
 	const playback = createSpeechPlayback({
-		serverTts: () => serverTts,
+		serverTts: serverTtsUsable,
+		privacy: speechPrivacy,
 		onerror: (message) => toast.error(message),
 		oninfo: (message) => toast.info(message),
 		volume: () => page.data.settings?.speechVolume ?? 1
@@ -151,10 +212,18 @@
 	// ── voice mode ───────────────────────────────────────────────────────────
 	// A spoken conversation in this chat: each turn is sent as a regular
 	// message and the reply is read aloud as it streams in.
-	const voiceSupported = $derived(voiceModeSupported(sttModel, serverTts));
+	const voiceSupported = $derived(
+		voiceModeSupported(sttModel, serverTtsUsable(), conversation.private) &&
+			voiceModeAvailable({
+				isPrivate,
+				sttTrusted: privateData.sttTrusted,
+				sttConfigured: sttModel !== null
+			})
+	);
 	const voice = createVoiceMode({
 		sttModel: untrack(() => sttModel),
-		serverTts: () => serverTts,
+		serverTts: serverTtsUsable,
+		privacy: speechPrivacy,
 		volume: () => page.data.settings?.speechVolume ?? 1,
 		send: (text) => submit(text, []),
 		// The user went on talking before the reply was heard: their message is
@@ -1410,7 +1479,11 @@
 		{codingAgents}
 		handoffDisabled={streaming || chat.messages.length === 0}
 		messageCount={chat.messages.length}
-		onupdated={(updated) => (conversation = updated)}
+		{privateData}
+		onupdated={(updated) => {
+			if (!updated.private) privacyNotice = null;
+			conversation = updated;
+		}}
 	/>
 
 	<!-- Reserve the scrollbar on both sides so messages stay centred over the composer. -->
@@ -1449,6 +1522,33 @@
 					{dispatchMessageId}
 					speech={playback}
 				/>
+				{#if privacyNotice && isPrivate}
+					<div class="mx-auto w-full max-w-3xl px-4 pb-4" role="status">
+						<div
+							class="flex items-start gap-2.5 rounded-xl border bg-muted/40 px-3 py-2.5 text-sm"
+							data-privacy-notice
+						>
+							<LockIcon class="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+							<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+								<p class="font-medium">This chat read private data and is now private.</p>
+								<p class="text-muted-foreground">
+									Only trusted models can continue it, and tools that send data outside Chatty are
+									off.
+								</p>
+								<p class="text-xs text-muted-foreground">Source: {privacyNotice.reason}</p>
+							</div>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								class="-my-1 -mr-1 shrink-0 text-muted-foreground"
+								aria-label="Dismiss"
+								onclick={() => (privacyNotice = null)}
+							>
+								<XIcon class="size-3.5" />
+							</Button>
+						</div>
+					</div>
+				{/if}
 				{#if waiting}
 					<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
 				{:else if backgroundWaiting}
@@ -1582,7 +1682,7 @@
 						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 							<PaperclipIcon class="size-4" />
 						</Button>
-						<MicButton {speech} />
+						<MicButton {speech} blockedReason={micBlocked} />
 					</div>
 					{#if streaming && !canSend}
 						<Button

@@ -6,7 +6,8 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import type { Conversation } from '$lib/types.js';
+	import type { Conversation, PrivateDataStatus } from '$lib/types.js';
+	import { PRIVATE_DATA_OFF } from '$lib/private-data.js';
 	import type { CodingConversation } from '$lib/coding-environments.js';
 	import CodingTaskDetails from './CodingTaskDetails.svelte';
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
@@ -28,12 +29,15 @@
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import ArchiveRestoreIcon from '@lucide/svelte/icons/archive-restore';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import LockIcon from '@lucide/svelte/icons/lock';
+	import LockOpenIcon from '@lucide/svelte/icons/lock-open';
 
 	/** The header's "⋯" menu: conversation actions, plus task details for coding tasks. */
 	let {
 		conversation,
 		coding = null,
 		environmentName = null,
+		privateData = PRIVATE_DATA_OFF,
 		onupdated,
 		onhandoff,
 		oncreatepr,
@@ -43,6 +47,8 @@
 		conversation: Conversation;
 		coding?: CodingConversation | null;
 		environmentName?: string | null;
+		/** The app shell's private-data switches: the privacy items follow them. */
+		privateData?: PrivateDataStatus;
 		onupdated: (c: Conversation) => void;
 		/** Shown on phones, where the header has no room for the Hand off button. */
 		onhandoff?: () => void;
@@ -60,6 +66,38 @@
 	let renameText = $state('');
 	let deleting = $state(false);
 	let pickingSnooze = $state(false);
+	let confirmingPublic = $state(false);
+	let savingPrivacy = $state(false);
+
+	// Coding chats run on a T3 machine and can never be private.
+	const showPrivacy = $derived(privateData.enabled && !coding && !conversation.coding);
+	const isAdmin = $derived((page.data.user as { role?: string } | undefined)?.role === 'admin');
+
+	async function setPrivate(next: boolean) {
+		confirmingPublic = false;
+		savingPrivacy = true;
+		try {
+			const res = await fetch(`/api/conversations/${conversation.id}`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(next ? { private: true } : { private: false, confirm: true })
+			}).catch(() => null);
+			if (!res?.ok) {
+				const data = (await res?.json().catch(() => null)) as { message?: string } | null;
+				toast.error(
+					data?.message ??
+						(next ? 'Failed to make the chat private' : 'Failed to make the chat public')
+				);
+				return;
+			}
+			const { conversation: updated } = (await res.json()) as { conversation: Conversation };
+			onupdated(updated);
+			toast.success(next ? 'This chat is now private' : 'This chat is now public');
+			await invalidateAll();
+		} finally {
+			savingPrivacy = false;
+		}
+	}
 
 	const settled = $derived(conversation.settledAt !== null);
 	const noun = $derived(coding ? 'task' : 'conversation');
@@ -262,6 +300,37 @@
 			<PencilIcon class="size-4" />
 			Rename
 		</DropdownMenu.Item>
+		{#if showPrivacy}
+			{#if conversation.private}
+				<DropdownMenu.Item disabled={savingPrivacy} onSelect={() => (confirmingPublic = true)}>
+					<LockOpenIcon class="size-4" />
+					Make public…
+				</DropdownMenu.Item>
+			{:else if privateData.available}
+				<DropdownMenu.Item disabled={savingPrivacy} onSelect={() => setPrivate(true)}>
+					<LockIcon class="size-4" />
+					Make private
+				</DropdownMenu.Item>
+			{:else}
+				<!-- No trusted provider yet: say why, and (for admins) where to set one up. -->
+				<DropdownMenu.Item
+					disabled={!isAdmin}
+					class="items-start"
+					title="Private chats need a provider trusted with private data"
+					onSelect={() => goto(resolve('/settings/providers'))}
+				>
+					<LockIcon class="mt-0.5 size-4" />
+					<span class="flex min-w-0 flex-col">
+						<span>Make private</span>
+						<span class="text-xs font-normal text-muted-foreground">
+							{isAdmin
+								? 'Trust a provider in Settings → Providers first'
+								: 'Needs a provider trusted with private data'}
+						</span>
+					</span>
+				</DropdownMenu.Item>
+			{/if}
+		{/if}
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item variant="destructive" onSelect={() => (deleting = true)}>
 			<Trash2Icon class="size-4" />
@@ -289,6 +358,23 @@
 	onclose={() => (pickingSnooze = false)}
 	onchanged={snoozeChanged}
 />
+
+<Dialog.Root open={confirmingPublic} onOpenChange={(open) => (confirmingPublic = open)}>
+	<Dialog.Content>
+		<Dialog.Header>
+			<Dialog.Title>Make this chat public?</Dialog.Title>
+			<Dialog.Description>
+				Anything already sent in this chat can't be recalled. Making it public lets untrusted
+				models, and tools that send data outside Chatty, see this chat's history, including any
+				private data it read.
+			</Dialog.Description>
+		</Dialog.Header>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (confirmingPublic = false)}>Keep private</Button>
+			<Button onclick={() => setPrivate(false)}>Make public</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <Dialog.Root open={deleting} onOpenChange={(open) => (deleting = open)}>
 	<Dialog.Content>

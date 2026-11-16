@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import MicIcon from '@lucide/svelte/icons/mic';
+	import MicOffIcon from '@lucide/svelte/icons/mic-off';
 
 	type SpeechState = {
 		supported: boolean;
@@ -11,7 +12,14 @@
 		readFrequencyData?: () => Uint8Array;
 	};
 
-	let { speech }: { speech: SpeechState } = $props();
+	let {
+		speech,
+		blockedReason
+	}: {
+		speech: SpeechState;
+		/** Dictation isn't allowed here (e.g. a private chat without trusted speech to text): why. */
+		blockedReason?: string;
+	} = $props();
 
 	const recording = $derived(speech.recording);
 	const transcribing = $derived(!speech.recording && (speech.busy ?? false));
@@ -95,7 +103,17 @@
 	const timer = $derived(`${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`);
 </script>
 
-{#if speech.supported}
+{#if blockedReason}
+	<button
+		type="button"
+		class="inline-flex size-9 cursor-not-allowed items-center justify-center rounded-full text-muted-foreground opacity-50 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+		title={blockedReason}
+		aria-label="Dictate (speech to text): {blockedReason}"
+		aria-disabled="true"
+	>
+		<MicOffIcon class="size-4" />
+	</button>
+{:else if speech.supported}
 	<button
 		type="button"
 		class={[

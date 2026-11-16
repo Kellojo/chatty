@@ -4,13 +4,21 @@
 	import CodingTaskBar from './CodingTaskBar.svelte';
 	import ConversationMenu from './ConversationMenu.svelte';
 	import HandoffDialog from './HandoffDialog.svelte';
+	import PrivateChatBadge from './PrivateChatBadge.svelte';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { getSidebarState } from './sidebar-state.svelte.js';
 	import { decodeModelRef, encodeModelRef } from '$lib/model-ref.js';
-	import type { Agent, Conversation, ModelMapping, PickerModelGroup } from '$lib/types.js';
+	import type {
+		Agent,
+		Conversation,
+		ModelMapping,
+		PickerModelGroup,
+		PrivateDataStatus
+	} from '$lib/types.js';
+	import { PRIVATE_DATA_OFF } from '$lib/private-data.js';
 	import type { CodingConversation, CodingEnvironment } from '$lib/coding-environments.js';
 	import type { CodingBrowserActivity } from '$lib/coding-preview.js';
 	import { canCreatePullRequest } from '$lib/coding-task-details.js';
@@ -29,6 +37,7 @@
 		codingAgents = [],
 		handoffDisabled = false,
 		messageCount,
+		privateData = PRIVATE_DATA_OFF,
 		onupdated
 	}: {
 		conversation: Conversation;
@@ -49,6 +58,8 @@
 		handoffDisabled?: boolean;
 		/** Messages in the chat, so the handoff dialog keeps its draft while it's unchanged. */
 		messageCount?: number;
+		/** The app shell's private-data switches (lock, privacy menu items). */
+		privateData?: PrivateDataStatus;
 		onupdated: (c: Conversation) => void;
 	} = $props();
 
@@ -56,8 +67,10 @@
 	// Coding-task dialogs, opened from the task bar or (on phones) from the ⋯ menu.
 	let codingSettingsOpen = $state(false);
 	let codingPreviewOpen = $state(false);
+	// Hand-off sends the chat to a coding agent, which a private chat can't reach.
+	const isPrivate = $derived(privateData.enabled && conversation.private);
 	const canHandoff = $derived(
-		!coding && (codingEnvironments.length > 0 || codingAgents.length > 0)
+		!coding && !isPrivate && (codingEnvironments.length > 0 || codingAgents.length > 0)
 	);
 
 	let saving = $state(false);
@@ -147,6 +160,9 @@
 					>
 						{displayTitle}
 					</h1>
+					{#if isPrivate}
+						<PrivateChatBadge class="max-sm:relative max-sm:z-10" />
+					{/if}
 					{#if personaLabel}
 						<Badge variant="secondary" class="shrink-0 max-sm:hidden" title="Persona">
 							{personaLabel}
@@ -163,6 +179,7 @@
 					value={currentModelValue}
 					onselect={selectModel}
 					disabled={saving}
+					privateOnly={isPrivate}
 					align={isPhone.current ? 'start' : 'end'}
 					class="w-auto shrink-0 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground max-sm:static max-sm:-mx-1.5 max-sm:mt-px max-sm:max-w-full max-sm:gap-0.5 max-sm:self-start max-sm:border-0 max-sm:px-1.5 max-sm:py-0 max-sm:text-xs max-sm:leading-4 max-sm:font-medium max-sm:shadow-none max-sm:after:absolute max-sm:after:-inset-x-1.5 max-sm:after:inset-y-1 max-sm:after:rounded-lg max-sm:after:content-[''] max-sm:hover:bg-transparent max-sm:focus-visible:ring-0 max-sm:focus-visible:after:ring-[3px] max-sm:focus-visible:after:ring-ring/50 max-sm:data-[size=default]:h-auto sm:ml-auto sm:max-w-44 sm:pr-2 sm:data-[size=default]:h-8 lg:max-w-56 sm:pointer-coarse:data-[size=default]:h-10 max-sm:[&_[data-model-icon=brand]>*]:size-3 max-sm:[&_[data-model-icon=generic]]:hidden max-sm:[&_[data-model-source]]:hidden max-sm:[&>svg:last-child]:size-3"
 				/>
@@ -191,6 +208,7 @@
 				{conversation}
 				{coding}
 				environmentName={codingEnvironmentName}
+				{privateData}
 				{onupdated}
 				onhandoff={canHandoff && !handoffDisabled ? () => (handoffOpen = true) : undefined}
 				oncreatepr={coding && oncreatepr && canCreatePullRequest(coding) ? oncreatepr : undefined}

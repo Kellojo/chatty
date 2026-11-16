@@ -18,6 +18,7 @@
 		source,
 		favoriteKey = value,
 		lockedFavorite,
+		disabled = false,
 		badges
 	}: {
 		value: string;
@@ -29,6 +30,8 @@
 		favoriteKey?: string;
 		/** Starred elsewhere (e.g. in T3) and not editable here; the tooltip says why. */
 		lockedFavorite?: string;
+		/** Greyed out and unselectable, e.g. an untrusted model in a private chat. */
+		disabled?: boolean;
 		badges?: Snippet;
 	} = $props();
 
@@ -38,7 +41,7 @@
 	const locked = $derived(!own && !!lockedFavorite);
 </script>
 
-<Select.Item {value} label={name} class="group/model">
+<Select.Item {value} label={name} {disabled} class="group/model">
 	{#if brand}
 		<ProviderIcon {brand} class="size-3.5 shrink-0" />
 	{:else}
@@ -46,6 +49,7 @@
 		<BoxIcon class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
 	{/if}
 	<span class="truncate">{name}</span>
+	{#if disabled}<span class="sr-only">, not trusted with private data</span>{/if}
 	{#if source}
 		<span class="shrink-0 truncate text-xs font-normal text-muted-foreground">{source}</span>
 	{/if}
