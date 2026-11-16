@@ -148,7 +148,7 @@
 </SettingsSection>
 
 {#if data.privateData.enabled}
-	<SettingsSection title="Privacy">
+	<SettingsSection title="Private data">
 		<SettingsRow
 			label="New chats are private"
 			for="pref-private-by-default"
