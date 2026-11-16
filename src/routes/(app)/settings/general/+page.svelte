@@ -3,11 +3,11 @@
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
-	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
+	import PrivateDataDiagram from '$lib/components/app/settings/PrivateDataDiagram.svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -53,6 +53,7 @@
 	>
 		<Switch id="general-private-data" checked={enabled} onCheckedChange={setPrivateData} />
 	</SettingsRow>
+	<PrivateDataDiagram trustedProviders={data.trustedProviders} class="mb-1" />
 	<div class="flex flex-col gap-2.5 pb-1 text-sm">
 		{#if data.trustedProviders.length === 0}
 			<p
@@ -70,18 +71,12 @@
 				</span>
 			</p>
 		{:else}
-			<p class="flex items-start gap-2 text-muted-foreground">
-				<ShieldCheckIcon
-					class="mt-px size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
-					aria-hidden="true"
-				/>
-				<span>
-					Trusted with private data: {data.trustedProviders.join(', ')}. Change this in
-					<a
-						class="font-medium underline decoration-current/40 underline-offset-2 hover:decoration-current"
-						href={resolve('/settings/providers')}>Providers</a
-					>.
-				</span>
+			<p class="text-muted-foreground">
+				Change which providers are trusted in
+				<a
+					class="font-medium text-foreground underline decoration-current/40 underline-offset-2 hover:decoration-current"
+					href={resolve('/settings/providers')}>Providers</a
+				>.
 			</p>
 		{/if}
 	</div>

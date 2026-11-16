@@ -13,3 +13,14 @@ export function privateDataStatus(db: Db): PrivateDataStatus {
 		ttsTrusted: roleTrusted(db, 'text-to-speech')
 	};
 }
+
+/** Names of the enabled providers trusted with private data (shown in the settings diagram). */
+export function trustedProviderNames(db: Db): string[] {
+	return (
+		db
+			.prepare(
+				'SELECT name FROM providers WHERE enabled = 1 AND allow_private = 1 ORDER BY created_at'
+			)
+			.all() as { name: string }[]
+	).map((p) => p.name);
+}

@@ -15,6 +15,7 @@
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { onMount, untrack } from 'svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
+	import PrivateDataDiagram from '$lib/components/app/settings/PrivateDataDiagram.svelte';
 	import SpeechPreviewButton from '$lib/components/app/settings/SpeechPreviewButton.svelte';
 	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { PageData } from './$types';
@@ -152,7 +153,7 @@
 			label="New chats are private"
 			for="pref-private-by-default"
 			description={data.privateData.available
-				? 'New chats start with the lock on: only models trusted with private data see them. You can still turn it off per chat. Coding tasks are never private.'
+				? 'New chats start with the lock on. You can still turn it off per chat.'
 				: 'Takes effect once a provider is trusted with private data (Settings → Providers).'}
 		>
 			<Switch
@@ -161,6 +162,7 @@
 				onCheckedChange={setPrivateByDefault}
 			/>
 		</SettingsRow>
+		<PrivateDataDiagram trustedProviders={data.trustedProviders} class="mb-1" />
 	</SettingsSection>
 {/if}
 
