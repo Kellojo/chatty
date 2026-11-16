@@ -86,13 +86,25 @@ export function micAvailable(opts: {
 	return opts.sttConfigured || (opts.browserRecognition ?? true);
 }
 
-/** Voice mode needs to hear the user: in a private chat, only with trusted speech-to-text. */
+/**
+ * Voice mode needs to hear the user and to answer out loud. In a private chat
+ * that takes trusted speech to text, and a way to speak that keeps the reply
+ * private: trusted text to speech, or an on-device browser voice.
+ */
 export function voiceModeAvailable(opts: {
 	isPrivate: boolean;
 	sttTrusted: boolean;
 	sttConfigured: boolean;
+	ttsTrusted: boolean;
+	ttsConfigured: boolean;
+	/** On-device browser voices (`localService`). */
+	localVoiceCount: number;
+	/** The browser has speechSynthesis at all. */
+	browserVoice?: boolean;
 }): boolean {
-	return !opts.isPrivate || (opts.sttConfigured && opts.sttTrusted);
+	if (!opts.isPrivate) return true;
+	if (!opts.sttConfigured || !opts.sttTrusted) return false;
+	return readAloudMode(opts) !== 'hidden';
 }
 
 /**

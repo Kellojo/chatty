@@ -19,6 +19,7 @@
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
 	import ProviderPrivacyField from '$lib/components/app/settings/ProviderPrivacyField.svelte';
+	import ProviderTrustBanner from '$lib/components/app/settings/ProviderTrustBanner.svelte';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
 	import { resolveProviderBrand } from '$lib/provider-brand.js';
 	import { PROVIDER_PRESETS, type ProviderPreset } from '$lib/provider-presets.js';
@@ -245,6 +246,10 @@
 		{/if}
 	{/snippet}
 </SettingsHeader>
+
+{#if data.privateData.enabled}
+	<ProviderTrustBanner providers={data.providers} />
+{/if}
 
 <SettingsSection flush>
 	{#if data.providers.length === 0}

@@ -595,15 +595,31 @@ export async function setConceptsPrivate(
 	value: boolean,
 	audit: MemoryAuditInfo
 ): Promise<number> {
+	const paths = await listConceptPaths(scope, userId, prefix || undefined);
+	return setConceptPathsPrivate(db, scope, userId, paths, value, audit);
+}
+
+/**
+ * Sets the private flag on the given concepts (paths in the bundle); missing
+ * ones and those already flagged are skipped. Returns how many changed.
+ */
+export async function setConceptPathsPrivate(
+	db: Db,
+	scope: MemoryScope,
+	userId: string,
+	relPaths: readonly string[],
+	value: boolean,
+	audit: MemoryAuditInfo
+): Promise<number> {
 	let updated = 0;
-	for (const relPath of await listConceptPaths(scope, userId, prefix || undefined)) {
+	for (const relPath of relPaths) {
 		const concept = await readConcept(scope, userId, relPath);
 		if (!concept || (concept.frontmatter.private === true) === value) continue;
 		await writeConcept(
 			db,
 			scope,
 			userId,
-			relPath,
+			concept.path,
 			{
 				frontmatter: {
 					...concept.frontmatter,

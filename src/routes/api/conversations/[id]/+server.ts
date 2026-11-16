@@ -1,4 +1,5 @@
 import { getCodingConversation } from '$lib/server/db/repo/coding-conversations.js';
+import { privatePlaceholderTitle } from '$lib/server/privacy/background.js';
 import { hasTrustedProvider } from '$lib/server/privacy/policy.js';
 import { modelRefTrusted as modelTrusted } from '$lib/server/privacy/guard.js';
 import { json, error } from '@sveltejs/kit';
@@ -9,6 +10,7 @@ import { getAgent } from '$lib/server/db/repo/agents.js';
 import {
 	getConversation,
 	setConversationPrivate,
+	setConversationTitle,
 	softDeleteConversation,
 	toPublic as conversationToPublic,
 	updateConversation
@@ -50,7 +52,12 @@ const patchSchema = z.object({
 	agentId: z.string().nullable().optional(),
 	/** Turning it on is always allowed; turning it off needs `confirm: true`. */
 	private: z.boolean().optional(),
-	confirm: z.boolean().optional()
+	confirm: z.boolean().optional(),
+	/**
+	 * With `private: true`: replace the title (which an untrusted title model
+	 * may have written) with a placeholder. Not pushed to T3.
+	 */
+	replaceTitle: z.boolean().optional()
 });
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
@@ -80,7 +87,10 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 			if (data.modelId === undefined) data.modelId = agent.model_id;
 		}
 	}
-	const { private: makePrivate, confirm, ...fields } = data;
+	const { private: makePrivate, confirm, replaceTitle, ...fields } = data;
+	if (replaceTitle === true && makePrivate !== true) {
+		error(400, { message: 'replaceTitle only goes with private: true' });
+	}
 	const current = getConversation(db, user.id, params.id);
 	if (!current) error(404, { message: 'Conversation not found' });
 	const willBePrivate = makePrivate ?? current.private === 1;
@@ -98,13 +108,26 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		});
 	}
 	// A private chat can only be switched to models that may see private data.
+	// Making a chat on an untrusted model private is fine: its turns fail closed
+	// until a trusted model is picked.
+	const switching = fields.providerId !== undefined || fields.modelId !== undefined;
 	const providerId = fields.providerId !== undefined ? fields.providerId : current.provider_id;
 	const modelId = fields.modelId !== undefined ? fields.modelId : current.model_id;
-	if (willBePrivate && providerId && modelId && !modelTrusted(db, providerId, modelId)) {
+	if (
+		switching &&
+		willBePrivate &&
+		providerId &&
+		modelId &&
+		!modelTrusted(db, providerId, modelId)
+	) {
 		error(409, { message: 'Private chat: pick a model that may process private data' });
 	}
 	const conversation = updateConversation(db, user.id, params.id, fields);
 	if (!conversation) error(404, { message: 'Conversation not found' });
+	if (replaceTitle === true) {
+		conversation.title = privatePlaceholderTitle();
+		setConversationTitle(db, conversation.id, conversation.title);
+	}
 	if (makePrivate !== undefined && setConversationPrivate(db, conversation.id, makePrivate)) {
 		conversation.private = makePrivate ? 1 : 0;
 		publishServerEvent(user.id, {

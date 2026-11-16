@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getAgent } from '$lib/server/db/repo/agents.js';
+import { getPrivateByDefault } from '$lib/server/db/repo/user-settings.js';
 import {
 	CONVERSATIONS_PAGE_SIZE,
 	createConversation,
@@ -33,7 +34,11 @@ const createSchema = z.object({
 	providerId: z.string().nullish(),
 	modelId: z.string().nullish(),
 	agentId: z.string().nullable().optional(),
-	/** Start private: only providers trusted with private data may see it. */
+	/**
+	 * Start private: only providers trusted with private data may see it. Left
+	 * out, the user's `privateByDefault` setting decides; an explicit `false`
+	 * (the new-chat lock turned off) wins over it.
+	 */
 	private: z.boolean().optional()
 });
 
@@ -50,9 +55,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			error(404, { message: 'Agent not found' });
 		}
 	}
-	// A private agent's chats are private; otherwise the user's choice.
-	const isPrivate =
-		agent?.private === 1 || (config.PRIVATE_DATA_ENABLED && parsed.data.private === true);
+	// A private agent's chats are private; otherwise the user's choice, which
+	// defaults to their setting while a provider may process private data.
+	const asked =
+		parsed.data.private ??
+		(config.PRIVATE_DATA_ENABLED && getPrivateByDefault(db, user.id) && hasTrustedProvider(db));
+	const isPrivate = agent?.private === 1 || (config.PRIVATE_DATA_ENABLED && asked);
 	if (isPrivate && !hasTrustedProvider(db)) {
 		error(409, { message: 'No provider may process private data yet' });
 	}

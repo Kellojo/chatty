@@ -49,7 +49,8 @@ const putSchema = z
 			.optional(),
 		notificationTriggers: triggerPatch.optional(),
 		pushTriggers: triggerPatch.optional(),
-		speechVolume: z.number().min(0).max(1).optional()
+		speechVolume: z.number().min(0).max(1).optional(),
+		privateByDefault: z.boolean().optional()
 	})
 	.refine(
 		(data) =>
@@ -62,7 +63,8 @@ const putSchema = z
 			data.favoriteModels !== undefined ||
 			data.notificationTriggers !== undefined ||
 			data.pushTriggers !== undefined ||
-			data.speechVolume !== undefined,
+			data.speechVolume !== undefined ||
+			data.privateByDefault !== undefined,
 		{ message: 'Nothing to update' }
 	);
 
@@ -89,6 +91,9 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 	}
 	if (parsed.data.speechVolume !== undefined) {
 		setUserSetting(db, user.id, 'speechVolume', parsed.data.speechVolume);
+	}
+	if (parsed.data.privateByDefault !== undefined) {
+		setUserSetting(db, user.id, 'privateByDefault', parsed.data.privateByDefault);
 	}
 	if (parsed.data.suggestions !== undefined) {
 		setUserSetting(db, user.id, 'suggestions', parsed.data.suggestions);

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
+	import { invalidateAll } from '$app/navigation';
+	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { guardUnsavedChanges } from '$lib/components/app/settings/unsaved-changes.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
@@ -28,6 +30,7 @@
 		codingSuggestions?: string[];
 		globalInstructions?: string;
 		speechVolume?: number;
+		privateByDefault?: boolean;
 	}) {
 		const res = await fetch('/api/user/settings', {
 			method: 'PUT',
@@ -79,6 +82,21 @@
 		}
 	}
 
+	// Shown while a change is saving, until the refreshed settings agree.
+	let privatePending = $state<boolean | null>(null);
+	const privateByDefault = $derived(privatePending ?? data.settings.privateByDefault);
+
+	async function setPrivateByDefault(value: boolean) {
+		privatePending = value;
+		try {
+			await putSettings({ privateByDefault: value });
+			await invalidateAll().catch(() => undefined);
+		} catch {
+			toast.error("Couldn't change the setting. Try again.");
+		}
+		if (privatePending === value) privatePending = null;
+	}
+
 	const instructionsDirty = $derived(instructions.trim() !== savedInstructions);
 	guardUnsavedChanges(() => instructionsDirty);
 </script>
@@ -127,6 +145,24 @@
 		</Button>
 	</div>
 </SettingsSection>
+
+{#if data.privateData.enabled}
+	<SettingsSection title="Privacy">
+		<SettingsRow
+			label="New chats are private"
+			for="pref-private-by-default"
+			description={data.privateData.available
+				? 'New chats start with the lock on: only models trusted with private data see them, and tools that send data outside Chatty are off. You can still turn it off per chat. Coding tasks are never private.'
+				: 'Takes effect once a provider is trusted with private data (Settings → Providers).'}
+		>
+			<Switch
+				id="pref-private-by-default"
+				checked={privateByDefault}
+				onCheckedChange={setPrivateByDefault}
+			/>
+		</SettingsRow>
+	</SettingsSection>
+{/if}
 
 <SettingsSection
 	title="Read aloud"

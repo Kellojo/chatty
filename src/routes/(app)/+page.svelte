@@ -41,6 +41,7 @@
 	import { pickerModelGroups, syncModelCatalog } from '$lib/state/model-catalog.svelte.js';
 	import { pendingMessage, pendingVoice } from '$lib/state/pending-message.svelte.js';
 	import { voiceModeSupported } from '$lib/state/voice-mode.svelte.js';
+	import { localVoiceCount } from '$lib/state/local-voices.svelte.js';
 	import { unlockVoiceAudio } from '$lib/state/voice-audio.js';
 	import VoiceModeButton from '$lib/components/app/VoiceModeButton.svelte';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
@@ -219,8 +220,8 @@
 	const modelMissing = $derived(!hasModels || selectedValue === '');
 
 	// A private chat (the composer's lock): only trusted models may run it.
-	// Coding tasks can never be private.
-	let makePrivate = $state(false);
+	// Coding tasks can never be private. Starts on with "New chats are private".
+	let makePrivate = $state(untrack(() => data.settings.privateByDefault));
 	const isPrivate = $derived(
 		makePrivate && !coding && data.privateData.enabled && data.privateData.available
 	);
@@ -257,7 +258,9 @@
 			body.modelId = modelId;
 		}
 		if (personaId) body.agentId = personaId;
-		if (isPrivate) body.private = true;
+		// Said either way while the lock shows, so turning it off beats the
+		// "New chats are private" setting the server would apply otherwise.
+		if (data.privateData.enabled && data.privateData.available) body.private = isPrivate;
 		const res = await fetch('/api/conversations', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -303,7 +306,15 @@
 			data.sttModel,
 			data.serverTts && (!isPrivate || data.privateData.ttsTrusted),
 			isPrivate
-		) && voiceModeAvailable({ isPrivate, sttTrusted: data.privateData.sttTrusted, sttConfigured })
+		) &&
+			voiceModeAvailable({
+				isPrivate,
+				sttTrusted: data.privateData.sttTrusted,
+				sttConfigured,
+				ttsTrusted: data.privateData.ttsTrusted,
+				ttsConfigured: data.serverTts,
+				localVoiceCount: localVoiceCount()
+			})
 	);
 	const offerVoice = $derived(
 		voiceSupported &&

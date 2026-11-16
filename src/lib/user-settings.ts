@@ -80,6 +80,11 @@ export interface UserSettings {
 	 * from memory or past chats, not even a count of hidden items.
 	 */
 	strictMemoryPrivacy: boolean;
+	/**
+	 * New chats start private (only while private data is on and a provider
+	 * is trusted with it). Coding tasks are never private.
+	 */
+	privateByDefault: boolean;
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -93,5 +98,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 	notificationTriggers: DEFAULT_NOTIFICATION_TRIGGERS,
 	pushTriggers: DEFAULT_NOTIFICATION_TRIGGERS,
 	speechVolume: 1,
-	strictMemoryPrivacy: false
+	strictMemoryPrivacy: false,
+	privateByDefault: false
 };

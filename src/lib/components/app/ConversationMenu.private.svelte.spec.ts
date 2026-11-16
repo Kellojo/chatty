@@ -75,7 +75,7 @@ describe('ConversationMenu privacy items', () => {
 			onupdated: () => {}
 		});
 		await openMenu();
-		await expect.element(page.getByRole('menuitem', { name: 'Make private' })).toBeInTheDocument();
+		await expect.element(page.getByRole('menuitem', { name: 'Make private…' })).toBeInTheDocument();
 	});
 
 	it('hides the privacy items while the feature is off', async () => {
@@ -144,5 +144,77 @@ describe('ConversationMenu privacy items', () => {
 		await vi.waitFor(() => expect(onupdated).toHaveBeenCalled());
 		const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
 		expect(JSON.parse(String(init.body))).toEqual({ private: false, confirm: true });
+	});
+
+	it('asks before making a chat private, with the title and memory options', async () => {
+		const updated = conv({ private: true, title: 'Private chat · 16 Nov' });
+		const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+			const json = (body: unknown) =>
+				new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+			if (url.endsWith('/derived-concepts')) {
+				return json({
+					concepts: [
+						{ scope: 'user', path: 'people/sam.md', title: 'Sam', private: false },
+						{ scope: 'user', path: 'old.md', title: 'Old note', private: true }
+					]
+				});
+			}
+			if (url === '/api/memory/private') return json({ updated: 1 });
+			if (init?.method === 'PATCH') return json({ conversation: updated });
+			return new Response(null, { status: 404 });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const onupdated = vi.fn();
+		render(ConversationMenu, { conversation: conv(), privateData: status(), onupdated });
+		await openMenu();
+		await page.getByRole('menuitem', { name: 'Make private…' }).click();
+		await expect.element(page.getByText('Make this chat private?')).toBeInTheDocument();
+		await expect.element(page.getByText('Sam', { exact: true })).toBeInTheDocument();
+		await expect
+			.element(
+				page.getByText("Anything already sent to models can't be recalled", { exact: false })
+			)
+			.toBeInTheDocument();
+		await expect.element(page.getByText('Best effort', { exact: false })).toBeInTheDocument();
+		// Nothing changes until it's confirmed.
+		expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
+
+		await page.getByRole('checkbox', { name: 'Replace the title with a placeholder' }).click();
+		await page.getByRole('button', { name: 'Make private', exact: true }).click();
+		await vi.waitFor(() => expect(onupdated).toHaveBeenCalledWith(updated));
+		const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
+		expect(JSON.parse(String(patch[1]!.body))).toEqual({ private: true, replaceTitle: true });
+		// Only the note that isn't private yet is marked.
+		const mark = fetchMock.mock.calls.find(([url]) => url === '/api/memory/private')!;
+		expect(JSON.parse(String(mark[1]!.body))).toEqual({
+			scope: 'user',
+			paths: ['people/sam.md'],
+			private: true
+		});
+	});
+
+	it('leaves memory notes alone when "Mark these private too" is off', async () => {
+		const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+			const json = (body: unknown) =>
+				new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+			if (url.endsWith('/derived-concepts')) {
+				return json({
+					concepts: [{ scope: 'user', path: 'people/sam.md', title: 'Sam', private: false }]
+				});
+			}
+			if (init?.method === 'PATCH') return json({ conversation: conv({ private: true }) });
+			return json({ updated: 1 });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const onupdated = vi.fn();
+		render(ConversationMenu, { conversation: conv(), privateData: status(), onupdated });
+		await openMenu();
+		await page.getByRole('menuitem', { name: 'Make private…' }).click();
+		await page.getByRole('checkbox', { name: 'Mark these private too' }).click();
+		await page.getByRole('button', { name: 'Make private', exact: true }).click();
+		await vi.waitFor(() => expect(onupdated).toHaveBeenCalled());
+		const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
+		expect(JSON.parse(String(patch[1]!.body))).toEqual({ private: true });
+		expect(fetchMock.mock.calls.some(([url]) => url === '/api/memory/private')).toBe(false);
 	});
 });

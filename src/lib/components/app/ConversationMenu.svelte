@@ -10,6 +10,7 @@
 	import { PRIVATE_DATA_OFF } from '$lib/private-data.js';
 	import type { CodingConversation } from '$lib/coding-environments.js';
 	import CodingTaskDetails from './CodingTaskDetails.svelte';
+	import MakePrivateDialog from './MakePrivateDialog.svelte';
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
 	import SnoozeDialog from './SnoozeDialog.svelte';
 	import { markedUnread, setConversationRead } from './marked-unread.svelte.js';
@@ -67,36 +68,40 @@
 	let deleting = $state(false);
 	let pickingSnooze = $state(false);
 	let confirmingPublic = $state(false);
+	let confirmingPrivate = $state(false);
 	let savingPrivacy = $state(false);
 
 	// Coding chats run on a T3 machine and can never be private.
 	const showPrivacy = $derived(privateData.enabled && !coding && !conversation.coding);
 	const isAdmin = $derived((page.data.user as { role?: string } | undefined)?.role === 'admin');
 
-	async function setPrivate(next: boolean) {
+	async function makePublic() {
 		confirmingPublic = false;
 		savingPrivacy = true;
 		try {
 			const res = await fetch(`/api/conversations/${conversation.id}`, {
 				method: 'PATCH',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(next ? { private: true } : { private: false, confirm: true })
+				body: JSON.stringify({ private: false, confirm: true })
 			}).catch(() => null);
 			if (!res?.ok) {
 				const data = (await res?.json().catch(() => null)) as { message?: string } | null;
-				toast.error(
-					data?.message ??
-						(next ? 'Failed to make the chat private' : 'Failed to make the chat public')
-				);
+				toast.error(data?.message ?? 'Failed to make the chat public');
 				return;
 			}
 			const { conversation: updated } = (await res.json()) as { conversation: Conversation };
 			onupdated(updated);
-			toast.success(next ? 'This chat is now private' : 'This chat is now public');
+			toast.success('This chat is now public');
 			await invalidateAll();
 		} finally {
 			savingPrivacy = false;
 		}
+	}
+
+	async function madePrivate(updated: Conversation | undefined) {
+		confirmingPrivate = false;
+		if (updated) onupdated(updated);
+		await invalidateAll();
 	}
 
 	const settled = $derived(conversation.settledAt !== null);
@@ -307,9 +312,9 @@
 					Make public…
 				</DropdownMenu.Item>
 			{:else if privateData.available}
-				<DropdownMenu.Item disabled={savingPrivacy} onSelect={() => setPrivate(true)}>
+				<DropdownMenu.Item disabled={savingPrivacy} onSelect={() => (confirmingPrivate = true)}>
 					<LockIcon class="size-4" />
-					Make private
+					Make private…
 				</DropdownMenu.Item>
 			{:else}
 				<!-- No trusted provider yet: say why, and (for admins) where to set one up. -->
@@ -371,10 +376,17 @@
 		</Dialog.Header>
 		<Dialog.Footer>
 			<Button variant="outline" onclick={() => (confirmingPublic = false)}>Keep private</Button>
-			<Button onclick={() => setPrivate(false)}>Make public</Button>
+			<Button onclick={makePublic}>Make public</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+<MakePrivateDialog
+	targets={confirmingPrivate ? [conversation] : null}
+	admin={isAdmin}
+	onclose={() => (confirmingPrivate = false)}
+	ondone={({ conversation: updated }) => madePrivate(updated)}
+/>
 
 <Dialog.Root open={deleting} onOpenChange={(open) => (deleting = open)}>
 	<Dialog.Content>

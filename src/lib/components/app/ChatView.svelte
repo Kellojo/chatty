@@ -68,6 +68,7 @@
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import { createVoiceMode, voiceModeSupported } from '$lib/state/voice-mode.svelte.js';
+	import { localVoiceCount } from '$lib/state/local-voices.svelte.js';
 	import VoiceBar from './VoiceBar.svelte';
 	import VoiceModeButton from './VoiceModeButton.svelte';
 	import {
@@ -217,7 +218,11 @@
 			voiceModeAvailable({
 				isPrivate,
 				sttTrusted: privateData.sttTrusted,
-				sttConfigured: sttModel !== null
+				sttConfigured: sttModel !== null,
+				// It must also answer out loud without the reply leaving the device.
+				ttsTrusted: privateData.ttsTrusted,
+				ttsConfigured: serverTts,
+				localVoiceCount: localVoiceCount()
 			})
 	);
 	const voice = createVoiceMode({

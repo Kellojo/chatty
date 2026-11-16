@@ -38,8 +38,44 @@ describe('private speech', () => {
 				browserRecognition: false
 			})
 		).toBe(false);
-		expect(voiceModeAvailable({ ...base, isPrivate: true })).toBe(false);
-		expect(voiceModeAvailable({ ...base, isPrivate: false })).toBe(true);
+		const speak = { ttsConfigured: true, ttsTrusted: true, localVoiceCount: 0 };
+		expect(voiceModeAvailable({ ...base, ...speak, isPrivate: true })).toBe(false);
+		expect(voiceModeAvailable({ ...base, ...speak, isPrivate: false })).toBe(true);
+	});
+
+	it('offers voice mode in a private chat only when it can also speak privately', () => {
+		const hear = { isPrivate: true, sttConfigured: true, sttTrusted: true };
+		// Trusted text to speech.
+		expect(
+			voiceModeAvailable({ ...hear, ttsConfigured: true, ttsTrusted: true, localVoiceCount: 0 })
+		).toBe(true);
+		// Untrusted text to speech, no on-device voice: it could listen but not answer.
+		expect(
+			voiceModeAvailable({ ...hear, ttsConfigured: true, ttsTrusted: false, localVoiceCount: 0 })
+		).toBe(false);
+		// An on-device browser voice answers instead.
+		expect(
+			voiceModeAvailable({ ...hear, ttsConfigured: true, ttsTrusted: false, localVoiceCount: 1 })
+		).toBe(true);
+		expect(
+			voiceModeAvailable({
+				...hear,
+				ttsConfigured: false,
+				ttsTrusted: false,
+				localVoiceCount: 1,
+				browserVoice: false
+			})
+		).toBe(false);
+		// Public chats don't need either.
+		expect(
+			voiceModeAvailable({
+				...hear,
+				isPrivate: false,
+				ttsConfigured: false,
+				ttsTrusted: false,
+				localVoiceCount: 0
+			})
+		).toBe(true);
 	});
 
 	it('picks how to read aloud', () => {
