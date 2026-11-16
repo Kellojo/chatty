@@ -66,8 +66,8 @@ function textOf(parts: unknown[]): string {
 function insertConversation(id: string, title: string, messages: SeedMessage[]): void {
 	const start = Date.now() - messages.length * 60_000;
 	const insertConv = db.prepare(
-		`INSERT INTO conversations (id, user_id, kind, title, mode, created_at, updated_at, last_read_at)
-		 VALUES (?, ?, 'chat', ?, 'agent', ?, ?, ?)`
+		`INSERT INTO conversations (id, user_id, kind, title, created_at, updated_at, last_read_at)
+		 VALUES (?, ?, 'chat', ?, ?, ?, ?)`
 	);
 	const insertMsg = db.prepare(
 		`INSERT INTO messages (id, conversation_id, role, parts, content_text, status, error, created_at, usage_json)

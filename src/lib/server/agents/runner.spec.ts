@@ -145,7 +145,6 @@ describe('startAgentRun', () => {
 		const conversation = getConversation(db, 'u1', finished.conversation_id!)!;
 		expect(conversation.kind).toBe('agent-run');
 		expect(conversation.origin).toBe('user');
-		expect(conversation.mode).toBe('agent');
 		expect(conversation.agent_id).toBe(agent.id);
 
 		const messages = listMessages(db, conversation.id);

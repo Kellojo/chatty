@@ -485,7 +485,6 @@ export async function createCodingTask(
 		}
 		const conv = createConversation(db, userId, {
 			kind: 'chat',
-			mode: 'agent',
 			title: opts.title?.trim().slice(0, 200) ?? ''
 		});
 		createCodingConversation(db, {

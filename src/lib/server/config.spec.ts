@@ -18,17 +18,14 @@ describe('config', () => {
 		expect(config.ENABLE_SIGNUP).toBe(true);
 		expect(config.OIDC_ONLY).toBe(false);
 		expect(config.AGENT_MAX_STEPS).toBe(25);
-		expect(config.CHAT_MAX_STEPS).toBe(20);
 	});
 
 	it('parses booleans and numbers from strings', async () => {
 		process.env.ENABLE_SIGNUP = 'false';
 		process.env.AGENT_MAX_STEPS = '10';
-		process.env.CHAT_MAX_STEPS = '30';
 		const { config } = await import('./config.js');
 		expect(config.ENABLE_SIGNUP).toBe(false);
 		expect(config.AGENT_MAX_STEPS).toBe(10);
-		expect(config.CHAT_MAX_STEPS).toBe(30);
 	});
 
 	it('rejects OIDC_ONLY without full OIDC config', async () => {

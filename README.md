@@ -69,8 +69,7 @@ services:
 | `OIDC_CLIENT_ID`                | —                      | OIDC client ID                                                                          |
 | `OIDC_CLIENT_SECRET`            | —                      | OIDC client secret                                                                      |
 | `OIDC_SCOPES`                   | `openid profile email` | OIDC scopes                                                                             |
-| `AGENT_MAX_STEPS`               | `25`                   | Max steps per agent run                                                                 |
-| `CHAT_MAX_STEPS`                | `20`                   | Max model steps (tool rounds + final answer) per reply in a plain chat                  |
+| `AGENT_MAX_STEPS`               | `25`                   | Max model steps (tool rounds + final answer) per reply or run, unless set per chat      |
 | `MAX_ATTACHMENT_SIZE_MB`        | `50`                   | Max upload size                                                                         |
 | `WORKSPACE_GC_DAYS`             | `30`                   | Days before workspace cleanup                                                           |
 | `CONVERSATION_AUTO_SETTLE_DAYS` | `7`                    | Idle days before a chat is auto-settled (hidden from sidebar); `0` disables             |

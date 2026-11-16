@@ -195,7 +195,6 @@ describe('createStepSummarizer', () => {
 		createModel(db, { providerId: provider.id, modelId: 'm1' });
 		const conv = createConversation(db, 'u1', {
 			title: 't',
-			mode: 'chat',
 			providerId: provider.id,
 			modelId: 'm1'
 		});

@@ -15,7 +15,6 @@ function makeConv(overrides: Partial<ConversationRow> = {}): ConversationRow {
 		user_id: 'u1',
 		kind: 'chat',
 		title: '',
-		mode: 'chat',
 		provider_id: null,
 		model_id: null,
 		system_prompt: null,

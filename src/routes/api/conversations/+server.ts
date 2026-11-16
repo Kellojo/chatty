@@ -30,7 +30,6 @@ export const GET: RequestHandler = ({ locals, url }) => {
 const createSchema = z.object({
 	providerId: z.string().nullish(),
 	modelId: z.string().nullish(),
-	mode: z.enum(['chat', 'agent']).optional(),
 	agentId: z.string().nullable().optional()
 });
 

@@ -98,13 +98,13 @@ describe('PATCH /api/conversations/[id] agentId guard', () => {
 			role: 'user',
 			parts: [{ type: 'text', text: 'hi' }]
 		});
-		const res = await call<{ conversation: { mode: string; agentId: string | null } }>(PATCH, {
+		const res = await call<{ conversation: { title: string; agentId: string | null } }>(PATCH, {
 			user: u1,
 			params: { id: conversation.id },
-			body: { mode: 'agent' }
+			body: { title: 'Renamed' }
 		});
 		expect(res.status).toBe(200);
-		expect(res.body.conversation.mode).toBe('agent');
+		expect(res.body.conversation.title).toBe('Renamed');
 		expect(res.body.conversation.agentId).toBe(a1.id);
 	});
 

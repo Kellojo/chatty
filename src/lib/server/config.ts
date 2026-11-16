@@ -35,9 +35,8 @@ const schema = z.object({
 	OIDC_SCOPES: z.string().default('openid profile email'),
 	AUTO_PROMOTE_FIRST_USER: boolFromString('true'),
 	AGENT_MAX_STEPS: z.coerce.number().int().min(1).default(25),
-	CHAT_MAX_STEPS: z.coerce.number().int().min(1).default(20),
 	CHAT_COMPACT_TOKENS: z.coerce.number().int().min(0).default(60000),
-	CHAT_COMPACT_KEEP_MESSAGES: z.coerce.number().int().min(2).default(10),
+	CHAT_COMPACT_KEEP_MESSAGES: z.coerce.number().int().min(2).default(20),
 	MAX_ATTACHMENT_SIZE_MB: z.coerce.number().int().min(1).default(50),
 	// Chats untouched for this many days are settled (hidden from the sidebar). 0 disables.
 	CONVERSATION_AUTO_SETTLE_DAYS: z.coerce.number().int().min(0).default(7),

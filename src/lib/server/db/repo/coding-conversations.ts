@@ -523,7 +523,6 @@ export function importCodingConversation(
 		if (linked) return null;
 		const conversation = createConversation(db, input.userId, {
 			kind: 'chat',
-			mode: 'agent',
 			title: input.title
 		});
 		db.prepare(

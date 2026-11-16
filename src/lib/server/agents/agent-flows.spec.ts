@@ -169,7 +169,6 @@ function seedUserChat() {
 	const conversation = createConversation(db, 'u1', {
 		providerId: 'p1',
 		modelId: 'm1',
-		mode: 'chat',
 		title: 'Normal chat'
 	});
 	return conversation;

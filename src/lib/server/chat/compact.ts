@@ -134,10 +134,7 @@ export async function maybeCompactConversation(
 	fallbackRef: { providerId: string; modelId: string }
 ): Promise<void> {
 	const db = getDb();
-	const keep =
-		conversation.mode === 'agent'
-			? Math.max(config.CHAT_COMPACT_KEEP_MESSAGES, 20)
-			: config.CHAT_COMPACT_KEEP_MESSAGES;
+	const keep = config.CHAT_COMPACT_KEEP_MESSAGES;
 
 	const threshold = compactThreshold(conversation, await effectiveContextLength(fallbackRef), keep);
 	if (threshold === null) return;
