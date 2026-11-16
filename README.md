@@ -24,11 +24,6 @@ services:
     container_name: chatty
     restart: unless-stopped
     environment:
-      DATABASE_PATH: /data/ai-chat.db
-      MEMORY_VOLUME: /memory
-      SKILLS_VOLUME: /skills
-      DOCUMENTS_VOLUME: /documents
-      WORKSPACES_VOLUME: /workspaces
       APP_SECRET: ${CHATTY_APP_SECRET}
       TZ: Europe/Berlin
       ORIGIN: https://ai.example.com
@@ -47,17 +42,17 @@ services:
       - ./skills:/skills
 ```
 
-> **Note:** `APP_SECRET` must be at least 16 characters. `OIDC_ONLY=true` requires all three `OIDC_*` variables.
+> **Note:** The image already points `DATABASE_PATH` and the `*_VOLUME` variables at `/data`, `/memory`, `/skills`, `/documents` and `/workspaces`, so you only need to set them to use different paths. `APP_SECRET` must be at least 16 characters. `OIDC_ONLY=true` requires all three `OIDC_*` variables.
 
 ## Environment variables
 
 | Variable                        | Default                | Description                                                                             |
 | ------------------------------- | ---------------------- | --------------------------------------------------------------------------------------- |
-| `DATABASE_PATH`                 | `./data/ai-chat.db`    | SQLite database path                                                                    |
-| `MEMORY_VOLUME`                 | `./memory`             | Memory storage directory                                                                |
-| `SKILLS_VOLUME`                 | `./skills`             | Skills directory                                                                        |
-| `DOCUMENTS_VOLUME`              | `./documents`          | Documents directory                                                                     |
-| `WORKSPACES_VOLUME`             | `./workspaces`         | Agent workspaces directory                                                              |
+| `DATABASE_PATH`                 | `./data/ai-chat.db`    | SQLite database path (Docker image: `/data/ai-chat.db`)                                 |
+| `MEMORY_VOLUME`                 | `./memory`             | Memory storage directory (Docker image: `/memory`)                                      |
+| `SKILLS_VOLUME`                 | `./skills`             | Skills directory (Docker image: `/skills`)                                              |
+| `DOCUMENTS_VOLUME`              | `./documents`          | Documents directory (Docker image: `/documents`)                                        |
+| `WORKSPACES_VOLUME`             | `./workspaces`         | Agent workspaces directory (Docker image: `/workspaces`)                                |
 | `APP_SECRET`                    | —                      | Secret for session encryption (min 16 chars)                                            |
 | `TZ`                            | `UTC`                  | Timezone                                                                                |
 | `ORIGIN`                        | —                      | Public origin URL (e.g. `https://chat.example.com`)                                     |
@@ -215,7 +210,7 @@ Then archive `data/backup.db`, `data/.secret` (if used), `memory`, `skills` and 
 
 **Stability.** From 1.0 on, upgrades within the same major version keep the database, the volume layout and the environment variables backward compatible: existing installs keep working after pulling a new image. Breaking changes to any of those only ship in a new major version, with notes in the release.
 
-> **Older installs:** earlier versions of this README did not set `SKILLS_VOLUME`, so skills were stored inside the container (`/app/skills`) rather than in the `/skills` volume, and were lost when the container was recreated. Before adding `SKILLS_VOLUME: /skills`, copy any skills out of the running container: `docker cp chatty:/app/skills/. ./skills/` (skip the `defaults` folder).
+> **Older installs:** earlier versions of this README did not set `SKILLS_VOLUME`, so skills were stored inside the container (`/app/skills`) rather than in the `/skills` volume, and were lost when the container was recreated. The image now sets `SKILLS_VOLUME=/skills` itself, so before upgrading, mount a `/skills` volume and copy any skills out of the running container: `docker cp chatty:/app/skills/. ./skills/` (skip the `defaults` folder). The same applies to any of `/data`, `/memory`, `/documents` and `/workspaces` you set to an `/app/...` path or left unset.
 
 ## Development
 

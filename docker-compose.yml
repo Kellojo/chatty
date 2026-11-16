@@ -4,12 +4,6 @@ services:
     ports:
       - '3000:3000'
     env_file: .env
-    environment:
-      DATABASE_PATH: /data/ai-chat.db
-      MEMORY_VOLUME: /memory
-      SKILLS_VOLUME: /skills
-      DOCUMENTS_VOLUME: /documents
-      WORKSPACES_VOLUME: /workspaces
     volumes:
       - data:/data
       - memory:/memory

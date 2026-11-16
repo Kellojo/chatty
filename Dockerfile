@@ -24,6 +24,12 @@ ENV NODE_ENV=production
 # adapter-node's default request body limit (512K) rejects photo uploads.
 # The attachment route enforces its own per-file limit; this is just the global ceiling.
 ENV BODY_SIZE_LIMIT=1G
+# Point storage at the declared volumes; the app's defaults are relative to /app.
+ENV DATABASE_PATH=/data/ai-chat.db \
+    MEMORY_VOLUME=/memory \
+    SKILLS_VOLUME=/skills \
+    DOCUMENTS_VOLUME=/documents \
+    WORKSPACES_VOLUME=/workspaces
 RUN corepack enable pnpm && groupadd -r app && useradd -r -g app app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --from=deps /app/node_modules ./node_modules
