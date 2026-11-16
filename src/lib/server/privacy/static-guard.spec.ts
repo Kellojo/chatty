@@ -25,7 +25,10 @@ const MODEL_CALL_FILES = new Set([
 /** Provider factories (`@ai-sdk/anthropic` etc.) are only built behind resolveModel. */
 const PROVIDER_FACTORY_FILES = new Set(['lib/server/llm/registry.ts']);
 
-/** Server files that call `fetch`/`safeFetch` themselves, and why that's fine. */
+/**
+ * Server files that call `fetch`/`safeFetch` themselves, and why that's fine:
+ * none of them carries a prompt to a model provider outside the choke points.
+ */
 const FETCH_FILES: Record<string, string> = {
 	'lib/server/decisions/handler.ts': 'forwardDecisions: filterTargets + assertModelAllowed',
 	'lib/server/speech/transcriber.ts': 'resolveAudioEndpoint checks privacy',
@@ -37,13 +40,12 @@ const FETCH_FILES: Record<string, string> = {
 	'lib/server/mcp/oauth.ts': 'OAuth discovery and tokens, no content',
 	'lib/server/t3/client.ts': 'coding chats are never private',
 	'lib/server/net/safeFetch.ts': 'the guarded fetch itself',
-	'lib/server/net/favicon.ts':
-		'only hosts recorded by egress tools, which tainted turns cannot run',
-	'lib/server/mcp/servers/weather.ts': 'egress tool, blocked in tainted turns',
-	'lib/server/mcp/servers/webfetch.ts': 'egress tool, blocked in tainted turns',
-	'lib/server/mcp/servers/fs.ts': 'fs_curl, an egress tool blocked in tainted turns',
-	'lib/server/websearch/providers.ts': 'web_search, an egress tool blocked in tainted turns',
-	'lib/server/websearch/service.ts': 'web_search (egress, blocked when tainted) and admin setup',
+	'lib/server/net/favicon.ts': 'site icons only, no chat content',
+	'lib/server/mcp/servers/weather.ts': 'a tool; tools are not restricted',
+	'lib/server/mcp/servers/webfetch.ts': 'a tool; tools are not restricted',
+	'lib/server/mcp/servers/fs.ts': 'fs_curl, a tool; tools are not restricted',
+	'lib/server/websearch/providers.ts': 'web_search, a tool; tools are not restricted',
+	'lib/server/websearch/service.ts': 'web_search (a tool) and admin setup',
 	'lib/server/skills/gitImport.ts': 'started by the user, no chat content',
 	'lib/server/benchmarks/artificial-analysis.ts': 'model scores only, no user data'
 };

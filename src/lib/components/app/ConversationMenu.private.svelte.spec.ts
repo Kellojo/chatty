@@ -135,9 +135,7 @@ describe('ConversationMenu privacy items', () => {
 		await openMenu();
 		await page.getByRole('menuitem', { name: 'Make public…' }).click();
 		await expect
-			.element(
-				page.getByText("Anything already sent in this chat can't be recalled", { exact: false })
-			)
+			.element(page.getByText("Making it public lets models that aren't trusted", { exact: false }))
 			.toBeInTheDocument();
 		expect(fetchMock).not.toHaveBeenCalled();
 		await page.getByRole('button', { name: 'Make public', exact: true }).click();

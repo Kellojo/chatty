@@ -484,7 +484,7 @@
 			{#if showPrivate}
 				<SettingsRow label="Private agent" for="agent-private">
 					{#snippet description()}
-						<p>Its runs are private: only trusted models, no tools that send data out.</p>
+						<p>Its runs are private: only models trusted with private data see them.</p>
 						{#if !privateData.available && !form.private && !readonly}
 							<p class="mt-1 flex items-center gap-1.5">
 								<LockIcon class="size-3.5 shrink-0" aria-hidden="true" />

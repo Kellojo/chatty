@@ -44,7 +44,7 @@
 
 <SettingsSection
 	title="Private data"
-	description="Private chats, memory notes, documents and agents only reach providers you trust with private data, and can't be sent anywhere else by tools."
+	description="Private chats, memory notes, documents and agents only reach models on providers you trust with private data."
 >
 	<SettingsRow
 		label="Allow private data"

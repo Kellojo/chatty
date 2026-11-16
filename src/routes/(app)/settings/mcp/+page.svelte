@@ -33,7 +33,6 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PackageSearchIcon from '@lucide/svelte/icons/package-search';
 	import ZapIcon from '@lucide/svelte/icons/zap';
-	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
@@ -153,7 +152,6 @@
 	let addUrl = $state('');
 	let addCommand = $state('');
 	let addArgs = $state('');
-	let addAllowPrivate = $state(false);
 	let addBusy = $state(false);
 
 	let editOpen = $state(false);
@@ -163,7 +161,6 @@
 	let editUrl = $state('');
 	let editCommand = $state('');
 	let editArgs = $state('');
-	let editAllowPrivate = $state(false);
 	let editBusy = $state(false);
 
 	/** One argument per line; blank lines are ignored. */
@@ -186,8 +183,6 @@
 	}
 
 	const argsPlaceholder = '-y\n@modelcontextprotocol/server-everything';
-	const privateHint =
-		"Private chats may send data to this server's tools. Anything stored there (a grocery list, a recipe) is not private afterwards.";
 	const stdioHint =
 		'Runs the command on the Chatty host (no shell) each time tools are loaded, with a minimal environment (PATH, HOME, …). Only add commands you trust.';
 
@@ -239,7 +234,6 @@
 		addAuth = emptyAuth();
 		addCommand = '';
 		addArgs = '';
-		addAllowPrivate = false;
 	}
 
 	function openAdd() {
@@ -254,8 +248,7 @@
 			await api('/api/mcp-servers', 'POST', {
 				name: addName,
 				...connectionBody(addTransport, addUrl, addCommand, addArgs),
-				...(addTransport === 'stdio' ? {} : authBody(addAuth, false)),
-				allowPrivate: addAllowPrivate
+				...(addTransport === 'stdio' ? {} : authBody(addAuth, false))
 			});
 			toast.success(`Server "${addName}" added`);
 			addOpen = false;
@@ -284,7 +277,6 @@
 		};
 		editCommand = server.command ?? '';
 		editArgs = server.args.join('\n');
-		editAllowPrivate = server.allowPrivate;
 		editOpen = true;
 	}
 
@@ -296,8 +288,7 @@
 			await api(`/api/mcp-servers/${editId}`, 'PATCH', {
 				name: editName,
 				...connectionBody(editTransport, editUrl, editCommand, editArgs),
-				...(editTransport === 'stdio' ? {} : authBody(editAuth, true)),
-				allowPrivate: editAllowPrivate
+				...(editTransport === 'stdio' ? {} : authBody(editAuth, true))
 			});
 			toast.success('Server updated');
 			editOpen = false;
@@ -688,12 +679,6 @@
 		{/snippet}
 		{#snippet badges()}
 			<!-- Only what departs from the norm; tool count and usage live in the columns. -->
-			{#if !server.builtin && server.allowPrivate}
-				<span class="text-emerald-700 dark:text-emerald-400" title="Allowed in private chats"
-					><ShieldCheckIcon class="size-3.5" /><span class="sr-only">Allowed in private chats</span
-					></span
-				>
-			{/if}
 			{#if alwaysLoaded}
 				<!-- Common among built-ins, so a quiet glyph rather than a label. -->
 				<span
@@ -973,13 +958,6 @@
 					</div>
 					{@render authFields(addAuth, 'add', false)}
 				{/if}
-				<div class="flex items-start justify-between gap-4">
-					<div class="flex flex-col gap-1">
-						<Label for="add-allow-private">Allow in private chats</Label>
-						<p class="text-xs text-pretty text-muted-foreground">{privateHint}</p>
-					</div>
-					<Switch id="add-allow-private" bind:checked={addAllowPrivate} class="mt-0.5" />
-				</div>
 			</div>
 			<Dialog.Footer>
 				<Dialog.Close>
@@ -1043,13 +1021,6 @@
 					</div>
 					{@render authFields(editAuth, 'edit', true)}
 				{/if}
-				<div class="flex items-start justify-between gap-4">
-					<div class="flex flex-col gap-1">
-						<Label for="edit-allow-private">Allow in private chats</Label>
-						<p class="text-xs text-pretty text-muted-foreground">{privateHint}</p>
-					</div>
-					<Switch id="edit-allow-private" bind:checked={editAllowPrivate} class="mt-0.5" />
-				</div>
 			</div>
 			<Dialog.Footer>
 				<Dialog.Close>

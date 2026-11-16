@@ -11,8 +11,6 @@ import {
 	type CodingTaskProposalTarget
 } from '$lib/coding-task-proposal.js';
 import { createLogger } from '../../logger.js';
-import { blockedMessage } from '../../privacy/guard.js';
-import { callerPrivacy, isPrivateContext } from '../../privacy/policy.js';
 import { getCodingOptions, MAX_LAUNCH_PROMPT, resolveCodingTarget } from '../../t3/tasks.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
@@ -90,11 +88,6 @@ export function createCodingServer(ctx: CallerContext): McpServer {
 			// The card needs the user's chat to start from; agent runs have none.
 			if (ctx.agentRunId) return err('coding tasks can only be proposed in a chat with the user');
 			const db = getDb();
-			// The guard refuses this in private contexts already; the task would carry
-			// the chat's content to a coding agent outside Chatty.
-			if (isPrivateContext(db, callerPrivacy(ctx))) {
-				return err(blockedMessage(PROPOSE_CODING_TASK_TOOL, 'egress'));
-			}
 			if (!!environmentId !== !!projectId) {
 				return err('give environmentId and projectId together, or neither');
 			}

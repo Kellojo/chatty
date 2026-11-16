@@ -23,6 +23,6 @@
 		<span class="font-medium text-emerald-700 dark:text-emerald-300"
 			>This chat read {notice.reason} and is now private.</span
 		>
-		From here on only trusted models can continue it, and tools that send data outside Chatty are off.
+		From here on only trusted models can continue it.
 	</span>
 </p>

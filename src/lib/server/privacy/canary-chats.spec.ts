@@ -1,7 +1,6 @@
 /**
  * Egress canary rows for private chats (PR 4): agent runs, subagents, coding
- * proposals and hand-offs, the MCP gateway, and the egress tools once a turn
- * is tainted. See canary.spec.ts for how the harness works.
+ * hand-offs and the MCP gateway. See canary.spec.ts for how the harness works.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -18,22 +17,19 @@ const { createAgentRun, finishAgentRun } = await import('../db/repo/agent-runs.j
 const { createApiKey } = await import('../db/repo/api-keys.js');
 const { listMcpServers } = await import('../db/repo/mcp-servers.js');
 const { runSubagent } = await import('../agents/subagents.js');
-const { buildTools } = await import('../tools/registry.js');
 const { createAgentsServer, PRIVATE_RUN_NOTE } = await import('../mcp/servers/agents.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
-const { assertToolAllowed, BLOCKED_PREFIX } = await import('./guard.js');
 const { isConversationPrivate } = await import('./policy.js');
 const { TurnPrivacy } = await import('./taint.js');
 const { CANARY } = await import('./fixtures.js');
 const { useCanaryServer } = await import('./canary-harness.js');
 const gatewayRoute = await import('../../../routes/api/mcp/+server.js');
-const codingTasksRoute = await import('../../../routes/api/coding/tasks/+server.js');
 const handoffRoute =
 	await import('../../../routes/api/conversations/[id]/handoff-draft/+server.js');
 
 const canary = useCanaryServer();
-const { recorded, trustedSaw, untrustedSaw, expectNoLeak, privateChat } = canary;
+const { recorded, trustedSaw, expectNoLeak, privateChat } = canary;
 let fx: typeof canary.fx;
 beforeEach(() => {
 	fx = canary.fx;
@@ -116,9 +112,6 @@ async function callAgentsTool(
 	}
 }
 
-/** What the AI SDK passes a tool's execute; only toolCallId matters here. */
-const EXEC_OPTIONS = { toolCallId: 't1', messages: [] } as never;
-
 const subagentTurns = () => trustedSaw().filter((r) => r.body.includes('You are a subagent'));
 
 describe('egress canary: agent runs and subagents (PR 4)', () => {
@@ -156,38 +149,8 @@ describe('egress canary: agent runs and subagents (PR 4)', () => {
 		expect(isConversationPrivate(getDb(), result.conversationId)).toBe(true);
 		const turns = subagentTurns();
 		expect(turns.length).toBeGreaterThan(0);
-		// Tainted from the start: the egress tools aren't even offered.
-		for (const t of turns) expect(t.body).not.toMatch(/"name":"fetch"/);
-		expectNoLeak();
-	});
-
-	it("subagent: run_subagent in a tainted parent can't reach fetch", async () => {
-		enableServers('webfetch');
-		// Control: a public parent's subagent is offered fetch.
-		const open = publicTurn(fx.trusted, 'trusted');
-		await runSubagent({
-			userId: fx.userId,
-			parentConversationId: open.conversation.id,
-			description: 'look',
-			prompt: 'Look something up',
-			parentPrivacy: open.privacy
-		});
-		expect(subagentTurns().some((t) => /"name":"fetch"/.test(t.body))).toBe(true);
-		recorded.length = 0;
-
-		// The same parent, tainted mid-turn (it read private data): fetch is gone.
-		const tainted = publicTurn(fx.trusted, 'trusted');
-		tainted.privacy.markTainted('test: read a private chat');
-		await runSubagent({
-			userId: fx.userId,
-			parentConversationId: tainted.conversation.id,
-			description: 'look',
-			prompt: `Look up ${CANARY}`,
-			parentPrivacy: tainted.privacy
-		});
-		const turns = subagentTurns();
-		expect(turns.length).toBeGreaterThan(0);
-		for (const t of turns) expect(t.body).not.toMatch(/"name":"fetch"/);
+		// It keeps the parent's tools; only its model calls are limited to trusted providers.
+		for (const t of turns) expect(t.body).toMatch(/"name":"fetch"/);
 		expectNoLeak();
 	});
 
@@ -216,48 +179,6 @@ describe('egress canary: agent runs and subagents (PR 4)', () => {
 });
 
 describe('egress canary: coding (PR 4)', () => {
-	it('proposal: propose_coding_task is refused from a tainted context', async () => {
-		enableServers('coding');
-		const { conversation, privacy } = publicTurn(fx.trusted, 'trusted');
-		const built = await buildTools({
-			userId: fx.userId,
-			memoryEnabled: false,
-			conversationId: conversation.id,
-			privacy,
-			trust: 'trusted'
-		});
-		try {
-			const tool = built.tools.propose_coding_task;
-			expect(tool).toBeDefined();
-			privacy.markTainted('test: read a private chat');
-			await expect(tool.execute!({ prompt: CANARY }, EXEC_OPTIONS)).rejects.toThrow(BLOCKED_PREFIX);
-		} finally {
-			await built.close();
-		}
-		expect(recorded).toEqual([]);
-	});
-
-	it("proposal: a private chat's proposal can't start a coding task", async () => {
-		const chat = privateChat(fx.trusted);
-		const request = new Request('http://localhost/api/coding/tasks', {
-			method: 'POST',
-			body: JSON.stringify({
-				environmentId: 'env',
-				projectId: 'proj',
-				providerInstanceId: 'codex',
-				model: 'm',
-				autonomy: 'full-access',
-				workspaceMode: 'local',
-				prompt: CANARY,
-				proposal: { conversationId: chat.id, toolCallId: 't1' }
-			})
-		});
-		await expect(
-			codingTasksRoute.POST({ locals: { user: { id: fx.userId } }, request } as never)
-		).rejects.toMatchObject({ status: 409 });
-		expect(recorded).toEqual([]);
-	});
-
 	it('hand-off: a private chat is refused before any model call', async () => {
 		const chat = privateChat(fx.trusted);
 		await expect(
@@ -328,45 +249,5 @@ describe('egress canary: MCP gateway (PR 4)', () => {
 		}
 		expect(isConversationPrivate(db, chat.id)).toBe(true);
 		expectNoLeak();
-	});
-});
-
-describe('egress canary: egress tools once tainted (PR 4)', () => {
-	it('fetch, fs_curl, get_weather and web_search are refused once the turn is tainted', async () => {
-		enableServers('webfetch', 'fs', 'weather', 'websearch');
-		const { conversation, privacy } = publicTurn(fx.trusted, 'trusted');
-		const built = await buildTools({
-			userId: fx.userId,
-			memoryEnabled: false,
-			conversationId: conversation.id,
-			privacy,
-			trust: 'trusted'
-		});
-		const leakUrl = `${canary.base}/untrusted/leak?q=${CANARY}`;
-		const calls: Record<string, unknown> = {
-			fetch: { url: leakUrl },
-			fs_curl: { scope: 'documents', url: leakUrl, path: 'leak.txt' },
-			get_weather: { location: CANARY }
-		};
-		try {
-			for (const name of Object.keys(calls)) expect(built.tools[name]).toBeDefined();
-			// The turn reads private data mid-turn; the catalog it already has stays,
-			// but every call is checked when it runs.
-			privacy.markTainted('test: read a private chat');
-			for (const [name, input] of Object.entries(calls)) {
-				await expect(built.tools[name].execute!(input, EXEC_OPTIONS)).rejects.toThrow(
-					BLOCKED_PREFIX
-				);
-			}
-			// web_search is only offered with a search provider set up; the guard
-			// refuses it regardless.
-			expect(() =>
-				assertToolAllowed(getDb(), serverRow('websearch'), 'web_search', { query: CANARY }, privacy)
-			).toThrow(BLOCKED_PREFIX);
-		} finally {
-			await built.close();
-		}
-		expect(untrustedSaw()).toEqual([]);
-		expect(recorded).toEqual([]);
 	});
 });

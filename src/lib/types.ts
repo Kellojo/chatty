@@ -94,8 +94,6 @@ export interface McpServerInfo {
 	toolCount: number | null;
 	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
 	toolTokens: number | null;
-	/** An admin allows this server in private chats (not used for builtin servers). */
-	allowPrivate: boolean;
 }
 
 /** A server's tool calls over the usage window (Settings → MCP servers). */

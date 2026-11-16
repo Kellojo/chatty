@@ -172,7 +172,7 @@
 			<Dialog.Description>
 				From now on only models trusted with private data see {single
 					? 'this chat'
-					: 'these chats'}, and tools that send data outside Chatty are off.
+					: 'these chats'}.
 			</Dialog.Description>
 		</Dialog.Header>
 

@@ -21,14 +21,12 @@ const { createAgent } = await import('../../db/repo/agents.js');
 const { createAgentRun, finishAgentRun } = await import('../../db/repo/agent-runs.js');
 const { isConversationPrivate } = await import('../../privacy/policy.js');
 const { TurnPrivacy } = await import('../../privacy/taint.js');
-const { BLOCKED_PREFIX } = await import('../../privacy/guard.js');
 const { CANARY, markConversationPrivate, seedPrivacyFixture, setRole } =
 	await import('../../privacy/fixtures.js');
 const { prepareAgentCreate, PRIVATE_AGENT_MODEL_ERROR } = await import('../../agentInput.js');
 const { createChatSearchServer } = await import('./chat-search.js');
 const { createFsServer } = await import('./fs.js');
 const { createAgentsServer, PRIVATE_RUN_NOTE } = await import('./agents.js');
-const { createCodingServer } = await import('./coding.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
 
@@ -336,6 +334,30 @@ describe('documents/private', () => {
 });
 
 describe('private agents', () => {
+	it('makes a run started from a private chat private, so only trusted models see it', async () => {
+		const agent = createAgent(db, userId, {
+			name: 'helper',
+			systemPrompt: 'x',
+			triggerType: 'manual',
+			...fx.untrusted
+		});
+		const { ctx, conversationId } = turn('trusted');
+		markConversationPrivate(db, conversationId);
+		await call(createAgentsServer, ctx, 'start_agent', { agentId: agent.id, instructions: CANARY });
+		const run = db
+			.prepare('SELECT conversation_id FROM agent_runs WHERE agent_id = ?')
+			.get(agent.id) as { conversation_id: string };
+		expect(isConversationPrivate(db, run.conversation_id)).toBe(true);
+		// Its model isn't trusted, so the run's turn is refused rather than sent there.
+		await new Promise((r) => setTimeout(r, 300));
+		const reply = db
+			.prepare(
+				"SELECT status, error FROM messages WHERE conversation_id = ? AND role = 'assistant'"
+			)
+			.get(run.conversation_id) as { status: string; error: string | null } | undefined;
+		expect(reply?.status ?? 'failed').toBe('failed');
+	});
+
 	it('must use a trusted model', async () => {
 		const { ctx } = turn('trusted');
 		const base = { name: 'p', systemPrompt: 'x', triggerType: 'manual', private: true };
@@ -442,15 +464,5 @@ describe('private agents', () => {
 			expect(privacy.tainted).toBe(true);
 			expect(isConversationPrivate(db, conversationId)).toBe(true);
 		});
-	});
-});
-
-describe('coding proposals', () => {
-	it('are refused from a private chat', async () => {
-		const { ctx, conversationId } = turn('trusted');
-		markConversationPrivate(db, conversationId);
-		const res = await call(createCodingServer, ctx, 'propose_coding_task', { prompt: CANARY });
-		expect(res.isError).toBe(true);
-		expect(res.text).toContain(BLOCKED_PREFIX);
 	});
 });

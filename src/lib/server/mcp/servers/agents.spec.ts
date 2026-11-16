@@ -396,7 +396,8 @@ describe('start_agent', () => {
 			agentId: id,
 			trigger: 'manual',
 			userId: 'u1',
-			instructions: 'sort my inbox'
+			instructions: 'sort my inbox',
+			private: false
 		});
 		const body = JSON.parse(resultText(res)) as {
 			run: { agentId: string; status: string; id: string };

@@ -24,7 +24,7 @@ import {
 } from '../../db/repo/agents.js';
 import { findModel } from '../../db/repo/models.js';
 import { createLogger } from '../../logger.js';
-import { isAgentRunPrivate } from '../../privacy/policy.js';
+import { callerPrivacy, isAgentRunPrivate, isPrivateContext } from '../../privacy/policy.js';
 import { MAX_LAUNCH_PROMPT } from '../../t3/tasks.js';
 import type { CallerContext } from '../types.js';
 import { reportPrivate, seesPrivate } from './private-items.js';
@@ -319,7 +319,9 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 					agentId,
 					trigger: 'manual',
 					userId: ctx.userId,
-					instructions: task
+					instructions: task,
+					// Instructions from a private chat may carry its data: the run is private too.
+					private: isPrivateContext(db, callerPrivacy(ctx))
 				});
 				done.catch(() => undefined);
 				log.info('start_agent', { userId: ctx.userId, agentId, runId: run.id, wait: !!wait });

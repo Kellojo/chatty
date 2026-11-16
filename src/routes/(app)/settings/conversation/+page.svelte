@@ -152,7 +152,7 @@
 			label="New chats are private"
 			for="pref-private-by-default"
 			description={data.privateData.available
-				? 'New chats start with the lock on: only models trusted with private data see them, and tools that send data outside Chatty are off. You can still turn it off per chat. Coding tasks are never private.'
+				? 'New chats start with the lock on: only models trusted with private data see them. You can still turn it off per chat. Coding tasks are never private.'
 				: 'Takes effect once a provider is trusted with private data (Settings → Providers).'}
 		>
 			<Switch

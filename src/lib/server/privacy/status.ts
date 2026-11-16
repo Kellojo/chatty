@@ -1,7 +1,7 @@
 import type { PrivateDataStatus } from '$lib/types.js';
 import { isPrivateDataEnabled } from './feature.js';
 import type { Db } from '../db/index.js';
-import { roleTrusted } from './egress.js';
+import { roleTrusted } from './models.js';
 import { hasTrustedProvider } from './policy.js';
 
 /** What the app shell needs to show (or hide) private-data controls. */

@@ -14,7 +14,7 @@ import { FALLBACK_VOICE, getDefaultVoice } from '$lib/server/speech/synthesizer.
 import { roleVoices } from '$lib/server/speech/voices.js';
 import { isPrivateDataEnabled } from '$lib/server/privacy/feature.js';
 import { findRoleModel, type ModelRole } from '$lib/server/db/repo/models.js';
-import { roleTrusted } from '$lib/server/privacy/egress.js';
+import { roleTrusted } from '$lib/server/privacy/models.js';
 import type { PageServerLoad } from './$types';
 
 /** Roles that can see a private chat's data; the chat role only picks new chats' model. */

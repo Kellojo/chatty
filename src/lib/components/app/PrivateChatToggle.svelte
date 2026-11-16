@@ -9,7 +9,7 @@
 
 	/**
 	 * The new-chat composer's lock: starts the chat private, so only trusted
-	 * models see it and tools that send data out stay off. Hidden while the
+	 * models see it. Hidden while the
 	 * private-data feature is off; disabled (with a pointer to Settings →
 	 * Providers) until a provider is trusted with private data.
 	 */
@@ -86,7 +86,7 @@
 			aria-pressed={checked}
 			{disabled}
 			title={checked
-				? 'Private chat: only trusted models, and no tools that send data outside Chatty. Click to turn off.'
+				? 'Private chat: only models trusted with private data see it. Click to turn off.'
 				: 'Make this chat private'}
 			class={cn(
 				checked

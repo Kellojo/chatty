@@ -1,14 +1,13 @@
 /**
  * Private data: the one place that decides who may see it.
  *
- * Rule: data marked private only reaches providers (and MCP servers) an admin
- * trusts with it (`allow_private`). A context holding private data is
- * "tainted": its model calls may only go to trusted providers, and its tools
- * may only be ones that keep data inside Chatty (`TOOL_EGRESS`).
+ * Rule: data marked private only reaches model providers an admin trusts with
+ * it (`allow_private`). A context holding private data is "tainted": its model
+ * calls may only go to trusted providers. Tools are not restricted.
  *
  * Callers never decide this themselves: they pass a `Privacy` to the choke
  * points (`resolveModel`, `resolveImageModel`, `resolveAudioEndpoint`,
- * `forwardDecisions`) and the tool wrapper, which call into this module.
+ * `forwardDecisions`), which call into this module.
  */
 import type { ModelMappingTarget } from '$lib/types.js';
 import type { Db } from '../db/index.js';

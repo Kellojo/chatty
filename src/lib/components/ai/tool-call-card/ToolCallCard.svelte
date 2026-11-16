@@ -24,8 +24,6 @@
 	import ToolIcon from './ToolIcon.svelte';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import LockIcon from '@lucide/svelte/icons/lock';
-	import { blockedToolLabel, blockedToolReason } from '$lib/private-data.js';
 	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import { TOOL_BODY_LIMIT, truncateHead, truncateTail } from './truncate.js';
@@ -243,16 +241,8 @@
 	const showInput = $derived(
 		!isTrivial(part.input) && !detailCoversInput(part.input, display.detail)
 	);
-	/** Refused because the chat is private: not an error to fix, so it reads calmly. */
-	const blockedReason = $derived(failed ? blockedToolReason(resultText) : null);
-	/** What to do about a refusal; the row already says why it was refused. */
-	const blockedText = "To use it, start a chat that isn't private.";
 	/** Failed calls without a detail show the first line of their error instead. */
-	const detail = $derived(
-		blockedReason
-			? blockedToolLabel(blockedReason)
-			: (display.detail ?? (failed ? errorSummary(resultText) : null))
-	);
+	const detail = $derived(display.detail ?? (failed ? errorSummary(resultText) : null));
 
 	/** First line of an error, without the coding agent's generic lead-in. */
 	function errorSummary(text: string): string | null {
@@ -332,14 +322,10 @@
 				<span
 					class={cn(
 						'flex size-5 shrink-0 items-center justify-center text-muted-foreground',
-						failed && !blockedReason && 'text-destructive',
-						blockedReason && 'text-amber-600 dark:text-amber-400'
+						failed && 'text-destructive'
 					)}
 				>
-					{#if blockedReason}
-						<LockIcon class="size-3.5" aria-hidden="true" />
-						<span class="sr-only">Blocked in a private chat:</span>
-					{:else if running}
+					{#if running}
 						<Loader2Icon class="size-3.5 animate-spin" />
 					{:else if interrupted}
 						<!-- The message footer explains the stop; the row only marks which call it hit. -->
@@ -358,15 +344,13 @@
 							'min-w-0 truncate text-xs',
 							// The icon and "Failed" already say it went wrong; the excerpt stays readable grey.
 							'text-muted-foreground',
-							!blockedReason && !display.prose && display.detail && 'font-mono'
+							!display.prose && display.detail && 'font-mono'
 						)}
 						title={detail}>{detail}</span
 					>
 				{/if}
 				<span class="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-xs text-muted-foreground">
-					{#if blockedReason}
-						<span class="text-amber-700 dark:text-amber-400">Blocked</span>
-					{:else if failed && display.kind !== 'error'}
+					{#if failed && display.kind !== 'error'}
 						<span class="text-destructive">
 							{typeof exitCode === 'number' && exitCode !== 0 ? `Exit ${exitCode}` : 'Failed'}
 						</span>
@@ -414,27 +398,19 @@
 					<div>
 						{#if labelled}
 							<p class="mb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-								{blockedReason ? 'Blocked' : failed ? 'Error' : subagent ? 'Result' : 'Output'}
+								{failed ? 'Error' : subagent ? 'Result' : 'Output'}
 							</p>
 						{/if}
-						{#if blockedReason}
-							<p
-								class="rounded-md border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
-							>
-								{blockedText}
-							</p>
-						{:else}
-							<pre
-								{@attach (node) => {
-									void showFull;
-									scrollToEnd(node);
-								}}
-								class={cn(
-									'max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
-									failed && !blockedReason && 'border-destructive/30 text-destructive'
-								)}>{resultBody}</pre>
-						{/if}
-						{#if resultTruncated && !blockedReason}
+						<pre
+							{@attach (node) => {
+								void showFull;
+								scrollToEnd(node);
+							}}
+							class={cn(
+								'max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
+								failed && 'border-destructive/30 text-destructive'
+							)}>{resultBody}</pre>
+						{#if resultTruncated}
 							<button
 								type="button"
 								class="mt-1 rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"

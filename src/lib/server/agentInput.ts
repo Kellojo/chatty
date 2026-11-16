@@ -17,7 +17,7 @@ import {
 	type UpdateAgentInput
 } from './db/repo/agents.js';
 import { isSelectableModelRef } from './llm/mapped.js';
-import { modelRefTrusted } from './privacy/guard.js';
+import { modelRefTrusted } from './privacy/models.js';
 
 export const AGENT_TRIGGER_TYPES = ['persona', 'schedule', 'http', 'manual', 'event'] as const;
 

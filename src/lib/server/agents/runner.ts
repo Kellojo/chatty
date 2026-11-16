@@ -46,6 +46,11 @@ export interface StartAgentRunInput {
 	instructions?: string;
 	/** The API key that started an HTTP run, for its usage statistics. */
 	apiKeyId?: string;
+	/**
+	 * Started from a context holding private data (a private chat's start_agent):
+	 * the run is private too, so its instructions only reach trusted models.
+	 */
+	private?: boolean;
 }
 
 export interface StartedAgentRun {
@@ -176,9 +181,9 @@ async function startPass(
 		// apply to new runs.
 		systemPrompt: agent.system_prompt,
 		maxSteps: agent.max_steps,
-		// A tainted context may only start private agents (privacy/guard.ts). A
-		// memory agent's private pass is private, so it starts tainted.
-		private: agent.private === 1 || pass === 'private'
+		// Private agents, runs started from private data, and a memory agent's
+		// private pass are private, so they start tainted.
+		private: agent.private === 1 || input.private === true || pass === 'private'
 	});
 	const run = createAgentRun(db, {
 		agentId: agent.id,

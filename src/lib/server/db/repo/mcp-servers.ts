@@ -30,8 +30,6 @@ export interface McpServerRow {
 	tool_count: number | null;
 	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
 	tool_tokens: number | null;
-	/** 1: an admin allows this server in private chats (ignored for builtin servers). */
-	allow_private: number;
 }
 
 export interface McpServer {
@@ -54,8 +52,6 @@ export interface McpServer {
 	toolCount: number | null;
 	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
 	toolTokens: number | null;
-	/** An admin allows this server in private chats (not used for builtin servers). */
-	allowPrivate: boolean;
 }
 
 /** Parses the JSON `args` column, tolerating malformed values. */
@@ -86,8 +82,7 @@ export function toPublic(row: McpServerRow): McpServer {
 		hasOauthClientSecret: !!row.oauth_client_secret_enc,
 		oauthScope: row.oauth_scope,
 		toolCount: row.tool_count ?? null,
-		toolTokens: row.tool_tokens ?? null,
-		allowPrivate: row.allow_private === 1
+		toolTokens: row.tool_tokens ?? null
 	};
 }
 
@@ -130,16 +125,14 @@ export interface CreateMcpServerInput {
 	oauthClientId?: string | null;
 	oauthClientSecret?: string | null;
 	oauthScope?: string | null;
-	/** Fails closed: a server is not allowed in private chats unless this is true. */
-	allowPrivate?: boolean;
 }
 
 export function createMcpServer(db: Db, input: CreateMcpServerInput): McpServerRow {
 	const id = randomUUID();
 	db.prepare(
 		`INSERT INTO mcp_servers (id, name, transport, command, args, url, token_enc, enabled, builtin,
-		 load_mode, auth, oauth_client_id, oauth_client_secret_enc, oauth_scope, allow_private)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
+		 load_mode, auth, oauth_client_id, oauth_client_secret_enc, oauth_scope)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		input.name,
@@ -153,8 +146,7 @@ export function createMcpServer(db: Db, input: CreateMcpServerInput): McpServerR
 		input.auth ?? 'token',
 		input.oauthClientId ?? null,
 		input.oauthClientSecret ? encryptSecret(input.oauthClientSecret) : null,
-		input.oauthScope ?? null,
-		input.allowPrivate === true ? 1 : 0
+		input.oauthScope ?? null
 	);
 	return getMcpServer(db, id)!;
 }
@@ -172,7 +164,6 @@ export interface UpdateMcpServerInput {
 	oauthClientId?: string | null;
 	oauthClientSecret?: string | null;
 	oauthScope?: string | null;
-	allowPrivate?: boolean;
 }
 
 export function updateMcpServer(
@@ -193,7 +184,7 @@ export function updateMcpServer(
 	db.prepare(
 		`UPDATE mcp_servers SET name = ?, transport = ?, command = ?, args = ?, url = ?, token_enc = ?,
 		 enabled = ?, load_mode = ?, auth = ?, oauth_client_id = ?, oauth_client_secret_enc = ?,
-		 oauth_scope = ?, oauth_client_info_enc = ?, allow_private = ?
+		 oauth_scope = ?, oauth_client_info_enc = ?
 		 WHERE id = ?`
 	).run(
 		editable('name') ? patch.name : existing.name,
@@ -214,7 +205,6 @@ export function updateMcpServer(
 		editable('oauthScope') ? patch.oauthScope : existing.oauth_scope,
 		// A registration belongs to one server URL and client setup: re-register after either changes.
 		reRegister ? null : existing.oauth_client_info_enc,
-		editable('allowPrivate') ? (patch.allowPrivate ? 1 : 0) : existing.allow_private,
 		id
 	);
 	return getMcpServer(db, id);

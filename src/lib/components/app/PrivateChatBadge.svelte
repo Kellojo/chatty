@@ -34,8 +34,7 @@
 			{/snippet}
 		</Tooltip.Trigger>
 		<Tooltip.Content class="max-w-64 text-left">
-			Private chat: only models trusted with private data can continue it, and tools that send data
-			outside Chatty are off.
+			Private chat: only models trusted with private data can continue it.
 		</Tooltip.Content>
 	</Tooltip.Root>
 </Tooltip.Provider>

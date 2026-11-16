@@ -1,7 +1,7 @@
 import { getCodingConversation } from '$lib/server/db/repo/coding-conversations.js';
 import { privatePlaceholderTitle } from '$lib/server/privacy/background.js';
 import { hasTrustedProvider } from '$lib/server/privacy/policy.js';
-import { modelRefTrusted as modelTrusted } from '$lib/server/privacy/guard.js';
+import { modelRefTrusted as modelTrusted } from '$lib/server/privacy/models.js';
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { requireUser } from '$lib/server/auth/guards.js';

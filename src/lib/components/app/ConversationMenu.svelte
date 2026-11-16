@@ -369,9 +369,8 @@
 		<Dialog.Header>
 			<Dialog.Title>Make this chat public?</Dialog.Title>
 			<Dialog.Description>
-				Anything already sent in this chat can't be recalled. Making it public lets untrusted
-				models, and tools that send data outside Chatty, see this chat's history, including any
-				private data it read.
+				Making it public lets models that aren't trusted with private data see this chat's history,
+				including any private data it read.
 			</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>
