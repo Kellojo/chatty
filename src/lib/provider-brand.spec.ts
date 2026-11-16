@@ -36,6 +36,34 @@ describe('resolveBrand', () => {
 		expect(resolveModelBrand({ modelId: 'qwen3:8b' }, null)).toBe('qwen');
 	});
 
+	it('maps hosts whose base URL mentions openai to the host', () => {
+		expect(resolveBrand('Fast', 'https://api.groq.com/openai/v1')).toBe('groq');
+		expect(resolveBrand('Infra', 'https://api.deepinfra.com/v1/openai')).toBe('deepinfra');
+		expect(resolveBrand('Work', 'https://acme.openai.azure.com/openai')).toBe('microsoft');
+		expect(resolveBrand('Copilot', 'https://api.githubcopilot.com')).toBe('githubcopilot');
+		expect(resolveBrand('AWS', 'https://bedrock-runtime.us-east-1.amazonaws.com')).toBe('bedrock');
+	});
+
+	it('maps more model makers', () => {
+		expect(resolveModelBrand({ modelId: 'moonshotai/kimi-k2' })).toBe('kimi');
+		expect(resolveModelBrand({ modelId: 'z-ai/glm-4.6' })).toBe('zai');
+		expect(resolveModelBrand({ modelId: 'minimax/minimax-m2' })).toBe('minimax');
+		expect(resolveModelBrand({ modelId: 'cohere/command-a' })).toBe('cohere');
+		expect(resolveModelBrand({ modelId: 'perplexity/sonar-pro' })).toBe('perplexity');
+		expect(resolveModelBrand({ modelId: 'microsoft/phi-4' })).toBe('microsoft');
+		expect(resolveModelBrand({ modelId: 'nvidia/llama-3.1-nemotron-70b' })).toBe('nvidia');
+		expect(resolveModelBrand({ modelId: 'hf.co/unsloth/Qwen3-8B-GGUF' })).toBe('qwen');
+		const fireworks = {
+			name: 'Fireworks',
+			baseUrl: 'https://api.fireworks.ai/inference/v1',
+			type: 'x'
+		};
+		expect(resolveModelBrand({ modelId: 'accounts/fireworks/models/kimi-k2' }, fireworks)).toBe(
+			'kimi'
+		);
+		expect(resolveModelBrand({ modelId: 'some-model' }, fireworks)).toBe('fireworks');
+	});
+
 	it('returns null when nothing matches', () => {
 		expect(resolveBrand('Home server', null, 'http://10.0.0.5:8000/v1')).toBeNull();
 		expect(resolveBrand()).toBeNull();

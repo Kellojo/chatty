@@ -686,9 +686,7 @@ async function prepareTurn(
 	});
 	// A run turn knows whether it may ask; in a chat the user talks to, an agent
 	// that is allowed to ask can always do so.
-	const askUser = run
-		? run.askUser
-		: !!agent && parseCanAsk(agent) !== 'never';
+	const askUser = run ? run.askUser : !!agent && parseCanAsk(agent) !== 'never';
 	if (askUser) {
 		// Always loaded and never filtered by the agent's allowlist: it's how the
 		// agent reaches the user, not a capability.

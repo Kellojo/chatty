@@ -13,6 +13,20 @@ const RULES: [RegExp, Brand][] = [
 	[/antigravity/, 'antigravity'],
 	[/ollama|:11434\b/, 'ollama'],
 	[/lm[\s_-]?studio|:1234\b/, 'lmstudio'],
+	[/vllm/, 'vllm'],
+	// Hosts whose OpenAI-compatible URLs contain "openai" (api.groq.com/openai/v1,
+	// *.openai.azure.com), so they must precede the OpenAI rule.
+	[/groq/, 'groq'],
+	[/together/, 'together'],
+	// Not `accounts/fireworks/models/...` ids, so those show the model's maker.
+	[/fireworks(?!\/)/, 'fireworks'],
+	[/deepinfra/, 'deepinfra'],
+	[/cerebras/, 'cerebras'],
+	[/hugging\s?face/, 'huggingface'],
+	[/bedrock|amazonaws\.com/, 'bedrock'],
+	[/github\s?copilot|githubcopilot\.com/, 'githubcopilot'],
+	[/azure|microsoft|\bphi-?\d/, 'microsoft'],
+	[/nvidia|nemotron/, 'nvidia'],
 	// Perplexity's own models are the Sonar family (`sonar-pro`, `perplexity/sonar`).
 	[/perplexity|(^|\/)sonar\b/, 'perplexity'],
 	[/claude|anthropic/, 'claude'],
@@ -22,6 +36,10 @@ const RULES: [RegExp, Brand][] = [
 	[/deepseek/, 'deepseek'],
 	[/mistral|codestral|magistral|devstral/, 'mistral'],
 	[/qwen|dashscope/, 'qwen'],
+	[/kimi|moonshot/, 'kimi'],
+	[/\bz\.ai\b|zhipu|bigmodel\.cn|\bglm\b/, 'zai'],
+	[/minimax/, 'minimax'],
+	[/cohere|\bcommand-r\b|\bcommand-a\b/, 'cohere'],
 	[/\bmeta\b|llama/, 'meta']
 ];
 
