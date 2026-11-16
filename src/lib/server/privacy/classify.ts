@@ -15,7 +15,12 @@ const log = createLogger('privacy');
 /** Longer texts are cut; the start of a note says what it's about. */
 const MAX_INPUT = 6000;
 
-/** One yes/no question per kind of sensitive data, with the label a person sees. */
+/**
+ * One yes/no question per kind of sensitive data, with the label a person sees.
+ * Any personally identifiable information counts: PII is split into narrow
+ * questions (contact details, birth dates, full names, specific people) because
+ * a small decision model answers those far more reliably than one broad one.
+ */
 const QUESTIONS = [
 	{
 		name: 'health',
@@ -30,10 +35,27 @@ const QUESTIONS = [
 			'Does the text contain personal financial details, such as income, debts, account or card numbers, tax details or specific amounts a person owns or owes?'
 	},
 	{
-		name: 'identity',
-		label: 'personal details',
+		name: 'contact',
+		label: 'contact details',
 		instructions:
-			'Does the text contain identifying or contact details of a person, such as a home address, phone number, date of birth, or ID, passport or insurance numbers?'
+			'Does the text contain contact or identification details of a person, such as an email address, phone number, home address, or ID, passport, insurance or account numbers?'
+	},
+	{
+		name: 'birthdate',
+		label: 'a birth date',
+		instructions: "Does the text give a person's date of birth or birthday?"
+	},
+	{
+		name: 'name',
+		label: 'a full name',
+		instructions:
+			'Does the text mention a private person by their full name (first and last name)? Well-known public figures, authors and historical people do not count.'
+	},
+	{
+		name: 'people',
+		label: 'specific people',
+		instructions:
+			'Does the text describe specific private people, such as family or household members, children, friends or colleagues, with names, ages, roles or relationships?'
 	},
 	{
 		name: 'secrets',
@@ -54,11 +76,11 @@ export function canClassify(db: Db): boolean {
 }
 
 /**
- * From this probability up, a predicate counts as yes. LM Studio's decision
- * models answer with a probability: sensitive notes score well above it,
- * harmless ones near 0.
+ * From this probability up, a predicate counts as yes. Set low on purpose (any
+ * PII should be private): with `laya`, PII notes scored 0.32-1.0 and harmless
+ * ones at most 0.23 (a famous person's name).
  */
-const YES_PROBABILITY = 0.5;
+const YES_PROBABILITY = 0.3;
 
 /** A predicate answer's yes: a probability, or a boolean in whatever field the provider uses. */
 function saidYes(answer: Record<string, unknown>): boolean {

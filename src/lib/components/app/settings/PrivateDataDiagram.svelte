@@ -40,7 +40,7 @@
 		{ icon: LockIcon, text: 'You mark it private' },
 		{ icon: MessageSquareIcon, text: 'A chat reads something private' },
 		{ icon: SaveIcon, text: 'A private chat saves a note or file' },
-		{ icon: ScanSearchIcon, text: 'A saved note looks sensitive' }
+		{ icon: ScanSearchIcon, text: 'A saved note has personal info' }
 	];
 </script>
 

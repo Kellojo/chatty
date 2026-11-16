@@ -7,7 +7,7 @@ process.env.DATABASE_PATH = ':memory:';
 process.env.MEMORY_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-classify-'));
 
 /** What the fake Decisions model says yes to, and every request it got. */
-const decisions = vi.hoisted(() => ({ yes: [] as string[], calls: [] as unknown[] }));
+const decisions = vi.hoisted(() => ({ yes: [] as string[], calls: [] as unknown[], weak: false }));
 vi.mock('../decisions/handler.js', async (importOriginal) => {
 	const original = await importOriginal<typeof import('../decisions/handler.js')>();
 	return {
@@ -21,7 +21,7 @@ vi.mock('../decisions/handler.js', async (importOriginal) => {
 						answers: request.questions.map((q) => ({
 							type: 'predicate',
 							name: q.name,
-							probability: decisions.yes.includes(q.name) ? 0.86 : 0.34
+							probability: decisions.yes.includes(q.name) ? (decisions.weak ? 0.32 : 0.86) : 0.1
 						}))
 					})
 				);
@@ -44,6 +44,7 @@ beforeEach(() => {
 	fx = seedPrivacyFixture(getDb());
 	decisions.yes = [];
 	decisions.calls = [];
+	decisions.weak = false;
 });
 
 async function createConcept(args: Record<string, unknown>): Promise<string> {
@@ -89,6 +90,12 @@ describe('automatic privacy classification', () => {
 		]);
 		decisions.yes = [];
 		expect(await classifySensitive(db, 'I like teal')).toEqual([]);
+		// Any PII counts: a weak yes (a full name alone scores about 0.32) is enough.
+		decisions.yes = ['name'];
+		decisions.weak = true;
+		expect(await classifySensitive(db, 'Send the invoice to Katharina Schulz')).toEqual([
+			'a full name'
+		]);
 	});
 
 	it('marks a sensitive note private when a memory tool saves it', async () => {
