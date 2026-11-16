@@ -32,6 +32,7 @@ vi.mock('../decisions/handler.js', async (importOriginal) => {
 
 const { closeDb, getDb } = await import('../db/index.js');
 const { classifySensitive, canClassify } = await import('./classify.js');
+const { sweepMemoryPrivacy } = await import('./sweep.js');
 const { seedPrivacyFixture, setRole } = await import('./fixtures.js');
 const { readConcept, writeConcept } = await import('../memory/bundle.js');
 const { createMemoryServer } = await import('../mcp/servers/memory.js');
@@ -159,5 +160,55 @@ describe('automatic privacy classification', () => {
 		const publicNote = await readConcept('user', fx.userId, 'a/b');
 		expect(publicNote?.frontmatter.private).toBeUndefined();
 		expect(publicNote?.frontmatter.privateReason).toBeUndefined();
+	});
+
+	it('sweeps public notes once per content, and leaves a note made public alone', async () => {
+		const db = getDb();
+		// A user of its own, so notes from the other tests stay out of the sweep.
+		const userId = 'sweeper';
+		seedPrivacyFixture(db, undefined, userId);
+		const note = (p: string, body: string) =>
+			writeConcept(
+				db,
+				'user',
+				userId,
+				p,
+				{ frontmatter: { title: p }, body },
+				{ author: 't', userId }
+			);
+		await note('people/katharina', 'Send the invoice to Katharina Schulz');
+		await note('recipes/bread', 'Sourdough: 500g flour');
+
+		// Without a trusted Decisions model nothing is checked.
+		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({ checked: 0, marked: [] });
+
+		setRole(db, 'decisions', fx.trusted);
+		decisions.yes = ['name'];
+		// The fake flags every note it sees; only the first one is checked with a limit of 1.
+		expect(await sweepMemoryPrivacy(db, 'user', userId, 1)).toEqual({
+			checked: 1,
+			marked: ['people/katharina.md']
+		});
+		const marked = await readConcept('user', userId, 'people/katharina');
+		expect(marked?.frontmatter.privateReason).toBe(
+			'Marked private automatically: looks like a full name'
+		);
+
+		decisions.yes = [];
+		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({ checked: 1, marked: [] });
+		// Nothing changed since: nothing to check.
+		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({ checked: 0, marked: [] });
+
+		// A person makes the marked note public again: the sweep respects that.
+		await writeConcept(
+			db,
+			'user',
+			userId,
+			'people/katharina',
+			{ frontmatter: { title: 'people/katharina', private: false }, body: marked!.body },
+			{ author: 't', userId }
+		);
+		decisions.yes = ['name'];
+		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({ checked: 0, marked: [] });
 	});
 });

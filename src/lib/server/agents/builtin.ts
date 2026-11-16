@@ -141,7 +141,7 @@ export function seedMemoryCleanupAgent(db: Db): void {
 	syncBuiltinAgent(db, {
 		name: MEMORY_CLEANUP_AGENT,
 		description:
-			'Keeps long-term memory tidy on every 5th memory change: merges duplicates, resolves contradictions, prunes noise (built-in).',
+			'Keeps long-term memory tidy on every 5th memory change: merges duplicates, resolves contradictions, prunes noise, and marks notes with personal information private (built-in).',
 		systemPrompt: CLEANUP_SYSTEM_PROMPT,
 		triggerConfig: { event: 'memory.changed', every: 5 },
 		toolAllowlist: [

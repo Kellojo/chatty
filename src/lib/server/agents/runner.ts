@@ -15,7 +15,9 @@ import { findRoleModel } from '../db/repo/models.js';
 import { publishServerEvent } from '../events/bus.js';
 import { resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
+import type { MemoryScope } from '../memory/paths.js';
 import { turnTrust } from '../privacy/policy.js';
+import { sweepMemoryPrivacy } from '../privacy/sweep.js';
 import { runChatTurnHeadless } from '../chat/service.js';
 import { abortStream } from '../chat/streams.js';
 import { ensureAgentWorkspace } from '../workspaces.js';
@@ -23,6 +25,7 @@ import {
 	extractionWindowNote,
 	isBuiltinMemoryAgent,
 	lastSuccessfulMemoryPassAt,
+	MEMORY_CLEANUP_AGENT,
 	MEMORY_EXTRACTION_AGENT,
 	memoryPassLimits,
 	PRIVATE_PASS_NOTE,
@@ -121,6 +124,43 @@ export async function startAgentRun(
 	}
 
 	const passes = memoryPasses(db, agent, ref);
+	const started = await startPasses(db, agent, input, ref, passes);
+	if (!(agent.user_id === null && agent.name === MEMORY_CLEANUP_AGENT)) return started;
+	// Cleanup also catches notes with personal information that were saved
+	// public (before automatic marking, or in the memory editor). Afterwards,
+	// so a run never waits on it.
+	return {
+		run: started.run,
+		done: started.done.then((row) => sweepAfterCleanup(db, input.userId, row))
+	};
+}
+
+/** Marks private the user's (and, for an admin, shared) public notes with personal information. */
+async function sweepAfterCleanup<T>(db: Db, userId: string, row: T): Promise<T> {
+	const user = db.prepare('SELECT role FROM "user" WHERE id = ?').get(userId) as
+		{ role: string } | undefined;
+	const scopes: MemoryScope[] = user?.role === 'admin' ? ['user', 'shared'] : ['user'];
+	for (const scope of scopes) {
+		try {
+			await sweepMemoryPrivacy(db, scope, userId);
+		} catch (e) {
+			log.warn('Memory privacy sweep failed', {
+				scope,
+				error: e instanceof Error ? e.message : String(e)
+			});
+		}
+	}
+	return row;
+}
+
+/** Starts a run's passes: one, or a memory agent's public then private pass. */
+async function startPasses(
+	db: Db,
+	agent: AgentRow,
+	input: StartAgentRunInput,
+	ref: { providerId: string; modelId: string },
+	passes: (MemoryPass | undefined)[]
+): Promise<StartedAgentRun> {
 	if (passes.length < 2) return startPass(db, agent, input, ref, passes[0]);
 	// One after the other: the passes share the memory bundle and the model.
 	const first = await startPass(db, agent, input, ref, passes[0]);
