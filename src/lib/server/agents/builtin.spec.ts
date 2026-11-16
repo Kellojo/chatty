@@ -56,6 +56,32 @@ describe('builtin agent seeds', () => {
 		expect(row.system_prompt).toContain('run_subagent');
 	});
 
+	it('gives memory cleanup read-only subagents and brings an outdated row up to date', () => {
+		seedMemoryCleanupAgent(db);
+		db.prepare(
+			"UPDATE agents SET system_prompt = 'old', tool_allowlist = '[]' WHERE name = 'memory-cleanup'"
+		).run();
+		seedMemoryCleanupAgent(db);
+		const row = db
+			.prepare("SELECT * FROM agents WHERE name = 'memory-cleanup' AND user_id IS NULL")
+			.get() as { system_prompt: string; tool_allowlist: string; trigger_config: string };
+		expect(JSON.parse(row.tool_allowlist)).toContain('run_subagent');
+		expect(row.system_prompt).toContain('run_subagent');
+		expect(JSON.parse(row.trigger_config)).toEqual({ event: 'memory.changed', every: 5 });
+	});
+
+	it('leaves an up-to-date built-in row untouched', () => {
+		seedBuiltinAgent(db);
+		const before = db
+			.prepare("SELECT updated_at FROM agents WHERE name = 'memory-extraction'")
+			.get() as { updated_at: number };
+		seedBuiltinAgent(db);
+		const after = db
+			.prepare("SELECT updated_at FROM agents WHERE name = 'memory-extraction'")
+			.get() as { updated_at: number };
+		expect(after.updated_at).toBe(before.updated_at);
+	});
+
 	it('seeds the memory-cleanup agent as an every-5th memory.changed event agent', () => {
 		seedMemoryCleanupAgent(db);
 		seedMemoryCleanupAgent(db);

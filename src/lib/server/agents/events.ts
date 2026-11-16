@@ -5,7 +5,12 @@ import {
 	type ServerEvent
 } from '$lib/types.js';
 import { getDb, type Db } from '../db/index.js';
-import { getAgentRun, isAgentRunConversation, listRunningAgentIds } from '../db/repo/agent-runs.js';
+import {
+	getAgentRun,
+	hasRunningAgentRun,
+	isAgentRunConversation,
+	listRunningAgentIds
+} from '../db/repo/agent-runs.js';
 import {
 	getAgent,
 	incrementAgentEventCounter,
@@ -15,6 +20,7 @@ import {
 } from '../db/repo/agents.js';
 import { subscribeAllServerEvents } from '../events/bus.js';
 import { createLogger } from '../logger.js';
+import { MEMORY_CLEANUP_AGENT, MEMORY_EXTRACTION_AGENT } from './builtin.js';
 import { settleCodingAgentRun } from './coding-runs.js';
 
 const log = createLogger('agents');
@@ -148,6 +154,22 @@ function isBusy(db: Db, agentId: string): boolean {
 	return dispatching.has(agentId) || listRunningAgentIds(db, [agentId]).length > 0;
 }
 
+/**
+ * Built-in agents that wait while another one works for the same user: memory
+ * cleanup would otherwise tidy a bundle that extraction is still writing (and
+ * its writes are what trigger cleanup). Their events queue up and run once the
+ * other agent is done.
+ */
+const WAITS_FOR: Record<string, string> = { [MEMORY_CLEANUP_AGENT]: MEMORY_EXTRACTION_AGENT };
+
+function waitingOnOther(db: Db, agent: AgentRow, userId: string): boolean {
+	const other = agent.user_id === null ? WAITS_FOR[agent.name] : undefined;
+	if (!other) return false;
+	const row = db.prepare('SELECT id FROM agents WHERE name = ? AND user_id IS NULL').get(other) as
+		{ id: string } | undefined;
+	return !!row && (dispatching.has(row.id) || hasRunningAgentRun(db, row.id, userId));
+}
+
 function enqueue(agentId: string, userId: string, occurrence: Occurrence): void {
 	let byUser = pending.get(agentId);
 	if (!byUser) pending.set(agentId, (byUser = new Map()));
@@ -180,8 +202,13 @@ function dispatch(db: Db, agentId: string, userId: string, instructions: string,
 		)
 		.finally(() => {
 			dispatching.delete(agentId);
-			drainAgent(agentId, db, run);
+			drainPending(db, run);
 		});
+}
+
+/** Gives every agent with queued events a chance to run (one finished run can unblock several). */
+function drainPending(db: Db, run: RunFn): void {
+	for (const agentId of [...pending.keys()]) drainAgent(agentId, db, run);
 }
 
 /** Starts a follow-up run for queued events once the agent is free. */
@@ -189,12 +216,15 @@ export function drainAgent(agentId: string, db: Db = getDb(), run: RunFn = defau
 	try {
 		const byUser = pending.get(agentId);
 		if (!byUser || isBusy(db, agentId)) return;
-		const next = byUser.entries().next();
-		if (next.done) return;
-		const [userId, entry] = next.value;
+		const agent = getAgent(db, agentId);
+		// Users whose events must keep waiting stay queued; the first other one runs.
+		const next = [...byUser.entries()].find(
+			([userId]) => !agent || !waitingOnOther(db, agent, userId)
+		);
+		if (!next) return;
+		const [userId, entry] = next;
 		byUser.delete(userId);
 		if (byUser.size === 0) pending.delete(agentId);
-		const agent = getAgent(db, agentId);
 		// The agent may have been deleted, disabled or retargeted meanwhile.
 		if (!agent || agent.trigger_type !== 'event' || !enabledFor(db, agent, userId)) {
 			drainAgent(agentId, db, run);
@@ -246,7 +276,7 @@ export async function emitAgentEvent(
 				}
 				const occurrence: Occurrence = { event, count, payloadJson: JSON.stringify(payload) };
 				const queued = pending.get(agent.id)?.get(userId);
-				if (isBusy(db, agent.id) || queued) {
+				if (isBusy(db, agent.id) || queued || waitingOnOther(db, agent, userId)) {
 					// Keep order: anything already queued for this user goes first.
 					enqueue(agent.id, userId, occurrence);
 					drainAgent(agent.id, db, run);
@@ -278,7 +308,7 @@ export function handleServerEvent(
 	// Runs started elsewhere (schedule, manual, HTTP) also block event runs;
 	// their completion is the signal to process what queued up meanwhile.
 	if (event.type === 'agent.run.finished') {
-		if (pending.has(event.agentId)) drainAgent(event.agentId, db, runFn);
+		if (pending.size > 0) drainPending(db, runFn ?? defaultRun);
 		return;
 	}
 	// Settle a coding agent's run before other agents react to its thread ending.

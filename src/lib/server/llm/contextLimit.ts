@@ -140,6 +140,36 @@ export function learnedContextLength(
 	return current(ref, basis, now)?.ceiling ?? null;
 }
 
+export interface LearnedContextInfo {
+	/** The context length budgeted against. */
+	limit: number;
+	/** Largest prompt plus reply seen to fit (0 when none since). */
+	largestFit: number;
+	learnedAt: number;
+	expiresAt: number;
+}
+
+/** What has been learned for a model, for display; null when nothing applies. */
+export function learnedContextInfo(
+	ref: ModelKey,
+	basis: number | null,
+	now = Date.now()
+): LearnedContextInfo | null {
+	const entry = current(ref, basis, now);
+	if (!entry) return null;
+	return {
+		limit: entry.ceiling,
+		largestFit: entry.floor,
+		learnedAt: entry.at,
+		expiresAt: entry.at + TTL_MS
+	};
+}
+
+/** Drops a model's learned limit, e.g. after its server was reconfigured. */
+export function forgetLearnedContextLimit(ref: ModelKey): boolean {
+	return learned.delete(keyOf(ref));
+}
+
 /** For tests. */
 export function resetLearnedContextLimits(): void {
 	learned.clear();

@@ -1,15 +1,17 @@
 import { MAX_CONCURRENT_SUBAGENTS, RUN_SUBAGENT_TOOL } from '$lib/subagent-tool.js';
+import type { AgentTriggerConfig } from '$lib/types.js';
 import type { Db } from '../db/index.js';
 import { createAgent, updateAgent } from '../db/repo/agents.js';
 
 export const MEMORY_EXTRACTION_AGENT = 'memory-extraction';
+export const MEMORY_CLEANUP_AGENT = 'memory-cleanup';
 
-const EXTRACTION_TRIGGER_CONFIG = {
+const EXTRACTION_TRIGGER_CONFIG: AgentTriggerConfig = {
 	event: 'chat.created',
 	every: 5,
 	instructions:
 		'New chats have been created since the last extraction. Use search_chats with the "since" parameter to list recent conversations, read_chat to review their contents, then distill durable long-term memory from them.'
-} as const;
+};
 
 /**
  * Tells an extraction run exactly which window to cover: everything updated
@@ -52,93 +54,100 @@ const EXTRACTION_TOOLS = [
 	'delete_concept'
 ];
 
+interface BuiltinAgentDefinition {
+	name: string;
+	description: string;
+	systemPrompt: string;
+	triggerConfig: AgentTriggerConfig;
+	toolAllowlist: string[];
+}
+
 /**
- * Seeds the memory extraction agent, or brings an existing row up to date:
- * built-in agents can't be edited by users, so their trigger, prompt and tools
- * follow this code.
+ * Creates a built-in event agent, or brings an existing row up to date: users
+ * can't edit built-ins, so their description, trigger, prompt and tools follow
+ * this code. Whether they're enabled is left alone.
  */
-export function seedBuiltinAgent(db: Db): void {
+function syncBuiltinAgent(db: Db, def: BuiltinAgentDefinition): void {
 	const existing = db
 		.prepare(
-			"SELECT id, trigger_type, trigger_config, system_prompt, tool_allowlist FROM agents WHERE name = 'memory-extraction' AND user_id IS NULL"
+			'SELECT id, description, trigger_type, trigger_config, system_prompt, tool_allowlist FROM agents WHERE name = ? AND user_id IS NULL'
 		)
-		.get() as
+		.get(def.name) as
 		| {
 				id: string;
+				description: string;
 				trigger_type: string;
 				trigger_config: string;
 				system_prompt: string;
 				tool_allowlist: string | null;
 		  }
 		| undefined;
-	if (existing) {
-		let cfg: { event?: string; every?: number; instructions?: string } = {};
-		try {
-			cfg = JSON.parse(existing.trigger_config) as typeof cfg;
-		} catch {
-			cfg = {};
-		}
-		if (
-			existing.trigger_type !== 'event' ||
-			cfg.event !== EXTRACTION_TRIGGER_CONFIG.event ||
-			cfg.every !== EXTRACTION_TRIGGER_CONFIG.every ||
-			cfg.instructions !== EXTRACTION_TRIGGER_CONFIG.instructions
-		) {
-			updateAgent(db, existing.id, {
-				triggerType: 'event',
-				triggerConfig: EXTRACTION_TRIGGER_CONFIG,
-				nextRunAt: null
-			});
-		}
-		if (
-			existing.system_prompt !== EXTRACTION_SYSTEM_PROMPT ||
-			existing.tool_allowlist !== JSON.stringify(EXTRACTION_TOOLS)
-		) {
-			updateAgent(db, existing.id, {
-				systemPrompt: EXTRACTION_SYSTEM_PROMPT,
-				toolAllowlist: EXTRACTION_TOOLS
-			});
-		}
+	if (!existing) {
+		createAgent(db, null, {
+			name: def.name,
+			description: def.description,
+			systemPrompt: def.systemPrompt,
+			triggerType: 'event',
+			triggerConfig: def.triggerConfig,
+			enabled: true,
+			toolAllowlist: def.toolAllowlist
+		});
 		return;
 	}
-	createAgent(db, null, {
-		name: 'memory-extraction',
+	const triggerChanged =
+		existing.trigger_type !== 'event' ||
+		existing.trigger_config !== JSON.stringify(def.triggerConfig);
+	if (
+		triggerChanged ||
+		existing.description !== def.description ||
+		existing.system_prompt !== def.systemPrompt ||
+		existing.tool_allowlist !== JSON.stringify(def.toolAllowlist)
+	) {
+		updateAgent(db, existing.id, {
+			description: def.description,
+			systemPrompt: def.systemPrompt,
+			toolAllowlist: def.toolAllowlist,
+			...(triggerChanged
+				? { triggerType: 'event' as const, triggerConfig: def.triggerConfig, nextRunAt: null }
+				: {})
+		});
+	}
+}
+
+export function seedBuiltinAgent(db: Db): void {
+	syncBuiltinAgent(db, {
+		name: MEMORY_EXTRACTION_AGENT,
 		description: 'Extracts long-term memory from recent conversations (built-in).',
 		systemPrompt: EXTRACTION_SYSTEM_PROMPT,
-		triggerType: 'event',
 		triggerConfig: EXTRACTION_TRIGGER_CONFIG,
-		enabled: true,
 		toolAllowlist: EXTRACTION_TOOLS
 	});
 }
 
-export function seedMemoryCleanupAgent(db: Db): void {
-	const existing = db
-		.prepare("SELECT id FROM agents WHERE name = 'memory-cleanup' AND user_id IS NULL")
-		.get();
-	if (existing) return;
-	createAgent(db, null, {
-		name: 'memory-cleanup',
-		description:
-			'Keeps long-term memory tidy on every 5th memory change: merges duplicates, resolves contradictions, prunes noise (built-in).',
-		systemPrompt: `You are the memory cleanup agent. Each run processes one user's long-term memory bundle and keeps it accurate and tidy. You are triggered after memories change; the triggering event details are in your instructions.
+const CLEANUP_SYSTEM_PROMPT = `You are the memory cleanup agent. Each run processes one user's long-term memory bundle and keeps it accurate and tidy. You are triggered after memories change; the triggering event details are in your instructions.
 
 Workflow:
-1. Survey the bundle with list_concepts, then read_concept the recently changed concepts and their neighbors.
+1. Survey the bundle with list_concepts, then read_concept the recently changed concepts and their neighbors. A large bundle: split the review by folder or topic and hand each part to its own run_subagent with tools ["list_concepts", "read_concept", "search_memory"] (up to ${MAX_CONCURRENT_SUBAGENTS} at once). Ask each to read its part and report, with concept paths, the duplicates, contradictions, noise, broken wiki-links and metadata problems it finds, plus the fix it proposes. Subagents only review; you make every change yourself, so changes that span parts stay consistent.
 2. Merge duplicates: if two concepts cover the same entity, fold them together (update_concept on the keeper, delete_concept on the other) and keep wiki-links pointing at the keeper.
 3. Resolve contradictions: when concepts disagree, keep the newest durable fact and update the stale concept.
 4. Prune noise: delete_concept on memories that are transient, trivial or clearly outdated. Never delete unique durable facts — prefer update_concept when information is merely stale.
 5. Tidy metadata: fix missing or messy frontmatter (type, title, description, tags, timestamp) and repair broken [[path/to/concept.md]] wiki-links after merges or deletions.
 6. Refile clearly misplaced concepts into a fitting folder (create_concept at the new path with identical content, then delete_concept the old one).
 
-Be conservative: when in doubt, leave a concept untouched.`,
-		triggerType: 'event',
+Be conservative: when in doubt, leave a concept untouched.`;
+
+export function seedMemoryCleanupAgent(db: Db): void {
+	syncBuiltinAgent(db, {
+		name: MEMORY_CLEANUP_AGENT,
+		description:
+			'Keeps long-term memory tidy on every 5th memory change: merges duplicates, resolves contradictions, prunes noise (built-in).',
+		systemPrompt: CLEANUP_SYSTEM_PROMPT,
 		triggerConfig: { event: 'memory.changed', every: 5 },
-		enabled: true,
 		toolAllowlist: [
 			'search_memory',
 			'read_concept',
 			'list_concepts',
+			RUN_SUBAGENT_TOOL,
 			'create_concept',
 			'update_concept',
 			'delete_concept'
