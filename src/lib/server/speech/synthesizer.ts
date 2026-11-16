@@ -4,6 +4,7 @@ import { getDb } from '../db/index.js';
 import { getSetting, setSetting, deleteSetting } from '../db/repo/settings.js';
 import { ModelUnavailableError } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
+import { filterTargets, type Privacy } from '../privacy/policy.js';
 import { resolveAudioEndpoint, upstreamErrorMessage } from './targets.js';
 import { listVoices, pickVoice } from './voices.js';
 
@@ -73,7 +74,8 @@ function isRetryable(e: unknown): boolean {
  */
 export async function synthesizeWithFallbacks(
 	input: string,
-	targets: ModelMappingTarget[],
+	mappingTargets: ModelMappingTarget[],
+	privacy: Privacy,
 	options?: SpeechOptions
 ): Promise<{
 	audio: ArrayBuffer;
@@ -82,6 +84,15 @@ export async function synthesizeWithFallbacks(
 	target: ModelMappingTarget;
 }> {
 	const db = getDb();
+	// Fallbacks are filtered first: a private text never reaches an untrusted provider.
+	const targets = filterTargets(db, mappingTargets, privacy);
+	if (targets.length === 0 && mappingTargets.length > 0) {
+		throw new SpeechError(
+			403,
+			'This chat is private and no text-to-speech model may process private data',
+			false
+		);
+	}
 	const requestedVoice = options?.voice?.trim() || undefined;
 	const configuredVoice = getDefaultVoice(db);
 	const responseFormat = options?.responseFormat ?? 'mp3';
@@ -94,7 +105,8 @@ export async function synthesizeWithFallbacks(
 				db,
 				target,
 				'speech',
-				'text-to-speech'
+				'text-to-speech',
+				privacy
 			);
 			// Checked per target: a mapping's fallbacks may use different voice names.
 			const voice = pickVoice(

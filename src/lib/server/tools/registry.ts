@@ -1,3 +1,4 @@
+import type { Privacy } from '../privacy/policy.js';
 import path from 'node:path';
 import type { Tool } from 'ai';
 import type { ToolInfo } from '$lib/types.js';
@@ -34,6 +35,8 @@ export interface BuildToolsInput {
 	servers?: McpServerRow[];
 	/** Sees every finished tool call, after it was counted towards the server's usage. */
 	onToolCall?: (row: McpServerRow, outcome: McpToolCallOutcome) => void;
+	/** The turn's privacy, shared with its tools (see CallerContext.privacy). */
+	privacy?: Privacy;
 }
 
 export interface BuiltTools extends ToolCatalog {
@@ -52,7 +55,8 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		author: input.author,
 		conversationId: input.conversationId,
 		agentRunId: input.agentRunId,
-		messageId: input.messageId
+		messageId: input.messageId,
+		privacy: input.privacy
 	};
 	const rows = (input.servers ?? listEnabledMcpServers(db)).filter(
 		(row) =>

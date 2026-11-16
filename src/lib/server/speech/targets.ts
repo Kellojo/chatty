@@ -4,6 +4,7 @@ import { findModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
 import { decryptSecret } from '../crypto.js';
 import { ModelUnavailableError } from '../llm/mapped.js';
+import { assertModelAllowed, type Privacy } from '../privacy/policy.js';
 
 /** Where to send an OpenAI-style audio request for one target. */
 export interface AudioEndpoint {
@@ -15,13 +16,17 @@ export interface AudioEndpoint {
 /**
  * The endpoint for `target` if its provider and model are enabled and the model
  * has `capability`; otherwise throws ModelUnavailableError so callers try the next target.
+ * Every speech call (STT, TTS, voices) resolves here, so `privacy` is checked
+ * once: a private context may only reach a trusted provider (PrivateDataBlockedError).
  */
 export function resolveAudioEndpoint(
 	db: Db,
 	target: ModelMappingTarget,
 	capability: 'transcription' | 'speech',
-	feature: string
+	feature: string,
+	privacy: Privacy
 ): AudioEndpoint {
+	assertModelAllowed(db, target, privacy);
 	const provider = getProvider(db, target.providerId);
 	if (!provider || provider.enabled !== 1) {
 		throw new ModelUnavailableError(`Provider ${target.providerId} is not available`);

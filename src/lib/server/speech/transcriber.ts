@@ -3,6 +3,7 @@ import { getDb } from '../db/index.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
 import { resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
+import { filterTargets, type Privacy } from '../privacy/policy.js';
 import { resolveAudioEndpoint, upstreamErrorMessage } from './targets.js';
 
 const log = createLogger('speech');
@@ -33,10 +34,19 @@ export interface TranscriptionOptions {
  */
 export async function transcribeWithFallbacks(
 	buffer: ArrayBuffer,
-	targets: ModelMappingTarget[],
+	mappingTargets: ModelMappingTarget[],
+	privacy: Privacy,
 	options?: TranscriptionOptions
 ): Promise<{ result: { text: string } | string; index: number; target: ModelMappingTarget }> {
 	const db = getDb();
+	// Any error falls back, so a private recording must never have an untrusted target to fall to.
+	const targets = filterTargets(db, mappingTargets, privacy);
+	if (targets.length === 0 && mappingTargets.length > 0) {
+		throw new TranscriptionError(
+			403,
+			'This chat is private and no speech-to-text model may process private data'
+		);
+	}
 	let lastError: unknown = null;
 
 	for (let i = 0; i < targets.length; i++) {
@@ -46,7 +56,8 @@ export async function transcribeWithFallbacks(
 				db,
 				target,
 				'transcription',
-				'transcription'
+				'transcription',
+				privacy
 			);
 
 			const formData = new FormData();
@@ -105,6 +116,7 @@ export async function transcribeLogged(
 		conversationId?: string | null;
 		runId?: string | null;
 	},
+	privacy: Privacy,
 	options?: TranscriptionOptions
 ): Promise<string> {
 	const db = getDb();
@@ -126,6 +138,7 @@ export async function transcribeLogged(
 		const { result, index, target } = await transcribeWithFallbacks(
 			buffer,
 			resolved.targets,
+			privacy,
 			options
 		);
 		finalizeProxyRequest(db, row.id, {

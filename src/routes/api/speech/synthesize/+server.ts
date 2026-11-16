@@ -1,3 +1,4 @@
+import { NON_PRIVATE } from '$lib/server/privacy/policy.js';
 import { error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { getDb } from '$lib/server/db/index.js';
@@ -61,7 +62,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		);
 		mappingId = resolved.mappingId;
 		// Stopping playback aborts the request, which frees the slot and the provider call.
-		result = await synthesizeWithFallbacks(parsed.data.text, resolved.targets, {
+		result = await synthesizeWithFallbacks(parsed.data.text, resolved.targets, NON_PRIVATE, {
 			voice: parsed.data.voice,
 			signal: request.signal
 		});

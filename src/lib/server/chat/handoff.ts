@@ -81,7 +81,8 @@ export async function draftHandoffPrompt(
 	});
 	try {
 		const result = await generateText({
-			model: resolveModel(target),
+			// Checked against the chat's flag as it is now; private chats can't hand off.
+			model: resolveModel(target, { tainted: false, conversationId: conversation.id }),
 			system: INSTRUCTIONS,
 			prompt: `<transcript>\n${transcript}\n</transcript>`,
 			maxOutputTokens: 2_000

@@ -202,6 +202,7 @@ describe('createStepSummarizer', () => {
 
 		const summarize = createStepSummarizer({
 			db,
+			privacy: { tainted: false },
 			userId: 'u1',
 			conversationId: conv.id,
 			fallback: { providerId: provider.id, modelId: 'm1' }

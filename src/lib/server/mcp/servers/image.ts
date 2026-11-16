@@ -1,3 +1,4 @@
+import { callerPrivacy } from '../../privacy/policy.js';
 import { createHash, randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -128,7 +129,7 @@ export function createImageServer(ctx: CallerContext): McpServer {
 
 			const count = Math.min(n ?? 1, MAX_N);
 			try {
-				const model = resolveImageModel(ref);
+				const model = resolveImageModel(ref, callerPrivacy(ctx));
 				const result = await loggedImageCall(ctx, ref, 'images.generate', () =>
 					generateImage({
 						model,
@@ -237,7 +238,7 @@ export function createImageServer(ctx: CallerContext): McpServer {
 			}
 
 			try {
-				const model = resolveImageModel(ref);
+				const model = resolveImageModel(ref, callerPrivacy(ctx));
 				const result = await loggedImageCall(ctx, ref, 'images.edit', () =>
 					generateImage({
 						model,

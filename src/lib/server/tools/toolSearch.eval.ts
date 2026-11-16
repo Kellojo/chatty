@@ -14,6 +14,7 @@
  * Reads the app's database (DATABASE_PATH from .env) for providers, models and
  * MCP servers, and builds the tools as the first admin user.
  */
+import { NON_PRIVATE } from '../privacy/policy.js';
 import { writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -181,7 +182,7 @@ async function runCase(
 	const startedAt = Date.now();
 	try {
 		const result = await generateText({
-			model: resolveModel(target),
+			model: resolveModel(target, NON_PRIVATE),
 			system: section ? `${SYSTEM}\n\n${section}` : SYSTEM,
 			prompt: evalCase.prompt,
 			tools: setup.tools,

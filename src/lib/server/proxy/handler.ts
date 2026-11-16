@@ -23,6 +23,7 @@ import {
 	type FinalizeProxyRequestInput
 } from '../db/repo/proxy-requests.js';
 import { ModelUnavailableError, resolveModel } from '../llm/registry.js';
+import { filterTargets, NON_PRIVATE, type Privacy } from '../privacy/policy.js';
 import {
 	chatCompletionsSchema,
 	createAssembler,
@@ -85,17 +86,32 @@ export function listOpenAiModels(db: Db): { object: 'list'; data: OpenAiModelEnt
 interface ResolvedModel {
 	mappingId: string | null;
 	targets: ModelMappingTarget[];
+	/**
+	 * The privacy API callers get: the caller owns the payload, so it is only
+	 * private when it asked for a `trusted_only` mapping, which then never
+	 * routes (or falls back) to an untrusted provider.
+	 */
+	privacy: Privacy;
 }
 
 export function resolveTargets(db: Db, model: string): ResolvedModel | null {
 	const mapping = getModelMappingByName(db, model);
 	if (mapping && mapping.enabled === 1) {
-		const targets = parseTargets(mapping);
-		if (targets.length > 0) return { mappingId: mapping.id, targets };
+		const privacy: Privacy =
+			(mapping as { trusted_only?: number }).trusted_only === 1
+				? { tainted: true, reason: 'trusted-only mapping' }
+				: NON_PRIVATE;
+		const targets = filterTargets(db, parseTargets(mapping), privacy);
+		if (targets.length > 0) return { mappingId: mapping.id, targets, privacy };
+		if (privacy.tainted) return null;
 	}
 	const row = findEnabledModelByModelId(db, model);
 	if (!row) return null;
-	return { mappingId: null, targets: [{ providerId: row.provider_id, modelId: row.model_id }] };
+	return {
+		mappingId: null,
+		targets: [{ providerId: row.provider_id, modelId: row.model_id }],
+		privacy: NON_PRIVATE
+	};
 }
 
 function errorMessage(error: unknown): string {
@@ -253,7 +269,7 @@ async function respondNonStreaming(
 		const assembler = formats.assembler();
 		let contentful = false;
 		try {
-			const model = resolveModel(target);
+			const model = resolveModel(target, resolved.privacy);
 			const result = startStream(prepared, model, request.signal);
 			let timing = NO_TIMING;
 			for await (const part of result.fullStream) {
@@ -344,7 +360,7 @@ function respondStreaming(
 					const target = resolved.targets[i];
 					let contentful = false;
 					try {
-						const model = resolveModel(target);
+						const model = resolveModel(target, resolved.privacy);
 						const result = startStream(prepared, model, abort.signal);
 						let timing = NO_TIMING;
 						for await (const part of result.fullStream) {

@@ -1,3 +1,9 @@
+import {
+	filterTargets,
+	PrivateDataBlockedError,
+	turnTrust,
+	type Privacy
+} from '../privacy/policy.js';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {
@@ -670,6 +676,19 @@ async function prepareTurn(
 		throw new ChatRequestError(400, `The selected model is not available: ${detail}`);
 	}
 
+	// The turn's privacy; choke points re-read the conversation's and run's flags.
+	const privacy: Privacy = {
+		tainted: false,
+		conversationId: conversation.id,
+		agentRunId: run?.runId ?? null
+	};
+	// Before the retry loop: a private chat never falls back to an untrusted provider.
+	const allowed = filterTargets(db, available, privacy);
+	if (allowed.length === 0) {
+		throw new ChatRequestError(409, new PrivateDataBlockedError().message);
+	}
+	const trust = turnTrust(db, allowed);
+
 	const catalog = await buildTools({
 		userId,
 		memoryEnabled: conversation.memory_enabled === 1,
@@ -683,7 +702,8 @@ async function prepareTurn(
 		author: run?.author,
 		conversationId: conversation.id,
 		agentRunId: run?.runId ?? null,
-		messageId: lastUserMessage.id
+		messageId: lastUserMessage.id,
+		privacy
 	});
 	// A run turn knows whether it may ask; in a chat the user talks to, an agent
 	// that is allowed to ask can always do so.
@@ -694,7 +714,16 @@ async function prepareTurn(
 		catalog.tools[ASK_USER_TOOL] = askUserTool();
 		catalog.toolToServer[ASK_USER_TOOL] = 'chatty';
 	}
-	return { conversation, agent, lastUserMessage, ref, targets: available, catalog };
+	return {
+		conversation,
+		agent,
+		lastUserMessage,
+		ref,
+		targets: allowed,
+		catalog,
+		privacy,
+		trust
+	};
 }
 
 export interface ChatTurnRequest {
@@ -799,7 +828,7 @@ export async function runChatTurn(
 		settleEarly({ status: 'failed', error: describe(e), abortReason: null, openAskUser: null });
 		throw e;
 	}
-	const { agent, lastUserMessage, ref, targets, catalog } = turn;
+	const { agent, lastUserMessage, ref, targets, catalog, privacy } = turn;
 	const { tools, close } = catalog;
 	conversation = turn.conversation;
 	if (controller.signal.aborted) {
@@ -965,7 +994,7 @@ export async function runChatTurn(
 				// A failed earlier target must not mark a successful fallback as failed.
 				errorText = null;
 				try {
-					const model = resolveModel(target);
+					const model = resolveModel(target, privacy);
 					const startedAt = Date.now();
 					let stepIndex = 0;
 					let lastStepAt = startedAt;
@@ -1042,6 +1071,7 @@ export async function runChatTurn(
 						messageId: assistantMessageId,
 						runId: run?.runId,
 						target,
+						privacy,
 						contextLength: () => effectiveContextLength(target),
 						overheadTokens:
 							estimateTokens(system) + Math.ceil(estimateToolChars(toolSearch.tools) / 4),
@@ -1219,13 +1249,18 @@ export async function runChatTurn(
 				if (conversation.title === '') {
 					const assistantText = extractText(responseMessage.parts);
 					const userText = extractText(lastUserMessage.parts);
-					generateConversationTitle(conversation.id, userId, ref, userText, assistantText).catch(
-						() => undefined
-					);
+					generateConversationTitle(
+						conversation.id,
+						userId,
+						ref,
+						userText,
+						assistantText,
+						privacy
+					).catch(() => undefined);
 				}
 				// Hidden runs are single turns: compacting them only costs a call.
 				if (status === 'complete' && visibleChat) {
-					maybeCompactConversation(conversation, userId, ref).catch(() => undefined);
+					maybeCompactConversation(conversation, userId, ref, privacy).catch(() => undefined);
 				}
 			} catch (e) {
 				log.error('Failed to persist assistant message', {
@@ -1315,6 +1350,7 @@ function stepCompactor(input: {
 	/** Absent for plain chats. */
 	runId?: string;
 	target: { providerId: string; modelId: string };
+	privacy: Privacy;
 	/** Asked per step: an LM Studio model's loaded context can change mid-run. */
 	contextLength: () => Promise<number | null>;
 	overheadTokens: number;
@@ -1328,6 +1364,7 @@ function stepCompactor(input: {
 		messageId: input.messageId,
 		runId: input.runId,
 		fallback: input.target,
+		privacy: input.privacy,
 		abortSignal: input.abortSignal
 	});
 	const prepare = async ({

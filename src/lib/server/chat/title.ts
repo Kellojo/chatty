@@ -1,35 +1,30 @@
+import { backgroundTarget, privatePlaceholderTitle } from '../privacy/background.js';
+import type { Privacy } from '../privacy/policy.js';
 import { generateText } from 'ai';
 import { getDb } from '../db/index.js';
 import { setConversationTitle } from '../db/repo/conversations.js';
-import { findModel, findRoleModel } from '../db/repo/models.js';
+import { findModel } from '../db/repo/models.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
 import { publishServerEvent } from '../events/bus.js';
 import { resolveModel } from '../llm/registry.js';
-import { resolveRefTargets } from '../llm/mapped.js';
 import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
-
-function titleTarget(fallback: { providerId: string; modelId: string }): {
-	providerId: string;
-	modelId: string;
-} {
-	const db = getDb();
-	const role = findRoleModel(db, 'title');
-	if (role) {
-		return resolveRefTargets({ providerId: role.provider_id, modelId: role.model_id }, db)
-			.targets[0];
-	}
-	return resolveRefTargets(fallback, db).targets[0];
-}
 
 export async function generateConversationTitle(
 	conversationId: string,
 	userId: string,
 	fallbackRef: { providerId: string; modelId: string },
 	userText: string,
-	assistantText: string
+	assistantText: string,
+	privacy: Privacy
 ): Promise<void> {
 	const db = getDb();
-	const target = titleTarget(fallbackRef);
+	// The title role, else the chat's model; a private chat only uses a trusted one.
+	const target = backgroundTarget(db, 'title', fallbackRef, privacy);
+	if (!target) {
+		setConversationTitle(db, conversationId, privatePlaceholderTitle());
+		publishServerEvent(userId, { type: 'conversation.updated', conversationId });
+		return;
+	}
 	const prompt = [
 		'Write a short conversation title (3-6 words, plain text, no quotes, no trailing punctuation) for this exchange.',
 		'',
@@ -48,7 +43,7 @@ export async function generateConversationTitle(
 	});
 	try {
 		const result = await generateText({
-			model: resolveModel(target),
+			model: resolveModel(target, privacy),
 			prompt,
 			maxOutputTokens: 30
 		});

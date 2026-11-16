@@ -78,6 +78,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		const { audio, contentType, index, target } = await synthesizeWithFallbacks(
 			body.input,
 			resolved.targets,
+			resolved.privacy,
 			{
 				voice: body.voice,
 				responseFormat: body.response_format,

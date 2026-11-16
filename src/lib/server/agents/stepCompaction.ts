@@ -1,3 +1,4 @@
+import type { Privacy } from '../privacy/policy.js';
 import { generateText, type ModelMessage } from 'ai';
 import { config } from '../config.js';
 import type { Db } from '../db/index.js';
@@ -334,6 +335,8 @@ export interface StepSummarizerOptions {
 	/** Absent for plain chats; the request then counts as chat usage. */
 	runId?: string;
 	fallback: { providerId: string; modelId: string };
+	/** The turn's privacy: a private one only summarizes on a trusted model. */
+	privacy: Privacy;
 	abortSignal?: AbortSignal;
 }
 
@@ -341,7 +344,9 @@ export interface StepSummarizerOptions {
 export function createStepSummarizer(opts: StepSummarizerOptions): Summarize {
 	return async ({ transcript, previous }) => {
 		const { db } = opts;
-		const target = summaryTarget(opts.fallback);
+		const target = summaryTarget(opts.fallback, opts.privacy);
+		// No trusted model for a private run: older steps are only truncated.
+		if (!target) return null;
 		const prompt = [
 			SUMMARY_PROMPT,
 			'',
@@ -364,7 +369,7 @@ export function createStepSummarizer(opts: StepSummarizerOptions): Summarize {
 		const startedAt = Date.now();
 		try {
 			const result = await generateText({
-				model: resolveModel(target),
+				model: resolveModel(target, opts.privacy),
 				prompt,
 				maxOutputTokens: SUMMARY_MAX_TOKENS,
 				abortSignal: opts.abortSignal

@@ -1,3 +1,5 @@
+import { backgroundTarget } from '../privacy/background.js';
+import type { Privacy } from '../privacy/policy.js';
 import { generateText, type UIMessage } from 'ai';
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
@@ -5,12 +7,11 @@ import { createSummary, unsummarizedMessages } from '../db/repo/conversation-sum
 import type { ConversationRow } from '../db/repo/conversations.js';
 import { listMessages, type MessageRow } from '../db/repo/messages.js';
 import { estimateMessagesChars } from '../llm/promptBreakdown.js';
-import { findModel, findRoleModel } from '../db/repo/models.js';
+import { findModel } from '../db/repo/models.js';
 import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-requests.js';
 import { publishServerEvent } from '../events/bus.js';
 import { effectiveContextLength } from '../llm/lmstudio.js';
 import { resolveModel } from '../llm/registry.js';
-import { resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
 import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
 
@@ -106,18 +107,15 @@ export function compactThreshold(
 	return config.CHAT_COMPACT_TOKENS;
 }
 
-/** The compaction role model when one is set, otherwise `fallback`. */
-export function summaryTarget(fallback: { providerId: string; modelId: string }): {
-	providerId: string;
-	modelId: string;
-} {
-	const db = getDb();
-	const role = findRoleModel(db, 'compaction');
-	if (role) {
-		return resolveRefTargets({ providerId: role.provider_id, modelId: role.model_id }, db)
-			.targets[0];
-	}
-	return resolveRefTargets(fallback, db).targets[0];
+/**
+ * The compaction role model when one is set, otherwise `fallback`. A private
+ * chat only uses a trusted one of them; null when there is none (skip it).
+ */
+export function summaryTarget(
+	fallback: { providerId: string; modelId: string },
+	privacy: Privacy
+): { providerId: string; modelId: string } | null {
+	return backgroundTarget(getDb(), 'compaction', fallback, privacy);
 }
 
 const SUMMARY_PROMPT = `You are compressing conversation history to fit a context window. Summarize the conversation so far, preserving:
@@ -131,7 +129,8 @@ Be concise but complete; write in third person. Output only the summary.`;
 export async function maybeCompactConversation(
 	conversation: ConversationRow,
 	userId: string,
-	fallbackRef: { providerId: string; modelId: string }
+	fallbackRef: { providerId: string; modelId: string },
+	privacy: Privacy
 ): Promise<void> {
 	const db = getDb();
 	const keep = config.CHAT_COMPACT_KEEP_MESSAGES;
@@ -185,7 +184,9 @@ export async function maybeCompactConversation(
 	promptParts.push(transcript);
 	const prompt = promptParts.join('\n');
 
-	const target = summaryTarget(fallbackRef);
+	// A private chat with no trusted model keeps its history unsummarized.
+	const target = summaryTarget(fallbackRef, privacy);
+	if (!target) return;
 	const requestRow = createProxyRequest(db, {
 		userId,
 		source: 'chat',
@@ -198,7 +199,7 @@ export async function maybeCompactConversation(
 	const startedAt = Date.now();
 	try {
 		const result = await generateText({
-			model: resolveModel(target),
+			model: resolveModel(target, privacy),
 			prompt,
 			maxOutputTokens: SUMMARY_TARGET_TOKENS
 		});

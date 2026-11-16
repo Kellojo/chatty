@@ -1,3 +1,4 @@
+import { callerPrivacy } from '../../privacy/policy.js';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -73,6 +74,7 @@ export function createSpeechServer(ctx: CallerContext): McpServer {
 						conversationId: ctx.conversationId,
 						runId: ctx.agentRunId ?? null
 					},
+					callerPrivacy(ctx),
 					{ fileName: uploadedName(row.path), mimeType: row.mime, language, prompt }
 				);
 				const trimmed = transcript.trim();

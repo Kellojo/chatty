@@ -5,6 +5,7 @@ import { getProvider } from '../db/repo/providers.js';
 import { resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
 import { resolveAudioEndpoint } from './targets.js';
+import { NON_PRIVATE } from '../privacy/policy.js';
 
 const log = createLogger('speech');
 
@@ -46,7 +47,8 @@ export async function listVoices(db: Db, target: ModelMappingTarget): Promise<Vo
 	if (cached && Date.now() - cached.at < cached.ttl) return cached.list;
 	let endpoint: { baseUrl: string; headers: Record<string, string> };
 	try {
-		endpoint = resolveAudioEndpoint(db, target, 'speech', 'text-to-speech');
+		// Lists voices only: no content goes out.
+		endpoint = resolveAudioEndpoint(db, target, 'speech', 'text-to-speech', NON_PRIVATE);
 	} catch {
 		return null;
 	}

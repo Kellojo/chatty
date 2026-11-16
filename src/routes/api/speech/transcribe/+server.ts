@@ -1,3 +1,4 @@
+import { NON_PRIVATE } from '$lib/server/privacy/policy.js';
 import { json } from '@sveltejs/kit';
 import { getDb } from '$lib/server/db/index.js';
 import { findRoleModel } from '$lib/server/db/repo/models.js';
@@ -32,6 +33,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			await audioFile.arrayBuffer(),
 			ref,
 			{ userId: locals.user.id, source: 'chat' },
+			NON_PRIVATE,
 			{ fileName: audioFile.name || undefined, mimeType: audioFile.type || undefined }
 		);
 		return json({ text });
