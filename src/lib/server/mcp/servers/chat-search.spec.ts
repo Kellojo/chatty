@@ -187,18 +187,30 @@ describe('chat-search server', () => {
 });
 
 describe('read_chat tool', () => {
-	it("returns own conversation's messages oldest to newest with text", async () => {
-		const res = await callTool('read_chat', { conversationId: readId });
-		const msgs = JSON.parse(resultText(res)) as Array<{
+	type Page = {
+		totalMessages: number;
+		range: [number, number] | null;
+		messages: Array<{
 			role: string;
 			text: string;
 			createdAt: number;
 			status: string;
+			cut?: string;
 		}>;
-		expect(msgs.map((m) => m.text)).toEqual(['first', 'second', 'third']);
-		expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
-		expect(msgs.map((m) => m.createdAt)).toEqual([1, 2, 3]);
-		expect(msgs[0].status).toBe('complete');
+		olderCursor?: string;
+		newerCursor?: string;
+	};
+	const page = (res: unknown) => JSON.parse(resultText(res)) as Page;
+
+	it("returns own conversation's messages oldest to newest with text", async () => {
+		const res = page(await callTool('read_chat', { conversationId: readId }));
+		expect(res.messages.map((m) => m.text)).toEqual(['first', 'second', 'third']);
+		expect(res.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+		expect(res.messages.map((m) => m.createdAt)).toEqual([1, 2, 3]);
+		expect(res.messages[0].status).toBe('complete');
+		expect(res).toMatchObject({ totalMessages: 3, range: [1, 3] });
+		expect(res.olderCursor).toBeUndefined();
+		expect(res.newerCursor).toBeUndefined();
 	});
 
 	it("rejects another user's conversation id", async () => {
@@ -212,10 +224,42 @@ describe('read_chat tool', () => {
 		expect((res as { isError?: boolean }).isError).toBe(true);
 	});
 
-	it('honours the limit argument, keeping the last messages', async () => {
-		const res = await callTool('read_chat', { conversationId: readId, limit: 2 });
-		const msgs = JSON.parse(resultText(res)) as Array<{ text: string }>;
-		expect(msgs.map((m) => m.text)).toEqual(['second', 'third']);
+	it('rejects a malformed cursor', async () => {
+		const res = await callTool('read_chat', { conversationId: readId, cursor: 'garbage' });
+		expect((res as { isError?: boolean }).isError).toBe(true);
+		expect(resultText(res)).toContain('invalid cursor');
+	});
+
+	it('pages a long chat by size in both directions', async () => {
+		const db = getDb();
+		const id = createConversation(db, 'u1', { title: 'long' }).id;
+		const texts = Array.from({ length: 6 }, (_, i) => `${i}`.repeat(900));
+		for (const t of texts) {
+			createMessage(db, { conversationId: id, role: 'user', parts: [{ type: 'text', text: t }] });
+		}
+		// Newest first: 2000 chars hold two 900-char messages.
+		const last = page(await callTool('read_chat', { conversationId: id, maxChars: 2000 }));
+		expect(last.messages.map((m) => m.text)).toEqual(texts.slice(4));
+		expect(last.range).toEqual([5, 6]);
+		expect(last.newerCursor).toBeUndefined();
+		const older = page(
+			await callTool('read_chat', { conversationId: id, maxChars: 2000, cursor: last.olderCursor })
+		);
+		expect(older.messages.map((m) => m.text)).toEqual(texts.slice(2, 4));
+
+		// From the start, following newerCursor reads every message exactly once.
+		const seen: string[] = [];
+		let cursor: string | undefined;
+		let res = page(
+			await callTool('read_chat', { conversationId: id, from: 'start', maxChars: 2000 })
+		);
+		for (;;) {
+			seen.push(...res.messages.map((m) => m.text));
+			cursor = res.newerCursor;
+			if (!cursor) break;
+			res = page(await callTool('read_chat', { conversationId: id, maxChars: 2000, cursor }));
+		}
+		expect(seen).toEqual(texts);
 	});
 
 	it('reads only the shown version of an edited conversation', async () => {
@@ -228,12 +272,7 @@ describe('read_chat tool', () => {
 		say('assistant', 'old answer');
 		say('assistant', 'new answer', { parentId: q });
 		say('user', 'follow-up');
-		const res = await callTool('read_chat', { conversationId: id, limit: 3 });
-		const msgs = JSON.parse(resultText(res)) as Array<{ text: string }>;
-		expect(msgs.map((m) => m.text)).toEqual(['q', 'new answer', 'follow-up']);
-		const last = await callTool('read_chat', { conversationId: id, limit: 1 });
-		expect((JSON.parse(resultText(last)) as Array<{ text: string }>).map((m) => m.text)).toEqual([
-			'follow-up'
-		]);
+		const res = page(await callTool('read_chat', { conversationId: id }));
+		expect(res.messages.map((m) => m.text)).toEqual(['q', 'new answer', 'follow-up']);
 	});
 });

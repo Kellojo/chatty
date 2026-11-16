@@ -379,9 +379,22 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 		mcp('search_chats', { query: 'sidebar' }, [
 			{ id: 'c-1', title: 'Side Panel: Coding Tasks vs Chat', updatedAt: 1794067922836 }
 		]),
-		mcp('read_chat', { conversationId: 'c-1' }, [
-			{ role: 'user', text: 'Make the sidebar look like an inbox', status: 'complete' }
-		])
+		mcp(
+			'read_chat',
+			{ conversationId: 'c-1' },
+			{
+				totalMessages: 1,
+				range: [1, 1],
+				messages: [
+					{
+						role: 'user',
+						text: 'Make the sidebar look like an inbox',
+						createdAt: 1794067922836,
+						status: 'complete'
+					}
+				]
+			}
+		)
 	],
 	fs: [
 		mcp('fs_ls', { scope: 'workspace' }, 'src/\nREADME.md\npackage.json'),

@@ -44,6 +44,18 @@ describe('builtin agent seeds', () => {
 		expect(triggerConfig.every).toBe(5);
 	});
 
+	it('gives memory extraction subagents and brings an outdated prompt and tool list up to date', () => {
+		db.prepare(
+			"UPDATE agents SET system_prompt = 'old', tool_allowlist = '[]' WHERE name = 'memory-extraction'"
+		).run();
+		seedBuiltinAgent(db);
+		const row = db
+			.prepare("SELECT * FROM agents WHERE name = 'memory-extraction' AND user_id IS NULL")
+			.get() as { system_prompt: string; tool_allowlist: string };
+		expect(JSON.parse(row.tool_allowlist)).toContain('run_subagent');
+		expect(row.system_prompt).toContain('run_subagent');
+	});
+
 	it('seeds the memory-cleanup agent as an every-5th memory.changed event agent', () => {
 		seedMemoryCleanupAgent(db);
 		seedMemoryCleanupAgent(db);

@@ -97,7 +97,8 @@ import {
 import { attachmentCache } from './attachmentCache.js';
 import { isTranscribable } from '../mcp/servers/speech.js';
 import { estimateTokens, maybeCompactConversation } from './compact.js';
-import { effectiveContextLength } from '../llm/lmstudio.js';
+import { effectiveContextLength, reportedContextLength } from '../llm/lmstudio.js';
+import { withContextOverflowRetry } from './overflowRetry.js';
 import {
 	abortReasonOf,
 	appendChunk,
@@ -1052,14 +1053,20 @@ export async function runChatTurn(
 						abortSignal: controller.signal
 					});
 					const result = streamText({
-						model,
+						model: compactSteps
+							? withContextOverflowRetry(model, {
+									target,
+									reportedContextLength: () => reportedContextLength(target),
+									compact: compactSteps.overflow
+								})
+							: model,
 						...prompt,
 						stopWhen,
 						experimental_repairToolCall: toolSearch.repairToolCall,
 						prepareStep: async (options) => {
 							const activeTools = toolSearch.activeTools();
 							const base = lastStep(options);
-							const messages = compactSteps ? await compactSteps(options) : undefined;
+							const messages = compactSteps ? await compactSteps.prepare(options) : undefined;
 							return {
 								...base,
 								...(activeTools ? { activeTools } : {}),
@@ -1328,7 +1335,7 @@ function stepCompactor(input: {
 		fallback: input.target,
 		abortSignal: input.abortSignal
 	});
-	return async ({
+	const prepare = async ({
 		messages,
 		steps
 	}: {
@@ -1366,6 +1373,38 @@ function stepCompactor(input: {
 		});
 		return c.messages;
 	};
+	/**
+	 * For a step the model rejected as too long: compacts it to the limit just
+	 * learned, keeping only the latest step verbatim. Null when nothing shrank.
+	 */
+	const overflow = async (rejected: {
+		messages: ModelMessage[];
+		promptTokens: number;
+		contextLength: number;
+	}): Promise<ModelMessage[] | null> => {
+		const threshold = compactionThreshold(rejected.contextLength);
+		if (threshold === null) return null;
+		const c = await compactStepMessages({
+			messages: rejected.messages,
+			// It didn't fit, whatever the estimate says.
+			promptTokens: Math.max(rejected.promptTokens, threshold),
+			thresholdTokens: threshold,
+			summarize,
+			keepRecentSteps: 1
+		});
+		if (c.stage === 'none') return null;
+		log.info('Rejected step compacted for a retry', {
+			conversationId: input.conversationId,
+			runId: input.runId,
+			stage: c.stage,
+			contextLength: rejected.contextLength,
+			elided: c.elided,
+			truncated: c.truncated,
+			foldedSteps: c.foldedSteps
+		});
+		return c.messages;
+	};
+	return { prepare, overflow };
 }
 
 export async function handleChatRequest(

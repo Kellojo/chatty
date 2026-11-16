@@ -55,9 +55,11 @@ type ToolResultOutput = Extract<
 export function compactionThreshold(contextLength: number | null | undefined): number | null {
 	if (config.CHAT_COMPACT_TOKENS === 0) return null;
 	if (contextLength && contextLength > 0) {
+		// Small windows can't spare a full reply reserve or the usual minimum.
+		const reserve = Math.min(RESPONSE_RESERVE_TOKENS, Math.floor(contextLength / 4));
 		return Math.max(
-			Math.floor((contextLength - RESPONSE_RESERVE_TOKENS) * SAFETY_MARGIN),
-			MIN_THRESHOLD_TOKENS
+			Math.floor((contextLength - reserve) * SAFETY_MARGIN),
+			Math.min(MIN_THRESHOLD_TOKENS, Math.floor(contextLength / 2))
 		);
 	}
 	return config.CHAT_COMPACT_TOKENS;

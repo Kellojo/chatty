@@ -1,3 +1,4 @@
+import { MAX_CONCURRENT_SUBAGENTS, RUN_SUBAGENT_TOOL } from '$lib/subagent-tool.js';
 import type { Db } from '../db/index.js';
 import { createAgent, updateAgent } from '../db/repo/agents.js';
 
@@ -22,12 +23,54 @@ export function extractionWindowNote(lastSuccessAt: number | null): string {
 	return `The last successful extraction for this user started at ${iso}. Pass exactly since = "${iso}" to search_chats, and only extract from conversations updated at or after that time — not from memory timestamps.`;
 }
 
+const EXTRACTION_SYSTEM_PROMPT = `You are the memory extraction agent. Each run processes one user's recent conversations and distills them into long-term memory.
+
+Workflow:
+1. Use search_chats to find recent conversations.
+2. Read them. read_chat returns one page at a time; follow its cursors until you have read what is new. Several chats or a long one: hand each chat to its own run_subagent with tools ["read_chat"] (up to ${MAX_CONCURRENT_SUBAGENTS} at once), giving it the chat id and the time window, and asking it to read the whole chat with from = "start" and newerCursor and to report the durable facts, preferences, decisions and ongoing projects it finds — concise bullets, no chatter. Their reports, not the chats, then stay in your context. Read a single short chat yourself.
+3. Check existing memory with list_concepts and search_memory; prefer update_concept over create_concept when a concept already exists.
+4. Persist only durable facts, preferences, decisions and ongoing projects — never transient chatter, one-off questions or secrets.
+
+Write each memory as an OKF concept via create_concept / update_concept with YAML frontmatter:
+- type: concept | person | project | preference | decision
+- title: short human-readable name
+- description: one-sentence summary
+- tags: list of lowercase keywords
+- timestamp: ISO 8601 time of extraction
+
+The body is structured markdown. Cross-link related concepts with [[path/to/concept.md]] wiki-links so the memory graph stays connected.`;
+
+const EXTRACTION_TOOLS = [
+	'search_chats',
+	'read_chat',
+	RUN_SUBAGENT_TOOL,
+	'search_memory',
+	'read_concept',
+	'list_concepts',
+	'create_concept',
+	'update_concept',
+	'delete_concept'
+];
+
+/**
+ * Seeds the memory extraction agent, or brings an existing row up to date:
+ * built-in agents can't be edited by users, so their trigger, prompt and tools
+ * follow this code.
+ */
 export function seedBuiltinAgent(db: Db): void {
 	const existing = db
 		.prepare(
-			"SELECT id, trigger_type, trigger_config FROM agents WHERE name = 'memory-extraction' AND user_id IS NULL"
+			"SELECT id, trigger_type, trigger_config, system_prompt, tool_allowlist FROM agents WHERE name = 'memory-extraction' AND user_id IS NULL"
 		)
-		.get() as { id: string; trigger_type: string; trigger_config: string } | undefined;
+		.get() as
+		| {
+				id: string;
+				trigger_type: string;
+				trigger_config: string;
+				system_prompt: string;
+				tool_allowlist: string | null;
+		  }
+		| undefined;
 	if (existing) {
 		let cfg: { event?: string; every?: number; instructions?: string } = {};
 		try {
@@ -47,39 +90,25 @@ export function seedBuiltinAgent(db: Db): void {
 				nextRunAt: null
 			});
 		}
+		if (
+			existing.system_prompt !== EXTRACTION_SYSTEM_PROMPT ||
+			existing.tool_allowlist !== JSON.stringify(EXTRACTION_TOOLS)
+		) {
+			updateAgent(db, existing.id, {
+				systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+				toolAllowlist: EXTRACTION_TOOLS
+			});
+		}
 		return;
 	}
 	createAgent(db, null, {
 		name: 'memory-extraction',
 		description: 'Extracts long-term memory from recent conversations (built-in).',
-		systemPrompt: `You are the memory extraction agent. Each run processes one user's recent conversations and distills them into long-term memory.
-
-Workflow:
-1. Use search_chats to find recent conversations, then read_chat to read their contents.
-2. Check existing memory first with list_concepts and search_memory; prefer update_concept over create_concept when a concept already exists.
-3. Persist only durable facts, preferences, decisions and ongoing projects — never transient chatter, one-off questions or secrets.
-
-Write each memory as an OKF concept via create_concept / update_concept with YAML frontmatter:
-- type: concept | person | project | preference | decision
-- title: short human-readable name
-- description: one-sentence summary
-- tags: list of lowercase keywords
-- timestamp: ISO 8601 time of extraction
-
-The body is structured markdown. Cross-link related concepts with [[path/to/concept.md]] wiki-links so the memory graph stays connected.`,
+		systemPrompt: EXTRACTION_SYSTEM_PROMPT,
 		triggerType: 'event',
 		triggerConfig: EXTRACTION_TRIGGER_CONFIG,
 		enabled: true,
-		toolAllowlist: [
-			'search_chats',
-			'read_chat',
-			'search_memory',
-			'read_concept',
-			'list_concepts',
-			'create_concept',
-			'update_concept',
-			'delete_concept'
-		]
+		toolAllowlist: EXTRACTION_TOOLS
 	});
 }
 

@@ -8,8 +8,15 @@ import {
 	MAX_SEARCH_PAGE_SIZE,
 	searchConversationsRanked
 } from '../../db/repo/conversations.js';
-import { listLatestMessages } from '../../db/repo/messages.js';
+import { getMessageTexts, listActivePathIds } from '../../db/repo/messages.js';
 import type { CallerContext } from '../types.js';
+import {
+	decodeCursor,
+	READ_CHAT_DEFAULT_CHARS,
+	READ_CHAT_MAX_CHARS,
+	READ_CHAT_MIN_CHARS,
+	readChatPage
+} from './chat-pages.js';
 import { err, text } from './shared.js';
 
 /** What a coding thread (T3 session) reports beyond the chat fields; unset values are left out. */
@@ -99,28 +106,49 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'read_chat',
 		{
-			description: "Read a chat's latest messages (id from search_chats).",
+			description:
+				"Read a chat's messages (id from search_chats), one page of about maxChars characters at a time, oldest to newest within the page. " +
+				'By default the page holds the latest messages; from "start" begins at the first. Long messages are split across pages (`cut` marks where text continues). ' +
+				'To read on, call again with `olderCursor` (text before the page) or `newerCursor` (text after it) as `cursor`; stop once you have what you need.',
 			inputSchema: {
 				conversationId: z.string(),
-				limit: z.number().int().optional().describe('Default 100, max 500')
+				from: z
+					.enum(['start', 'end'])
+					.optional()
+					.describe('Where the first page is taken from without a cursor. Default "end" (latest).'),
+				cursor: z
+					.string()
+					.optional()
+					.describe('olderCursor or newerCursor from a previous page of this chat'),
+				maxChars: z
+					.number()
+					.int()
+					.optional()
+					.describe(
+						`Page size in characters. Default ${READ_CHAT_DEFAULT_CHARS}, ${READ_CHAT_MIN_CHARS}-${READ_CHAT_MAX_CHARS}`
+					)
 			}
 		},
-		async ({ conversationId, limit }) => {
+		async ({ conversationId, from, cursor, maxChars }) => {
 			const db = getDb();
 			const conversation = getConversation(db, ctx.userId, conversationId);
 			if (!conversation) return err('conversation not found');
-			const n = Math.min(500, Math.max(1, Math.floor(limit ?? 100)));
-			const messages = listLatestMessages(db, conversationId, n);
-			return text(
-				JSON.stringify(
-					messages.map((m) => ({
-						role: m.role,
-						text: m.content_text,
-						createdAt: m.created_at,
-						status: m.status
-					}))
-				)
+			const decoded = cursor ? decodeCursor(cursor) : null;
+			if (cursor && !decoded) return err('invalid cursor');
+			const page = readChatPage(
+				listActivePathIds(db, conversationId),
+				(ids) => getMessageTexts(db, ids),
+				{
+					from: from ?? 'end',
+					cursor: decoded,
+					maxChars: Math.min(
+						READ_CHAT_MAX_CHARS,
+						Math.max(READ_CHAT_MIN_CHARS, Math.floor(maxChars ?? READ_CHAT_DEFAULT_CHARS))
+					)
+				}
 			);
+			if ('error' in page) return err(page.error);
+			return text(JSON.stringify(page));
 		}
 	);
 	return server;

@@ -3,6 +3,7 @@ import { decryptSecret } from '../crypto.js';
 import { getDb } from '../db/index.js';
 import { findModel } from '../db/repo/models.js';
 import { getProvider, type ProviderRow } from '../db/repo/providers.js';
+import { learnedContextLength } from './contextLimit.js';
 
 /**
  * LM Studio's native REST API reports, per model, the context length it is
@@ -141,10 +142,10 @@ export async function liveContextLength(
 }
 
 /**
- * The context window to budget a prompt against: what an LM Studio model is
- * loaded with right now when the server says so, else the stored value.
+ * The context window the model reports: what an LM Studio model is loaded
+ * with right now when the server says so, else the stored value.
  */
-export async function effectiveContextLength(ref: {
+export async function reportedContextLength(ref: {
 	providerId: string;
 	modelId: string;
 }): Promise<number | null> {
@@ -153,4 +154,18 @@ export async function effectiveContextLength(ref: {
 	const provider = getProvider(db, ref.providerId);
 	if (!provider) return stored;
 	return (await liveContextLength(provider, ref.modelId)) ?? stored;
+}
+
+/**
+ * The context window to budget a prompt against: the reported one, lowered to
+ * what overflow errors have shown actually fits (see contextLimit).
+ */
+export async function effectiveContextLength(ref: {
+	providerId: string;
+	modelId: string;
+}): Promise<number | null> {
+	const reported = await reportedContextLength(ref);
+	const learned = learnedContextLength(ref, reported);
+	if (learned === null) return reported;
+	return reported === null ? learned : Math.min(reported, learned);
 }

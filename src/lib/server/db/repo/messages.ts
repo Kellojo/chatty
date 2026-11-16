@@ -197,6 +197,32 @@ function rowsFor(db: Db, refs: PathRef[]): MessageRow[] {
 	return refs.flatMap((r) => byId.get(r.id) ?? []);
 }
 
+/** Ids of the conversation's active path, oldest to newest. No message bodies are read. */
+export function listActivePathIds(db: Db, conversationId: string): string[] {
+	return activePathRefs(db, conversationId).map((r) => r.id);
+}
+
+export type MessageText = Pick<
+	MessageRow,
+	'id' | 'role' | 'content_text' | 'created_at' | 'status'
+>;
+
+/** The plain text (and a few fields) of the given messages, in the order of `ids`; `parts` is not read. */
+export function getMessageTexts(db: Db, ids: string[]): MessageText[] {
+	if (ids.length === 0) return [];
+	const byId = new Map<string, MessageText>();
+	for (let i = 0; i < ids.length; i += ID_CHUNK) {
+		const chunk = ids.slice(i, i + ID_CHUNK);
+		const rows = db
+			.prepare(
+				`SELECT id, role, content_text, created_at, status FROM messages WHERE id IN (${chunk.map(() => '?').join(', ')})`
+			)
+			.all(...chunk) as MessageText[];
+		for (const row of rows) byId.set(row.id, row);
+	}
+	return ids.flatMap((id) => byId.get(id) ?? []);
+}
+
 /** The conversation's active path (see above), oldest to newest. */
 export function listMessages(db: Db, conversationId: string): MessageRow[] {
 	const leaf = activeLeafId(db, conversationId);
