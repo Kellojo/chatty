@@ -87,7 +87,7 @@ describe('tool guard', () => {
 			'webfetch',
 			{ guard: (tool, input) => assertToolAllowed(db, builtin('webfetch'), tool, input, privacy) }
 		);
-		const run = () => tools.fetch.execute!({}, { toolCallId: 't', messages: [] });
+		const run = () => tools.fetch.execute!({}, { toolCallId: 't', messages: [] } as never);
 		await run();
 		expect(ran).toBe(1);
 		privacy.markTainted('read a private note');
