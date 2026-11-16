@@ -116,7 +116,10 @@ ${env.token_enc}`;
 				environmentId: env.id,
 				error: e instanceof Error ? e.message : String(e)
 			});
-			recordEnvironmentCheck(db, env.id, { status: 'error', error: errorMessage(e) });
+			recordEnvironmentCheck(db, env.id, {
+				status: e instanceof T3ClientError && e.kind === 'unauthorized' ? 'unauthorized' : 'error',
+				error: errorMessage(e)
+			});
 		}
 		return getCodingEnvironment(db, env.user_id, env.id) ?? env;
 	})().finally(() => {

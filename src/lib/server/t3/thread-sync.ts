@@ -25,11 +25,12 @@ import {
 import {
 	getCodingEnvironment,
 	listEnabledCodingEnvironments,
+	markEnvironmentUnauthorized,
 	type CodingEnvironmentRow
 } from '../db/repo/coding-environments.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
-import { t3HttpGet, type T3Stream } from './client.js';
+import { t3HttpGet, T3ClientError, type T3Stream } from './client.js';
 import { ensureFollower, getFollower } from './follower.js';
 import { acquireT3Connection, type T3Lease } from './pool.js';
 import {
@@ -397,6 +398,34 @@ export function isCurrentEnvironment(db: Db, env: CodingEnvironmentRow): boolean
 	);
 }
 
+/**
+ * Enabled environments worth polling and watching: not those whose token was
+ * rejected, which won't start working on its own. The periodic environment
+ * sync (./sync.ts) still checks them, and editing the token resets the status.
+ */
+function syncableEnvironments(db: Db): CodingEnvironmentRow[] {
+	return listEnabledCodingEnvironments(db).filter((env) => env.status !== 'unauthorized');
+}
+
+/**
+ * Records a rejected token on `env` (as read before the call that failed) and
+ * stops watching it. Returns whether `e` was such a rejection.
+ */
+function handleUnauthorized(db: Db, env: CodingEnvironmentRow, e: unknown): boolean {
+	if (!(e instanceof T3ClientError && e.kind === 'unauthorized')) return false;
+	if (markEnvironmentUnauthorized(db, env, e.message)) {
+		log.warn('Coding environment rejected its access token; paused until it is updated', {
+			environmentId: env.id
+		});
+	}
+	const watcher = watchers.get(env.id);
+	if (watcher && watcherKey(watcher.env) === watcherKey(env)) {
+		watcher.stop();
+		watchers.delete(env.id);
+	}
+	return true;
+}
+
 /** Lets `stopThreadSync` cut short a pass that is still running (shutdown). */
 export interface ThreadSyncPass {
 	cancelled: boolean;
@@ -406,7 +435,7 @@ export async function syncAllThreads(
 	db: Db = getDb(),
 	pass: ThreadSyncPass = { cancelled: false }
 ): Promise<void> {
-	const envs = listEnabledCodingEnvironments(db);
+	const envs = syncableEnvironments(db);
 	syncShellWatchers(db, envs);
 	for (const env of envs) {
 		if (pass.cancelled) return;
@@ -414,6 +443,7 @@ export async function syncAllThreads(
 		try {
 			shell = await loadShell(env);
 		} catch (e) {
+			if (handleUnauthorized(db, env, e)) continue;
 			log.warn('Could not load T3 threads', {
 				environmentId: env.id,
 				error: e instanceof Error ? e.message : String(e)
@@ -524,6 +554,7 @@ class ShellWatcher {
 					},
 					onEnd: (error) => {
 						if (this.stream === stream) this.stream = null;
+						if (this.stopped || handleUnauthorized(this.db, this.env, error)) return;
 						if (error) this.warn(error);
 						this.scheduleRetry();
 					}
@@ -531,6 +562,7 @@ class ShellWatcher {
 			);
 			this.stream = stream;
 		} catch (e) {
+			if (this.stopped || handleUnauthorized(this.db, this.env, e)) return;
 			this.warn(e);
 			this.scheduleRetry();
 		}
@@ -577,12 +609,13 @@ class ShellWatcher {
 				if (this.stopped || !isCurrentEnvironment(this.db, this.env)) return;
 				importThreads(this.db, this.env, shell);
 			};
-			run().catch((e) =>
+			run().catch((e) => {
+				if (handleUnauthorized(this.db, this.env, e)) return;
 				log.warn('Could not import new T3 threads', {
 					environmentId: this.env.id,
 					error: e instanceof Error ? e.message : String(e)
-				})
-			);
+				});
+			});
 		}, LIVE_IMPORT_DEBOUNCE_MS);
 		this.importTimer.unref?.();
 	}
@@ -639,7 +672,7 @@ let currentPass: ThreadSyncPass | null = null;
  */
 export function refreshShellWatchers(db: Db = getDb()): void {
 	if (!timer) return; // thread sync isn't running (tests, shutdown)
-	syncShellWatchers(db, listEnabledCodingEnvironments(db));
+	syncShellWatchers(db, syncableEnvironments(db));
 }
 
 export function startThreadSync(db: Db = getDb()): void {

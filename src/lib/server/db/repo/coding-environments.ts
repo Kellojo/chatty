@@ -326,6 +326,26 @@ function writeEnvironmentCheck(db: Db, id: string, result: EnvironmentCheckResul
 	);
 }
 
+/**
+ * Marks `env` (as read before reaching it) as having its access token
+ * rejected, unless its URL or token changed meanwhile. Returns whether the row
+ * changed, i.e. whether this is news.
+ */
+export function markEnvironmentUnauthorized(
+	db: Db,
+	env: Pick<CodingEnvironmentRow, 'id' | 'base_url' | 'token_enc'>,
+	error: string
+): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE coding_environments SET status = 'unauthorized', last_error = ?, last_checked_at = ?
+				 WHERE id = ? AND base_url = ? AND token_enc = ? AND status != 'unauthorized'`
+			)
+			.run(error, Date.now(), env.id, env.base_url, env.token_enc).changes > 0
+	);
+}
+
 // ── usage ────────────────────────────────────────────────────────────────
 
 /** Replaces an environment's stored extra resets with a fresh snapshot. */

@@ -12,6 +12,8 @@
 		<span class="size-1.5 rounded-full bg-emerald-500"></span>
 		Online
 	</Badge>
+{:else if environment.status === 'unauthorized'}
+	<Badge variant="destructive" title={environment.lastError ?? undefined}>Token rejected</Badge>
 {:else if environment.status === 'error'}
 	<Badge variant="destructive" title={environment.lastError ?? undefined}>Unreachable</Badge>
 {:else}

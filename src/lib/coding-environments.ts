@@ -1,7 +1,12 @@
 // Client-safe types for coding environments (remote T3 Code servers) and the
 // provider usage Chatty mirrors from them.
 
-export type CodingEnvironmentStatus = 'unknown' | 'online' | 'error';
+/** `unauthorized`: the server rejected the access token (expired or revoked). */
+export type CodingEnvironmentStatus = 'unknown' | 'online' | 'error' | 'unauthorized';
+
+/** Whether the last attempt to reach an environment failed (unreachable or token rejected). */
+export const environmentFailed = (status: CodingEnvironmentStatus): boolean =>
+	status === 'error' || status === 'unauthorized';
 
 export interface CodingEnvironment {
 	id: string;

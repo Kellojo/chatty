@@ -28,6 +28,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import {
+		environmentFailed,
 		MAX_HISTORY_IMPORT,
 		parseEnvironmentUrl,
 		type CodingEnvironment,
@@ -109,7 +110,7 @@
 
 	function reportStatus(env: CodingEnvironment) {
 		if (env.status === 'online') toast.success(`Connected to "${env.name}"`);
-		else if (env.status === 'error')
+		else if (environmentFailed(env.status))
 			toast.error(`"${env.name}": ${env.lastError ?? 'unreachable'}`);
 	}
 
@@ -355,7 +356,7 @@
 								? `Synced ${formatTimeAgo(env.lastSyncedAt)}`
 								: 'Never synced'}
 					</p>
-					{#if env.status === 'error' && env.lastError && enabled}
+					{#if environmentFailed(env.status) && env.lastError && enabled}
 						<p class="line-clamp-2 text-xs text-destructive" title={env.lastError}>
 							{env.lastError}
 						</p>
