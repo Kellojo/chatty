@@ -59,12 +59,10 @@ describe('conversations repo', () => {
 		const c = createConversation(db, 'u1');
 		const updated = updateConversation(db, 'u1', c.id, {
 			title: 'new',
-			mode: 'agent',
 			memoryEnabled: true,
 			maxSteps: 10
 		});
 		expect(updated!.title).toBe('new');
-		expect(updated!.mode).toBe('agent');
 		expect(updated!.memory_enabled).toBe(1);
 		expect(updated!.max_steps).toBe(10);
 	});

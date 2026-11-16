@@ -89,7 +89,7 @@ beforeEach(() => {
 		baseUrl: 'http://t3.test',
 		token: 'token'
 	}));
-	conversationId = createConversation(db, 'u1', { kind: 'chat', mode: 'agent', title: 'Task' }).id;
+	conversationId = createConversation(db, 'u1', { kind: 'chat', title: 'Task' }).id;
 	coding.createCodingConversation(db, {
 		conversationId,
 		environmentId: env.id,
@@ -446,7 +446,7 @@ describe('CodingFollower shared socket and resume', () => {
 		const db = getDb();
 		const row = coding.getCodingConversation(db, conversationId)!;
 		const env = getCodingEnvironment(db, 'u1', row.environment_id!)!;
-		const otherId = createConversation(db, 'u1', { kind: 'chat', mode: 'agent', title: 'B' }).id;
+		const otherId = createConversation(db, 'u1', { kind: 'chat', title: 'B' }).id;
 		coding.createCodingConversation(db, {
 			conversationId: otherId,
 			environmentId: env.id,
@@ -830,7 +830,7 @@ describe('CodingFollower message ids', () => {
 		db.prepare(
 			`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES ('u2', 'u2', 'u2@example.com', 0, 0, 0, 'user')`
 		).run();
-		const other = createConversation(db, 'u2', { kind: 'chat', mode: 'agent', title: 'Task' }).id;
+		const other = createConversation(db, 'u2', { kind: 'chat', title: 'Task' }).id;
 		createMessage(db, {
 			id: 'm1:reply',
 			conversationId: other,

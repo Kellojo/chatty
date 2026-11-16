@@ -36,7 +36,6 @@ export const GET: RequestHandler = ({ locals, params }) => {
 
 const patchSchema = z.object({
 	title: z.string().max(200).optional(),
-	mode: z.enum(['chat', 'agent']).optional(),
 	providerId: z.string().nullable().optional(),
 	modelId: z.string().nullable().optional(),
 	systemPrompt: z.string().max(10000).nullable().optional(),

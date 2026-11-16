@@ -39,7 +39,7 @@ function setup(toolCallId: string, opts: { started?: boolean } = {}) {
 	const db = getDb();
 	const chat = createConversation(db, 'u1', { title: 'Main chat' });
 	if (!opts.started) return { chat, taskId: null };
-	const task = createConversation(db, 'u1', { kind: 'chat', mode: 'agent', title: 'Fix login' });
+	const task = createConversation(db, 'u1', { kind: 'chat', title: 'Fix login' });
 	createCodingConversation(db, {
 		conversationId: task.id,
 		environmentId: envId,

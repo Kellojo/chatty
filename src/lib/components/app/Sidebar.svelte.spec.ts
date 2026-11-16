@@ -38,7 +38,6 @@ function conv(id: string, title: string, patch: Partial<Conversation> = {}): Con
 		origin: 'user',
 		agentRun: null,
 		title,
-		mode: 'chat',
 		providerId: 'p',
 		modelId: 'anthropic/claude-opus-5-5',
 		systemPrompt: null,

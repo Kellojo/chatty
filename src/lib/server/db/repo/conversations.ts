@@ -12,7 +12,6 @@ export interface ConversationRow {
 	user_id: string;
 	kind: string;
 	title: string;
-	mode: string;
 	provider_id: string | null;
 	model_id: string | null;
 	system_prompt: string | null;
@@ -57,7 +56,6 @@ export interface Conversation {
 	id: string;
 	kind: 'chat' | 'agent-run' | 'research';
 	title: string;
-	mode: 'chat' | 'agent';
 	providerId: string | null;
 	modelId: string | null;
 	systemPrompt: string | null;
@@ -90,7 +88,6 @@ export function toPublic(row: ConversationRow): Conversation {
 		id: row.id,
 		kind: row.kind as Conversation['kind'],
 		title: row.title,
-		mode: row.mode as Conversation['mode'],
 		providerId: row.provider_id,
 		modelId: row.model_id,
 		systemPrompt: row.system_prompt,
@@ -264,7 +261,6 @@ export function getConversation(db: Db, userId: string, id: string): Conversatio
 export interface CreateConversationInput {
 	providerId?: string | null;
 	modelId?: string | null;
-	mode?: 'chat' | 'agent';
 	kind?: 'chat' | 'agent-run' | 'research';
 	title?: string;
 	agentId?: string | null;
@@ -287,16 +283,15 @@ export function createConversation(
 	const id = randomUUID();
 	const now = Date.now();
 	db.prepare(
-		`INSERT INTO conversations (id, user_id, kind, title, mode, provider_id, model_id, agent_id,
+		`INSERT INTO conversations (id, user_id, kind, title, provider_id, model_id, agent_id,
 		 system_prompt, max_steps, origin, memory_enabled, subagent_of, subagent_tool_call_id,
 		 created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
 		input.kind ?? 'chat',
 		input.title ?? '',
-		input.mode ?? 'agent',
 		input.providerId ?? null,
 		input.modelId ?? null,
 		input.agentId ?? null,
@@ -314,7 +309,6 @@ export function createConversation(
 
 export interface UpdateConversationInput {
 	title?: string;
-	mode?: 'chat' | 'agent';
 	providerId?: string | null;
 	modelId?: string | null;
 	systemPrompt?: string | null;
@@ -334,12 +328,11 @@ export function updateConversation(
 	const existing = getConversation(db, userId, id);
 	if (!existing) return undefined;
 	db.prepare(
-		`UPDATE conversations SET title = ?, mode = ?, provider_id = ?, model_id = ?,
+		`UPDATE conversations SET title = ?, provider_id = ?, model_id = ?,
 		 system_prompt = ?, memory_enabled = ?, max_steps = ?, temperature = ?, max_tokens = ?, agent_id = ?
 		 WHERE id = ?`
 	).run(
 		patch.title ?? existing.title,
-		patch.mode ?? existing.mode,
 		patch.providerId !== undefined ? patch.providerId : existing.provider_id,
 		patch.modelId !== undefined ? patch.modelId : existing.model_id,
 		patch.systemPrompt !== undefined ? patch.systemPrompt : existing.system_prompt,

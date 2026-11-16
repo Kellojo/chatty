@@ -249,7 +249,6 @@ export async function runSubagent(input: SubagentInput, db: Db = getDb()): Promi
 		conversation = createConversation(db, input.userId, {
 			// Hidden like agent runs: no sidebar entry, no chat events, no agent triggers.
 			kind: 'agent-run',
-			mode: 'agent',
 			title: `${SUBAGENT_TITLE_PREFIX}${input.description}`.slice(0, 200),
 			providerId: parent.provider_id,
 			modelId: parent.model_id,

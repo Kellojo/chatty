@@ -18,7 +18,6 @@ function conv(id: string, overrides: Partial<Conversation> = {}): Conversation {
 		origin: 'user',
 		agentRun: null,
 		title: `Chat ${id}`,
-		mode: 'chat',
 		providerId: null,
 		modelId: null,
 		systemPrompt: null,

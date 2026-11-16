@@ -110,7 +110,6 @@ export async function startAgentRun(
 	const conversation = createConversation(db, input.userId, {
 		kind: visible ? 'chat' : 'agent-run',
 		origin: visible ? 'dispatch' : 'user',
-		mode: 'agent',
 		title: `${agent.name} · ${input.trigger} run`,
 		providerId: ref.providerId,
 		modelId: ref.modelId,

@@ -183,7 +183,6 @@ export interface Conversation {
 	id: string;
 	kind: 'chat' | 'agent-run' | 'research';
 	title: string;
-	mode: 'chat' | 'agent';
 	providerId: string | null;
 	modelId: string | null;
 	systemPrompt: string | null;

@@ -63,7 +63,7 @@ function seedCodingAgent(triggerConfig: Record<string, unknown> = {}) {
 
 /** A coding task conversation with the given status, as launchCodingTask leaves it. */
 function seedCodingConversation(status = 'running', threadId: string | null = 'thread-1') {
-	const conv = createConversation(db, 'u1', { kind: 'chat', mode: 'agent' });
+	const conv = createConversation(db, 'u1', { kind: 'chat' });
 	db.prepare(
 		`INSERT INTO coding_conversations (conversation_id, environment_id, project_id, project_title,
 		   thread_id, provider_instance_id, model, runtime_mode, workspace_mode, status, created_at, updated_at)

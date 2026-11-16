@@ -50,7 +50,6 @@ beforeEach(() => {
 	});
 	conversationId = conversations.createConversation(db, 'u1', {
 		kind: 'chat',
-		mode: 'agent',
 		title: 'Task'
 	}).id;
 	coding.createCodingConversation(db, {

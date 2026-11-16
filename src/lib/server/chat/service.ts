@@ -688,7 +688,7 @@ async function prepareTurn(
 	// that is allowed to ask can always do so.
 	const askUser = run
 		? run.askUser
-		: !!agent && conversation.mode === 'agent' && parseCanAsk(agent) !== 'never';
+		: !!agent && parseCanAsk(agent) !== 'never';
 	if (askUser) {
 		// Always loaded and never filtered by the agent's allowlist: it's how the
 		// agent reaches the user, not a capability.
@@ -920,10 +920,7 @@ export async function runChatTurn(
 		await close().catch(() => undefined);
 		throw e;
 	}
-	const maxSteps =
-		conversation.mode === 'agent'
-			? (conversation.max_steps ?? config.AGENT_MAX_STEPS)
-			: config.CHAT_MAX_STEPS;
+	const maxSteps = conversation.max_steps ?? config.AGENT_MAX_STEPS;
 	const stopWhen = stepCountIs(maxSteps);
 	const lastStep = answerOnLastStep(maxSteps);
 	const loadedTools = loadedToolsFromHistory(history, catalog.deferred);
