@@ -156,15 +156,12 @@
 	// Private chats only run on trusted models. A chat turns private on its own
 	// (for good) when a turn reads private data: the server says so with an event.
 	const isPrivate = $derived(privateData.enabled && conversation.private);
-	/** Shown once a turn made this chat private while it was open; `reason` says what it read. */
-	let privacyNotice = $state<{ reason: string } | null>(null);
 	$effect(() => {
 		const id = conversation.id;
 		return onServerEvent((event) => {
 			if (event.type !== 'conversation.privacy' || event.conversationId !== id) return;
+			// The reply itself shows where it became private (a notice part).
 			conversation = { ...conversation, private: event.private };
-			if (event.private && event.reason) privacyNotice = { reason: event.reason };
-			else if (!event.private) privacyNotice = null;
 		});
 	});
 
@@ -1487,7 +1484,6 @@
 		messageCount={chat.messages.length}
 		{privateData}
 		onupdated={(updated) => {
-			if (!updated.private) privacyNotice = null;
 			conversation = updated;
 		}}
 	/>
@@ -1528,33 +1524,6 @@
 					{dispatchMessageId}
 					speech={playback}
 				/>
-				{#if privacyNotice && isPrivate}
-					<div class="mx-auto w-full max-w-3xl px-4 pb-4" role="status">
-						<div
-							class="flex items-start gap-2.5 rounded-xl border bg-muted/40 px-3 py-2.5 text-sm"
-							data-privacy-notice
-						>
-							<LockIcon class="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-							<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-								<p class="font-medium">This chat read private data and is now private.</p>
-								<p class="text-muted-foreground">
-									Only trusted models can continue it, and tools that send data outside Chatty are
-									off.
-								</p>
-								<p class="text-xs text-muted-foreground">Source: {privacyNotice.reason}</p>
-							</div>
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								class="-my-1 -mr-1 shrink-0 text-muted-foreground"
-								aria-label="Dismiss"
-								onclick={() => (privacyNotice = null)}
-							>
-								<XIcon class="size-3.5" />
-							</Button>
-						</div>
-					</div>
-				{/if}
 				{#if waiting}
 					<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
 				{:else if backgroundWaiting}

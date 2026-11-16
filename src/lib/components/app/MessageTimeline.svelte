@@ -41,6 +41,8 @@
 	import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
 	import type { SpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { DispatchInfo, MessageUsage, UIMessage, UIMessageMetadata } from '$lib/types.js';
+	import PrivacyNoticeRow from './PrivacyNoticeRow.svelte';
+	import { readPrivacyNotice } from '$lib/private-data.js';
 
 	let {
 		messages,
@@ -188,6 +190,8 @@
 						<CodingTaskProposalCard part={part as never} active={messageActive} />
 					{:else if part && readCodingTaskNotice(part)}
 						<CodingTaskNoticeRow notice={readCodingTaskNotice(part)!} />
+					{:else if part && readPrivacyNotice(part)}
+						<PrivacyNoticeRow notice={readPrivacyNotice(part)!} />
 					{:else if part && conversationId && readHtmlRender(part)}
 						<HtmlRenderFrame {conversationId} {part} />
 					{:else if part?.type === 'file'}

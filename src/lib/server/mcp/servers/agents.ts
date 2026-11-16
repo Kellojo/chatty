@@ -88,7 +88,7 @@ function runResult(ctx: CallerContext, db: Db, run: AgentRunRow, agent: AgentRow
 			);
 		}
 		if (described.result || described.question || run.error) {
-			reportPrivate(ctx, 'a private agent run');
+			reportPrivate(ctx, "a private agent's result");
 		}
 		return text(JSON.stringify({ ...described, private: true }));
 	}

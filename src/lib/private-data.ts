@@ -67,3 +67,21 @@ export function modelValueTrusted(
 /** The one-line reminder under the composer of a private chat (new and existing). */
 export const PRIVATE_CHAT_HINT =
 	'Private chat: only trusted models, and no tools that send data outside Chatty.';
+
+/**
+ * A part the server writes into a reply at the moment a tool handed the turn
+ * private data and the chat became private, so the chat shows it in place.
+ * Data parts never reach the model.
+ */
+export const PRIVACY_NOTICE_PART = 'data-privacy-notice';
+
+export interface PrivacyNotice {
+	/** What the turn read, as a short noun phrase: "a private note", "a private chat". */
+	reason: string;
+}
+
+export function readPrivacyNotice(part: { type: string }): PrivacyNotice | null {
+	if (part.type !== PRIVACY_NOTICE_PART) return null;
+	const reason = (part as { data?: { reason?: unknown } }).data?.reason;
+	return { reason: typeof reason === 'string' && reason.trim() ? reason.trim() : 'private data' };
+}

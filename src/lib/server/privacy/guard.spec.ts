@@ -97,6 +97,23 @@ describe('tool guard', () => {
 });
 
 describe('turn taint', () => {
+	it('announces the promotion once, and only for a chat that was public', () => {
+		const db = getDb();
+		const open = createConversation(db, fx.userId, { private: false });
+		const privacy = new TurnPrivacy(db, fx.userId, { conversationId: open.id, trust: 'trusted' });
+		const seen: string[] = [];
+		privacy.onPromoted = (reason) => seen.push(reason);
+		privacy.markTainted('a private note');
+		privacy.markTainted('a private chat');
+		expect(seen).toEqual(['a private note']);
+
+		const already = createConversation(db, fx.userId, { private: true });
+		const quiet = new TurnPrivacy(db, fx.userId, { conversationId: already.id, trust: 'trusted' });
+		quiet.onPromoted = (reason) => seen.push(reason);
+		quiet.markTainted('a private note');
+		expect(seen).toEqual(['a private note']);
+	});
+
 	it('writes the private flag before markTainted returns', () => {
 		const db = getDb();
 		const c = createConversation(db, fx.userId, { private: false });

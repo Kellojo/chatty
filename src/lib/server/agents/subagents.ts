@@ -334,7 +334,7 @@ export async function runSubagent(input: SubagentInput, db: Db = getDb()): Promi
 		// parent before the report reaches the parent's model.
 		if (isConversationPrivate(db, id) && !parentTainted) {
 			if (isTurnPrivacy(input.parentPrivacy) && input.parentPrivacy.trusted) {
-				input.parentPrivacy.markTainted('a subagent read private data');
+				input.parentPrivacy.markTainted("a subagent's private report");
 			} else {
 				report = { text: PRIVATE_REPORT_WITHHELD, truncated: false };
 			}

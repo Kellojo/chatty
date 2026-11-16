@@ -40,6 +40,12 @@ export class TurnPrivacy implements Privacy {
 
 	readonly trust: Trust;
 
+	/**
+	 * Called once when this turn makes its conversation private (not for chats
+	 * that already were). The chat service writes it into the reply as a notice.
+	 */
+	onPromoted?: (reason: string) => void;
+
 	/** Whether this turn's tools may return private items (and taint it). */
 	get trusted(): boolean {
 		return this.trust === 'trusted';
@@ -62,6 +68,12 @@ export class TurnPrivacy implements Privacy {
 		const changed = setConversationPrivate(this.db, this.conversationId, true);
 		if (changed) {
 			log.info('Conversation became private', { conversationId: this.conversationId, reason });
+			try {
+				this.onPromoted?.(reason);
+			} catch (e) {
+				// The notice is a courtesy; the flag above is what protects the data.
+				log.warn('Could not show the private notice', { error: String(e) });
+			}
 			publishServerEvent(this.userId, {
 				type: 'conversation.privacy',
 				conversationId: this.conversationId,

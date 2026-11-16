@@ -1,4 +1,5 @@
 import { TurnPrivacy } from '../privacy/taint.js';
+import { PRIVACY_NOTICE_PART } from '$lib/private-data.js';
 import {
 	filterTargets,
 	PrivateDataBlockedError,
@@ -1005,6 +1006,10 @@ export async function runChatTurn(
 			return errorText ?? 'An error occurred while generating the response';
 		},
 		execute: async ({ writer }) => {
+			// A tool that hands this turn private data makes the chat private; the
+			// reply says so right there, after the call that read it.
+			privacy.onPromoted = (reason) =>
+				writer.write({ type: PRIVACY_NOTICE_PART, data: { reason } } as UIMessageChunk);
 			let lastError: unknown = null;
 			let totalTokensUsed: import('ai').LanguageModelUsage | undefined;
 			for (let i = 0; i < targets.length; i++) {

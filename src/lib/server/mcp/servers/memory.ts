@@ -187,7 +187,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				'search',
 				hits.map((h) => ({ scope: h.scope === 'shared' ? 'shared' : 'user', path: h.path }))
 			);
-			if (hits.some((h) => h.private)) taint('read a private note');
+			if (hits.some((h) => h.private)) taint('a private note');
 			const hidden = view === 'public' ? countPrivateMemoryHits(db, scopes, query) : 0;
 			const out = hits.map(({ private: p, ...h }) => (p ? { ...h, private: true } : h));
 			return withHidden(JSON.stringify(out), hidden);
@@ -206,7 +206,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			const concept = await readConcept(scope ?? 'user', ctx.userId, normalized);
 			if (!concept || !canSee(memoryView(ctx), concept)) return err(NOT_FOUND);
 			trackViews('read', [{ scope: concept.scope, path: concept.path }]);
-			if (isPrivate(concept)) taint('read a private note');
+			if (isPrivate(concept)) taint('a private note');
 			return text(
 				JSON.stringify({
 					path: concept.path,
@@ -244,7 +244,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			// A filtered view lists only concepts the index knows to be visible, so
 			// one it hasn't indexed yet is left out rather than shown unchecked.
 			const listed = view === 'all' ? paths : paths.filter((p) => summaries.has(p));
-			if (listed.some((p) => summaries.get(p)?.private)) taint('read a private note');
+			if (listed.some((p) => summaries.get(p)?.private)) taint('a private note');
 			return withHidden(
 				JSON.stringify(
 					listed.map((p) => {
@@ -366,7 +366,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
-			if (isPrivate(existing)) taint('updated a private note');
+			if (isPrivate(existing)) taint('a private note');
 			return written(
 				'updated',
 				normalized,
@@ -400,7 +400,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
-			if (isPrivate(existing)) taint('deleted a private note');
+			if (isPrivate(existing)) taint('a private note');
 			return written(
 				'deleted',
 				normalized,
