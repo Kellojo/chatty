@@ -71,7 +71,6 @@ services:
 | `AGENT_QUESTION_TTL_DAYS`       | `7`                    | Days before an agent's unanswered question is dismissed; `0` disables                   |
 | `AGENT_RUN_CHAT_RETENTION_DAYS` | `30`                   | Days before settled agent-run chats you never replied to are deleted; `0` disables      |
 | `ALLOW_PRIVATE_NETWORK_FETCH`   | `false`                | Let agent fetch tools reach localhost, LAN and metadata addresses                       |
-| `PRIVATE_DATA_ENABLED`          | `false`                | Show the private toggles for chats, memory and agents (see [Private data](#private-data)) |
 | `AUTO_PROMOTE_FIRST_USER`       | `true`                 | First user becomes admin                                                                |
 | `ARTIFICIAL_ANALYSIS_API_KEY`   | —                      | Key for model Intelligence Index scores; overrides the key saved in Settings → Services |
 | `SEARXNG_URL`                   | —                      | SearXNG URL for the `web_search` tool; overrides the one saved in Settings → Services   |
@@ -162,7 +161,7 @@ claude mcp add --scope user --transport http chatty <ORIGIN>/api/mcp --header "A
 
 ## Private data
 
-Set `PRIVATE_DATA_ENABLED=true` to mark chats, memory notes, documents and agents as private. **The rule:** private data only reaches providers an admin marked **Can process private data** (Settings → Providers), and a model that has read private data can't send it anywhere else.
+An admin turns on **Settings → General → Allow private data** to let users mark chats, memory notes, documents and agents as private (off by default; turning it off only hides the controls, so what is already private stays private). **The rule:** private data only reaches providers an admin marked **Can process private data** (Settings → Providers), and a model that has read private data can't send it anywhere else.
 
 - **Trusted providers.** Tick _Can process private data_ in a provider's create or edit dialog. Any provider type qualifies; the dialog hints when a URL looks local and warns when private data would go to a public host. Nothing is trusted after an upgrade, so nothing changes until you opt in. External MCP servers have their own _Allow in private chats_ switch: anything a private chat writes there is no longer private.
 - **What is private.** A chat you lock (composer or chat menu), a chat started from a private agent, notes marked _Private_ in the memory editor (admins only for shared notes), and files under `documents/<user>/private/`. **A chat becomes private permanently** once it reads private data (a private note, a private chat, a private agent's result); it says so in the chat. Making it public again needs a confirmation, and text an untrusted provider already received can't be recalled.

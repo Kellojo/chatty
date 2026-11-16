@@ -12,7 +12,7 @@ import {
 import { listProviders, toPublic as providerToPublic } from '$lib/server/db/repo/providers.js';
 import { FALLBACK_VOICE, getDefaultVoice } from '$lib/server/speech/synthesizer.js';
 import { roleVoices } from '$lib/server/speech/voices.js';
-import { config } from '$lib/server/config.js';
+import { isPrivateDataEnabled } from '$lib/server/privacy/feature.js';
 import { findRoleModel, type ModelRole } from '$lib/server/db/repo/models.js';
 import { roleTrusted } from '$lib/server/privacy/egress.js';
 import type { PageServerLoad } from './$types';
@@ -51,7 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		ttsVoices: await roleVoices(db),
 		fallbackVoice: FALLBACK_VOICE,
 		/** Roles set to a model that may not process private data (warned about when private data is on). */
-		untrustedRoles: config.PRIVATE_DATA_ENABLED
+		untrustedRoles: isPrivateDataEnabled(db)
 			? PRIVATE_ROLES.filter((role) => findRoleModel(db, role) && !roleTrusted(db, role))
 			: []
 	};

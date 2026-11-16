@@ -1,4 +1,4 @@
-import { config } from '$lib/server/config.js';
+import { isPrivateDataEnabled } from '$lib/server/privacy/feature.js';
 import { hasTrustedProvider } from '$lib/server/privacy/policy.js';
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
@@ -59,8 +59,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	// defaults to their setting while a provider may process private data.
 	const asked =
 		parsed.data.private ??
-		(config.PRIVATE_DATA_ENABLED && getPrivateByDefault(db, user.id) && hasTrustedProvider(db));
-	const isPrivate = agent?.private === 1 || (config.PRIVATE_DATA_ENABLED && asked);
+		(isPrivateDataEnabled(db) && getPrivateByDefault(db, user.id) && hasTrustedProvider(db));
+	const isPrivate = agent?.private === 1 || (isPrivateDataEnabled(db) && asked);
 	if (isPrivate && !hasTrustedProvider(db)) {
 		error(409, { message: 'No provider may process private data yet' });
 	}

@@ -11,7 +11,6 @@ import { isHttpError } from '@sveltejs/kit';
 
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
-process.env.PRIVATE_DATA_ENABLED = 'true';
 process.env.MEMORY_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-make-private-'));
 
 const { closeDb, getDb } = await import('$lib/server/db/index.js');
@@ -23,6 +22,7 @@ const { createMessage } = await import('$lib/server/db/repo/messages.js');
 const { setUserSetting } = await import('$lib/server/db/repo/user-settings.js');
 const { readConcept, writeConcept } = await import('$lib/server/memory/bundle.js');
 const { seedPrivacyFixture } = await import('$lib/server/privacy/fixtures.js');
+const { setPrivateDataEnabled } = await import('$lib/server/privacy/feature.js');
 const { POST: createChat } = await import('../+server.js');
 const { PATCH } = await import('../[id]/+server.js');
 const { GET: derivedGet } = await import('../[id]/derived-concepts/+server.js');
@@ -66,6 +66,7 @@ beforeEach(() => {
 	closeDb();
 	db = getDb();
 	seedPrivacyFixture(db);
+	setPrivateDataEnabled(db, true);
 	db.prepare(`UPDATE "user" SET role = 'user' WHERE id = 'u1'`).run();
 });
 

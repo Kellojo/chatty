@@ -126,6 +126,13 @@
 			group: 'Integrations'
 		},
 		{
+			href: '/settings/general',
+			label: 'General',
+			icon: SettingsIcon,
+			adminOnly: true,
+			group: 'Admin'
+		},
+		{
 			href: '/settings/users',
 			label: 'Users',
 			icon: UsersIcon,
