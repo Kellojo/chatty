@@ -485,7 +485,9 @@ export async function createCodingTask(
 		}
 		const conv = createConversation(db, userId, {
 			kind: 'chat',
-			title: opts.title?.trim().slice(0, 200) ?? ''
+			title: opts.title?.trim().slice(0, 200) ?? '',
+			// Coding chats run on a T3 machine and are never private.
+			private: false
 		});
 		createCodingConversation(db, {
 			conversationId: conv.id,

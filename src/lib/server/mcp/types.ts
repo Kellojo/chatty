@@ -1,4 +1,4 @@
-import type { Privacy } from '../privacy/policy.js';
+import type { Privacy, Trust } from '../privacy/policy.js';
 
 export interface CallerContext {
 	userId: string;
@@ -15,4 +15,9 @@ export interface CallerContext {
 	 * fall back to the conversation's and run's flags (see callerPrivacy).
 	 */
 	privacy?: Privacy;
+	/**
+	 * Whether this turn may be handed private items (every model it can reach
+	 * is trusted). Missing means untrusted: the gateway, background callers.
+	 */
+	trust?: Trust;
 }

@@ -249,6 +249,11 @@ export type ServerEvent =
 	 */
 	| { type: 'conversation.branch_changed'; conversationId: string }
 	| { type: 'conversation.compacted'; conversationId: string }
+	/**
+	 * The conversation became private (or public again). `reason` is set when a
+	 * turn read private data and made it private on its own (sticky taint).
+	 */
+	| { type: 'conversation.privacy'; conversationId: string; private: boolean; reason?: string }
 	| { type: 'conversation.settle_changed'; conversationIds: string[]; settled: boolean }
 	| { type: 'conversation.snooze_changed'; conversationIds: string[]; snoozed: boolean }
 	/** The conversation was moved to trash; lists should drop it. */

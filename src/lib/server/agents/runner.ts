@@ -117,7 +117,9 @@ export async function startAgentRun(
 		// A snapshot, as for chats started with an agent: later prompt edits
 		// apply to new runs.
 		systemPrompt: agent.system_prompt,
-		maxSteps: agent.max_steps
+		maxSteps: agent.max_steps,
+		// A tainted context may only start private agents (privacy/guard.ts).
+		private: agent.private === 1
 	});
 	const run = createAgentRun(db, {
 		agentId: agent.id,

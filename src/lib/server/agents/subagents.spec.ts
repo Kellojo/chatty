@@ -111,7 +111,7 @@ describe('runSubagent', () => {
 		});
 		// Same tools as the chat (no allowlist), but never subagents or questions for the user.
 		expect(turn.mock.calls[0][3]).toEqual({
-			tools: { allowlist: undefined, exclude: ['run_subagent', 'ask_user'] }
+			tools: { allowlist: undefined, exclude: ['run_subagent', 'ask_user'], tainted: false }
 		});
 	});
 

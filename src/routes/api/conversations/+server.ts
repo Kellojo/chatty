@@ -1,3 +1,5 @@
+import { config } from '$lib/server/config.js';
+import { hasTrustedProvider } from '$lib/server/privacy/policy.js';
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { requireUser } from '$lib/server/auth/guards.js';
@@ -30,7 +32,9 @@ export const GET: RequestHandler = ({ locals, url }) => {
 const createSchema = z.object({
 	providerId: z.string().nullish(),
 	modelId: z.string().nullish(),
-	agentId: z.string().nullable().optional()
+	agentId: z.string().nullable().optional(),
+	/** Start private: only providers trusted with private data may see it. */
+	private: z.boolean().optional()
 });
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -46,7 +50,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			error(404, { message: 'Agent not found' });
 		}
 	}
-	const conversation = createConversation(db, user.id, parsed.data);
+	// A private agent's chats are private; otherwise the user's choice.
+	const isPrivate =
+		agent?.private === 1 || (config.PRIVATE_DATA_ENABLED && parsed.data.private === true);
+	if (isPrivate && !hasTrustedProvider(db)) {
+		error(409, { message: 'No provider may process private data yet' });
+	}
+	const conversation = createConversation(db, user.id, { ...parsed.data, private: isPrivate });
 	if (conversation.kind === 'chat') {
 		publishServerEvent(user.id, { type: 'chat.created', conversationId: conversation.id });
 	}

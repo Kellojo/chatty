@@ -104,3 +104,17 @@ describe('privacy static guard', () => {
 		expect(stale).toEqual([]);
 	});
 });
+
+describe('conversation privacy is decided by every creator', () => {
+	it('passes `private` in every production createConversation call', async () => {
+		const missing: string[] = [];
+		for (const file of await sourceFiles(SRC)) {
+			const text = await fs.readFile(file, 'utf8');
+			if (rel(file) === 'lib/server/db/repo/conversations.ts') continue;
+			for (const match of text.matchAll(/createConversation\(([\s\S]*?)\n\t*\}\)/g)) {
+				if (!/\bprivate:/.test(match[1])) missing.push(rel(file));
+			}
+		}
+		expect(missing).toEqual([]);
+	});
+});

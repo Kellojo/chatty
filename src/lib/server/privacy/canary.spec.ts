@@ -7,21 +7,18 @@
  * untrusted provider never receives the canary. Most rows also check the
  * trusted one did get the call, so a row can't pass by doing nothing.
  *
- * Rows still marked `todo` are paths a later step closes; a new path gets a
- * row here before it ships.
+ * The harness is in canary-harness.ts; other areas have their own
+ * canary-*.spec.ts. A new egress path gets a row before it ships.
  */
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
 process.env.CHAT_COMPACT_TOKENS = '1000';
 process.env.CHAT_COMPACT_KEEP_MESSAGES = '4';
 
-const { closeDb, getDb } = await import('../db/index.js');
+const { getDb } = await import('../db/index.js');
 const { createConversation } = await import('../db/repo/conversations.js');
-const { createMessage } = await import('../db/repo/messages.js');
 const { createAgent } = await import('../db/repo/agents.js');
 const { createAgentRun } = await import('../db/repo/agent-runs.js');
 const { handleChatRequest } = await import('../chat/service.js');
@@ -34,129 +31,15 @@ const { listVoices } = await import('../speech/voices.js');
 const { forwardDecisions } = await import('../decisions/handler.js');
 const { resolveImageModel } = await import('../llm/registry.js');
 const { PrivateDataBlockedError } = await import('./policy.js');
-const { CANARY, createMapping, markConversationPrivate, seedPrivacyFixture, setRole } =
-	await import('./fixtures.js');
+const { CANARY, createMapping, setRole } = await import('./fixtures.js');
+const { useCanaryServer } = await import('./canary-harness.js');
 
-// --- the recording server ---------------------------------------------------
-
-interface Recorded {
-	kind: 'trusted' | 'untrusted';
-	path: string;
-	body: string;
-}
-
-const recorded: Recorded[] = [];
-let server: http.Server;
-let base = '';
-
-const completion = (stream: boolean) =>
-	stream
-		? [
-				{ choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' } }] },
-				{
-					choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-					usage: { prompt_tokens: 1, completion_tokens: 1 }
-				}
-			]
-				.map((c) => `data: ${JSON.stringify({ id: 'x', created: 0, model: 'm', ...c })}\n\n`)
-				.join('') + 'data: [DONE]\n\n'
-		: JSON.stringify({
-				id: 'x',
-				created: 0,
-				model: 'm',
-				choices: [
-					{ index: 0, message: { role: 'assistant', content: 'A summary.' }, finish_reason: 'stop' }
-				],
-				usage: { prompt_tokens: 1, completion_tokens: 1 }
-			});
-
-function respond(req: http.IncomingMessage, res: http.ServerResponse, body: string): void {
-	const url = req.url ?? '';
-	if (url.endsWith('/chat/completions')) {
-		const stream = /"stream":\s*true/.test(body);
-		res.writeHead(200, { 'content-type': stream ? 'text/event-stream' : 'application/json' });
-		res.end(completion(stream));
-	} else if (url.endsWith('/audio/transcriptions')) {
-		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ text: 'transcript' }));
-	} else if (url.endsWith('/audio/speech')) {
-		res.writeHead(200, { 'content-type': 'audio/mpeg' });
-		res.end(Buffer.from([1, 2, 3]));
-	} else if (url.endsWith('/audio/voices')) {
-		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ voices: ['alloy'] }));
-	} else if (url.endsWith('/decisions')) {
-		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ decisions: [] }));
-	} else if (url.endsWith('/images/generations')) {
-		res.writeHead(200, { 'content-type': 'application/json' });
-		res.end(JSON.stringify({ data: [{ b64_json: Buffer.from('png').toString('base64') }] }));
-	} else {
-		res.writeHead(404);
-		res.end();
-	}
-}
-
-beforeAll(async () => {
-	server = http.createServer((req, res) => {
-		const chunks: Buffer[] = [];
-		req.on('data', (c: Buffer) => chunks.push(c));
-		req.on('end', () => {
-			// Binary bodies (audio uploads) are searched as latin1, which keeps ASCII intact.
-			const body = Buffer.concat(chunks).toString('latin1');
-			const kind = (req.url ?? '').startsWith('/trusted/') ? 'trusted' : 'untrusted';
-			recorded.push({ kind, path: req.url ?? '', body });
-			respond(req, res, body);
-		});
-	});
-	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-	base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-});
-
-afterAll(async () => {
-	await new Promise<void>((resolve) => server.close(() => resolve()));
-});
-
-let fx: ReturnType<typeof seedPrivacyFixture>;
-
+const canary = useCanaryServer();
+const { recorded, untrustedSaw, trustedSaw, expectNoLeak, privateChat, drain } = canary;
+let fx: typeof canary.fx;
 beforeEach(() => {
-	closeDb();
-	recorded.length = 0;
-	const db = getDb();
-	fx = seedPrivacyFixture(db, (kind) => `${base}/${kind}/v1`);
-	// The canary rows test model and speech egress; tools have their own rows.
-	db.prepare('UPDATE mcp_servers SET enabled = 0').run();
+	fx = canary.fx;
 });
-
-const untrustedSaw = () => recorded.filter((r) => r.kind === 'untrusted');
-const trustedSaw = () => recorded.filter((r) => r.kind === 'trusted');
-const leaked = () => untrustedSaw().filter((r) => r.body.includes(CANARY));
-
-/** The row's invariant: the canary never reached the untrusted provider. */
-function expectNoLeak(): void {
-	expect(leaked().map((r) => r.path)).toEqual([]);
-}
-
-/** A private conversation on `model` whose history holds the canary. */
-function privateChat(model: { providerId: string; modelId: string }, messages = 2) {
-	const db = getDb();
-	const c = createConversation(db, fx.userId, { title: 'secret', ...model });
-	markConversationPrivate(db, c.id);
-	for (let i = 0; i < messages; i++) {
-		createMessage(db, {
-			conversationId: c.id,
-			role: i % 2 === 0 ? 'user' : 'assistant',
-			parts: [{ type: 'text', text: `${CANARY} ${'x'.repeat(400)}` }]
-		});
-	}
-	return c;
-}
-
-async function drain(res: Response): Promise<void> {
-	await res.text();
-	// The stream's onEnd persists after the body is done.
-	await new Promise((r) => setTimeout(r, 50));
-}
 
 const privacyOf = (conversationId: string) => ({ tainted: false, conversationId });
 
@@ -323,27 +206,4 @@ describe('egress canary: model and speech calls (PR 3)', () => {
 		expect(() => resolveImageModel(fx.trusted, { tainted: true })).not.toThrow();
 		expect(recorded).toEqual([]);
 	});
-});
-
-describe('egress canary: private chats end to end (PR 4)', () => {
-	it.todo('agent result: a private run result never reaches an untrusted caller');
-	it.todo('subagent: a subagent of a private parent stays private');
-	it.todo('coding proposal: blocked from a tainted context');
-	it.todo('hand-off: refused for a private chat');
-	it.todo('gateway: read_chat never returns a private chat');
-	it.todo('tools: web fetch, fs_curl, weather and web search are refused once tainted');
-});
-
-describe('egress canary: side channels (PR 5)', () => {
-	it.todo('push payload: a private chat gets a fixed title and body');
-	it.todo('T3 title sync: skips private conversations');
-	it.todo('event dispatch: events from private chats only reach private agents');
-	it.todo('transcribe and synthesize routes: fail closed without a conversation');
-});
-
-describe('egress canary: private memory (PR 6)', () => {
-	it.todo('memory search: an untrusted turn never sees a private concept');
-	it.todo('gateway: search_memory never returns a private concept');
-	it.todo('memory extraction: the public pass never reads a private chat');
-	it.todo('memory cleanup: an untrusted memory model skips private concepts');
 });

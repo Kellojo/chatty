@@ -278,6 +278,11 @@ export interface CreateConversationInput {
 	/** For a subagent's conversation: the conversation that started it. */
 	subagentOf?: string | null;
 	subagentToolCallId?: string | null;
+	/**
+	 * Private (only trusted providers may see it). Every production caller sets
+	 * this on purpose; a test checks that (privacy/static-guard.spec.ts).
+	 */
+	private?: boolean;
 }
 
 export function createConversation(
@@ -290,8 +295,8 @@ export function createConversation(
 	db.prepare(
 		`INSERT INTO conversations (id, user_id, kind, title, provider_id, model_id, agent_id,
 		 system_prompt, max_steps, origin, memory_enabled, subagent_of, subagent_tool_call_id,
-		 created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 private, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
@@ -306,6 +311,7 @@ export function createConversation(
 		input.memoryEnabled === false ? 0 : 1,
 		input.subagentOf ?? null,
 		input.subagentToolCallId ?? null,
+		input.private ? 1 : 0,
 		now,
 		now
 	);
@@ -358,6 +364,18 @@ export function touchConversation(db: Db, id: string): void {
 /** Sets the title without counting as activity, so a generated title doesn't reorder the sidebar. */
 export function setConversationTitle(db: Db, id: string, title: string): void {
 	db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, id);
+}
+
+/**
+ * Marks a conversation private or public. Without the activity bump, like a
+ * title. Returns whether the flag changed.
+ */
+export function setConversationPrivate(db: Db, id: string, value: boolean): boolean {
+	return (
+		db
+			.prepare('UPDATE conversations SET private = ? WHERE id = ? AND private != ?')
+			.run(value ? 1 : 0, id, value ? 1 : 0).changes > 0
+	);
 }
 
 export function softDeleteConversation(db: Db, userId: string, id: string): boolean {

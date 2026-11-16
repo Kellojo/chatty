@@ -1,3 +1,4 @@
+import { TurnPrivacy } from '../privacy/taint.js';
 import {
 	filterTargets,
 	PrivateDataBlockedError,
@@ -676,18 +677,26 @@ async function prepareTurn(
 		throw new ChatRequestError(400, `The selected model is not available: ${detail}`);
 	}
 
-	// The turn's privacy; choke points re-read the conversation's and run's flags.
-	const privacy: Privacy = {
-		tainted: false,
+	// Choke points re-read the conversation's and run's flags; the turn's own
+	// privacy also tracks taint from its tools (TurnPrivacy).
+	const snapshot: Privacy = {
+		tainted: limits.tainted === true,
 		conversationId: conversation.id,
 		agentRunId: run?.runId ?? null
 	};
 	// Before the retry loop: a private chat never falls back to an untrusted provider.
-	const allowed = filterTargets(db, available, privacy);
+	const allowed = filterTargets(db, available, snapshot);
 	if (allowed.length === 0) {
 		throw new ChatRequestError(409, new PrivateDataBlockedError().message);
 	}
+	// Only a turn whose every target is trusted may be handed private items.
 	const trust = turnTrust(db, allowed);
+	const privacy = new TurnPrivacy(db, userId, {
+		conversationId: conversation.id,
+		agentRunId: run?.runId ?? null,
+		trust,
+		tainted: limits.tainted
+	});
 
 	const catalog = await buildTools({
 		userId,
@@ -703,7 +712,8 @@ async function prepareTurn(
 		conversationId: conversation.id,
 		agentRunId: run?.runId ?? null,
 		messageId: lastUserMessage.id,
-		privacy
+		privacy,
+		trust
 	});
 	// A run turn knows whether it may ask; in a chat the user talks to, an agent
 	// that is allowed to ask can always do so.
@@ -744,6 +754,8 @@ export interface TurnToolLimits {
 	allowlist?: string[];
 	/** Never these, whatever the allowlist says. */
 	exclude?: readonly string[];
+	/** The turn starts tainted (a subagent of a parent holding private data). */
+	tainted?: boolean;
 }
 
 export interface ChatTurn {

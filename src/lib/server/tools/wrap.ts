@@ -14,6 +14,11 @@ export interface WrapMcpToolsOptions {
 	onError?: (error: unknown) => void;
 	/** Called once per finished call. */
 	onCall?: (outcome: McpToolCallOutcome) => void;
+	/**
+	 * Runs before every call; throwing refuses it (the model gets the error).
+	 * The private-data check lives here, so deferred tools are covered too.
+	 */
+	guard?: (toolName: string, input: unknown) => void | Promise<void>;
 }
 
 /** MCP servers report a failed call as a result with `isError`, not by throwing. */
@@ -29,7 +34,7 @@ function isErrorResult(result: unknown): boolean {
 export function wrapMcpTools(
 	set: Record<string, Tool>,
 	serverName: string,
-	{ onError, onCall }: WrapMcpToolsOptions = {}
+	{ onError, onCall, guard }: WrapMcpToolsOptions = {}
 ): Record<string, Tool> {
 	const wrapped: Record<string, Tool> = {};
 	for (const [name, tool] of Object.entries(set)) {
@@ -46,6 +51,7 @@ export function wrapMcpTools(
 					onCall?.({ tool: name, ok, durationMs: performance.now() - started });
 				let result: unknown;
 				try {
+					await guard?.(name, input);
 					result = await runInToolCall(options?.toolCallId, () =>
 						execute(input as never, options as never)
 					);

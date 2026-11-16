@@ -1,4 +1,5 @@
-import type { Privacy } from '../privacy/policy.js';
+import { assertToolAllowed, hiddenWhenTainted } from '../privacy/guard.js';
+import { callerPrivacy, isPrivateContext, type Privacy, type Trust } from '../privacy/policy.js';
 import path from 'node:path';
 import type { Tool } from 'ai';
 import type { ToolInfo } from '$lib/types.js';
@@ -37,6 +38,8 @@ export interface BuildToolsInput {
 	onToolCall?: (row: McpServerRow, outcome: McpToolCallOutcome) => void;
 	/** The turn's privacy, shared with its tools (see CallerContext.privacy). */
 	privacy?: Privacy;
+	/** Whether the turn may be handed private items (see CallerContext.trust). */
+	trust?: Trust;
 }
 
 export interface BuiltTools extends ToolCatalog {
@@ -56,8 +59,11 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		conversationId: input.conversationId,
 		agentRunId: input.agentRunId,
 		messageId: input.messageId,
-		privacy: input.privacy
+		privacy: input.privacy,
+		trust: input.trust
 	};
+	// Fixed for the catalog; every call is checked again when it runs.
+	const taintedAtStart = isPrivateContext(db, callerPrivacy(ctx));
 	const rows = (input.servers ?? listEnabledMcpServers(db)).filter(
 		(row) =>
 			(input.memoryEnabled || row.name !== 'memory') &&
@@ -89,9 +95,13 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 			onCall: (outcome) => {
 				trackCall(row, ctx.userId, outcome);
 				input.onToolCall?.(row, outcome);
-			}
+			},
+			guard: (tool, toolInput) =>
+				assertToolAllowed(getDb(), row, tool, toolInput, callerPrivacy(ctx))
 		});
 		for (const [name, tool] of Object.entries(set)) {
+			// A private turn isn't offered tools it may not run.
+			if (taintedAtStart && hiddenWhenTainted(db, row, name)) continue;
 			if (tools[name] || name === SEARCH_TOOLS_NAME) {
 				log.warn(`MCP tool name collision: "${name}" from ${row.name} skipped`);
 				continue;

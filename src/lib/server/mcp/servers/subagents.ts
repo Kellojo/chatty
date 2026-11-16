@@ -1,3 +1,4 @@
+import { callerPrivacy } from '../../privacy/policy.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { MAX_CONCURRENT_SUBAGENTS, RUN_SUBAGENT_TOOL } from '$lib/subagent-tool.js';
@@ -46,7 +47,8 @@ export function createSubagentsServer(ctx: CallerContext): McpServer {
 					prompt,
 					tools,
 					toolCallId: currentToolCallId(),
-					signal: extra.signal
+					signal: extra.signal,
+					parentPrivacy: callerPrivacy(ctx)
 				});
 				const outcome =
 					result.status === 'completed' && !result.result
