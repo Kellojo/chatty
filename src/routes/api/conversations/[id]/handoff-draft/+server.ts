@@ -20,10 +20,6 @@ export const POST: RequestHandler = async ({ locals, params }) => {
 	if (getCodingConversation(db, conversation.id)) {
 		error(400, { message: 'This is already a coding task' });
 	}
-	// The draft is the chat's content, bound for a coding agent outside Chatty.
-	if (conversation.private === 1) {
-		error(409, { message: "Private chats can't be handed off to a coding agent" });
-	}
 	try {
 		return json({ prompt: await draftHandoffPrompt(user.id, conversation, db) });
 	} catch (e) {

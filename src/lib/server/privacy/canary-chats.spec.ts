@@ -22,14 +22,14 @@ const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.j
 const { createMCPClient } = await import('@ai-sdk/mcp');
 const { isConversationPrivate } = await import('./policy.js');
 const { TurnPrivacy } = await import('./taint.js');
-const { CANARY } = await import('./fixtures.js');
+const { CANARY, createMapping } = await import('./fixtures.js');
 const { useCanaryServer } = await import('./canary-harness.js');
 const gatewayRoute = await import('../../../routes/api/mcp/+server.js');
 const handoffRoute =
 	await import('../../../routes/api/conversations/[id]/handoff-draft/+server.js');
 
 const canary = useCanaryServer();
-const { recorded, trustedSaw, expectNoLeak, privateChat } = canary;
+const { trustedSaw, expectNoLeak, privateChat } = canary;
 let fx: typeof canary.fx;
 beforeEach(() => {
 	fx = canary.fx;
@@ -179,18 +179,16 @@ describe('egress canary: agent runs and subagents (PR 4)', () => {
 });
 
 describe('egress canary: coding (PR 4)', () => {
-	it('hand-off: a private chat is refused before any model call', async () => {
-		const chat = privateChat(fx.trusted);
-		await expect(
-			handoffRoute.POST({
-				locals: { user: { id: fx.userId } },
-				params: { id: chat.id }
-			} as never)
-		).rejects.toMatchObject({
-			status: 409,
-			body: { message: "Private chats can't be handed off to a coding agent" }
-		});
-		expect(recorded).toEqual([]);
+	it("hand-off: a private chat's draft is only written by a trusted model", async () => {
+		const mapping = createMapping(getDb(), 'handoff-mixed', [fx.untrusted, fx.trusted]);
+		const chat = privateChat(mapping);
+		const res = await handoffRoute.POST({
+			locals: { user: { id: fx.userId } },
+			params: { id: chat.id }
+		} as never);
+		expect(res.status).toBe(200);
+		expect(trustedSaw().some((r) => r.body.includes(CANARY))).toBe(true);
+		expectNoLeak();
 	});
 });
 

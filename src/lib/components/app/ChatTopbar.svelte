@@ -67,10 +67,9 @@
 	// Coding-task dialogs, opened from the task bar or (on phones) from the ⋯ menu.
 	let codingSettingsOpen = $state(false);
 	let codingPreviewOpen = $state(false);
-	// Hand-off sends the chat to a coding agent, which a private chat can't reach.
 	const isPrivate = $derived(privateData.enabled && conversation.private);
 	const canHandoff = $derived(
-		!coding && !isPrivate && (codingEnvironments.length > 0 || codingAgents.length > 0)
+		!coding && (codingEnvironments.length > 0 || codingAgents.length > 0)
 	);
 
 	let saving = $state(false);
