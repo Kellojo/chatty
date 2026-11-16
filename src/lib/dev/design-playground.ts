@@ -348,6 +348,20 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 			'# Example Domain\n\nThis domain is for use in illustrative examples in documents.'
 		)
 	],
+	websearch: [
+		mcp(
+			'web_search',
+			{ query: 'svelte 5 runes', limit: 2 },
+			'Results for "svelte 5 runes" via SearXNG:\n' +
+				'[1] {"url":"https://svelte.dev/docs/svelte/what-are-runes","title":"What are runes? • Svelte Docs","site":"svelte.dev","description":"Runes are symbols that you use in .svelte files to control the Svelte compiler.","favicon":"https://svelte.dev/favicon.ico"}\n' +
+				'[2] {"url":"https://svelte.dev/blog/runes","title":"Introducing runes","site":"svelte.dev","favicon":"https://svelte.dev/favicon.ico"} (published 2023-09-20T00:00:00)'
+		),
+		mcp(
+			'search_places',
+			{ query: 'coffee', location: 'lisbon portugal', limit: 1 },
+			'[1] {"name":"Fábrica Coffee Roasters","address":"R. das Portas de Santo Antão 136, 1150-269 Lisboa","categories":["Coffee & Tea","Cafe"],"rating":"4.6/5 (1820 reviews)","price":"€","hoursToday":"08:00–19:00","coordinates":[38.7167,-9.1405],"website":"https://fabricacoffeeroasters.com"}'
+		)
+	],
 	datetime: [
 		mcp(
 			'now',

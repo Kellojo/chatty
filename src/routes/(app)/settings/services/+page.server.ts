@@ -4,6 +4,7 @@ import { listAaModels } from '$lib/server/db/repo/aa-models.js';
 import { listModels, toPublic as modelToPublic } from '$lib/server/db/repo/models.js';
 import { getKeyInfo, getStatus } from '$lib/server/benchmarks/artificial-analysis.js';
 import { matchScores } from '$lib/server/benchmarks/match.js';
+import { getWebSearchInfo } from '$lib/server/websearch/service.js';
 import type { PageServerLoad } from './$types';
 
 /** Third-party services Chatty pulls data from; one entry per service as more are added. */
@@ -18,6 +19,7 @@ export const load: PageServerLoad = ({ locals }) => {
 			aa: { key, status: getStatus(db) },
 			matched,
 			total: models.length
-		}
+		},
+		webSearch: getWebSearchInfo(db)
 	};
 };

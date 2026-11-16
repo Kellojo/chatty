@@ -9,9 +9,9 @@ import { createLogger } from '../logger.js';
 import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
 
 /**
- * In-run context compaction for agent tool loops.
+ * In-turn context compaction for tool loops (agent runs and plain chats).
  *
- * A run is one long `streamText` call, so chat compaction (which runs between
+ * A turn is one long `streamText` call, so chat compaction (which runs between
  * turns) never sees it, and every tool result piles up in the prompt. Before
  * each step this shrinks the messages once the prompt nears the model's
  * context window, cheapest first:
@@ -25,7 +25,7 @@ import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
  * steps (the SDK reuses a `prepareStep` override), so nothing is redone.
  */
 
-const log = createLogger('agent-compaction');
+const log = createLogger('step-compaction');
 
 const SAFETY_MARGIN = 0.85;
 const RESPONSE_RESERVE_TOKENS = 8192;
@@ -42,7 +42,7 @@ const SINGLE_OUTPUT_SHARE = 0.25;
 const TRANSCRIPT_PART_CHARS = 2000;
 const SUMMARY_MAX_TOKENS = 2000;
 
-export const SUMMARY_MARKER = '[Progress summary of earlier steps in this run]';
+export const SUMMARY_MARKER = '[Progress summary of earlier steps in this turn]';
 const SUMMARY_TRAILER =
 	'Continue the task from where these steps left off; do not redo completed work.';
 
@@ -51,7 +51,7 @@ type ToolResultOutput = Extract<
 	{ type: 'tool-result' }
 >['output'];
 
-/** Token threshold at which a run's prompt is compacted, or null when disabled. */
+/** Token threshold at which a turn's prompt is compacted, or null when disabled. */
 export function compactionThreshold(contextLength: number | null | undefined): number | null {
 	if (config.CHAT_COMPACT_TOKENS === 0) return null;
 	if (contextLength && contextLength > 0) {
@@ -312,28 +312,31 @@ export async function compactStepMessages(input: CompactStepInput): Promise<Comp
 	return result;
 }
 
-const SUMMARY_PROMPT = `You are compressing the working history of an autonomous agent run so it fits the model's context window. The agent will continue from your summary, without the original steps.
+const SUMMARY_PROMPT = `You are compressing the working history of an AI assistant's tool-using turn so it fits the model's context window. The assistant will continue from your summary, without the original steps.
 
 Write a concise progress report preserving:
 - what the task is and what has been completed so far
-- key findings and data the agent will still need: ids, names, paths, URLs, numbers, code
+- key findings and data still needed: ids, names, paths, URLs, numbers, code
 - actions with side effects already performed (so they are not repeated)
 - approaches that failed and why
 - what remains to be done next
 
 Output only the summary.`;
 
-export interface RunSummarizerOptions {
+export interface StepSummarizerOptions {
 	db: Db;
 	userId: string;
 	conversationId: string;
-	runId: string;
+	/** The reply being generated, so the request log links to it. */
+	messageId?: string;
+	/** Absent for plain chats; the request then counts as chat usage. */
+	runId?: string;
 	fallback: { providerId: string; modelId: string };
 	abortSignal?: AbortSignal;
 }
 
 /** LLM summarizer for {@link compactStepMessages}, recorded as a 'compaction' request. */
-export function createRunSummarizer(opts: RunSummarizerOptions): Summarize {
+export function createStepSummarizer(opts: StepSummarizerOptions): Summarize {
 	return async ({ transcript, previous }) => {
 		const { db } = opts;
 		const target = summaryTarget(opts.fallback);
@@ -347,9 +350,10 @@ export function createRunSummarizer(opts: RunSummarizerOptions): Summarize {
 		].join('\n');
 		const row = createProxyRequest(db, {
 			userId: opts.userId,
-			source: 'agent',
+			source: opts.runId ? 'agent' : 'chat',
 			conversationId: opts.conversationId,
 			runId: opts.runId,
+			messageId: opts.messageId,
 			purpose: 'compaction',
 			endpoint: 'generateText',
 			requestedModel: target.modelId,

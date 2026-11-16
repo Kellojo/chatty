@@ -70,6 +70,7 @@ services:
 | `OIDC_CLIENT_SECRET`            | —                      | OIDC client secret                                                                      |
 | `OIDC_SCOPES`                   | `openid profile email` | OIDC scopes                                                                             |
 | `AGENT_MAX_STEPS`               | `25`                   | Max steps per agent run                                                                 |
+| `CHAT_MAX_STEPS`                | `20`                   | Max model steps (tool rounds + final answer) per reply in a plain chat                  |
 | `MAX_ATTACHMENT_SIZE_MB`        | `50`                   | Max upload size                                                                         |
 | `WORKSPACE_GC_DAYS`             | `30`                   | Days before workspace cleanup                                                           |
 | `CONVERSATION_AUTO_SETTLE_DAYS` | `7`                    | Idle days before a chat is auto-settled (hidden from sidebar); `0` disables             |
@@ -78,8 +79,55 @@ services:
 | `ALLOW_PRIVATE_NETWORK_FETCH`   | `false`                | Let agent fetch tools reach localhost, LAN and metadata addresses                       |
 | `AUTO_PROMOTE_FIRST_USER`       | `true`                 | First user becomes admin                                                                |
 | `ARTIFICIAL_ANALYSIS_API_KEY`   | —                      | Key for model Intelligence Index scores; overrides the key saved in Settings → Services |
+| `SEARXNG_URL`                   | —                      | SearXNG URL for the `web_search` tool; overrides the one saved in Settings → Services   |
+| `BRAVE_SEARCH_API_KEY`          | —                      | Brave Search API key for `web_search`; overrides the key saved in Settings → Services   |
+| `PERPLEXITY_API_KEY`            | —                      | Perplexity API key for `web_search`; overrides the key saved in Settings → Services     |
 
 Model Intelligence Index scores come from [Artificial Analysis](https://artificialanalysis.ai) (free API key, 100 requests a day). Save the key in **Settings → Services**, where it is stored encrypted, or set `ARTIFICIAL_ANALYSIS_API_KEY`. Scores are fetched only when you save the key, sync a provider's models (at most once an hour) or click Refresh; nothing runs in the background. A refresh costs 2–3 requests.
+
+### Web search
+
+Models get a `web_search` tool (web results, or news with `type: "news"`) once a search provider is configured in **Settings → Services**; without one, the tool isn't offered at all. Three providers are supported:
+
+- **SearXNG**: a self-hosted metasearch engine. Enter its base URL (e.g. `http://searxng:8080`) or set `SEARXNG_URL`. Since the admin configures it, it may be on localhost or a private network without `ALLOW_PRIVATE_NETWORK_FETCH`; only link-local/metadata addresses are refused. Chatty talks to its JSON API, which SearXNG disables by default: add `json` to `search.formats` in its `settings.yml`, otherwise saving fails with HTTP 403.
+- **Brave Search API**: save an [API key](https://api-dashboard.search.brave.com/app/keys) (stored encrypted) or set `BRAVE_SEARCH_API_KEY`. Brave also adds a `search_places` tool (restaurants, shops, sights… with address, rating, opening hours and coordinates) via its Place Search API, which is part of the Search plan.
+- **Perplexity Search API**: save an [API key](https://www.perplexity.ai/account/api/keys) (stored encrypted) or set `PERPLEXITY_API_KEY`. It returns ranked web results, not generated answers, and has no news search, so news searches use the other providers.
+
+Each is checked with a test search before it's saved, and env vars override what's saved in the app. Results come back as the same source cards as `fetch`, so citations look alike.
+
+With several providers connected, **Settings → Services → Web search** picks how a search uses them, and shows the resulting order:
+
+- **Combined** (default): every provider is searched at once and the results are merged into one list, de-duplicated by URL and ranked so pages that several providers found come first. Each result notes which providers found it. A round waits at most 10 s, and once one provider has found something the others get 3 s more; providers that are too slow are left out of that answer.
+- **Fallback**: one provider answers each search, starting with the one set with **Make default**; the next is only tried when it fails.
+
+Paid APIs bill every search they take part in, so Combined costs more than Fallback. Set a provider to **Backup only** to search it only when no other provider answers (in Fallback, it's tried last). If every provider is Backup only, they're all searched normally.
+
+A SearXNG sidecar for the compose file above:
+
+```yaml
+services:
+  # app: … as above, plus SEARXNG_URL: http://searxng:8080
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
+    volumes:
+      - ./searxng:/etc/searxng # settings.yml goes here
+```
+
+and at least this in `./searxng/settings.yml`:
+
+```yaml
+use_default_settings: true
+server:
+  limiter: false # only Chatty calls it, from inside the compose network
+search:
+  formats:
+    - html
+    - json
+```
 
 ## Deployment
 

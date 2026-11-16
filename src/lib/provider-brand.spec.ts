@@ -16,6 +16,7 @@ describe('resolveBrand', () => {
 		expect(resolveBrand('Work', 'https://openrouter.ai/api/v1')).toBe('openrouter');
 		expect(resolveBrand('Local', 'http://localhost:11434/v1')).toBe('ollama');
 		expect(resolveBrand('OpenRouter', 'anthropic')).toBe('openrouter');
+		expect(resolveBrand('Search', 'https://api.perplexity.ai')).toBe('perplexity');
 	});
 
 	it("prefers the model's maker over a gateway provider", () => {
@@ -28,6 +29,8 @@ describe('resolveBrand', () => {
 		expect(brand('x-ai/grok-4')).toBe('grok');
 		expect(brand('meta-llama/llama-4-maverick')).toBe('meta');
 		expect(brand('mistralai/devstral-medium')).toBe('mistral');
+		expect(brand('perplexity/sonar-pro')).toBe('perplexity');
+		expect(resolveModelBrand({ modelId: 'sonar-reasoning-pro' })).toBe('perplexity');
 		expect(brand('some-lab/unknown-model')).toBe('openrouter');
 		expect(resolveModelBrand({ modelId: 'o3' })).toBe('openai');
 		expect(resolveModelBrand({ modelId: 'qwen3:8b' }, null)).toBe('qwen');

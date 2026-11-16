@@ -10,6 +10,7 @@ import { connectServer, listServerTools } from '../mcp/clientManager.js';
 import { McpSignInRequiredError } from '../mcp/oauth.js';
 import { acquireMcpServer, cachedMcpTools, type McpLease } from '../mcp/pool.js';
 import type { CallerContext } from '../mcp/types.js';
+import { isWebSearchConfigured } from '../websearch/service.js';
 import { pickDeferredTools, SEARCH_TOOLS_NAME, type ToolCatalog } from './toolSearch.js';
 import { wrapMcpTools, type McpToolCallOutcome } from './wrap.js';
 
@@ -54,7 +55,10 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		messageId: input.messageId
 	};
 	const rows = (input.servers ?? listEnabledMcpServers(db)).filter(
-		(row) => input.memoryEnabled || row.name !== 'memory'
+		(row) =>
+			(input.memoryEnabled || row.name !== 'memory') &&
+			// web_search is only offered once a search provider is set up.
+			(row.builtin !== 1 || row.name !== 'websearch' || isWebSearchConfigured(db))
 	);
 	const tools: Record<string, Tool> = {};
 	const toolToServer: Record<string, string> = {};

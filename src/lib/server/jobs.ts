@@ -2,11 +2,13 @@ import { purgeExpiredOAuth } from './db/repo/oauth.js';
 import { dismissRun } from './agents/run-lifecycle.js';
 import { listActiveStreamIds } from './chat/streams.js';
 import { config } from './config.js';
+import { ICON_TTL_MS } from './net/favicon.js';
 import { getDb, type Db } from './db/index.js';
 import {
 	listAwaitingAgentRunConversationIds,
 	listAwaitingAgentRunsBefore
 } from './db/repo/agent-runs.js';
+import { purgeCachedFavicons } from './db/repo/favicon-cache.js';
 import { deleteStalePushSubscriptions } from './db/repo/push-subscriptions.js';
 import {
 	deleteUnlinkedAttachment,
@@ -158,6 +160,9 @@ export async function runDailyJobs(db: Db = getDb()): Promise<void> {
 
 	const purged = await purgeSoftDeletedConversations(db);
 	if (purged > 0) log.info(`Purged ${purged} soft-deleted conversation(s)`);
+
+	const staleIcons = purgeCachedFavicons(db, Date.now() - ICON_TTL_MS);
+	if (staleIcons > 0) log.info(`Removed ${staleIcons} site icon(s) cached over a month ago`);
 
 	const stalePush = deleteStalePushSubscriptions(db);
 	if (stalePush > 0) log.info(`Removed ${stalePush} push subscription(s) of ended sessions`);

@@ -193,8 +193,12 @@
 		return server.url ?? '';
 	}
 
-	const builtinServers = $derived(data.servers.filter((s) => s.builtin));
-	const customServers = $derived(data.servers.filter((s) => !s.builtin));
+	/** Always-loaded servers first, then on-demand ones; alphabetical within each. */
+	const byLoadModeThenName = (a: McpServerInfo, b: McpServerInfo) =>
+		Number(isAlwaysLoaded(b)) - Number(isAlwaysLoaded(a)) ||
+		a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+	const builtinServers = $derived(data.servers.filter((s) => s.builtin).sort(byLoadModeThenName));
+	const customServers = $derived(data.servers.filter((s) => !s.builtin).sort(byLoadModeThenName));
 
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<McpServerInfo | null>(null);
@@ -207,6 +211,8 @@
 
 	let enabledOverride = $state<Record<string, boolean>>({});
 	let loadModeOverride = $state<Record<string, McpServerInfo['loadMode']>>({});
+	const isAlwaysLoaded = (server: McpServerInfo) =>
+		(loadModeOverride[server.id] ?? server.loadMode) === 'always';
 
 	async function api(path: string, method: string, body?: unknown): Promise<Response> {
 		const res = await fetch(path, {

@@ -27,6 +27,8 @@ const RULES: [RegExp, Brand][] = [
 	[/github\s?copilot|githubcopilot\.com/, 'githubcopilot'],
 	[/azure|microsoft|\bphi-?\d/, 'microsoft'],
 	[/nvidia|nemotron/, 'nvidia'],
+	// Perplexity's own models are the Sonar family (`sonar-pro`, `perplexity/sonar`).
+	[/perplexity|(^|\/)sonar\b/, 'perplexity'],
 	[/claude|anthropic/, 'claude'],
 	[/openai|codex|chatgpt|\bgpt\b|(^|\/)o\d\b/, 'openai'],
 	[/gemini|gemma|generativelanguage\.googleapis|^google\//, 'gemini'],
@@ -37,7 +39,6 @@ const RULES: [RegExp, Brand][] = [
 	[/kimi|moonshot/, 'kimi'],
 	[/\bz\.ai\b|zhipu|bigmodel\.cn|\bglm\b/, 'zai'],
 	[/minimax/, 'minimax'],
-	[/perplexity|\bsonar\b/, 'perplexity'],
 	[/cohere|\bcommand-r\b|\bcommand-a\b/, 'cohere'],
 	[/\bmeta\b|llama/, 'meta']
 ];

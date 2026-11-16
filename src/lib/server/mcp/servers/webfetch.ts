@@ -1,8 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { getDb } from '../../db/index.js';
+import { rememberSourceSite } from '../../db/repo/source-sites.js';
+import { createLogger } from '../../logger.js';
 import { readBodyLimited } from '../../net/readBody.js';
 import { safeFetch } from '../../net/safeFetch.js';
+import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
+
+const log = createLogger('webfetch');
 
 const MAX_BYTES = 1024 * 1024;
 /** Only the start of a page is searched for <head> metadata. */
@@ -253,7 +259,7 @@ function binaryError(contentType: string) {
 }
 
 /** Collapse whitespace, decode entities and cap the length on a word boundary. */
-function clean(raw: string | undefined, max: number): string | undefined {
+export function clean(raw: string | undefined, max: number): string | undefined {
 	if (!raw) return undefined;
 	const s = decodeEntities(raw).replace(/\s+/g, ' ').trim();
 	if (!s) return undefined;
@@ -284,27 +290,14 @@ function absolute(href: string | undefined, base: string): string | undefined {
 	}
 }
 
-/** The page's own icon: an SVG, else the declared size closest to 32px, else /favicon.ico. */
-function pickFavicon(links: Record<string, string>[], base: string): string | undefined {
-	let best: { href: string; score: number } | undefined;
-	for (const link of links) {
-		const rel = (link.rel ?? '').toLowerCase().split(/\s+/);
-		if (!rel.includes('icon')) continue; // also skips mask-icon / apple-touch-icon
-		const href = absolute(link.href, base);
-		if (!href) continue;
-		const size = Number(/(\d+)x\d+/i.exec(link.sizes ?? '')?.[1]);
-		const svg = /svg/i.test(link.type ?? '') || /\.svg(?:[?#]|$)/i.test(href);
-		const score = svg ? 0 : size ? Math.abs(size - 32) + (size < 32 ? 16 : 0) : 20;
-		if (!best || score < best.score) best = { href, score };
-	}
-	return best?.href ?? absolute('/favicon.ico', base);
+/** How far a declared icon size is from `target`px; smaller icons are penalized (they'd be upscaled). */
+export function sizeScore(sizes: string | undefined, target: number): number | null {
+	const size = Number(/(\d+)x\d+/i.exec(sizes ?? '')?.[1]);
+	return size ? Math.abs(size - target) / target + (size < target ? 0.5 : 0) : null;
 }
 
-/**
- * Card metadata from a page's <head>: title, site name, description, favicon
- * and preview image, with URLs resolved absolute. Missing fields are omitted.
- */
-export function extractPageMeta(html: string, pageUrl: string): PageMeta {
+/** A page's <head>: its first <meta> values by name/property, its <link> tags and its base URL. */
+function parseHead(html: string, pageUrl: string) {
 	const headEnd = /<\/head\s*>|<body\b/i.exec(html.slice(0, MAX_HEAD_BYTES))?.index;
 	const head = html.slice(0, headEnd ?? MAX_HEAD_BYTES);
 	const meta: Record<string, string> = {};
@@ -316,6 +309,46 @@ export function extractPageMeta(html: string, pageUrl: string): PageMeta {
 	const links = [...head.matchAll(/<link\b[^>]*>/gi)].map((m) => attrs(m[0]));
 	const baseTag = /<base\b[^>]*>/i.exec(head)?.[0];
 	const base = (baseTag && absolute(attrs(baseTag).href, pageUrl)) || pageUrl;
+	return { head, meta, links, base };
+}
+
+/**
+ * Every icon a page's <head> declares, best first: rel="icon" / "shortcut icon"
+ * (SVG, then the size closest to 32px), then apple-touch-icon(-precomposed),
+ * then the Windows tile image. mask-icon is skipped: it's a one-colour
+ * silhouette. `manifest` is the web app manifest, which may list more icons.
+ */
+export function pageIcons(html: string, pageUrl: string): { icons: string[]; manifest?: string } {
+	const { meta, links, base } = parseHead(html, pageUrl);
+	const ranked: { href: string; score: number }[] = [];
+	let manifest: string | undefined;
+	for (const link of links) {
+		const rel = (link.rel ?? '').toLowerCase().split(/\s+/);
+		const href = absolute(link.href, base);
+		if (!href) continue;
+		if (rel.includes('manifest')) {
+			manifest ??= href;
+		} else if (rel.includes('icon')) {
+			const svg = /svg/i.test(link.type ?? '') || /\.svg(?:[?#]|$)/i.test(href);
+			ranked.push({ href, score: svg ? 0 : (sizeScore(link.sizes, 32) ?? 0.6) + 0.01 });
+		} else if (rel.includes('apple-touch-icon') || rel.includes('apple-touch-icon-precomposed')) {
+			// Usually 180px; the legacy -precomposed variant only when nothing else is there.
+			const legacy = !rel.includes('apple-touch-icon');
+			ranked.push({ href, score: 100 + (sizeScore(link.sizes, 180) ?? 0.3) + (legacy ? 1 : 0) });
+		}
+	}
+	const tile = absolute(meta['msapplication-tileimage'], base);
+	if (tile) ranked.push({ href: tile, score: 200 });
+	ranked.sort((a, b) => a.score - b.score);
+	return { icons: [...new Set(ranked.map((r) => r.href))], manifest };
+}
+
+/**
+ * Card metadata from a page's <head>: title, site name, description, favicon
+ * and preview image, with URLs resolved absolute. Missing fields are omitted.
+ */
+export function extractPageMeta(html: string, pageUrl: string): PageMeta {
+	const { head, meta, base } = parseHead(html, pageUrl);
 	const titleTag = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(head)?.[1];
 	const host = URL.canParse(pageUrl) ? new URL(pageUrl).hostname.replace(/^www\./, '') : '';
 	const card: PageMeta = {
@@ -326,7 +359,7 @@ export function extractPageMeta(html: string, pageUrl: string): PageMeta {
 			meta['og:description'] ?? meta['description'] ?? meta['twitter:description'],
 			200
 		),
-		favicon: pickFavicon(links, base),
+		favicon: pageIcons(html, pageUrl).icons[0] ?? absolute('/favicon.ico', base),
 		image: absolute(meta['og:image'] ?? meta['og:image:url'] ?? meta['twitter:image'], base)
 	};
 	return Object.fromEntries(
@@ -334,7 +367,18 @@ export function extractPageMeta(html: string, pageUrl: string): PageMeta {
 	) as unknown as PageMeta;
 }
 
-export function createWebfetchServer(): McpServer {
+/** Lets /api/favicon serve this site's icon to the user; recording never fails the fetch. */
+export function rememberSource(userId: string, card: PageMeta): void {
+	try {
+		rememberSourceSite(getDb(), userId, card.url, card.favicon);
+	} catch (e) {
+		log.warn('Recording source site failed:', {
+			error: e instanceof Error ? e.message : String(e)
+		});
+	}
+}
+
+export function createWebfetchServer(ctx?: CallerContext): McpServer {
 	const server = new McpServer({ name: 'ai-chat-webfetch', version: '0.1.0' });
 	server.registerTool(
 		'fetch',
@@ -386,6 +430,7 @@ export function createWebfetchServer(): McpServer {
 			const result = text(converted + suffix);
 			// The body stays the first content part; the card is an extra part.
 			const card = extractPageMeta(body, pageUrl);
+			if (ctx) rememberSource(ctx.userId, card);
 			result.content.push({ type: 'text', text: `Source card: ${JSON.stringify(card)}` });
 			return result;
 		}

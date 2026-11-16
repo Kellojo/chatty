@@ -57,7 +57,7 @@ import {
 import {
 	compactStepMessages,
 	compactionThreshold,
-	createRunSummarizer,
+	createStepSummarizer,
 	estimateValueTokens
 } from '../agents/stepCompaction.js';
 import { openAskUserCall } from '$lib/ask-user.js';
@@ -921,7 +921,9 @@ export async function runChatTurn(
 		throw e;
 	}
 	const maxSteps =
-		conversation.mode === 'agent' ? (conversation.max_steps ?? config.AGENT_MAX_STEPS) : 5;
+		conversation.mode === 'agent'
+			? (conversation.max_steps ?? config.AGENT_MAX_STEPS)
+			: config.CHAT_MAX_STEPS;
 	const stopWhen = stepCountIs(maxSteps);
 	const lastStep = answerOnLastStep(maxSteps);
 	const loadedTools = loadedToolsFromHistory(history, catalog.deferred);
@@ -1036,19 +1038,19 @@ export async function runChatTurn(
 									tools: toolSearch.tools
 								})
 							: { system, messages: modelMessages, tools: toolSearch.tools };
-					const compactSteps = run
-						? stepCompactor({
-								db,
-								userId,
-								conversationId: conversation.id,
-								runId: run.runId,
-								target,
-								contextLength: () => effectiveContextLength(target),
-								overheadTokens:
-									estimateTokens(system) + Math.ceil(estimateToolChars(toolSearch.tools) / 4),
-								abortSignal: controller.signal
-							})
-						: null;
+					// Plain chats too: a few large fetch results can overflow a local model.
+					const compactSteps = stepCompactor({
+						db,
+						userId,
+						conversationId: conversation.id,
+						messageId: assistantMessageId,
+						runId: run?.runId,
+						target,
+						contextLength: () => effectiveContextLength(target),
+						overheadTokens:
+							estimateTokens(system) + Math.ceil(estimateToolChars(toolSearch.tools) / 4),
+						abortSignal: controller.signal
+					});
 					const result = streamText({
 						model,
 						...prompt,
@@ -1297,15 +1299,19 @@ export async function runChatTurnHeadless(
 }
 
 /**
- * The context-size guard for a run's long tool loops: once a step's prompt
- * nears the model's context, older steps are folded into a summary (see
- * stepCompaction). Returns the messages to use for the next step, if changed.
+ * The context-size guard for a turn's tool loop (agent run or plain chat):
+ * once a step's prompt nears the model's context, older steps are folded into
+ * a summary (see stepCompaction). Returns the messages to use for the next
+ * step, if changed. Only the prompt is compacted; the streamed reply that is
+ * persisted and shown keeps every step.
  */
 function stepCompactor(input: {
 	db: Db;
 	userId: string;
 	conversationId: string;
-	runId: string;
+	messageId: string;
+	/** Absent for plain chats. */
+	runId?: string;
 	target: { providerId: string; modelId: string };
 	/** Asked per step: an LM Studio model's loaded context can change mid-run. */
 	contextLength: () => Promise<number | null>;
@@ -1313,10 +1319,11 @@ function stepCompactor(input: {
 	abortSignal: AbortSignal;
 }) {
 	if (compactionThreshold(null) === null) return null;
-	const summarize = createRunSummarizer({
+	const summarize = createStepSummarizer({
 		db: input.db,
 		userId: input.userId,
 		conversationId: input.conversationId,
+		messageId: input.messageId,
 		runId: input.runId,
 		fallback: input.target,
 		abortSignal: input.abortSignal
@@ -1347,7 +1354,8 @@ function stepCompactor(input: {
 			summarize
 		});
 		if (c.stage === 'none') return undefined;
-		log.info('Agent run context compacted', {
+		log.info('Turn context compacted', {
+			conversationId: input.conversationId,
 			runId: input.runId,
 			stage: c.stage,
 			beforeTokens: c.beforeTokens,
