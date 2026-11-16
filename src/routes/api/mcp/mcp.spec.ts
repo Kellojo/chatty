@@ -116,8 +116,9 @@ describe('mcp-gateway access', () => {
 	it('gives a key without saved access the default servers, all tools', () => {
 		const db = getDb();
 		const names = gateway.resolveMcpAccess(db, null).servers.map((r) => r.name);
-		expect(names).toContain('memory');
-		expect(names).toContain('chat-search');
+		expect(names).toContain('skills');
+		expect(names).not.toContain('memory');
+		expect(names).not.toContain('chat-search');
 		expect(names).not.toContain('fs');
 		expect(names).not.toContain('code-exec');
 		expect([...gateway.resolveMcpAccess(db, null).tools.values()].every((t) => t === null)).toBe(
@@ -132,5 +133,20 @@ describe('mcp-gateway access', () => {
 		]);
 		expect(access.servers.map((r) => r.name)).toEqual(['memory']);
 		expect(access.tools.get('memory')).toEqual(new Set(['search_memory']));
+	});
+});
+
+describe('MCP gateway defaults', () => {
+	it('leaves chat search and memory out of a new key unless picked', async () => {
+		const db = getDb();
+		const ids = gateway.defaultMcpAccess(db).map((e) => e.serverId);
+		expect(ids).not.toContain(server('chat-search').id);
+		expect(ids).not.toContain(server('memory').id);
+		// A key with explicit access to them still gets them.
+		const access = gateway.resolveMcpAccess(db, [
+			{ serverId: server('chat-search').id, tools: null },
+			{ serverId: server('memory').id, tools: ['search_memory'] }
+		]);
+		expect(access.servers.map((s) => s.name).sort()).toEqual(['chat-search', 'memory']);
 	});
 });

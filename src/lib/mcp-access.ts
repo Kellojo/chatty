@@ -8,6 +8,20 @@ export function defaultAccess(servers: McpGatewayServer[]): McpKeyAccess {
 	return servers.filter((s) => s.exposedByDefault).map((s) => ({ serverId: s.id, tools: null }));
 }
 
+/** Builtin servers that hand past chats and memory notes to the key's app. */
+export const PERSONAL_DATA_SERVERS: readonly string[] = ['chat-search', 'memory'];
+
+/**
+ * The personal-data servers (chat search, memory) `access` grants, by name. Keys
+ * created before these left the defaults still have them, so the key list warns.
+ */
+export function personalDataServers(access: McpKeyAccess, servers: McpGatewayServer[]): string[] {
+	const granted = new Set(access.map((e) => e.serverId));
+	return servers
+		.filter((s) => s.builtin && PERSONAL_DATA_SERVERS.includes(s.name) && granted.has(s.id))
+		.map((s) => s.name);
+}
+
 /** The tool names `access` allows among the tools listed now. */
 export function accessToToolNames(
 	access: McpKeyAccess,

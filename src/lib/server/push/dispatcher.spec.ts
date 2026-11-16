@@ -120,7 +120,7 @@ describe('push dispatcher', () => {
 		});
 		expect(payloads()[0]).toMatchObject({
 			title: 'Inbox triage',
-			body: 'Needs you: Archive these 12 newsletters?',
+			body: 'An agent needs your input',
 			kind: 'needs-you'
 		});
 		expect((sender.mock.calls[0][2] as { urgency: string }).urgency).toBe('high');

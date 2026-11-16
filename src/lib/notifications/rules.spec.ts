@@ -151,7 +151,7 @@ describe('noticeForEvent', () => {
 			kind: 'needs-you',
 			tag: 'chat:d',
 			title: 'Agent',
-			body: 'Needs you: Which branch?',
+			body: 'An agent needs your input',
 			url: '/chat/d',
 			conversationId: 'd',
 			agentId: 'ag'

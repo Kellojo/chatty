@@ -84,7 +84,8 @@ export function noticeForEvent(event: ServerEvent, ctx: NoticeContext): Notice |
 				kind: 'needs-you',
 				tag: `chat:${event.conversationId}`,
 				title: 'Agent',
-				body: `Needs you: ${event.question}`,
+				// The question is model-written and may quote the chat; it only shows in the app.
+				body: 'An agent needs your input',
 				url: `/chat/${event.conversationId}`,
 				conversationId: event.conversationId,
 				agentId: event.agentId

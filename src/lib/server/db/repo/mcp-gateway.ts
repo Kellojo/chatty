@@ -15,7 +15,9 @@ const TOP_TOOLS = 3;
  * main clients) already have their own, better file, shell, math and clock
  * tools. `agents` starts runs that use the agent's own tools, which reaches
  * past the key's picks, so it must be chosen on purpose. `subagents` and
- * `coding` only work inside a conversation.
+ * `coding` only work inside a conversation. `chat-search` and `memory` hand
+ * past chats and notes to another app, so they must be chosen on purpose too
+ * (keys created before that keep them; see migration 0087).
  */
 const HIDDEN_BY_DEFAULT = new Set([
 	'fs',
@@ -24,7 +26,9 @@ const HIDDEN_BY_DEFAULT = new Set([
 	'datetime',
 	'agents',
 	'subagents',
-	'coding'
+	'coding',
+	'chat-search',
+	'memory'
 ]);
 
 export function exposedByDefault(row: Pick<McpServerRow, 'name' | 'builtin'>): boolean {
