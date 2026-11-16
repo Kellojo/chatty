@@ -228,6 +228,18 @@ export const AGENT_EVENT_NAMES = [
 
 export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
 
+/** Private-data switches for the app shell (layout data `privateData`). */
+export interface PrivateDataStatus {
+	/** PRIVATE_DATA_ENABLED: the private toggles are shown at all. */
+	enabled: boolean;
+	/** At least one enabled provider may process private data (else the toggles are disabled). */
+	available: boolean;
+	/** The speech-to-text role only reaches trusted providers (dictation in private chats). */
+	sttTrusted: boolean;
+	/** The text-to-speech role only reaches trusted providers (server read-aloud in private chats). */
+	ttsTrusted: boolean;
+}
+
 export type ServerEvent =
 	| { type: 'chat.created'; conversationId: string }
 	/** `agentRunId` is set when an agent run's turn produced the message (its run event notifies instead). */

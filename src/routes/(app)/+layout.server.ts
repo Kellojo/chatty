@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit';
+import { privateDataStatus } from '$lib/server/privacy/status.js';
 import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
 import { config } from '$lib/server/config.js';
 import { getDb } from '$lib/server/db/index.js';
@@ -42,7 +43,6 @@ export const load: LayoutServerLoad = async ({ locals, depends, url }) => {
 		unreadIds: listUnreadChatIds(db, locals.user.id),
 		sidebarOpen: settings.sidebarOpen,
 		settings,
-		/** Whether chats, memory and agents can be marked private (PRIVATE_DATA_ENABLED). */
-		privateData: config.PRIVATE_DATA_ENABLED
+		privateData: privateDataStatus(db)
 	};
 };
