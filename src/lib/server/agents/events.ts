@@ -20,6 +20,7 @@ import {
 } from '../db/repo/agents.js';
 import { subscribeAllServerEvents } from '../events/bus.js';
 import { createLogger } from '../logger.js';
+import { isPrivateContext } from '../privacy/policy.js';
 import { MEMORY_CLEANUP_AGENT, MEMORY_EXTRACTION_AGENT } from './builtin.js';
 import { settleCodingAgentRun } from './coding-runs.js';
 
@@ -31,6 +32,8 @@ interface Occurrence {
 	event: AgentEventName;
 	count: number;
 	payloadJson: string;
+	/** From a private conversation or run: only private agents may get it. */
+	private: boolean;
 }
 
 interface Pending {
@@ -132,6 +135,18 @@ function fromRunConversation(db: Db, payload: Record<string, unknown>): boolean 
 	);
 }
 
+/**
+ * The event comes from a private conversation or a private agent's run. Only
+ * private agents (which only use trusted models) react to it: the event
+ * itself carries ids only, but the agent may read the chat it points at.
+ */
+function fromPrivateContext(db: Db, payload: Record<string, unknown>): boolean {
+	const conversationId = typeof payload.conversationId === 'string' ? payload.conversationId : null;
+	const agentRunId = typeof payload.agentRunId === 'string' ? payload.agentRunId : null;
+	if (!conversationId && !agentRunId) return false;
+	return isPrivateContext(db, { tainted: false, conversationId, agentRunId });
+}
+
 export function buildEventInstructions(
 	triggerConfig: AgentTriggerConfig,
 	occurrences: Occurrence[],
@@ -230,9 +245,16 @@ export function drainAgent(agentId: string, db: Db = getDb(), run: RunFn = defau
 			drainAgent(agentId, db, run);
 			return;
 		}
+		// …or made public: private events queued for it are dropped.
+		const occurrences =
+			agent.private === 1 ? entry.occurrences : entry.occurrences.filter((o) => !o.private);
+		if (occurrences.length === 0) {
+			drainAgent(agentId, db, run);
+			return;
+		}
 		const instructions = buildEventInstructions(
 			parseTriggerConfig(agent),
-			entry.occurrences,
+			occurrences,
 			entry.dropped
 		);
 		dispatch(db, agentId, userId, instructions, run);
@@ -254,9 +276,11 @@ export async function emitAgentEvent(
 	try {
 		const run = runFn ?? defaultRun;
 		if (fromRunConversation(db, payload)) return;
+		const isPrivate = fromPrivateContext(db, payload);
 		for (const agent of listEventAgents(db, event)) {
 			try {
 				if (!enabledFor(db, agent, userId)) continue;
+				if (isPrivate && agent.private !== 1) continue;
 				if (agent.coding_target && fromAgentRun(db, payload)) continue;
 				if (fromOwnRun(db, agent.id, payload)) continue;
 				const count = incrementAgentEventCounter(db, agent.id, userId, event);
@@ -274,7 +298,12 @@ export async function emitAgentEvent(
 					});
 					continue;
 				}
-				const occurrence: Occurrence = { event, count, payloadJson: JSON.stringify(payload) };
+				const occurrence: Occurrence = {
+					event,
+					count,
+					payloadJson: JSON.stringify(payload),
+					private: isPrivate
+				};
 				const queued = pending.get(agent.id)?.get(userId);
 				if (isBusy(db, agent.id) || queued || waitingOnOther(db, agent, userId)) {
 					// Keep order: anything already queued for this user goes first.

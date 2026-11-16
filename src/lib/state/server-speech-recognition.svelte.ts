@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { appendSpeechPrivacy, PRIVATE_SPEECH, type SpeechPrivacy } from '$lib/private-speech.js';
 
 interface MediaRecorderLike {
 	start(timeslice?: number): void;
@@ -26,17 +27,23 @@ export function recordingMimeType(): string {
 			: 'audio/mp4';
 }
 
-/** Sends a recording to the server's speech to text endpoint and returns the transcript. */
+/**
+ * Sends a recording to the server's speech to text endpoint and returns the
+ * transcript. `privacy` says which chat it is for; without it the server
+ * treats the recording as private (trusted models only).
+ */
 export async function transcribeRecording(
 	blob: Blob,
 	sttModel: { providerId: string; modelId: string },
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	privacy: SpeechPrivacy = PRIVATE_SPEECH
 ): Promise<string> {
 	const formData = new FormData();
 	const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
 	formData.append('audio', blob, `recording.${extension}`);
 	formData.append('providerId', sttModel.providerId);
 	formData.append('modelId', sttModel.modelId);
+	appendSpeechPrivacy(formData, privacy);
 
 	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT);
 	const res = await fetch('/api/speech/transcribe', {
@@ -55,7 +62,14 @@ export async function transcribeRecording(
 	return text;
 }
 
-export function createServerSpeechRecognition(sttModel: { providerId: string; modelId: string }) {
+export function createServerSpeechRecognition(
+	sttModel: { providerId: string; modelId: string },
+	options: {
+		/** The chat being dictated into, read when a recording is sent (default: private). */
+		privacy?: () => SpeechPrivacy;
+	} = {}
+) {
+	const privacy = options.privacy ?? (() => PRIVATE_SPEECH);
 	let recording = $state(false);
 	let busy = $state(false);
 	let finalTranscript = $state('');
@@ -130,7 +144,7 @@ export function createServerSpeechRecognition(sttModel: { providerId: string; mo
 			chunks = [];
 
 			try {
-				const text = await transcribeRecording(blob, sttModel);
+				const text = await transcribeRecording(blob, sttModel, undefined, privacy());
 				if (text) {
 					finalTranscript = text;
 				}

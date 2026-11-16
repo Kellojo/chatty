@@ -1,12 +1,18 @@
 // Server-side twin of the open tab's notice decisions: the same rules
 // ($lib/notifications/rules.ts) decide what is pushed, with the user's push
 // triggers, so a push says exactly what the tab would have shown.
-import { needsYouNotice, noticeForEvent, type Notice } from '$lib/notifications/rules.js';
+import {
+	needsYouNotice,
+	noticeForEvent,
+	privateNotice,
+	type Notice
+} from '$lib/notifications/rules.js';
 import type { ServerEvent } from '$lib/types.js';
 import type { Db } from '../db/index.js';
 import { getAgent } from '../db/repo/agents.js';
 import { getSidebarConversation, toPublic } from '../db/repo/conversations.js';
 import { getPushTriggers } from '../db/repo/user-settings.js';
+import { isAgentRunPrivate, isConversationPrivate } from '../privacy/policy.js';
 
 /** What the service worker receives; kept small (push payloads cap near 4 KB). */
 export interface PushPayload {
@@ -38,9 +44,26 @@ export function noticeForPush(db: Db, userId: string, event: ServerEvent): Notic
 		return c && c.settledAt === null ? needsYouNotice(c) : null;
 	}
 	const notice = noticeForEvent(event, { triggers, conversation });
-	if (!notice?.agentId) return notice;
+	if (!notice) return null;
+	// Push services and lock screens are outside Chatty: a private chat or run
+	// says nothing about itself (checked here too, as the sidebar lookup skips
+	// hidden run transcripts).
+	if (eventIsPrivate(db, event)) return privateNotice(notice);
+	if (!notice.agentId) return notice;
 	const agent = getAgent(db, notice.agentId);
+	if (agent?.private === 1) return privateNotice(notice);
 	return agent?.name ? { ...notice, title: agent.name } : notice;
+}
+
+/** The event is about a private conversation or a private agent's run. */
+function eventIsPrivate(db: Db, event: ServerEvent): boolean {
+	if ('conversationId' in event && typeof event.conversationId === 'string') {
+		if (isConversationPrivate(db, event.conversationId)) return true;
+	}
+	if ('runId' in event && typeof event.runId === 'string') {
+		if (isAgentRunPrivate(db, event.runId)) return true;
+	}
+	return false;
 }
 
 /**

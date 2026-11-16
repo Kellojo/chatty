@@ -224,6 +224,32 @@ describe('title', () => {
 	});
 });
 
+describe('title of a private conversation', () => {
+	const makePrivate = () =>
+		db.prepare('UPDATE conversations SET private = 1 WHERE id = ?').run(conversationId);
+
+	it('is neither pushed to T3 nor taken from it', async () => {
+		coding.updateCodingConversation(db, conversationId, {
+			remoteSettled: false,
+			remotePinned: false,
+			remoteTitle: 'Fix the build'
+		});
+		conversations.updateConversation(db, 'u1', conversationId, { title: 'Secret rename' });
+		makePrivate();
+		expect(reconcile({ title: 'Fix the build' })).toBe(false);
+		expect(reconcile({ title: 'Renamed on T3' })).toBe(false);
+		expect(local().title).toBe('Secret rename');
+		dispatched.length = 0;
+		await pushThreadState(db, 'u1', [conversationId]);
+		expect(dispatched).toEqual([]);
+		// Other state still syncs.
+		conversations.settleConversation(db, 'u1', conversationId, 'manual');
+		await pushThreadState(db, 'u1', [conversationId]);
+		expect(dispatched.map((c) => c.type)).toEqual(['thread.settle']);
+		expect(JSON.stringify(dispatched)).not.toContain('Secret');
+	});
+});
+
 describe('pinned', () => {
 	it('adopts a pin on T3 and asks to push a local unpin', () => {
 		reconcile({ pinned: false });

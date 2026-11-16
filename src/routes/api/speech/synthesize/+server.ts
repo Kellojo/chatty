@@ -1,4 +1,3 @@
-import { NON_PRIVATE } from '$lib/server/privacy/policy.js';
 import { error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { getDb } from '$lib/server/db/index.js';
@@ -12,12 +11,17 @@ import {
 } from '$lib/server/speech/synthesizer.js';
 import { acquireSpeechSlot } from '$lib/server/speech/limiter.js';
 import { relayUpstreamError } from '$lib/server/speech/targets.js';
+import { speechRequestPrivacy } from '../request-privacy.js';
 import type { RequestHandler } from './$types';
 
 const bodySchema = z.object({
 	text: z.string().trim().min(1).max(MAX_SPEECH_INPUT),
 	/** Reads with this voice instead of the configured one, e.g. to preview it. */
-	voice: z.string().trim().min(1).max(100).optional()
+	voice: z.string().trim().min(1).max(100).optional(),
+	/** The chat being read aloud; its private flag decides which models may read it. */
+	conversationId: z.string().min(1).max(100).optional(),
+	/** For an unsaved new chat. Without this or `conversationId` the text counts as private. */
+	private: z.boolean().optional()
 });
 
 /**
@@ -27,7 +31,11 @@ const bodySchema = z.object({
  */
 const MAX_IN_FLIGHT = 3;
 
-/** Reads text aloud with the Text to speech default (Settings → Defaults). */
+/**
+ * Reads text aloud with the Text to speech default (Settings → Defaults). A
+ * private chat's text only reaches models trusted with private data (403 if
+ * the default has none).
+ */
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) error(401, { message: 'Unauthorized' });
 	const userId = locals.user.id;
@@ -36,6 +44,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!parsed.success) error(400, { message: 'Invalid request body' });
 
 	const db = getDb();
+	const privacy = speechRequestPrivacy(db, userId, parsed.data);
+	if (!privacy) error(404, { message: 'Conversation not found' });
 	const roleModel = findRoleModel(db, 'text-to-speech');
 	if (!roleModel) error(409, { message: 'No text to speech model is set' });
 
@@ -49,7 +59,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		purpose: 'speech',
 		endpoint: 'audio.speech',
 		requestedModel: roleModel.model_id,
-		stream: false
+		stream: false,
+		conversationId: privacy.conversationId ?? null
 	});
 	const startedAt = Date.now();
 	let mappingId: string | null = null;
@@ -62,7 +73,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		);
 		mappingId = resolved.mappingId;
 		// Stopping playback aborts the request, which frees the slot and the provider call.
-		result = await synthesizeWithFallbacks(parsed.data.text, resolved.targets, NON_PRIVATE, {
+		result = await synthesizeWithFallbacks(parsed.data.text, resolved.targets, privacy, {
 			voice: parsed.data.voice,
 			signal: request.signal
 		});
@@ -77,12 +88,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		});
 	} catch (e) {
 		const local = e instanceof ModelUnavailableError;
+		// Chatty's own refusal (e.g. a private chat and no trusted model) keeps its status.
+		const refused = e instanceof SpeechError && !e.upstream;
 		const { status, message } = local
 			? { status: 409, message: e.message }
-			: relayUpstreamError(
-					e instanceof SpeechError ? e.status : 502,
-					request.signal.aborted ? 'Cancelled' : e instanceof Error ? e.message : 'Speech failed'
-				);
+			: refused
+				? { status: e.status, message: e.message }
+				: relayUpstreamError(
+						e instanceof SpeechError ? e.status : 502,
+						request.signal.aborted ? 'Cancelled' : e instanceof Error ? e.message : 'Speech failed'
+					);
 		finalizeProxyRequest(db, log.id, {
 			status: 'failed',
 			httpStatus: status,

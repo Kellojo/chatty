@@ -127,7 +127,9 @@
 	const preview = createSpeechPlayback({
 		serverTts: () => true,
 		onerror: (message) => toast.error(message),
-		volume: () => page.data.settings?.speechVolume ?? 1
+		volume: () => page.data.settings?.speechVolume ?? 1,
+		// A sample text, not chat content.
+		privacy: () => ({ private: false })
 	});
 	onMount(() => preview.stop);
 	const sampleText = (name: string) => `Hi, I'm ${name}. This is how replies will sound.`;

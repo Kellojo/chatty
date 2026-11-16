@@ -7,8 +7,10 @@ import {
 	badgedFaviconSvg,
 	codingStatusSnapshot,
 	composeTitle,
+	needsYouNotice,
 	newlyNeedingYou,
-	noticeForEvent
+	noticeForEvent,
+	PRIVATE_NOTICE_TITLE
 } from './rules.js';
 
 function conv(id: string, overrides: Partial<Conversation> = {}): Conversation {
@@ -196,6 +198,61 @@ describe('noticeForEvent', () => {
 
 	it('ignores unrelated events', () => {
 		expect(noticeForEvent({ type: 'skills.changed' }, ctx([]))).toBeNull();
+	});
+	it('says nothing about a private chat: fixed title and body, no agent to name', () => {
+		const secret = conv('p', { title: 'Divorce lawyer shortlist', private: true });
+		const reply = noticeForEvent(
+			{ type: 'chat.message_completed', conversationId: 'p' },
+			ctx([secret])
+		);
+		expect(reply).toEqual({
+			kind: 'reply',
+			tag: 'chat:p',
+			title: PRIVATE_NOTICE_TITLE,
+			body: 'New reply',
+			url: '/chat/p',
+			conversationId: 'p'
+		});
+		const question = noticeForEvent(
+			{
+				type: 'agent.run.awaiting_input',
+				agentId: 'ag',
+				runId: 'r1',
+				conversationId: 'p',
+				question: 'Which one?'
+			},
+			ctx([secret])
+		);
+		expect(question).toEqual({
+			kind: 'needs-you',
+			tag: 'chat:p',
+			title: PRIVATE_NOTICE_TITLE,
+			body: 'Waiting for your input',
+			url: '/chat/p',
+			conversationId: 'p'
+		});
+		// A background run of a private chat: its run page, still without names.
+		const finished = noticeForEvent(
+			{
+				type: 'agent.run.finished',
+				agentId: 'ag',
+				runId: 'r1',
+				status: 'failed',
+				conversationId: 'p',
+				visible: false
+			},
+			ctx([secret])
+		);
+		expect(finished).toMatchObject({ title: PRIVATE_NOTICE_TITLE, body: 'Something failed' });
+		expect(finished).not.toHaveProperty('agentId');
+		expect(JSON.stringify([reply, question, finished])).not.toContain('Divorce');
+	});
+
+	it('keeps a private coding task out of its needs-you notice', () => {
+		const notice = needsYouNotice(
+			coding('c', 'awaiting_input', { title: 'Secret', private: true })
+		);
+		expect(notice).toMatchObject({ title: PRIVATE_NOTICE_TITLE, url: '/chat/c' });
 	});
 });
 

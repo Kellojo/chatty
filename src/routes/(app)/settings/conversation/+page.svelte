@@ -62,7 +62,9 @@
 	const playback = createSpeechPlayback({
 		serverTts: () => data.serverTts,
 		onerror: (message) => toast.error(message),
-		volume: () => volume / 100
+		volume: () => volume / 100,
+		// A sample text, not chat content.
+		privacy: () => ({ private: false })
 	});
 	onMount(() => playback.stop);
 

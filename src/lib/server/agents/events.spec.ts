@@ -440,3 +440,51 @@ describe('agent run conversations', () => {
 		expect(runFn).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe('private conversations', () => {
+	const makePrivate = (table: 'agents' | 'conversations', id: string) =>
+		db.prepare(`UPDATE ${table} SET private = 1 WHERE id = ?`).run(id);
+
+	it('only reach private agents', async () => {
+		const publicAgent = seedEventAgent('u1', { event: 'chat.message_completed' });
+		const privateAgent = seedEventAgent('u1', { event: 'chat.message_completed' });
+		makePrivate('agents', privateAgent.id);
+		const chat = createConversation(db, 'u1', { private: true });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('chat.message_completed', 'u1', { conversationId: chat.id }, db, runFn);
+		expect(runFn.mock.calls.map((c) => c[0])).toEqual([privateAgent.id]);
+		expect(publicAgent.id).not.toBe(privateAgent.id);
+	});
+
+	it("treat a private agent run's events as private", async () => {
+		const publicAgent = seedEventAgent('u1', { event: 'memory.changed' });
+		const runner = createAgent(db, 'u1', {
+			name: 'private runner',
+			systemPrompt: 'x',
+			triggerType: 'manual'
+		});
+		makePrivate('agents', runner.id);
+		const run = createAgentRun(db, { agentId: runner.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md', agentRunId: run.id }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+		await emitAgentEvent('memory.changed', 'u1', { path: 'b.md' }, db, runFn);
+		expect(runFn).toHaveBeenCalledWith(publicAgent.id, 'u1', expect.any(String));
+	});
+
+	it('pins chat event payloads to ids: no titles or content reach the agent', async () => {
+		const SECRET = 'SECRET-TITLE-41b2';
+		seedEventAgent('u1', { event: 'chat.created' });
+		seedEventAgent('u1', { event: 'chat.message_completed' });
+		const chat = createConversation(db, 'u1', { title: SECRET });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		handleServerEvent('u1', { type: 'chat.created', conversationId: chat.id }, db, runFn);
+		handleServerEvent('u1', { type: 'chat.message_completed', conversationId: chat.id }, db, runFn);
+		await vi.waitFor(() => expect(runFn).toHaveBeenCalledTimes(2));
+		for (const [, , instructions] of runFn.mock.calls as [string, string, string][]) {
+			expect(instructions).not.toContain(SECRET);
+			const payload = JSON.parse(instructions.match(/Payload: (\{.*?\})\./)![1]);
+			expect(Object.keys(payload)).toEqual(['conversationId']);
+		}
+	});
+});

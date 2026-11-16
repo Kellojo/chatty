@@ -1,6 +1,12 @@
 import { browser } from '$app/environment';
+import { PRIVATE_SPEECH, type SpeechPrivacy } from '$lib/private-speech.js';
 import { speechChunks } from '$lib/speakable-text.js';
-import { fetchSpeech } from './speech-playback.svelte.js';
+import {
+	fetchSpeech,
+	NO_PRIVATE_VOICE,
+	privateBrowserVoice,
+	utteranceLang
+} from './speech-playback.svelte.js';
 import { voicePlayers } from './voice-audio.js';
 
 /** The first piece is kept short so the voice starts quickly; later ones batch up. */
@@ -19,9 +25,13 @@ export type VoiceSpeaker = ReturnType<typeof createVoiceSpeaker>;
  * Reads a reply aloud while it is still arriving. Text is pushed as sentences
  * complete; with the Text to speech default set, each batch is synthesized one
  * ahead of playback, otherwise the browser's voice reads it.
+ *
+ * `privacy` is the chat being read (default: private): the server only reads
+ * a private chat with trusted models, the browser only with on-device voices.
  */
 export function createVoiceSpeaker(options: {
 	serverTts: () => boolean;
+	privacy?: () => SpeechPrivacy;
 	volume: () => number;
 	onerror?: (message: string) => void;
 	/** Audio started playing (for the first time in this reply). */
@@ -45,6 +55,7 @@ export function createVoiceSpeaker(options: {
 
 	const volume = () => Math.min(1, Math.max(0, options.volume()));
 	const browserVoice = () => browser && 'speechSynthesis' in window;
+	const privacy = () => options.privacy?.() ?? PRIVATE_SPEECH;
 
 	function started() {
 		if (speaking) return;
@@ -67,7 +78,10 @@ export function createVoiceSpeaker(options: {
 			if (!running) void runServer(generation);
 			wake?.();
 		} else if (browserVoice()) {
-			for (const piece of pieces) speakBrowser(piece, generation);
+			const isPrivate = privacy().private;
+			const voice = isPrivate ? privateBrowserVoice(utteranceLang()) : null;
+			if (isPrivate && !voice) return fail(generation, NO_PRIVATE_VOICE);
+			for (const piece of pieces) speakBrowser(piece, generation, voice);
 		} else {
 			fail(generation, 'Reading aloud is not available in this browser');
 		}
@@ -163,7 +177,7 @@ export function createVoiceSpeaker(options: {
 				if (gen !== generation) return;
 				if (text === null) break;
 				const el = players[i % players.length];
-				const audio = fetchSpeech(text, signal);
+				const audio = fetchSpeech(text, signal, undefined, privacy());
 				const before = played[i - 1] ?? Promise.resolve();
 				const playback = (async () => {
 					const url = await audio;
@@ -193,9 +207,10 @@ export function createVoiceSpeaker(options: {
 		}
 	}
 
-	function speakBrowser(text: string, gen: number) {
+	function speakBrowser(text: string, gen: number, voice: SpeechSynthesisVoice | null) {
 		const utterance = new SpeechSynthesisUtterance(text);
-		utterance.lang = document.documentElement.lang || navigator.language;
+		utterance.lang = utteranceLang();
+		if (voice) utterance.voice = voice;
 		utterance.volume = volume();
 		utterance.onstart = () => {
 			if (gen === generation) started();

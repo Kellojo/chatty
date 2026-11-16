@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import type { SpeechPrivacy } from '$lib/private-speech.js';
 import { speakableUpTo } from '$lib/speakable-text.js';
 import { unlockVoiceAudio } from './voice-audio.js';
 import { canListen, createVoiceListener } from './voice-listener.svelte.js';
@@ -13,12 +14,17 @@ export type VoicePhase =
 /** The reply voice mode is waiting on: the newest assistant message in the chat. */
 export type VoiceReply = { id: string; text: string } | null;
 
-/** Voice mode works in this browser with this setup. */
+/**
+ * Voice mode works in this browser with this setup. In a private chat
+ * (`isPrivate`, default true) it needs server speech to text: the browser's
+ * recognition sends audio to Google.
+ */
 export function voiceModeSupported(
 	sttModel: { providerId: string; modelId: string } | null,
-	serverTts: boolean
+	serverTts: boolean,
+	isPrivate = true
 ): boolean {
-	if (!browser || !canListen(sttModel)) return false;
+	if (!browser || !canListen(sttModel, isPrivate)) return false;
 	return serverTts || 'speechSynthesis' in window;
 }
 
@@ -32,6 +38,8 @@ export type VoiceMode = ReturnType<typeof createVoiceMode>;
 export function createVoiceMode(options: {
 	sttModel: { providerId: string; modelId: string } | null;
 	serverTts: () => boolean;
+	/** The chat voice mode talks in (default: private); see SpeechPrivacy. */
+	privacy?: () => SpeechPrivacy;
 	volume: () => number;
 	/** Sends what the user said as a chat message; false if it didn't go out. */
 	send: (text: string) => Promise<boolean>;
@@ -69,6 +77,7 @@ export function createVoiceMode(options: {
 
 	const speaker = createVoiceSpeaker({
 		serverTts: options.serverTts,
+		privacy: options.privacy,
 		volume: options.volume,
 		onerror: options.onerror,
 		// The barge-in detector relearns the room with the assistant's voice in it.
@@ -77,6 +86,7 @@ export function createVoiceMode(options: {
 
 	const listener = createVoiceListener({
 		sttModel: options.sttModel,
+		privacy: options.privacy,
 		onturn: (text) => void turn(text),
 		onbargein: () => cutOff(true),
 		onerror: options.onerror,
