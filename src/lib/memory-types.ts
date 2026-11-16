@@ -8,6 +8,8 @@ export interface MemoryTreeNode {
 	description?: string;
 	/** A private concept (frontmatter `private: true`): only trusted models may see it. */
 	private?: boolean;
+	/** Private, but Chatty suggests reviewing it: it no longer looks like it has personal details. */
+	privateReview?: boolean;
 	children?: MemoryTreeNode[];
 }
 
@@ -21,6 +23,8 @@ export interface ConceptFrontmatter {
 	private?: boolean;
 	/** Why Chatty marked it private on its own (automatic classification). */
 	privateReason?: string;
+	/** Chatty suggests reviewing the flag: it no longer looks like it has personal details. */
+	privateReview?: string;
 }
 
 export interface Concept {

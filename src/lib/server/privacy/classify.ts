@@ -136,3 +136,41 @@ export async function classifySensitive(db: Db, text: string): Promise<string[] 
 export function privateReasonFor(labels: string[]): string {
 	return `Marked private automatically: looks like ${labels.join(', ')}`;
 }
+
+/** The suggestion an automatically marked note gets when it no longer looks personal. */
+export const PRIVATE_REVIEW_NOTE =
+	'No personal details found any more: it may not need to be private';
+
+/** The privacy fields to write for a note, as `writeConcept` takes them. */
+export interface PrivacyUpdate {
+	private?: true;
+	privateReason?: string;
+	/** A string flags the note for review; null clears an earlier flag. */
+	privateReview?: string | null;
+}
+
+/** The privacy fields of a note, as far as the check cares. */
+type CurrentPrivacy = { private?: boolean; privateReason?: string; privateReview?: string };
+
+/**
+ * What a check that found `labels` means for a note whose privacy is
+ * `current` (null for a new one), or null to leave it as it is:
+ * - public note with personal details: private, with the reason;
+ * - note marked private automatically: a fresh reason if it still has them,
+ *   else a review flag. It stays private: only a person makes a note public;
+ * - note a person (or a private chat) made private: never touched.
+ */
+export function reviewUpdate(
+	current: CurrentPrivacy | null,
+	labels: string[]
+): PrivacyUpdate | null {
+	const auto = current?.private === true && Boolean(current.privateReason);
+	if (current?.private && !auto) return null;
+	if (labels.length > 0) {
+		const reason = privateReasonFor(labels);
+		if (auto && current?.privateReason === reason && !current.privateReview) return null;
+		return { private: true, privateReason: reason, privateReview: null };
+	}
+	if (auto) return current?.privateReview ? null : { privateReview: PRIVATE_REVIEW_NOTE };
+	return null;
+}

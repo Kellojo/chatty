@@ -28,6 +28,11 @@ export interface ConceptFrontmatter {
 	private?: boolean;
 	/** Why Chatty marked it private on its own (automatic classification); only on private concepts. */
 	privateReason?: string;
+	/**
+	 * Set when an automatically marked note no longer looks like it has personal
+	 * details: it stays private until a person decides. Only on private concepts.
+	 */
+	privateReview?: string;
 }
 
 export interface Concept {
@@ -66,7 +71,8 @@ const frontmatterSchema = z.object({
 	tags: z.array(z.string().trim().min(1).max(50)).max(20).default([]),
 	timestamp: z.string().default(() => new Date().toISOString()),
 	private: z.boolean().optional(),
-	privateReason: z.string().trim().min(1).max(200).optional()
+	privateReason: z.string().trim().min(1).max(200).optional(),
+	privateReview: z.string().trim().min(1).max(200).nullish()
 });
 
 function parseFrontmatterInput(input: unknown): ConceptFrontmatter {
@@ -75,11 +81,16 @@ function parseFrontmatterInput(input: unknown): ConceptFrontmatter {
 		const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 		throw new Error(`Invalid concept frontmatter: ${issues}`);
 	}
-	const { private: isPrivate, privateReason, ...rest } = parsed.data;
+	const { private: isPrivate, privateReason, privateReview, ...rest } = parsed.data;
 	// Written only when set, so public concepts keep their files unchanged; a
-	// reason only means something on a private concept.
+	// reason or review only means something on a private concept.
 	if (!isPrivate) return rest;
-	return { ...rest, private: true, ...(privateReason ? { privateReason } : {}) };
+	return {
+		...rest,
+		private: true,
+		...(privateReason ? { privateReason } : {}),
+		...(privateReview ? { privateReview } : {})
+	};
 }
 
 function requireConcept(
@@ -123,6 +134,9 @@ function parseConceptFile(scope: MemoryScope, relPath: string, raw: string): Con
 			...(isPrivate ? { private: true } : {}),
 			...(isPrivate && typeof data.privateReason === 'string' && data.privateReason.trim()
 				? { privateReason: data.privateReason }
+				: {}),
+			...(isPrivate && typeof data.privateReview === 'string' && data.privateReview.trim()
+				? { privateReview: data.privateReview }
 				: {})
 		},
 		body
@@ -325,6 +339,11 @@ export async function writeConcept(
 			private?: boolean;
 			/** Why it was marked private automatically; kept while it stays private. */
 			privateReason?: string;
+			/**
+			 * A review suggestion: a string sets it, null clears it. Omitted keeps the
+			 * existing one, unless `private` is given (a person decided).
+			 */
+			privateReview?: string | null;
 		};
 		body: string;
 	},
@@ -345,6 +364,20 @@ export async function writeConcept(
 		// A save that keeps it private keeps the reason it was marked with.
 		if (fm.private && !fm.privateReason && current?.frontmatter.privateReason) {
 			fm = { ...fm, privateReason: current.frontmatter.privateReason };
+		}
+		// A review suggestion given with this save applies to the (kept) private
+		// note; without one, it stays unless a person just set the flag either way.
+		if (fm.private) {
+			const review = input.frontmatter.privateReview;
+			if (typeof review === 'string') {
+				fm = { ...fm, privateReview: review };
+			} else if (
+				review === undefined &&
+				input.frontmatter.private === undefined &&
+				current?.frontmatter.privateReview
+			) {
+				fm = { ...fm, privateReview: current.frontmatter.privateReview };
+			}
 		}
 		const raw = matter.stringify(input.body, fm);
 		await fsp.mkdir(path.dirname(target.abs), { recursive: true });
@@ -520,6 +553,7 @@ export async function listTree(scope: MemoryScope, userId: string): Promise<Memo
 				let title = e.name.slice(0, -'.md'.length);
 				let description = '';
 				let isPrivate = false;
+				let review = false;
 				try {
 					const raw = await fsp.readFile(abs, 'utf8');
 					isPrivate = conceptIsPrivate(null, raw);
@@ -528,6 +562,7 @@ export async function listTree(scope: MemoryScope, userId: string): Promise<Memo
 					if (typeof d.title === 'string' && d.title.trim()) title = d.title;
 					if (typeof d.description === 'string') description = d.description;
 					isPrivate = conceptIsPrivate(d, raw);
+					review = isPrivate && typeof d.privateReview === 'string' && d.privateReview !== '';
 				} catch {
 					// fall back to filename title
 				}
@@ -537,7 +572,8 @@ export async function listTree(scope: MemoryScope, userId: string): Promise<Memo
 					kind: 'concept',
 					title,
 					description,
-					...(isPrivate ? { private: true } : {})
+					...(isPrivate ? { private: true } : {}),
+					...(review ? { privateReview: true } : {})
 				};
 			})
 		);

@@ -286,6 +286,8 @@
 		private: boolean;
 		/** Why Chatty marked it private on its own, if it did. */
 		privateReason?: string;
+		/** Chatty suggests reviewing the flag (no personal details found any more). */
+		privateReview?: string;
 	};
 
 	const emptyEditor: EditorState = {
@@ -448,7 +450,8 @@
 			body: concept.body,
 			timestamp: concept.frontmatter.timestamp,
 			private: concept.frontmatter.private === true,
-			privateReason: concept.frontmatter.privateReason
+			privateReason: concept.frontmatter.privateReason,
+			privateReview: concept.frontmatter.privateReview
 		};
 	}
 
@@ -782,7 +785,7 @@
 				>
 					<span class="flex items-center gap-1.5 text-sm {selected ? 'font-medium' : ''}">
 						<span class="truncate">{node.title || node.name.replace(/\.md$/, '')}</span>
-						{#if privateEnabled && node.private}<PrivateBadge />{/if}
+						{#if privateEnabled && node.private}<PrivateBadge review={node.privateReview} />{/if}
 					</span>
 					{#if node.description}
 						<span class="line-clamp-1 text-xs text-muted-foreground" title={node.description}>

@@ -11,6 +11,8 @@
 		private: boolean;
 		/** Why Chatty marked it private on its own (automatic classification). */
 		privateReason?: string;
+		/** Chatty suggests reviewing the flag: it no longer finds personal details. */
+		privateReview?: string;
 	};
 </script>
 
@@ -18,6 +20,7 @@
 	import { untrack } from 'svelte';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import FolderIcon from '@lucide/svelte/icons/folder';
+	import SearchCheckIcon from '@lucide/svelte/icons/search-check';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
@@ -260,7 +263,13 @@
 							Only models trusted with private data can see this note.{#if !canChangePrivate}
 								Only admins can change this for shared memories.{/if}
 						</p>
-						{#if draft.private && draft.privateReason}
+						{#if draft.private && draft.privateReview}
+							<p class="flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+								<SearchCheckIcon class="size-3 shrink-0" aria-hidden="true" />
+								Chatty no longer finds personal details here. Turn Private off if it doesn't need to be
+								private; saving with it on keeps it private.
+							</p>
+						{:else if draft.private && draft.privateReason}
 							<!-- Classification only adds the flag; a person decides whether it stays. -->
 							<p class="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
 								<SparklesIcon class="size-3 shrink-0" aria-hidden="true" />

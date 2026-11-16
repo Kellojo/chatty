@@ -32,7 +32,10 @@ vi.mock('../decisions/handler.js', async (importOriginal) => {
 
 const { closeDb, getDb } = await import('../db/index.js');
 const { classifySensitive, canClassify } = await import('./classify.js');
-const { sweepMemoryPrivacy } = await import('./sweep.js');
+const { sweepMemoryPrivacy, recordPrivacyCheck } = await import('./sweep.js');
+const { reviewUpdate, PRIVATE_REVIEW_NOTE } = await import('./classify.js');
+const { TurnPrivacy } = await import('./taint.js');
+const { createConversation } = await import('../db/repo/conversations.js');
 const { seedPrivacyFixture, setRole } = await import('./fixtures.js');
 const { readConcept, writeConcept } = await import('../memory/bundle.js');
 const { createMemoryServer } = await import('../mcp/servers/memory.js');
@@ -49,13 +52,22 @@ beforeEach(() => {
 });
 
 async function createConcept(args: Record<string, unknown>): Promise<string> {
-	const ctx = { userId: fx.userId, role: 'admin', workspaceDir: null, documentsDir: '' };
+	return callMemoryTool('create_concept', args);
+}
+
+/** Calls a memory tool; an untrusted chat's context unless `ctx` says otherwise. */
+async function callMemoryTool(
+	name: string,
+	args: Record<string, unknown>,
+	extra: Record<string, unknown> = {}
+): Promise<string> {
+	const ctx = { userId: fx.userId, role: 'admin', workspaceDir: null, documentsDir: '', ...extra };
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	const server = createMemoryServer(ctx);
 	await server.connect(serverTransport);
 	const client = await createMCPClient({ transport: clientTransport, maxRetries: 0 });
 	try {
-		const tool = (await client.tools()).create_concept as unknown as {
+		const tool = (await client.tools())[name] as unknown as {
 			execute: (input: unknown, opts: unknown) => Promise<{ content: { text: string }[] }>;
 		};
 		const res = await tool.execute(args, { toolCallId: 't', messages: [] });
@@ -180,14 +192,19 @@ describe('automatic privacy classification', () => {
 		await note('recipes/bread', 'Sourdough: 500g flour');
 
 		// Without a trusted Decisions model nothing is checked.
-		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({ checked: 0, marked: [] });
+		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({
+			checked: 0,
+			marked: [],
+			flagged: []
+		});
 
 		setRole(db, 'decisions', fx.trusted);
 		decisions.yes = ['name'];
 		// The fake flags every note it sees; only the first one is checked with a limit of 1.
 		expect(await sweepMemoryPrivacy(db, 'user', userId, 1)).toEqual({
 			checked: 1,
-			marked: ['people/katharina.md']
+			marked: ['people/katharina.md'],
+			flagged: []
 		});
 		const marked = await readConcept('user', userId, 'people/katharina');
 		expect(marked?.frontmatter.privateReason).toBe(
@@ -195,9 +212,17 @@ describe('automatic privacy classification', () => {
 		);
 
 		decisions.yes = [];
-		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({ checked: 1, marked: [] });
+		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({
+			checked: 1,
+			marked: [],
+			flagged: []
+		});
 		// Nothing changed since: nothing to check.
-		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({ checked: 0, marked: [] });
+		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({
+			checked: 0,
+			marked: [],
+			flagged: []
+		});
 
 		// A person makes the marked note public again: the sweep respects that.
 		await writeConcept(
@@ -209,6 +234,87 @@ describe('automatic privacy classification', () => {
 			{ author: 't', userId }
 		);
 		decisions.yes = ['name'];
-		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({ checked: 0, marked: [] });
+		expect(await sweepMemoryPrivacy(db, 'user', userId)).toEqual({
+			checked: 0,
+			marked: [],
+			flagged: []
+		});
+	});
+
+	it('flags automatically marked notes that no longer look personal, and leaves the rest', () => {
+		const auto = {
+			private: true,
+			privateReason: 'Marked private automatically: looks like health'
+		};
+		expect(reviewUpdate(auto, [])).toEqual({ privateReview: PRIVATE_REVIEW_NOTE });
+		expect(reviewUpdate({ ...auto, privateReview: PRIVATE_REVIEW_NOTE }, [])).toBeNull();
+		expect(reviewUpdate(auto, ['health'])).toBeNull();
+		expect(reviewUpdate(auto, ['money'])).toEqual({
+			private: true,
+			privateReason: 'Marked private automatically: looks like money',
+			privateReview: null
+		});
+		// Made private by a person (or a private chat): never second-guessed.
+		expect(reviewUpdate({ private: true }, [])).toBeNull();
+		expect(reviewUpdate(null, [])).toBeNull();
+	});
+
+	it('flags an edited note through the tool and the sweep; a person saving clears it', async () => {
+		const db = getDb();
+		// A user of its own, so notes from the other tests stay out of the sweep.
+		const uid = 'reviewer';
+		seedPrivacyFixture(db, undefined, uid);
+		setRole(db, 'decisions', fx.trusted);
+		decisions.yes = ['health'];
+		await callMemoryTool(
+			'create_concept',
+			{ path: 'health/meds', title: 'Meds', body: 'Takes insulin daily.' },
+			{ userId: uid }
+		);
+
+		// A trusted chat edits the note so nothing personal is left.
+		const c = createConversation(db, uid, { private: false });
+		decisions.yes = [];
+		const text = await callMemoryTool(
+			'update_concept',
+			{ path: 'health/meds', body: 'Insulin is a hormone.' },
+			{
+				userId: uid,
+				trust: 'trusted',
+				conversationId: c.id,
+				privacy: new TurnPrivacy(db, uid, { conversationId: c.id, trust: 'trusted' })
+			}
+		);
+		expect(text).toContain('flagged for review');
+		let note = await readConcept('user', uid, 'health/meds');
+		expect(note?.frontmatter.private).toBe(true);
+		expect(note?.frontmatter.privateReview).toBe(PRIVATE_REVIEW_NOTE);
+
+		// A person saves it with Private on: confirmed, the flag goes.
+		await writeConcept(
+			db,
+			'user',
+			uid,
+			'health/meds',
+			{ frontmatter: { title: 'Meds', private: true }, body: note!.body },
+			{ author: 't', userId: uid }
+		);
+		note = await readConcept('user', uid, 'health/meds');
+		expect(note?.frontmatter.privateReview).toBeUndefined();
+		expect(note?.frontmatter.privateReason).toBe('Marked private automatically: looks like health');
+
+		// The editor records that a person decided: the sweep leaves the note alone…
+		recordPrivacyCheck(db, note!, uid);
+		expect((await sweepMemoryPrivacy(db, 'user', uid)).flagged).toEqual([]);
+		// …until its text changes again.
+		await writeConcept(
+			db,
+			'user',
+			uid,
+			'health/meds',
+			{ frontmatter: { title: 'Meds' }, body: 'Insulin is made in the pancreas.' },
+			{ author: 't', userId: uid }
+		);
+		expect((await sweepMemoryPrivacy(db, 'user', uid)).flagged).toEqual(['health/meds.md']);
 	});
 });

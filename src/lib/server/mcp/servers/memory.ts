@@ -21,7 +21,8 @@ import {
 	type MemoryReadOptions
 } from '../../memory/fts.js';
 import { ftsScope, normalizeConceptPath, type MemoryScope } from '../../memory/paths.js';
-import { classifySensitive, privateReasonFor } from '../../privacy/classify.js';
+import { classifySensitive, reviewUpdate, type PrivacyUpdate } from '../../privacy/classify.js';
+import { recordPrivacyCheck } from '../../privacy/sweep.js';
 import { callerPrivacy, isPrivateContext } from '../../privacy/policy.js';
 import type { CallerContext } from '../types.js';
 import { hiddenNote, reportPrivate, seesPrivate } from './private-items.js';
@@ -175,23 +176,28 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 
 	/**
 	 * The privacy of a note about to be written: private when the context is
-	 * (forced), otherwise whatever automatic classification finds. It only ever
-	 * adds the flag; a note that is already private is not classified again.
+	 * (forced), otherwise whatever the automatic check finds (see reviewUpdate):
+	 * it marks notes with personal details private and flags automatically
+	 * marked ones that no longer have any, but never makes a note public.
 	 */
 	const privacyFor = async (
 		view: MemoryView,
-		alreadyPrivate: boolean,
+		current: Concept | null,
 		fields: { title: string; description?: string; tags?: string[]; body: string }
-	): Promise<{ private?: true; privateReason?: string }> => {
-		if (writesPrivate(view)) return { private: true };
-		if (alreadyPrivate) return {};
-		const labels = await classifySensitive(
-			getDb(),
-			[fields.title, fields.description ?? '', (fields.tags ?? []).join(', '), fields.body].join(
-				'\n'
-			)
-		);
-		return labels?.length ? { private: true, privateReason: privateReasonFor(labels) } : {};
+	): Promise<{ update: PrivacyUpdate; checked: boolean }> => {
+		if (writesPrivate(view)) return { update: { private: true }, checked: false };
+		const fm = current?.frontmatter ?? null;
+		// Made private by a person or a private chat: not second-guessed.
+		if (fm?.private && !fm.privateReason) return { update: {}, checked: false };
+		const text = [
+			fields.title,
+			fields.description ?? '',
+			(fields.tags ?? []).join(', '),
+			fields.body
+		].join('\n');
+		const labels = await classifySensitive(getDb(), text);
+		if (labels === null) return { update: {}, checked: false };
+		return { update: reviewUpdate(fm, labels) ?? {}, checked: true };
 	};
 
 	server.registerTool(
@@ -314,9 +320,14 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				current ? (canSee(view, current) ? 'concept already exists' : INVALID_PATH) : null;
 			const refused = guard(await readConcept(s, ctx.userId, normalized));
 			if (refused) return err(refused);
-			const privacy = await privacyFor(view, false, { title, description, tags, body });
+			const { update: privacy, checked } = await privacyFor(view, null, {
+				title,
+				description,
+				tags,
+				body
+			});
 			try {
-				await writeConcept(
+				const saved = await writeConcept(
 					getDb(),
 					s,
 					ctx.userId,
@@ -328,6 +339,8 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 					audit(),
 					guard
 				);
+				// Checked just now: the cleanup sweep needn't check it again.
+				if (checked) recordPrivacyCheck(getDb(), saved, ctx.userId);
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
@@ -376,11 +389,15 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				tags: tags ?? existing.frontmatter.tags
 			};
 			const nextBody = body ?? existing.body;
-			const privacy = await privacyFor(view, isPrivate(existing), { ...fields, body: nextBody });
+			const { update: privacy, checked } = await privacyFor(view, existing, {
+				...fields,
+				body: nextBody
+			});
 			const next = { frontmatter: { ...fields, ...privacy }, body: nextBody };
 			let saved: Concept;
 			try {
 				saved = await writeConcept(getDb(), s, ctx.userId, normalized, next, audit(), guard);
+				if (checked) recordPrivacyCheck(getDb(), saved, ctx.userId);
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
@@ -392,7 +409,10 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				next.frontmatter.title,
 				memorySnippet(next.frontmatter.description, next.body),
 				isPrivate(saved),
-				privacy.privateReason
+				privacy.privateReason ??
+					(privacy.privateReview
+						? 'Private, flagged for review: no personal details found'
+						: undefined)
 			);
 		}
 	);
