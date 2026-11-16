@@ -295,7 +295,7 @@
 			</div>
 			{#if privateOnly}
 				<p
-					class="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 text-xs text-muted-foreground"
+					class="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 text-xs font-medium text-foreground/70"
 					data-private-note
 				>
 					<LockIcon class="size-3 shrink-0" aria-hidden="true" />

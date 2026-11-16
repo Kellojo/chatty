@@ -64,7 +64,8 @@ async function sourceFiles(dir: string): Promise<string[]> {
 
 const rel = (file: string) => path.relative(SRC, file).split(path.sep).join('/');
 
-describe('privacy static guard', () => {
+// These scan every source file, which can take a while under a busy test run.
+describe('privacy static guard', { timeout: 30_000 }, () => {
 	it('keeps model calls and provider factories in allowlisted files', async () => {
 		const offenders: string[] = [];
 		for (const file of await sourceFiles(SRC)) {
@@ -105,7 +106,7 @@ describe('privacy static guard', () => {
 	});
 });
 
-describe('conversation privacy is decided by every creator', () => {
+describe('conversation privacy is decided by every creator', { timeout: 30_000 }, () => {
 	it('passes `private` in every production createConversation call', async () => {
 		const missing: string[] = [];
 		for (const file of await sourceFiles(SRC)) {

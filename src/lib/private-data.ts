@@ -63,3 +63,7 @@ export function modelValueTrusted(
 	}
 	return trusted.has(providerId);
 }
+
+/** The one-line reminder under the composer of a private chat (new and existing). */
+export const PRIVATE_CHAT_HINT =
+	'Private chat: only trusted models, and no tools that send data outside Chatty.';

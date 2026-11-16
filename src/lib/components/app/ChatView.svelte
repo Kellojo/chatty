@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Chat } from '@ai-sdk/svelte';
+	import { PRIVATE_CHAT_HINT } from '$lib/private-data.js';
 	import { DefaultChatTransport } from 'ai';
 	import { onMount, tick, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
@@ -1737,6 +1738,18 @@
 					{/if}
 				</PromptInputActions>
 			</PromptInput>
+			{#if isPrivate}
+				<!-- Stays in view under the composer, like the new-chat page's note. -->
+				<p
+					class="mx-auto mt-1.5 flex max-w-full items-start justify-center gap-1.5 text-xs text-muted-foreground"
+				>
+					<LockIcon
+						class="mt-0.5 size-3 shrink-0 text-emerald-600 dark:text-emerald-400"
+						aria-hidden="true"
+					/>
+					<span>{PRIVATE_CHAT_HINT}</span>
+				</p>
+			{/if}
 		{/if}
 		<input
 			bind:this={fileInput}

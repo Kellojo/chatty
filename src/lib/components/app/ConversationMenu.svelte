@@ -376,7 +376,11 @@
 		</Dialog.Header>
 		<Dialog.Footer>
 			<Button variant="outline" onclick={() => (confirmingPublic = false)}>Keep private</Button>
-			<Button onclick={makePublic}>Make public</Button>
+			<Button
+				variant="outline"
+				class="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+				onclick={makePublic}>Make public</Button
+			>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

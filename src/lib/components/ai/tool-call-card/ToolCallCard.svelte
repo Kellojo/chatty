@@ -246,13 +246,7 @@
 	/** Refused because the chat is private: not an error to fix, so it reads calmly. */
 	const blockedReason = $derived(failed ? blockedToolReason(resultText) : null);
 	/** What to do about a refusal; the row already says why it was refused. */
-	const blockedText = $derived(
-		blockedReason === 'persist'
-			? "This chat holds private data, so tools that would store it where it isn't private are off. To use it, start a chat that isn't private."
-			: blockedReason
-				? "This chat holds private data, so tools that could take it outside Chatty are off. To use it, start a chat that isn't private."
-				: ''
-	);
+	const blockedText = "To use it, start a chat that isn't private.";
 	/** Failed calls without a detail show the first line of their error instead. */
 	const detail = $derived(
 		blockedReason
@@ -425,10 +419,9 @@
 						{/if}
 						{#if blockedReason}
 							<p
-								class="flex items-start gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+								class="rounded-md border bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
 							>
-								<LockIcon class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-								<span>{blockedText}</span>
+								{blockedText}
 							</p>
 						{:else}
 							<pre

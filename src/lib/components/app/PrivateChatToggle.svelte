@@ -90,7 +90,7 @@
 				: 'Make this chat private'}
 			class={cn(
 				checked
-					? 'gap-1.5 bg-accent px-2.5 text-accent-foreground hover:bg-accent/80'
+					? 'gap-1.5 bg-emerald-500/10 px-2.5 text-emerald-800 ring-1 ring-emerald-600/30 hover:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-400/30'
 					: 'text-muted-foreground hover:text-foreground'
 			)}
 			onclick={toggle}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
+	import { PRIVATE_CHAT_HINT } from '$lib/private-data.js';
 	import { afterNavigate, beforeNavigate, goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -536,9 +537,12 @@
 				This model isn't trusted with private data. Pick a trusted model for a private chat.
 			</p>
 		{:else if isPrivate}
-			<p class="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
-				<LockIcon class="size-3.5 shrink-0" />
-				Private: only trusted models see this chat, and tools that send data outside Chatty are off.
+			<p class="mt-2 flex items-start gap-1.5 text-sm text-muted-foreground">
+				<LockIcon
+					class="mt-0.5 size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+					aria-hidden="true"
+				/>
+				<span>{PRIVATE_CHAT_HINT}</span>
 			</p>
 		{/if}
 		{#if coding}
