@@ -284,6 +284,8 @@
 		body: string;
 		timestamp: string;
 		private: boolean;
+		/** Why Chatty marked it private on its own, if it did. */
+		privateReason?: string;
 	};
 
 	const emptyEditor: EditorState = {
@@ -445,7 +447,8 @@
 			tags: concept.frontmatter.tags.join(', '),
 			body: concept.body,
 			timestamp: concept.frontmatter.timestamp,
-			private: concept.frontmatter.private === true
+			private: concept.frontmatter.private === true,
+			privateReason: concept.frontmatter.privateReason
 		};
 	}
 

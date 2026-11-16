@@ -26,6 +26,8 @@ export interface ConceptFrontmatter {
 	 * means public; files never carry `private: false`.
 	 */
 	private?: boolean;
+	/** Why Chatty marked it private on its own (automatic classification); only on private concepts. */
+	privateReason?: string;
 }
 
 export interface Concept {
@@ -63,7 +65,8 @@ const frontmatterSchema = z.object({
 	description: z.string().trim().max(500).default(''),
 	tags: z.array(z.string().trim().min(1).max(50)).max(20).default([]),
 	timestamp: z.string().default(() => new Date().toISOString()),
-	private: z.boolean().optional()
+	private: z.boolean().optional(),
+	privateReason: z.string().trim().min(1).max(200).optional()
 });
 
 function parseFrontmatterInput(input: unknown): ConceptFrontmatter {
@@ -72,9 +75,11 @@ function parseFrontmatterInput(input: unknown): ConceptFrontmatter {
 		const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 		throw new Error(`Invalid concept frontmatter: ${issues}`);
 	}
-	const { private: isPrivate, ...rest } = parsed.data;
-	// Written only when set, so public concepts keep their files unchanged.
-	return isPrivate ? { ...rest, private: true } : rest;
+	const { private: isPrivate, privateReason, ...rest } = parsed.data;
+	// Written only when set, so public concepts keep their files unchanged; a
+	// reason only means something on a private concept.
+	if (!isPrivate) return rest;
+	return { ...rest, private: true, ...(privateReason ? { privateReason } : {}) };
 }
 
 function requireConcept(
@@ -115,7 +120,10 @@ function parseConceptFile(scope: MemoryScope, relPath: string, raw: string): Con
 				? data.tags.filter((t): t is string => typeof t === 'string')
 				: [],
 			timestamp: typeof data.timestamp === 'string' ? data.timestamp : '',
-			...(isPrivate ? { private: true } : {})
+			...(isPrivate ? { private: true } : {}),
+			...(isPrivate && typeof data.privateReason === 'string' && data.privateReason.trim()
+				? { privateReason: data.privateReason }
+				: {})
 		},
 		body
 	};
@@ -315,6 +323,8 @@ export async function writeConcept(
 			timestamp?: string;
 			/** true/false sets the flag; omitted keeps the existing file's, so no save drops it. */
 			private?: boolean;
+			/** Why it was marked private automatically; kept while it stays private. */
+			privateReason?: string;
 		};
 		body: string;
 	},
@@ -331,6 +341,10 @@ export async function writeConcept(
 		if (refused) throw new ConceptWriteRefused(refused);
 		if (input.frontmatter.private === undefined && current?.frontmatter.private) {
 			fm = { ...given, private: true };
+		}
+		// A save that keeps it private keeps the reason it was marked with.
+		if (fm.private && !fm.privateReason && current?.frontmatter.privateReason) {
+			fm = { ...fm, privateReason: current.frontmatter.privateReason };
 		}
 		const raw = matter.stringify(input.body, fm);
 		await fsp.mkdir(path.dirname(target.abs), { recursive: true });

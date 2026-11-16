@@ -9,6 +9,8 @@
 		body: string;
 		/** Only models trusted with private data may see it. */
 		private: boolean;
+		/** Why Chatty marked it private on its own (automatic classification). */
+		privateReason?: string;
 	};
 </script>
 
@@ -16,6 +18,7 @@
 	import { untrack } from 'svelte';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import FolderIcon from '@lucide/svelte/icons/folder';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
@@ -252,10 +255,19 @@
 						disabled={!canChangePrivate}
 						aria-describedby="{uid}-private-hint"
 					/>
-					<p id="{uid}-private-hint" class="text-xs text-muted-foreground">
-						Only models trusted with private data can see this note.{#if !canChangePrivate}
-							Only admins can change this for shared memories.{/if}
-					</p>
+					<div id="{uid}-private-hint" class="flex flex-col gap-1 text-xs text-muted-foreground">
+						<p>
+							Only models trusted with private data can see this note.{#if !canChangePrivate}
+								Only admins can change this for shared memories.{/if}
+						</p>
+						{#if draft.private && draft.privateReason}
+							<!-- Classification only adds the flag; a person decides whether it stays. -->
+							<p class="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+								<SparklesIcon class="size-3 shrink-0" aria-hidden="true" />
+								{draft.privateReason}. Turn it off if it isn't.
+							</p>
+						{/if}
+					</div>
 				</div>
 			{/if}
 		</div>

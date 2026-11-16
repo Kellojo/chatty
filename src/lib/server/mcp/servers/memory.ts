@@ -21,6 +21,7 @@ import {
 	type MemoryReadOptions
 } from '../../memory/fts.js';
 import { ftsScope, normalizeConceptPath, type MemoryScope } from '../../memory/paths.js';
+import { classifySensitive, privateReasonFor } from '../../privacy/classify.js';
 import { callerPrivacy, isPrivateContext } from '../../privacy/policy.js';
 import type { CallerContext } from '../types.js';
 import { hiddenNote, reportPrivate, seesPrivate } from './private-items.js';
@@ -109,12 +110,15 @@ function written(
 	scope: MemoryScope,
 	title: string | undefined,
 	snippet: string,
-	isPrivate = false
+	isPrivate = false,
+	/** Set when the note was marked private automatically: why. */
+	privateReason?: string
 ): CallToolResult {
 	const item = { action, path, scope, title: title || undefined, snippet: snippet || undefined };
+	const flag = privateReason ? ` (${privateReason.toLowerCase()})` : isPrivate ? ' (private)' : '';
 	return {
 		content: [
-			{ type: 'text', text: `${action} ${path}${isPrivate ? ' (private)' : ''}` },
+			{ type: 'text', text: `${action} ${path}${flag}` },
 			{ type: 'text', text: JSON.stringify(item) }
 		]
 	};
@@ -168,6 +172,27 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	/** Whether this context holds private data: everything it writes is private. */
 	const writesPrivate = (view: MemoryView) =>
 		view === 'private' || isPrivateContext(getDb(), callerPrivacy(ctx));
+
+	/**
+	 * The privacy of a note about to be written: private when the context is
+	 * (forced), otherwise whatever automatic classification finds. It only ever
+	 * adds the flag; a note that is already private is not classified again.
+	 */
+	const privacyFor = async (
+		view: MemoryView,
+		alreadyPrivate: boolean,
+		fields: { title: string; description?: string; tags?: string[]; body: string }
+	): Promise<{ private?: true; privateReason?: string }> => {
+		if (writesPrivate(view)) return { private: true };
+		if (alreadyPrivate) return {};
+		const labels = await classifySensitive(
+			getDb(),
+			[fields.title, fields.description ?? '', (fields.tags ?? []).join(', '), fields.body].join(
+				'\n'
+			)
+		);
+		return labels?.length ? { private: true, privateReason: privateReasonFor(labels) } : {};
+	};
 
 	server.registerTool(
 		'search_memory',
@@ -289,7 +314,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				current ? (canSee(view, current) ? 'concept already exists' : INVALID_PATH) : null;
 			const refused = guard(await readConcept(s, ctx.userId, normalized));
 			if (refused) return err(refused);
-			const makePrivate = writesPrivate(view);
+			const privacy = await privacyFor(view, false, { title, description, tags, body });
 			try {
 				await writeConcept(
 					getDb(),
@@ -297,13 +322,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 					ctx.userId,
 					normalized,
 					{
-						frontmatter: {
-							title,
-							type,
-							description,
-							tags,
-							...(makePrivate ? { private: true } : {})
-						},
+						frontmatter: { title, type, description, tags, ...privacy },
 						body
 					},
 					audit(),
@@ -318,7 +337,8 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				s,
 				title,
 				memorySnippet(description, body),
-				makePrivate
+				privacy.private === true,
+				privacy.privateReason
 			);
 		}
 	);
@@ -349,17 +369,15 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			const existing = await readConcept(s, ctx.userId, normalized);
 			if (!existing || guard(existing)) return err(NOT_FOUND);
 			// Never clears the flag: a turn can't make a private concept public.
-			const makePrivate = writesPrivate(view);
-			const next = {
-				frontmatter: {
-					title: title ?? existing.frontmatter.title,
-					type: type ?? existing.frontmatter.type,
-					description: description ?? existing.frontmatter.description,
-					tags: tags ?? existing.frontmatter.tags,
-					...(makePrivate ? { private: true } : {})
-				},
-				body: body ?? existing.body
+			const fields = {
+				title: title ?? existing.frontmatter.title,
+				type: type ?? existing.frontmatter.type,
+				description: description ?? existing.frontmatter.description,
+				tags: tags ?? existing.frontmatter.tags
 			};
+			const nextBody = body ?? existing.body;
+			const privacy = await privacyFor(view, isPrivate(existing), { ...fields, body: nextBody });
+			const next = { frontmatter: { ...fields, ...privacy }, body: nextBody };
 			let saved: Concept;
 			try {
 				saved = await writeConcept(getDb(), s, ctx.userId, normalized, next, audit(), guard);
@@ -373,7 +391,8 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				s,
 				next.frontmatter.title,
 				memorySnippet(next.frontmatter.description, next.body),
-				isPrivate(saved)
+				isPrivate(saved),
+				privacy.privateReason
 			);
 		}
 	);

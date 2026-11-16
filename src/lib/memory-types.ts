@@ -19,6 +19,8 @@ export interface ConceptFrontmatter {
 	timestamp: string;
 	/** Only trusted models may see it. Absent means public. */
 	private?: boolean;
+	/** Why Chatty marked it private on its own (automatic classification). */
+	privateReason?: string;
 }
 
 export interface Concept {
