@@ -2,7 +2,10 @@
 	import { toast } from 'svelte-sonner';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import LockIcon from '@lucide/svelte/icons/lock';
+	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import type { Conversation } from '$lib/types.js';
 
@@ -174,23 +177,21 @@
 		</Dialog.Header>
 
 		<div class="flex flex-col gap-4">
-			<label class="flex cursor-pointer items-start gap-3">
-				<input
-					type="checkbox"
-					class="mt-0.5 size-4 shrink-0 accent-primary"
-					bind:checked={replaceTitle}
-				/>
+			<div class="flex items-start justify-between gap-4">
 				<span class="flex flex-col gap-0.5">
-					<span>Replace the title with a placeholder</span>
+					<Label for="make-private-title">Replace the title with a placeholder</Label>
 					<span class="text-xs text-muted-foreground">
 						The current {single ? 'title was' : 'titles were'} written by a title model and may be in
 						push notification history.
 					</span>
 				</span>
-			</label>
+				<Switch id="make-private-title" class="mt-0.5" bind:checked={replaceTitle} />
+			</div>
 
-			<div class="flex flex-col gap-2">
-				<p class="font-medium">Memory written from {single ? 'this chat' : 'these chats'}</p>
+			<div class="flex flex-col gap-3">
+				<p class="text-sm font-medium">
+					Memory written from {single ? 'this chat' : 'these chats'}
+				</p>
 				{#if concepts === null}
 					<p class="flex items-center gap-2 text-xs text-muted-foreground">
 						<LoaderCircleIcon class="size-3.5 animate-spin" aria-hidden="true" />
@@ -212,40 +213,45 @@
 									<span class="shrink-0 text-xs text-muted-foreground">Shared</span>
 								{/if}
 								{#if concept.private}
-									<span class="inline-flex shrink-0 text-muted-foreground" title="Already private">
-										<LockIcon class="size-3" aria-hidden="true" />
-										<span class="sr-only">Already private</span>
+									<span
+										class="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+									>
+										<LockIcon class="size-3" aria-hidden="true" />Already private
 									</span>
 								{/if}
 							</li>
 						{/each}
 					</ul>
 					{#if markable.length > 0}
-						<label class="flex cursor-pointer items-start gap-3">
-							<input
-								type="checkbox"
-								class="mt-0.5 size-4 shrink-0 accent-primary"
-								bind:checked={markConcepts}
-							/>
-							<span>Mark these private too</span>
-						</label>
+						<div class="flex items-start justify-between gap-4">
+							<span class="flex flex-col gap-0.5">
+								<Label for="make-private-notes">Mark these private too</Label>
+								<span class="text-xs text-muted-foreground">
+									Best effort: these were written after a memory run read {single
+										? 'this chat'
+										: 'these chats'}. The same facts may also be in other notes.
+								</span>
+							</span>
+							<Switch id="make-private-notes" class="mt-0.5" bind:checked={markConcepts} />
+						</div>
 					{/if}
 					{#if lockedShared > 0}
 						<p class="text-xs text-muted-foreground">
 							Only an admin can mark shared notes private.
 						</p>
 					{/if}
-					<p class="text-xs text-muted-foreground">
-						Best effort: these are the notes written after a memory run read {single
-							? 'this chat'
-							: 'these chats'}. The same facts may also be in other notes.
-					</p>
 				{/if}
 			</div>
 
-			<p class="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-				Anything already sent to models can't be recalled, and push notifications already sent (with
-				their titles) can't be cleared.
+			<p
+				class="flex items-start gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-sm font-normal text-amber-800 dark:bg-amber-400/10 dark:text-amber-200/90"
+				role="note"
+			>
+				<ShieldAlertIcon class="mt-px size-4 shrink-0" aria-hidden="true" />
+				<span>
+					Anything already sent to models can't be recalled, and push notifications already sent
+					(with their titles) can't be cleared.
+				</span>
 			</p>
 		</div>
 

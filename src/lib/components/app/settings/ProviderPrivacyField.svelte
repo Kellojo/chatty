@@ -76,7 +76,7 @@
 		<div class="flex flex-col gap-1">
 			<Label for={id}>Can process private data</Label>
 			<p class="text-xs text-pretty text-muted-foreground">
-				Private chats, notes and agents may only use providers with this on. Tick it only if you
+				Private chats, notes and agents may only use providers with this on. Turn it on only if you
 				trust where this provider sends data.
 			</p>
 		</div>
@@ -93,7 +93,7 @@
 		>
 			<TriangleAlertIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
 			<p class="min-w-0 break-words">
-				Private data will be sent to <span class="font-mono">{host}</span>.
+				Private data will be sent to <span class="font-mono">{host}</span>, an external service.
 			</p>
 		</div>
 	{/if}
@@ -103,7 +103,7 @@
 		>
 			<TriangleAlertIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
 			<p>
-				Private chats and agents using this provider will stop working until they pick a trusted
+				Private chats and agents using this provider will pause until they're switched to a trusted
 				model.
 			</p>
 		</div>

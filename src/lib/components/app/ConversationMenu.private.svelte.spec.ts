@@ -179,7 +179,7 @@ describe('ConversationMenu privacy items', () => {
 		// Nothing changes until it's confirmed.
 		expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
 
-		await page.getByRole('checkbox', { name: 'Replace the title with a placeholder' }).click();
+		await page.getByRole('switch', { name: 'Replace the title with a placeholder' }).click();
 		await page.getByRole('button', { name: 'Make private', exact: true }).click();
 		await vi.waitFor(() => expect(onupdated).toHaveBeenCalledWith(updated));
 		const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
@@ -210,7 +210,7 @@ describe('ConversationMenu privacy items', () => {
 		render(ConversationMenu, { conversation: conv(), privateData: status(), onupdated });
 		await openMenu();
 		await page.getByRole('menuitem', { name: 'Make private…' }).click();
-		await page.getByRole('checkbox', { name: 'Mark these private too' }).click();
+		await page.getByRole('switch', { name: 'Mark these private too' }).click();
 		await page.getByRole('button', { name: 'Make private', exact: true }).click();
 		await vi.waitFor(() => expect(onupdated).toHaveBeenCalled());
 		const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;

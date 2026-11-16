@@ -50,21 +50,27 @@
 							aria-label="Private chat"
 							aria-disabled="true"
 							aria-describedby="private-chat-unavailable"
-							class="cursor-not-allowed text-muted-foreground opacity-50 hover:bg-transparent hover:text-muted-foreground"
+							class="relative cursor-help text-muted-foreground/80 hover:bg-transparent hover:text-muted-foreground"
 							onclick={() => (hintOpen = true)}
 						>
 							<LockOpenIcon class="size-4" />
+							<!-- Says at a glance that it can't be used yet, without a hover. -->
+							<span
+								class="absolute right-1.5 bottom-1.5 size-1.5 rounded-full bg-amber-500 ring-2 ring-background"
+								aria-hidden="true"
+							></span>
 						</Button>
 					{/snippet}
 				</Tooltip.Trigger>
-				<Tooltip.Content class="max-w-64 flex-col items-start gap-0.5 text-left">
+				<Tooltip.Content class="max-w-64 flex-col items-start gap-1 px-3 py-2 text-left">
 					<span id="private-chat-unavailable">
 						Private chats need a provider trusted with private data.
 					</span>
 					{#if admin}
 						<a
 							href={resolve('/settings/providers')}
-							class="font-medium underline underline-offset-2">Set one up in Settings → Providers</a
+							class="rounded-sm font-medium underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
+							>Set one up in Settings → Providers</a
 						>
 					{:else}
 						<span class="opacity-80">Ask an admin to trust one in Settings → Providers.</span>

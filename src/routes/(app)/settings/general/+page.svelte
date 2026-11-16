@@ -2,7 +2,6 @@
 	import { invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
-	import LockIcon from '@lucide/svelte/icons/lock';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import { Switch } from '$lib/components/ui/switch/index.js';
@@ -50,11 +49,11 @@
 	<SettingsRow
 		label="Allow private data"
 		for="general-private-data"
-		description="Shows the lock in chats, the Private switch for memory notes and agents, and related settings."
+		description="Shows the lock in chats and the Private switch for memory notes and agents. Turning it off only hides these: what is already private stays private."
 	>
 		<Switch id="general-private-data" checked={enabled} onCheckedChange={setPrivateData} />
 	</SettingsRow>
-	<div class="flex flex-col gap-2 pb-1 text-xs">
+	<div class="flex flex-col gap-2.5 pb-1 text-sm">
 		{#if data.trustedProviders.length === 0}
 			<p
 				class="flex items-start gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-amber-800 dark:text-amber-300"
@@ -64,7 +63,9 @@
 				<span>
 					No provider may process private data yet, so nothing can be made private. Turn on
 					<strong class="font-medium">Can process private data</strong> for a provider in
-					<a class="underline underline-offset-2" href={resolve('/settings/providers')}>Providers</a
+					<a
+						class="font-medium underline decoration-current/40 underline-offset-2 hover:decoration-current"
+						href={resolve('/settings/providers')}>Providers</a
 					>.
 				</span>
 			</p>
@@ -76,17 +77,12 @@
 				/>
 				<span>
 					Trusted with private data: {data.trustedProviders.join(', ')}. Change this in
-					<a class="underline underline-offset-2" href={resolve('/settings/providers')}>Providers</a
+					<a
+						class="font-medium underline decoration-current/40 underline-offset-2 hover:decoration-current"
+						href={resolve('/settings/providers')}>Providers</a
 					>.
 				</span>
 			</p>
 		{/if}
-		<p class="flex items-start gap-2 text-muted-foreground">
-			<LockIcon class="mt-px size-4 shrink-0" aria-hidden="true" />
-			<span>
-				Turning this off only hides the controls: whatever is already private stays private and
-				keeps to trusted providers.
-			</span>
-		</p>
 	</div>
 </SettingsSection>

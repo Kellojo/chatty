@@ -86,6 +86,8 @@
 		brand: Brand | null;
 		/** May run a private chat (its provider, or every mapping target's, is trusted). */
 		trusted: boolean;
+		/** Why an untrusted option can't run a private chat, shown on its greyed row. */
+		untrustedReason?: string;
 	}
 
 	const trustedIds = $derived(trustedProviderIds(groups));
@@ -97,7 +99,11 @@
 		brand:
 			resolveBrand(mapping.name) ??
 			(mapping.targets[0] ? resolveModelBrand(mapping.targets[0]) : null),
-		trusted: mappingTrusted(mapping, trustedIds)
+		trusted: mappingTrusted(mapping, trustedIds),
+		// A mapping that may fall back to an untrusted provider counts as untrusted.
+		untrustedReason: mapping.targets.some((t) => trustedIds.has(t.providerId))
+			? 'Can fall back to an untrusted provider'
+			: 'Not trusted with private data'
 	});
 
 	const modelOption = (
@@ -226,6 +232,8 @@
 		brand={option.brand}
 		source={showSource ? option.source : undefined}
 		disabled={privateOnly && !option.trusted}
+		disabledReason={option.untrustedReason ?? 'Not trusted with private data'}
+		disabledShort={option.untrustedReason?.startsWith('Can fall back') ? 'Mixed' : 'Untrusted'}
 	/>
 {/snippet}
 
