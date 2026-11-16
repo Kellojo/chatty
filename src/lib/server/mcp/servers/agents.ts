@@ -24,8 +24,10 @@ import {
 } from '../../db/repo/agents.js';
 import { findModel } from '../../db/repo/models.js';
 import { createLogger } from '../../logger.js';
+import { isAgentRunPrivate } from '../../privacy/policy.js';
 import { MAX_LAUNCH_PROMPT } from '../../t3/tasks.js';
 import type { CallerContext } from '../types.js';
+import { reportPrivate, seesPrivate } from './private-items.js';
 import { err, text } from './shared.js';
 
 const log = createLogger('mcp:agents');
@@ -44,7 +46,9 @@ const FIELD_DESCRIPTIONS = {
 	systemPrompt: "The agent's role and standing instructions",
 	toolAllowlist: 'Tool names the agent may use; null: all tools',
 	canAsk:
-		'Whether its runs may ask the user: never, approvals (only to approve actions) or any question'
+		'Whether its runs may ask the user: never, approvals (only to approve actions) or any question',
+	private:
+		'Private agent: its runs and results are private data. Needs a model trusted with private data'
 };
 
 /** Card instructions, given once (create_agent); get/update_agent point at them. */
@@ -52,18 +56,43 @@ const CARD_HINT =
 	'To show the agent as a card, reply with a ```agent fenced block of the result JSON (systemPrompt may be omitted).';
 const SAME_CARD = 'Returns the same JSON as create_agent (```agent card).';
 
-/** A run as start_agent / get_agent_run return it (the chat's agent run row reads this). */
-function runResult(db: Db, run: AgentRunRow, agent: AgentRow) {
-	return text(
-		JSON.stringify(
-			describeRunResult(
-				db,
-				run,
-				{ id: agent.id, name: agent.name },
-				{ visible: runsAsChats(agent) }
-			)
-		)
+export const PRIVATE_RUN_NOTE = 'Run finished. The result is private, open it in Chatty.';
+
+/**
+ * A run as start_agent / get_agent_run return it (the chat's agent run row
+ * reads this). A private run's reply and question are private data: a caller
+ * that may see it is tainted by them, any other gets only the run's id and
+ * status.
+ */
+function runResult(ctx: CallerContext, db: Db, run: AgentRunRow, agent: AgentRow) {
+	const described = describeRunResult(
+		db,
+		run,
+		{ id: agent.id, name: agent.name },
+		{ visible: runsAsChats(agent) }
 	);
+	if (isAgentRunPrivate(db, run.id)) {
+		if (!seesPrivate(ctx)) {
+			return text(
+				JSON.stringify({
+					run: { id: run.id, agentId: run.agent_id, status: run.status },
+					agent: described.agent,
+					runPath: described.runPath,
+					private: true,
+					result: null,
+					note:
+						run.status === 'running'
+							? 'The run is still working. Its result is private, open it in Chatty.'
+							: PRIVATE_RUN_NOTE
+				})
+			);
+		}
+		if (described.result || described.question || run.error) {
+			reportPrivate(ctx, 'a private agent run');
+		}
+		return text(JSON.stringify({ ...described, private: true }));
+	}
+	return text(JSON.stringify(described));
 }
 
 /** The public agent plus its model's display name, which the ```agent card shows. */
@@ -99,6 +128,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 							triggerType: pub.triggerType,
 							triggerConfig: pub.triggerConfig,
 							enabled: pub.enabled,
+							private: pub.private,
 							builtin: r.user_id === null,
 							coding: r.coding_target !== null,
 							lastRunAt: pub.lastRunAt,
@@ -148,7 +178,8 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 				providerId: agentCreateSchema.shape.providerId.describe(
 					MODEL_FIELD_DESCRIPTIONS.providerId
 				),
-				modelId: agentCreateSchema.shape.modelId.describe(MODEL_FIELD_DESCRIPTIONS.modelId)
+				modelId: agentCreateSchema.shape.modelId.describe(MODEL_FIELD_DESCRIPTIONS.modelId),
+				private: agentCreateSchema.shape.private.describe(FIELD_DESCRIPTIONS.private)
 			}
 		},
 		async (input) => {
@@ -182,7 +213,8 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 				toolAllowlist: agentPatchSchema.shape.toolAllowlist.describe(
 					FIELD_DESCRIPTIONS.toolAllowlist
 				),
-				canAsk: agentPatchSchema.shape.canAsk.describe(FIELD_DESCRIPTIONS.canAsk)
+				canAsk: agentPatchSchema.shape.canAsk.describe(FIELD_DESCRIPTIONS.canAsk),
+				private: agentPatchSchema.shape.private.describe(FIELD_DESCRIPTIONS.private)
 			}
 		},
 		async ({ agentId, ...patch }) => {
@@ -297,7 +329,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 							signal: extra.signal
 						})
 					: run;
-				return runResult(db, settled, agent);
+				return runResult(ctx, db, settled, agent);
 			} catch (e) {
 				const message = e instanceof Error ? e.message : 'failed to start agent run';
 				log.warn('start_agent failed', { userId: ctx.userId, agentId, error: message });
@@ -333,7 +365,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 					? await waitForRunToSettle(db, run, { timeoutMs: RUN_WAIT_MAX_MS, signal: extra.signal })
 					: run;
 			log.info('get_agent_run', { userId: ctx.userId, runId, status: settled.status });
-			return runResult(db, settled, agent);
+			return runResult(ctx, db, settled, agent);
 		}
 	);
 

@@ -4,11 +4,14 @@ import { Worker } from 'node:worker_threads';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { getDb } from '../../db/index.js';
+import { callerPrivacy, isPrivateContext } from '../../privacy/policy.js';
 import { sanitizeFilename } from '../../workspaces.js';
 import type { CallerContext } from '../types.js';
 import { readBodyLimited } from '../../net/readBody.js';
 import { safeFetch } from '../../net/safeFetch.js';
 import { resolveInsideReal } from '../../safePath.js';
+import { reportPrivate, seesPrivate } from './private-items.js';
 import { err, HEAVY_DIRS, namesHeavyDir, text, toPosix, walkIter } from './shared.js';
 
 const MAX_OUT = 64 * 1024;
@@ -299,25 +302,111 @@ export function grepInWorker(job: GrepJob, timeoutMs = GREP_TIMEOUT_MS): Promise
 	});
 }
 
+const exists = (p: string) =>
+	fsp.stat(p).then(
+		() => true,
+		() => false
+	);
+
+/** The documents folder whose files are private data: `<documents>/private/**`. */
+export const PRIVATE_DOCS_DIR = 'private';
+
+/** Whether a path relative to the documents root lies in the private folder (or is it). */
+export function isPrivateDocRel(rel: string): boolean {
+	const first = toPosix(rel).split('/')[0];
+	// Case-insensitive: on Windows and macOS `Private/` is the same folder.
+	return first.toLowerCase() === PRIVATE_DOCS_DIR;
+}
+
+/**
+ * Whether `abs` (inside `root`) is in the private documents folder, lexically
+ * or through a symlink that resolves into it.
+ */
+async function isPrivateDocPath(root: string, abs: string): Promise<boolean> {
+	if (isPrivateDocRel(path.relative(root, abs))) return true;
+	const realRoot = await fsp.realpath(root);
+	for (let probe = abs; ; probe = path.dirname(probe)) {
+		const real = await fsp.realpath(probe).catch(() => null);
+		if (real) return isPrivateDocRel(path.relative(realRoot, real));
+		if (path.dirname(probe) === probe) return false;
+	}
+}
+
 export function createFsServer(ctx: CallerContext): McpServer {
 	const server = new McpServer({ name: 'ai-chat-fs', version: '0.1.0' });
 
-	type Resolved = { ok: true; base: string; abs: string } | { ok: false; error: CallToolResult };
+	type Scope = z.infer<typeof SCOPE>;
+	type Found = {
+		ok: true;
+		base: string;
+		abs: string;
+		/** A file or folder in documents/private (private data). */
+		privateDoc: boolean;
+		/** The path the model asked for, when a write was moved to documents/private. */
+		redirectedFrom?: string;
+		/** Where that path resolved to, outside documents/private. */
+		sharedAbs?: string;
+	};
+	type Resolved = Found | { ok: false; error: CallToolResult };
 
 	// The scope roots may not exist yet (resolveInsideReal rejects a missing
 	// root); create each at most once per server instance.
 	const ensuredRoots = new Set<string>();
 
-	async function resolveIn(scope: z.infer<typeof SCOPE>, rel: string): Promise<Resolved> {
+	// documents/private is private data: a turn that may not see it gets the
+	// tool's "not found" error, as if it didn't exist.
+	const canSeePrivate = seesPrivate(ctx);
+	/** Whether this call's context holds private data (re-read: the chat may turn private mid-turn). */
+	const isTainted = () => isPrivateContext(getDb(), callerPrivacy(ctx));
+	/** Called before a result with private document data goes back to the model. */
+	const readPrivateDoc = () => reportPrivate(ctx, 'a private document');
+	/** Whether a walked entry is under documents/private and this turn may not see it. */
+	const hiddenEntry = (scope: Scope, rel: string) =>
+		scope === 'documents' && !canSeePrivate && isPrivateDocRel(rel);
+
+	/**
+	 * Resolves `rel` in the scope's root. `missing` is the tool's own error for
+	 * a path that doesn't exist, which a hidden private path gets too. With
+	 * `redirect`, a write into documents from a private context goes to
+	 * documents/private/<rel> instead, so private data never lands in a
+	 * document other chats can read.
+	 */
+	async function resolveIn(
+		scope: Scope,
+		rel: string,
+		opts: { missing: string; redirect?: boolean }
+	): Promise<Resolved> {
 		const dir = scope === 'workspace' ? ctx.workspaceDir : ctx.documentsDir;
 		if (!dir) return { ok: false, error: err('no workspace available') };
 		if (!ensuredRoots.has(dir)) {
 			await fsp.mkdir(dir, { recursive: true });
 			ensuredRoots.add(dir);
 		}
-		const abs = await resolveInsideReal(dir, rel);
+		let abs = await resolveInsideReal(dir, rel);
 		if (!abs) return { ok: false, error: err(`path escapes ${scope} root`) };
-		return { ok: true, base: dir, abs };
+		// Workspace files are private through their conversation; only documents are shared.
+		if (scope === 'workspace') return { ok: true, base: dir, abs, privateDoc: false };
+		let privateDoc = await isPrivateDocPath(dir, abs);
+		let redirectedFrom: string | undefined;
+		let sharedAbs: string | undefined;
+		if (!privateDoc && opts.redirect && isTainted()) {
+			sharedAbs = abs;
+			abs = await resolveInsideReal(dir, path.join(PRIVATE_DOCS_DIR, path.relative(dir, abs)));
+			if (!abs) return { ok: false, error: err(`path escapes ${scope} root`) };
+			privateDoc = true;
+			redirectedFrom = rel;
+		}
+		if (privateDoc && !canSeePrivate) return { ok: false, error: err(opts.missing) };
+		return { ok: true, base: dir, abs, privateDoc, redirectedFrom, sharedAbs };
+	}
+
+	/** A write's result; it tells the model when the write was moved to documents/private. */
+	function wrote(r: Found, verb: string, rel: string): CallToolResult {
+		if (r.redirectedFrom === undefined) return text(`${verb} ${toPosix(rel)}`);
+		const where = toPosix(path.relative(r.base, r.abs));
+		return text(
+			`${verb} ${where}: saved to ${where} instead of ${toPosix(rel)} because this chat is private`
+		);
 	}
 
 	server.registerTool(
@@ -327,14 +416,18 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			inputSchema: { scope: SCOPE, path: z.string().optional() }
 		},
 		async ({ scope, path: rel }) => {
-			const r = await resolveIn(scope, rel ?? '.');
+			const missing = `not a directory: ${rel ?? '.'}`;
+			const r = await resolveIn(scope, rel ?? '.', { missing });
 			if (!r.ok) return r.error;
 			let entries;
 			try {
 				entries = await fsp.readdir(r.abs, { withFileTypes: true });
 			} catch {
-				return err(`not a directory: ${rel ?? '.'}`);
+				return err(missing);
 			}
+			const relDir = path.relative(r.base, r.abs);
+			entries = entries.filter((e) => !hiddenEntry(scope, path.join(relDir, e.name)));
+			if (r.privateDoc && entries.length > 0) readPrivateDoc();
 			const dirs = entries
 				.filter((e) => e.isDirectory())
 				.map((e) => `${e.name}/`)
@@ -361,7 +454,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			}
 		},
 		async ({ scope, path: rel, head, tail, stats }) => {
-			const r = await resolveIn(scope, rel);
+			const r = await resolveIn(scope, rel, { missing: `not a file: ${rel}` });
 			if (!r.ok) return r.error;
 			let fh: FileHandle;
 			try {
@@ -373,6 +466,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			try {
 				const st = await fh.stat();
 				if (!st.isFile()) return err(`not a file: ${rel}`);
+				if (r.privateDoc) readPrivateDoc();
 				if (stats) {
 					const c = await countFile(fh);
 					return text(`${c.lines} ${c.words} ${c.bytes} ${toPosix(rel)}`);
@@ -405,7 +499,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			}
 		},
 		async ({ scope, pattern, path: rel, ignoreCase }) => {
-			const r = await resolveIn(scope, rel ?? '.');
+			const r = await resolveIn(scope, rel ?? '.', { missing: `path not found: ${rel ?? '.'}` });
 			if (!r.ok) return r.error;
 			if (pattern.length > MAX_PATTERN) {
 				return err(`pattern too long (max ${MAX_PATTERN} characters)`);
@@ -434,7 +528,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 				// Size and binary checks happen in the worker, on its single read of each file.
 				const skipDirs = namesHeavyDir(path.relative(r.base, r.abs)) ? undefined : HEAVY_DIRS;
 				for await (const e of walkIter(r.abs, { skipDirs, relTo: r.base })) {
-					if (e.isDir) continue;
+					if (e.isDir || hiddenEntry(scope, e.rel)) continue;
 					if (targets.length >= MAX_GREP_FILES) {
 						fileLimitHit = true;
 						break;
@@ -452,6 +546,10 @@ export function createFsServer(ctx: CallerContext): McpServer {
 				skipBinary: !stat.isFile()
 			});
 			if (!result.ok) return err(result.error);
+			// Lines are `rel:line:text`, rel from the documents root.
+			if (scope === 'documents' && result.lines.some((l) => isPrivateDocRel(l))) {
+				readPrivateDoc();
+			}
 			const out = cap(result.lines.join('\n'));
 			// Only worth mentioning when the search could have gone on finding more.
 			if (fileLimitHit && result.lines.length < MAX_MATCHES) {
@@ -471,7 +569,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			inputSchema: { scope: SCOPE, pattern: z.string() }
 		},
 		async ({ scope, pattern }) => {
-			const r = await resolveIn(scope, '.');
+			const r = await resolveIn(scope, '.', { missing: 'not found' });
 			if (!r.ok) return r.error;
 			const normalized = path.posix.normalize(pattern.replace(/\\/g, '/')).replace(/\/$/, '');
 			if (/^(?:\/|[a-z]:|\.\.(?:\/|$))/i.test(normalized)) {
@@ -499,7 +597,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			let visited = 0;
 			let scanLimitHit = false;
 			for await (const e of walkIter(start, { skipDirs, relTo: r.base })) {
-				if (matchGlob(e.rel)) matches.push(e.rel);
+				if (matchGlob(e.rel) && !hiddenEntry(scope, e.rel)) matches.push(e.rel);
 				if (matches.length >= MAX_GLOB) break;
 				if (++visited >= MAX_GLOB_SCAN) {
 					scanLimitHit = true;
@@ -507,6 +605,10 @@ export function createFsServer(ctx: CallerContext): McpServer {
 				}
 			}
 			matches.sort();
+			// The private folder's own name is no secret; what lies in it is.
+			if (scope === 'documents' && matches.some((m) => isPrivateDocRel(m) && m.includes('/'))) {
+				readPrivateDoc();
+			}
 			const out = JSON.stringify(matches);
 			return text(
 				scanLimitHit
@@ -529,16 +631,16 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			}
 		},
 		async ({ scope, path: rel, content, overwrite }) => {
-			const r = await resolveIn(scope, rel);
+			const r = await resolveIn(scope, rel, {
+				missing: `cannot write ${rel}: path not available`,
+				redirect: true
+			});
 			if (!r.ok) return r.error;
-			const exists = await fsp
-				.stat(r.abs)
-				.then(() => true)
-				.catch(() => false);
-			if (exists && overwrite === false) return err(`file already exists: ${rel}`);
+			const existed = await exists(r.abs);
+			if (existed && overwrite === false) return err(`file already exists: ${rel}`);
 			await fsp.mkdir(path.dirname(r.abs), { recursive: true });
 			await fsp.writeFile(r.abs, content, 'utf-8');
-			return text(`${exists ? 'updated' : 'created'} ${toPosix(rel)}`);
+			return wrote(r, existed ? 'updated' : 'created', rel);
 		}
 	);
 
@@ -556,14 +658,18 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			}
 		},
 		async ({ scope, path: rel, old: find, new: replacement, replaceAll }) => {
-			const r = await resolveIn(scope, rel);
+			const r = await resolveIn(scope, rel, { missing: `not a file: ${rel}`, redirect: true });
 			if (!r.ok) return r.error;
+			// Redirected to documents/private: the first edit starts from the shared file.
+			const from = r.sharedAbs !== undefined && !(await exists(r.abs)) ? r.sharedAbs : r.abs;
 			let content: string;
 			try {
-				content = await fsp.readFile(r.abs, 'utf-8');
+				content = await fsp.readFile(from, 'utf-8');
 			} catch {
 				return err(`not a file: ${rel}`);
 			}
+			// Whether the text matched tells the model something about the file.
+			if (r.privateDoc && r.redirectedFrom === undefined) readPrivateDoc();
 			const matches = content.split(find).length - 1;
 			if (matches === 0) return err(`text not found in ${rel}`);
 			if (matches > 1 && !replaceAll) {
@@ -575,8 +681,9 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			const updated = replaceAll
 				? content.split(find).join(replacement)
 				: content.replace(find, () => replacement);
+			await fsp.mkdir(path.dirname(r.abs), { recursive: true });
 			await fsp.writeFile(r.abs, updated, 'utf-8');
-			return text(`edited ${toPosix(rel)}`);
+			return wrote(r, 'edited', rel);
 		}
 	);
 
@@ -587,10 +694,13 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			inputSchema: { scope: SCOPE, path: z.string() }
 		},
 		async ({ scope, path: rel }) => {
-			const r = await resolveIn(scope, rel);
+			const r = await resolveIn(scope, rel, {
+				missing: `cannot create ${rel}: path not available`,
+				redirect: true
+			});
 			if (!r.ok) return r.error;
 			await fsp.mkdir(r.abs, { recursive: true });
-			return text(`created ${toPosix(rel)}`);
+			return wrote(r, 'created', rel);
 		}
 	);
 
@@ -601,7 +711,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			inputSchema: { scope: SCOPE, path: z.string() }
 		},
 		async ({ scope, path: rel }) => {
-			const r = await resolveIn(scope, rel);
+			const r = await resolveIn(scope, rel, { missing: `not found: ${rel}` });
 			if (!r.ok) return r.error;
 			if (path.relative(r.base, r.abs) === '') return err(`refusing to delete the ${scope} root`);
 			try {
@@ -642,7 +752,10 @@ export function createFsServer(ctx: CallerContext): McpServer {
 			}
 			const urlName = path.posix.basename(parsed.pathname);
 			const target = rel ?? (urlName ? sanitizeFilename(urlName) : 'download');
-			const r = await resolveIn(scope, target);
+			const r = await resolveIn(scope, target, {
+				missing: `cannot write ${target}: path not available`,
+				redirect: true
+			});
 			if (!r.ok) return r.error;
 			let res: Response;
 			try {

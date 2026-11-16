@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import { getCodingConversation, toPublic } from '../../db/repo/coding-conversations.js';
 import {
+	countPrivateConversationsSince,
+	countPrivateSearchMatches,
 	getConversation,
 	listConversationsSince,
 	MAX_SEARCH_PAGE_SIZE,
@@ -17,6 +19,7 @@ import {
 	READ_CHAT_MIN_CHARS,
 	readChatPage
 } from './chat-pages.js';
+import { hiddenNote, reportPrivate, seesPrivate } from './private-items.js';
 import { err, text } from './shared.js';
 
 /** What a coding thread (T3 session) reports beyond the chat fields; unset values are left out. */
@@ -78,28 +81,45 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 			const db = getDb();
 			// The chat the tool is called from is never a useful hit.
 			const current = ctx.conversationId ?? null;
+			// Private chats only reach a turn that may see them (filtered in SQL,
+			// before any limit); others learn how many were left out.
+			const includePrivate = seesPrivate(ctx);
 			const rows = q
 				? searchConversationsRanked(db, ctx.userId, q, {
 						// The filter below runs after the search: fetch more for since, and
 						// one extra to make up for dropping the current chat.
-						limit: sinceMs !== null ? MAX_SEARCH_PAGE_SIZE : current ? n + 1 : n
+						limit: sinceMs !== null ? MAX_SEARCH_PAGE_SIZE : current ? n + 1 : n,
+						includePrivate
 					})
 				: // A plain "what changed since" listing is how memory extraction finds new
 					// chats; agent-run chats hold the agent's words, not the user's, so they
 					// are left out. A text query still finds them.
-					listConversationsSince(db, ctx.userId, sinceMs!, { excludeDispatched: true });
-			const filtered = rows.filter(
-				(r) => r.id !== current && (sinceMs === null || r.updated_at >= sinceMs)
+					listConversationsSince(db, ctx.userId, sinceMs!, {
+						excludeDispatched: true,
+						includePrivate
+					});
+			const shown = rows
+				.filter((r) => r.id !== current && (sinceMs === null || r.updated_at >= sinceMs))
+				.slice(0, n);
+			if (shown.some((r) => r.private === 1)) reportPrivate(ctx, 'a private chat');
+			const json = JSON.stringify(
+				shown.map((r) => ({
+					id: r.id,
+					title: r.title,
+					updatedAt: r.updated_at,
+					...(r.private === 1 ? { private: true } : {}),
+					...(r.coding_status ? { coding: codingSummary(r.id) } : {})
+				}))
 			);
+			if (includePrivate) return text(json);
+			const hidden = q
+				? countPrivateSearchMatches(db, ctx.userId, q, { since: sinceMs })
+				: countPrivateConversationsSince(db, ctx.userId, sinceMs!, { excludeDispatched: true });
 			return text(
-				JSON.stringify(
-					filtered.slice(0, n).map((r) => ({
-						id: r.id,
-						title: r.title,
-						updatedAt: r.updated_at,
-						...(r.coding_status ? { coding: codingSummary(r.id) } : {})
-					}))
-				)
+				hidden > 0
+					? `${json}
+${hiddenNote(hidden)}`
+					: json
 			);
 		}
 	);
@@ -132,7 +152,9 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 		async ({ conversationId, from, cursor, maxChars }) => {
 			const db = getDb();
 			const conversation = getConversation(db, ctx.userId, conversationId);
-			if (!conversation) return err('conversation not found');
+			// A private chat doesn't exist for a turn that may not see it.
+			const isPrivate = conversation?.private === 1;
+			if (!conversation || (isPrivate && !seesPrivate(ctx))) return err('conversation not found');
 			const decoded = cursor ? decodeCursor(cursor) : null;
 			if (cursor && !decoded) return err('invalid cursor');
 			const page = readChatPage(
@@ -148,6 +170,7 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 				}
 			);
 			if ('error' in page) return err(page.error);
+			if (isPrivate) reportPrivate(ctx, 'a private chat');
 			return text(JSON.stringify(page));
 		}
 	);

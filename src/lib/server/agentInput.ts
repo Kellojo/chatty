@@ -17,6 +17,7 @@ import {
 	type UpdateAgentInput
 } from './db/repo/agents.js';
 import { isSelectableModelRef } from './llm/mapped.js';
+import { modelRefTrusted } from './privacy/guard.js';
 
 export const AGENT_TRIGGER_TYPES = ['persona', 'schedule', 'http', 'manual', 'event'] as const;
 
@@ -39,7 +40,9 @@ export const agentCreateSchema = z.object({
 	triggerConfig: agentTriggerConfigSchema.optional(),
 	maxSteps: z.number().int().min(1).max(100).nullable().optional(),
 	canAsk: z.enum(AGENT_CAN_ASK_VALUES).optional(),
-	enabled: z.boolean().optional()
+	enabled: z.boolean().optional(),
+	/** Private agent: its runs are private data, so it must use a trusted model. */
+	private: z.boolean().optional()
 });
 
 export const agentPatchSchema = agentCreateSchema.partial();
@@ -91,6 +94,11 @@ function validateCodingTrigger(triggerType: AgentTriggerType, coding: boolean): 
 	return coding && triggerType === 'persona' ? 'Coding agents cannot be chat personas' : null;
 }
 
+/** Coding agents hand their task to a coding agent outside Chatty, so they are never private. */
+function validateCodingPrivate(coding: boolean, isPrivate: boolean): string | null {
+	return coding && isPrivate ? 'Coding agents cannot be private' : null;
+}
+
 function validateModel(
 	db: Db,
 	providerId: string | null | undefined,
@@ -103,6 +111,19 @@ function validateModel(
 		return 'Unknown model';
 	}
 	return null;
+}
+
+export const PRIVATE_AGENT_MODEL_ERROR =
+	'A private agent needs a model that may process private data (a trusted provider)';
+
+/** A private agent's model (null: the default chat model) must only reach trusted providers. */
+function validatePrivateModel(
+	db: Db,
+	isPrivate: boolean,
+	providerId: string | null | undefined,
+	modelId: string | null | undefined
+): string | null {
+	return isPrivate && !modelRefTrusted(db, providerId, modelId) ? PRIVATE_AGENT_MODEL_ERROR : null;
 }
 
 function nextRunAtFor(
@@ -128,7 +149,9 @@ export function prepareAgentCreate(
 	const error =
 		validateTrigger(input.triggerType, triggerConfig) ??
 		validateCodingTrigger(input.triggerType, !!codingTarget) ??
-		validateModel(db, input.providerId, input.modelId);
+		validateCodingPrivate(!!codingTarget, input.private === true) ??
+		validateModel(db, input.providerId, input.modelId) ??
+		validatePrivateModel(db, input.private === true, input.providerId, input.modelId);
 	if (error) return { ok: false, error };
 	return {
 		ok: true,
@@ -183,12 +206,18 @@ export function prepareAgentUpdate(
 		if (error) return { ok: false, error };
 	}
 
+	const providerId = patch.providerId !== undefined ? patch.providerId : existing.provider_id;
+	const modelId = patch.modelId !== undefined ? patch.modelId : existing.model_id;
 	if (patch.providerId !== undefined || patch.modelId !== undefined) {
-		const providerId = patch.providerId !== undefined ? patch.providerId : existing.provider_id;
-		const modelId = patch.modelId !== undefined ? patch.modelId : existing.model_id;
 		const error = validateModel(db, providerId, modelId);
 		if (error) return { ok: false, error };
 	}
+	// Checked on every save of a private agent: the model's (or default's) trust may have changed.
+	const isPrivate = patch.private ?? existing.private === 1;
+	const privateError =
+		validateCodingPrivate(coding, isPrivate) ??
+		validatePrivateModel(db, isPrivate, providerId, modelId);
+	if (privateError) return { ok: false, error: privateError };
 
 	return {
 		ok: true,

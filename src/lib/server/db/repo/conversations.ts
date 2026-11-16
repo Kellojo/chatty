@@ -225,25 +225,54 @@ export function countSettledConversations(db: Db, userId: string): number {
 }
 
 /**
+ * Which conversations a search may see by their private flag: callers that
+ * hand results to a model pick `public` unless the turn may see private data.
+ */
+export type PrivateScope = 'all' | 'public' | 'private';
+
+function privateClause(scope: PrivateScope): string {
+	return scope === 'all' ? '' : `AND c.private = ${scope === 'private' ? 1 : 0}`;
+}
+
+/**
  * Chats updated since `since`. `excludeDispatched` leaves out chats Chatty
  * started for agent runs: their content is the agent's, not the user's (memory
- * extraction lists recent chats this way).
+ * extraction lists recent chats this way). `includePrivate: false` leaves out
+ * private chats (count them with `countPrivateConversationsSince`).
  */
 export function listConversationsSince(
 	db: Db,
 	userId: string,
 	since: number,
-	opts: { excludeDispatched?: boolean } = {}
+	opts: { excludeDispatched?: boolean; includePrivate: boolean }
 ): ConversationRow[] {
 	const dispatched = opts.excludeDispatched ? `AND c.origin != 'dispatch'` : '';
 	return db
 		.prepare(
 			`${SIDEBAR_SELECT}
 			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.updated_at >= ?
-			   ${dispatched}
+			   ${dispatched} ${privateClause(opts.includePrivate ? 'all' : 'public')}
 			 ORDER BY c.updated_at DESC`
 		)
 		.all(userId, since) as ConversationRow[];
+}
+
+/** How many private chats `listConversationsSince` leaves out without `includePrivate`. */
+export function countPrivateConversationsSince(
+	db: Db,
+	userId: string,
+	since: number,
+	opts: { excludeDispatched?: boolean } = {}
+): number {
+	const dispatched = opts.excludeDispatched ? `AND origin != 'dispatch'` : '';
+	const row = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM conversations
+			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND updated_at >= ?
+			   AND private = 1 ${dispatched}`
+		)
+		.get(userId, since) as { n: number };
+	return row.n;
 }
 
 /** One conversation with the coding-task and agent-run summary the sidebar shows. */
@@ -622,7 +651,7 @@ export function searchConversations(
 	db: Db,
 	userId: string,
 	query: string,
-	options: { limit?: number; offset?: number } = {}
+	options: { limit?: number; offset?: number; scope?: PrivateScope } = {}
 ): ConversationRow[] {
 	const trimmed = query.trim();
 	if (!trimmed) return [];
@@ -637,7 +666,9 @@ export function searchConversations(
 		? [ftsQuery, userId, userId, like, like]
 		: [userId, like, like];
 	params.push(limit, offset);
-	return db.prepare(searchConversationsSql(ftsQuery !== null)).all(...params) as ConversationRow[];
+	return db
+		.prepare(searchConversationsSql(ftsQuery !== null, options.scope))
+		.all(...params) as ConversationRow[];
 }
 
 /** How many matching conversations relevance ranking considers before it sorts. */
@@ -658,28 +689,14 @@ function titleWordMatches(word: string, term: string): boolean {
 	return word.startsWith(term) || (word.length >= 4 && term.startsWith(word));
 }
 
-/**
- * Searches conversations by relevance, for callers that rank rather than
- * filter (the model's chat search). Any word may match, and words may sit in
- * different messages of a chat. A chat scores the summed rarity (IDF) of the
- * words it covers in its messages or title, plus a bonus for words in its
- * title; pin and recency only break ties. Coverage counts every message, not
- * only the shown version: membership still comes from the version-aware
- * search, so this only shifts the order.
- */
-export function searchConversationsRanked(
+/** The conversations a ranked search considers, before scoring. */
+function rankedCandidates(
 	db: Db,
 	userId: string,
 	query: string,
-	options: { limit?: number } = {}
-): ConversationRow[] {
-	const terms = searchTerms(query);
-	if (terms.length === 0) return searchConversations(db, userId, query, options);
-	const limit = Math.min(
-		MAX_SEARCH_PAGE_SIZE,
-		Math.max(1, Math.floor(options.limit ?? SEARCH_PAGE_SIZE))
-	);
-
+	terms: string[],
+	scope: PrivateScope
+): Map<string, ConversationRow> {
 	const ftsAny = terms.map((t) => `"${t}"*`).join(' OR ');
 	const like = `%${escapeLike(query.trim())}%`;
 	const byId = new Map<string, ConversationRow>();
@@ -688,17 +705,49 @@ export function searchConversationsRanked(
 	};
 	add(
 		db
-			.prepare(searchConversationsSql(true))
+			.prepare(searchConversationsSql(true, scope))
 			.all(ftsAny, userId, userId, like, like, RANKED_CANDIDATES, 0) as ConversationRow[]
 	);
 	for (const term of terms) {
 		const termLike = `%${escapeLike(term)}%`;
 		add(
 			db
-				.prepare(searchConversationsSql(false))
+				.prepare(searchConversationsSql(false, scope))
 				.all(userId, termLike, termLike, RANKED_CANDIDATES, 0) as ConversationRow[]
 		);
 	}
+	return byId;
+}
+
+/**
+ * Searches conversations by relevance, for callers that rank rather than
+ * filter (the model's chat search). Any word may match, and words may sit in
+ * different messages of a chat. A chat scores the summed rarity (IDF) of the
+ * words it covers in its messages or title, plus a bonus for words in its
+ * title; pin and recency only break ties. Coverage counts every message, not
+ * only the shown version: membership still comes from the version-aware
+ * search, so this only shifts the order.
+ *
+ * `includePrivate: false` leaves private chats out in SQL, before any limit
+ * (count them with `countPrivateSearchMatches`).
+ */
+export function searchConversationsRanked(
+	db: Db,
+	userId: string,
+	query: string,
+	options: { limit?: number; includePrivate: boolean }
+): ConversationRow[] {
+	const scope: PrivateScope = options.includePrivate ? 'all' : 'public';
+	const terms = searchTerms(query);
+	if (terms.length === 0) {
+		return searchConversations(db, userId, query, { limit: options.limit, scope });
+	}
+	const limit = Math.min(
+		MAX_SEARCH_PAGE_SIZE,
+		Math.max(1, Math.floor(options.limit ?? SEARCH_PAGE_SIZE))
+	);
+
+	const byId = rankedCandidates(db, userId, query, terms, scope);
 	if (byId.size === 0) return [];
 
 	const total = Math.max(1, countConversations(db));
@@ -726,6 +775,22 @@ export function searchConversationsRanked(
 	return scored.slice(0, limit).map((s) => s.row);
 }
 
+/** How many private chats match `query`: what `searchConversationsRanked` hides without `includePrivate`. */
+export function countPrivateSearchMatches(
+	db: Db,
+	userId: string,
+	query: string,
+	opts: { since?: number | null } = {}
+): number {
+	const terms = searchTerms(query);
+	const rows =
+		terms.length === 0
+			? searchConversations(db, userId, query, { limit: MAX_SEARCH_PAGE_SIZE, scope: 'private' })
+			: [...rankedCandidates(db, userId, query, terms, 'private').values()];
+	const since = opts.since ?? null;
+	return since === null ? rows.length : rows.filter((r) => r.updated_at >= since).length;
+}
+
 /**
  * The search statement. Message text counts only on the version a conversation
  * shows: FTS runs once (an uncorrelated lookup, one index probe per term), then
@@ -736,7 +801,7 @@ export function searchConversationsRanked(
  * Parameters: with FTS `[ftsQuery, userId, userId, like, like, limit, offset]`,
  * without `[userId, like, like, limit, offset]`. Exported for query-plan tests.
  */
-export function searchConversationsSql(withFts: boolean): string {
+export function searchConversationsSql(withFts: boolean, scope: PrivateScope = 'all'): string {
 	const cte = withFts
 		? `WITH RECURSIVE
 			 hits(id, conversation_id) AS MATERIALIZED (
@@ -770,6 +835,7 @@ export function searchConversationsSql(withFts: boolean): string {
 		 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
 		 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
 		   AND (c.title LIKE ? ESCAPE '!' OR cc.project_title LIKE ? ESCAPE '!' ${ftsClause})
+		   ${privateClause(scope)}
 		 ORDER BY c.pinned DESC, ${ACTIVITY_ORDER}
 		 LIMIT ? OFFSET ?`;
 }

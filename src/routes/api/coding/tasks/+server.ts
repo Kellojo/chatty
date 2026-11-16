@@ -55,6 +55,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const parsed = createSchema.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) error(400, { message: parsed.error.issues[0]?.message ?? 'Invalid body' });
 	const { prompt, title, proposal, ...target } = parsed.data;
+	// A coding agent runs outside Chatty: a private chat's proposal never reaches one.
+	if (proposal && getConversation(getDb(), user.id, proposal.conversationId)?.private === 1) {
+		error(409, { message: "Private chats can't start coding tasks" });
+	}
 	const { conversation, coding } = await codingRoute(() =>
 		prompt
 			? launchCodingTask(user.id, { ...target, prompt, title }, undefined, { proposal })
