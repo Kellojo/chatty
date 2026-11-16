@@ -11,6 +11,13 @@
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import ArtificialAnalysisDialog from '$lib/components/app/settings/services/ArtificialAnalysisDialog.svelte';
+	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
+	import WebSearchDialog from '$lib/components/app/settings/services/WebSearchDialog.svelte';
+	import WebSearchModePanel from '$lib/components/app/settings/services/WebSearchModePanel.svelte';
+	import {
+		connectedProviders,
+		type WebSearchProvider
+	} from '$lib/components/app/settings/services/web-search.js';
 	import { formatAge } from '$lib/formats.js';
 	import {
 		clockTime,
@@ -25,7 +32,7 @@
 	const aaFailed = $derived(aaConnected && aa.aa.status.lastError !== null);
 
 	/** Every service on this page; a new one adds its id here, a row and a dialog below. */
-	const SERVICE_IDS = ['artificial-analysis'] as const;
+	const SERVICE_IDS = ['artificial-analysis', 'searxng', 'brave', 'perplexity'] as const;
 	type ServiceId = (typeof SERVICE_IDS)[number];
 	const isServiceId = (id: string | null): id is ServiceId =>
 		(SERVICE_IDS as readonly (string | null)[]).includes(id);
@@ -38,6 +45,13 @@
 		set: (open: boolean) => (configuring = open ? id : null)
 	});
 	const aaDialog = dialogOpen('artificial-analysis');
+	const searxngDialog = dialogOpen('searxng');
+	const braveDialog = dialogOpen('brave');
+	const perplexityDialog = dialogOpen('perplexity');
+
+	const ws = $derived(data.webSearch);
+	/** Modes, Default and Backup only only mean something with more than one provider. */
+	const wsSeveral = $derived(connectedProviders(ws).length > 1);
 
 	const clock = createClock();
 	const retryAt = $derived(
@@ -103,9 +117,84 @@
 	</ul>
 </SettingsSection>
 
+<SettingsSection
+	title="Web search"
+	description="Lets models search the web and news with the web_search tool. Connect one or more providers."
+	flush
+>
+	{#if wsSeveral}
+		<WebSearchModePanel info={ws} />
+	{/if}
+	<ul class="divide-y divide-border/60 border-t border-border/60">
+		{#snippet wsBadges(id: WebSearchProvider)}
+			{#if ws[id].source}
+				<Badge variant="secondary" class="text-success-foreground">Connected</Badge>
+			{/if}
+			{#if wsSeveral && ws.mode === 'fallback' && ws.order.fallback[0] === id}
+				<Badge variant="outline" class="font-normal text-muted-foreground">Default</Badge>
+			{:else if wsSeveral && ws.order.backup.includes(id)}
+				<Badge variant="outline" class="font-normal text-muted-foreground">Backup only</Badge>
+			{/if}
+		{/snippet}
+		{#snippet wsButton(id: WebSearchProvider)}
+			<Button
+				size="sm"
+				variant={ws[id].source ? 'outline' : 'default'}
+				onclick={() => (configuring = id)}
+			>
+				{ws[id].source ? 'Configure' : 'Connect'}
+			</Button>
+		{/snippet}
+		<SettingsListItem title="SearXNG">
+			{#snippet leading()}<ProviderIcon brand="searxng" decorative />{/snippet}
+			{#snippet badges()}{@render wsBadges('searxng')}{/snippet}
+			{#snippet meta()}
+				{#if ws.searxng.url}
+					<span class="truncate font-mono">{ws.searxng.url}</span>
+				{:else}
+					Your own metasearch instance, also on a private network
+				{/if}
+			{/snippet}
+			{#snippet trailing()}{@render wsButton('searxng')}{/snippet}
+		</SettingsListItem>
+		<SettingsListItem title="Brave Search">
+			{#snippet leading()}<ProviderIcon brand="brave" decorative />{/snippet}
+			{#snippet badges()}{@render wsBadges('brave')}{/snippet}
+			{#snippet meta()}
+				{#if ws.brave.hint}
+					API key ••••{ws.brave.hint}
+				{:else}
+					Brave's own index: web, news and places
+				{/if}
+			{/snippet}
+			{#snippet trailing()}{@render wsButton('brave')}{/snippet}
+		</SettingsListItem>
+		<SettingsListItem title="Perplexity">
+			{#snippet leading()}<ProviderIcon brand="perplexity" decorative />{/snippet}
+			{#snippet badges()}{@render wsBadges('perplexity')}{/snippet}
+			{#snippet meta()}
+				{#if ws.perplexity.hint}
+					API key ••••{ws.perplexity.hint}
+				{:else}
+					Ranked web results from Perplexity's Search API
+				{/if}
+			{/snippet}
+			{#snippet trailing()}{@render wsButton('perplexity')}{/snippet}
+		</SettingsListItem>
+	</ul>
+</SettingsSection>
+
 <ArtificialAnalysisDialog
 	bind:open={aaDialog.get, aaDialog.set}
 	aa={aa.aa}
 	matched={aa.matched}
 	total={aa.total}
+/>
+
+<WebSearchDialog bind:open={searxngDialog.get, searxngDialog.set} provider="searxng" info={ws} />
+<WebSearchDialog bind:open={braveDialog.get, braveDialog.set} provider="brave" info={ws} />
+<WebSearchDialog
+	bind:open={perplexityDialog.get, perplexityDialog.set}
+	provider="perplexity"
+	info={ws}
 />

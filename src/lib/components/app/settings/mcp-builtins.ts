@@ -10,6 +10,7 @@ import CodeXmlIcon from '@lucide/svelte/icons/code-xml';
 import FolderIcon from '@lucide/svelte/icons/folder';
 import GlobeIcon from '@lucide/svelte/icons/globe';
 import ImageIcon from '@lucide/svelte/icons/image';
+import SearchIcon from '@lucide/svelte/icons/search';
 import MessageSquareTextIcon from '@lucide/svelte/icons/message-square-text';
 import SparklesIcon from '@lucide/svelte/icons/sparkles';
 import TerminalIcon from '@lucide/svelte/icons/terminal';
@@ -17,6 +18,7 @@ import TerminalIcon from '@lucide/svelte/icons/terminal';
 /** One-line purpose for each bundled MCP server, shown under its name. */
 export const BUILTIN_PURPOSE: Record<string, string> = {
 	webfetch: 'Fetch and read web pages',
+	websearch: 'Search the web, news and places via the providers in Services',
 	datetime: 'Current time, time zones and waiting',
 	'chat-search': 'Search your past conversations',
 	fs: 'Read and write files in the agent workspace',
@@ -35,6 +37,7 @@ export const BUILTIN_PURPOSE: Record<string, string> = {
 /** Icon for each bundled MCP server (others use a generic one). */
 export const BUILTIN_ICON: Record<string, Component<{ class?: string }>> = {
 	webfetch: GlobeIcon,
+	websearch: SearchIcon,
 	datetime: ClockIcon,
 	'chat-search': MessageSquareTextIcon,
 	fs: FolderIcon,

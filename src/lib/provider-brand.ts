@@ -13,6 +13,8 @@ const RULES: [RegExp, Brand][] = [
 	[/antigravity/, 'antigravity'],
 	[/ollama|:11434\b/, 'ollama'],
 	[/lm[\s_-]?studio|:1234\b/, 'lmstudio'],
+	// Perplexity's own models are the Sonar family (`sonar-pro`, `perplexity/sonar`).
+	[/perplexity|(^|\/)sonar\b/, 'perplexity'],
 	[/claude|anthropic/, 'claude'],
 	[/openai|codex|chatgpt|\bgpt\b|(^|\/)o\d\b/, 'openai'],
 	[/gemini|gemma|generativelanguage\.googleapis|^google\//, 'gemini'],

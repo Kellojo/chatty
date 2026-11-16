@@ -75,6 +75,7 @@ const MATH_TOOLS = [
 /** Readable names for the bundled MCP servers; user-added servers keep their own name. */
 const SERVER_LABELS: Record<string, string> = {
 	webfetch: 'Web',
+	websearch: 'Web search',
 	datetime: 'Date & time',
 	'chat-search': 'Chat search',
 	fs: 'Files',
@@ -98,6 +99,9 @@ export function serverLabel(server: string): string {
 
 export const TOOL_META: Record<string, ToolMeta> = {
 	fetch: { label: 'Fetch URL', server: 'webfetch', kind: 'web', detail: 'url' },
+	// Also the name coding agents (T3) report their searches under; the label fits both.
+	web_search: { label: 'Web search', server: 'websearch', kind: 'web', detail: 'query' },
+	search_places: { label: 'Search places', server: 'websearch', kind: 'web', detail: 'query' },
 	now: { label: 'Current time', server: 'datetime', kind: 'time' },
 	// Removed tools; kept so past chats still label their calls.
 	get_timezone: { label: 'Get timezone', server: 'datetime', kind: 'time' },
@@ -168,7 +172,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	// Coding-agent items, see src/lib/server/t3/projection.ts.
 	run_command: { label: 'Ran command', server: 'coding', kind: 'command', detail: 'command' },
 	edit_files: { label: 'Edited', server: 'coding', kind: 'edit' },
-	web_search: { label: 'Searched the web', server: 'coding', kind: 'web', detail: 'query' },
+	// web_search: shares the builtin's entry at the top.
 	file_search: { label: 'Searched files', server: 'coding', kind: 'search', detail: 'pattern' },
 	todo_list: { label: 'Updated plan', server: 'coding', kind: 'todo' },
 	approval: { label: 'Approval', server: 'coding', kind: 'approval', detail: 'request' },

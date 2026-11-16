@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { CallerContext } from '../types.js';
 
 vi.resetModules();
 process.env.DATABASE_PATH = ':memory:';
@@ -7,7 +8,9 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 // The fixture server listens on 127.0.0.1, which the SSRF guard blocks by default.
 process.env.ALLOW_PRIVATE_NETWORK_FETCH = 'true';
 
-const { createWebfetchServer, extractPageMeta } = await import('./webfetch.js');
+const { createWebfetchServer, extractPageMeta, pageIcons } = await import('./webfetch.js');
+const { getDb } = await import('../../db/index.js');
+const { findSourceSite } = await import('../../db/repo/source-sites.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
 
@@ -90,9 +93,9 @@ afterAll(async () => {
 	await new Promise((resolve) => httpServer.close(resolve));
 });
 
-async function callFetch(args: Record<string, unknown>) {
+async function callFetch(args: Record<string, unknown>, ctx?: CallerContext) {
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const server = createWebfetchServer();
+	const server = createWebfetchServer(ctx);
 	await server.connect(serverTransport);
 	const client = await createMCPClient({ transport: clientTransport, maxRetries: 0 });
 	try {
@@ -206,6 +209,24 @@ describe('webfetch server', () => {
 		});
 	});
 
+	it("records the page's site and favicon for the user's /api/favicon", async () => {
+		getDb()
+			.prepare(
+				'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES (?, ?, ?, 0, 0, 0, \'user\')'
+			)
+			.run('u1', 'u1', 'u1@example.com');
+		const ctx = { userId: 'u1', role: 'user', workspaceDir: null, documentsDir: '' };
+		await callFetch({ url: `${base}/article` }, ctx);
+		expect(findSourceSite(getDb(), 'u1', '127.0.0.1')).toEqual({
+			host: '127.0.0.1',
+			origin: base,
+			faviconUrl: `${base}/static/icon.svg`
+		});
+		// Responses without a source card record nothing.
+		await callFetch({ url: `${base}/plain` }, { ...ctx, userId: 'u2' });
+		expect(findSourceSite(getDb(), 'u2', '127.0.0.1')).toBeNull();
+	});
+
 	it('adds no source card for non-HTML responses', async () => {
 		const res = (await callFetch({ url: `${base}/plain` })) as { content: unknown[] };
 		expect(res.content).toHaveLength(1);
@@ -246,7 +267,7 @@ describe('extractPageMeta', () => {
 		expect(extractPageMeta('<p>no head</p>', URL_).title).toBe('example.com');
 	});
 
-	it('prefers SVG icons, then the size closest to 32px, and skips mask/touch icons', () => {
+	it('prefers SVG icons, then the size closest to 32px, over touch icons; skips mask icons', () => {
 		const pick = (links: string) => extractPageMeta(`<head>${links}</head>`, URL_).favicon;
 		expect(
 			pick(
@@ -259,6 +280,38 @@ describe('extractPageMeta', () => {
 				'<link rel="shortcut icon" href="a.ico"><link rel="icon" type="image/svg+xml" href="b.svg">'
 			)
 		).toBe('https://www.example.com/docs/b.svg');
+	});
+
+	it('falls back to apple-touch-icon, then the Windows tile image, before /favicon.ico', () => {
+		const pick = (head: string) => extractPageMeta(`<head>${head}</head>`, URL_).favicon;
+		expect(
+			pick(
+				'<link rel="mask-icon" href="/mask.svg"><link rel="apple-touch-icon-precomposed" href="/old.png">' +
+					'<link rel="apple-touch-icon" sizes="180x180" href="/touch.png">'
+			)
+		).toBe('https://www.example.com/touch.png');
+		expect(pick('<meta name="msapplication-TileImage" content="/tile.png">')).toBe(
+			'https://www.example.com/tile.png'
+		);
+	});
+
+	it('lists every declared icon, best first, and the web app manifest', () => {
+		expect(
+			pageIcons(
+				'<head><meta name="msapplication-TileImage" content="/tile.png">' +
+					'<link rel="manifest" href="/site.webmanifest"><link rel="apple-touch-icon" href="/touch.png">' +
+					'<link rel="icon" href="/fav.ico"><link rel="icon" sizes="32x32" href="/32.png"></head>',
+				URL_
+			)
+		).toEqual({
+			icons: [
+				'https://www.example.com/32.png',
+				'https://www.example.com/fav.ico',
+				'https://www.example.com/touch.png',
+				'https://www.example.com/tile.png'
+			],
+			manifest: 'https://www.example.com/site.webmanifest'
+		});
 	});
 
 	it('resolves relative URLs against <base href> and drops non-http ones', () => {

@@ -1,16 +1,14 @@
 <script lang="ts">
 	import { SvelteSet } from 'svelte/reactivity';
 	import LibraryBigIcon from '@lucide/svelte/icons/library-big';
-	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import WidgetCard from './widget-card.svelte';
 	import LinkSafetyModal from './link-safety-modal.svelte';
 	import { inlineImageUrl } from './image-url.js';
-	import { cn } from '$lib/utils.js';
 
 	/**
-	 * A ```links fence: source cards for pages the model read (typically the
-	 * `fetch` tool's source cards, passed through verbatim). Payload:
-	 * `{ title?, links: [{ url, title?, site?, description?, favicon?, image? }] }`
+	 * A ```links fence: an answer's sources as a footnote line under it, typically the
+	 * `fetch` / `web_search` source cards passed through verbatim. Payload:
+	 * `{ title?, links: [{ url, title?, site?, description?, favicon? }] }`
 	 * or a bare array of links.
 	 */
 	type Source = {
@@ -20,7 +18,6 @@
 		site: string;
 		description: string | null;
 		favicon: string | null;
-		image: string | null;
 	};
 
 	type Props = { code: string; isIncomplete: boolean };
@@ -92,8 +89,10 @@
 					: host,
 			site,
 			description: str(l.description) ?? str(l.summary),
-			favicon: inlineImageUrl(l.favicon ?? l.icon),
-			image: inlineImageUrl(l.image)
+			// A remote favicon can't be loaded directly (image-url.ts); the server proxies it,
+			// but only for sites the user's own tools fetched.
+			favicon:
+				inlineImageUrl(l.favicon ?? l.icon) ?? `/api/favicon?host=${encodeURIComponent(host)}`
 		};
 	}
 
@@ -119,7 +118,7 @@
 		}
 	});
 
-	// Favicons and previews are third-party requests: no referrer, lazy, and a fallback when they fail.
+	// Favicons and previews load lazily, without a referrer, and fall back when they fail.
 	const failedImages = new SvelteSet<string>();
 
 	/** First letter or digit of the site name (or host), never a symbol or half an emoji. */
@@ -147,133 +146,97 @@
 	}
 </script>
 
-{#snippet favicon(source: Source, large = false)}
-	<div
-		class={cn(
-			'relative flex shrink-0 items-center justify-center overflow-hidden rounded-lg ring-1 ring-border dark:ring-white/10',
-			large ? 'size-10' : 'size-8'
-		)}
-		aria-hidden="true"
-	>
-		{#if source.favicon && !failedImages.has(source.favicon)}
-			<span class="absolute inset-0 bg-white"></span>
-			<img
-				src={source.favicon}
-				alt=""
-				class={cn('relative object-contain', large ? 'size-6' : 'size-[18px]')}
-				loading="lazy"
-				decoding="async"
-				referrerpolicy="no-referrer"
-				onerror={() => failedImages.add(source.favicon!)}
-			/>
-		{:else}
-			<span
-				class="flex size-full items-center justify-center rounded-lg bg-[oklch(0.93_0.05_var(--h))] font-semibold text-[oklch(0.42_0.12_var(--h))] uppercase dark:bg-[oklch(0.34_0.07_var(--h))] dark:text-[oklch(0.9_0.06_var(--h))] {large
-					? 'text-base'
-					: 'text-sm'}"
-				style:--h={hue(source.host)}>{monogram(source)}</span
-			>
-		{/if}
-	</div>
+{#snippet favicon(source: Source)}
+	<!-- Just the icon, no tile or border. -->
+	{#if source.favicon && !failedImages.has(source.favicon)}
+		<img
+			src={source.favicon}
+			alt=""
+			class="size-3.5 shrink-0 rounded-[3px] object-contain"
+			loading="lazy"
+			decoding="async"
+			referrerpolicy="no-referrer"
+			onerror={() => failedImages.add(source.favicon!)}
+		/>
+	{:else}
+		<span
+			class="flex size-3.5 shrink-0 items-center justify-center rounded-[3px] bg-[oklch(0.9_0.07_var(--h))] text-[8px] leading-none font-semibold text-[oklch(0.4_0.12_var(--h))] uppercase dark:bg-[oklch(0.36_0.08_var(--h))] dark:text-[oklch(0.92_0.06_var(--h))]"
+			style:--h={hue(source.host)}>{monogram(source)}</span
+		>
+	{/if}
 {/snippet}
 
-<WidgetCard
-	icon={LibraryBigIcon}
-	class="@container"
-	status={data || isIncomplete ? 'ready' : 'error'}
-	errorLabel="Could not render sources"
-	raw={code}
-	title={data?.title ?? 'Sources'}
-	meta={data
-		? `${data.links.length < data.total ? `${data.links.length} of ${data.total}` : data.links.length} ${data.total === 1 ? 'source' : 'sources'}`
-		: 'Gathering…'}
->
-	{#if !data}
-		<div class="flex flex-col gap-0.5 p-1.5" role="status" aria-busy="true">
-			<span class="sr-only">Gathering sources…</span>
-			{#each { length: pendingRows }, i (i)}
-				<div class="flex items-start gap-3 px-2.5 py-2.5" aria-hidden="true">
-					<div
-						class="size-8 shrink-0 animate-pulse rounded-lg bg-muted-foreground/15 motion-reduce:animate-none dark:bg-muted-foreground/30"
-					></div>
-					<div class="flex min-w-0 flex-1 flex-col gap-2 py-0.5">
-						<div
-							class="h-2.5 w-24 animate-pulse rounded-full bg-muted-foreground/15 motion-reduce:animate-none dark:bg-muted-foreground/30"
-						></div>
-						<div
-							class="h-3 w-3/4 animate-pulse rounded-full bg-muted-foreground/15 motion-reduce:animate-none dark:bg-muted-foreground/30"
-						></div>
-						<div
-							class="h-2.5 w-1/2 animate-pulse rounded-full bg-muted-foreground/10 motion-reduce:animate-none dark:bg-muted-foreground/20"
-						></div>
-					</div>
-				</div>
-			{/each}
-		</div>
-	{:else}
-		{@const single = data.links.length === 1}
-		<ol
-			class={cn('grid gap-0.5 p-1.5', !single && '@2xl:grid-cols-2')}
-			aria-label={data.title ?? 'Sources'}
-		>
-			{#each data.links as source, i (source.url)}
-				<li
-					class="group/link relative flex min-w-0 items-start gap-3 rounded-xl px-2.5 py-2.5 transition-colors hover:bg-muted/60 has-[a:focus-visible]:bg-muted/60"
-				>
-					{@render favicon(source, single)}
-					<div class="flex min-w-0 flex-1 flex-col gap-0.5">
-						<div class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-							<span
-								class="flex size-[18px] shrink-0 items-center justify-center rounded bg-muted text-[11px] leading-none font-semibold text-foreground tabular-nums group-hover/link:bg-background group-has-[a:focus-visible]/link:bg-background"
-								aria-hidden="true">{i + 1}</span
-							>
-							<span class="truncate">{source.site}</span>
-							<ArrowUpRightIcon
-								class="ml-auto size-3.5 shrink-0 opacity-0 transition-opacity group-hover/link:opacity-100 group-has-[a:focus-visible]/link:opacity-100"
-								aria-hidden="true"
-							/>
-						</div>
+{#if data || isIncomplete}
+	<!--
+		A quiet footnote line under the answer, not a card: the inline [1], [2] citations already
+		tie claims to sources, so this only names the sites. Page titles are in the tooltip and the
+		links' accessible names.
+	-->
+	<section
+		class="mt-4 mb-1 flex items-start gap-3 border-t border-border/50 pt-2.5 text-xs leading-5 text-muted-foreground"
+		aria-labelledby="{uid}-h"
+	>
+		<h3 id="{uid}-h" class="shrink-0 font-medium text-foreground/80">
+			{data?.title ?? 'Sources'}
+		</h3>
+		{#if !data}
+			<div class="flex flex-wrap gap-x-3 gap-y-1" role="status" aria-busy="true">
+				<span class="sr-only">Gathering sources…</span>
+				{#each { length: pendingRows }, i (i)}
+					<span class="flex h-5 items-center gap-1.5" aria-hidden="true">
+						<span
+							class="size-3.5 animate-pulse rounded-[3px] bg-muted-foreground/15 motion-reduce:animate-none dark:bg-muted-foreground/30"
+						></span>
+						<span
+							class="h-2 w-16 animate-pulse rounded-full bg-muted-foreground/15 motion-reduce:animate-none dark:bg-muted-foreground/30"
+						></span>
+					</span>
+				{/each}
+			</div>
+		{:else}
+			<ol class="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
+				{#each data.links as source, i (source.url)}
+					<li class="min-w-0">
 						<!-- eslint-disable svelte/no-navigation-without-resolve -- external source URLs -->
 						<a
 							href={source.url}
 							target="_blank"
 							rel="noopener noreferrer"
-							title={source.url}
+							title="{source.title} — {source.host}"
 							aria-label={linkLabel(source, i)}
 							aria-describedby={source.description ? `${uid}-d${i}` : undefined}
-							class="line-clamp-2 text-sm leading-snug font-medium text-foreground outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-2 focus-visible:after:ring-ring/50"
+							class="group/link flex min-w-0 items-center gap-1.5 rounded-sm text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
 							onclick={(e) => intercept(e, source.url)}
-							onauxclick={(e) => intercept(e, source.url)}>{source.title}</a
+							onauxclick={(e) => intercept(e, source.url)}
 						>
+							<span class="tabular-nums" aria-hidden="true">{i + 1}</span>
+							{@render favicon(source)}
+							<span
+								class="max-w-48 truncate decoration-foreground/30 underline-offset-2 group-hover/link:underline"
+								>{source.site}</span
+							>
+						</a>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						{#if source.description}
-							<p
-								id="{uid}-d{i}"
-								class={cn(
-									'text-xs leading-relaxed text-pretty text-muted-foreground',
-									single ? 'line-clamp-3' : 'line-clamp-1'
-								)}
-							>
-								{source.description}
-							</p>
+							<span id="{uid}-d{i}" class="sr-only">{source.description}</span>
 						{/if}
-					</div>
-					{#if single && source.image && !failedImages.has(source.image)}
-						<img
-							src={source.image}
-							alt=""
-							class="hidden aspect-[1.91/1] w-36 shrink-0 self-center rounded-lg object-cover ring-1 ring-border/50 @md:block dark:ring-white/10"
-							loading="lazy"
-							decoding="async"
-							referrerpolicy="no-referrer"
-							onerror={() => failedImages.add(source.image!)}
-						/>
-					{/if}
-				</li>
-			{/each}
-		</ol>
-	{/if}
-</WidgetCard>
+					</li>
+				{/each}
+				{#if data.links.length < data.total}
+					<li class="text-muted-foreground/70">+{data.total - data.links.length} more</li>
+				{/if}
+			</ol>
+		{/if}
+	</section>
+{:else}
+	<WidgetCard
+		icon={LibraryBigIcon}
+		status="error"
+		errorLabel="Could not render sources"
+		raw={code}
+		title={null}
+	/>
+{/if}
 
 <LinkSafetyModal
 	url={pendingUrl ?? ''}

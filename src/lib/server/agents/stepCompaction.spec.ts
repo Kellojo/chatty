@@ -4,8 +4,28 @@ import { describe, expect, it, vi } from 'vitest';
 process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
 
-const { compactStepMessages, compactionThreshold, splitSteps, SUMMARY_MARKER } =
-	await import('./stepCompaction.js');
+const generateTextMock = vi.fn();
+vi.mock('ai', async (importOriginal) => {
+	const original = await importOriginal<typeof import('ai')>();
+	return { ...original, generateText: (...args: unknown[]) => generateTextMock(...args) };
+});
+vi.mock('../llm/registry.js', async (importOriginal) => {
+	const original = await importOriginal<typeof import('../llm/registry.js')>();
+	return { ...original, resolveModel: () => ({}) };
+});
+
+const {
+	compactStepMessages,
+	compactionThreshold,
+	createStepSummarizer,
+	splitSteps,
+	SUMMARY_MARKER
+} = await import('./stepCompaction.js');
+const { getDb } = await import('../db/index.js');
+const { createConversation } = await import('../db/repo/conversations.js');
+const { createModel } = await import('../db/repo/models.js');
+const { createProvider } = await import('../db/repo/providers.js');
+const { listProxyRequests, toPublic } = await import('../db/repo/proxy-requests.js');
 
 function step(id: string, output: string): ModelMessage[] {
 	return [
@@ -161,5 +181,40 @@ describe('compactStepMessages', () => {
 		});
 		expect(result.stage).toBe('elided');
 		expect(result.messages).toHaveLength(7);
+	});
+});
+
+describe('createStepSummarizer', () => {
+	it('logs a plain chat summary as chat usage, without a run', async () => {
+		const db = getDb();
+		db.prepare(
+			'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, role) VALUES (?, ?, ?, 0, 0, 0, ?)'
+		).run('u1', 'A', 'a@b.c', 'admin');
+		createProvider(db, { name: 'Prov', type: 'openai-compatible', baseUrl: 'http://x' });
+		const provider = db.prepare('SELECT id FROM providers').get() as { id: string };
+		createModel(db, { providerId: provider.id, modelId: 'm1' });
+		const conv = createConversation(db, 'u1', {
+			title: 't',
+			mode: 'chat',
+			providerId: provider.id,
+			modelId: 'm1'
+		});
+		generateTextMock.mockResolvedValueOnce({ text: ' Summary. ', usage: {} });
+
+		const summarize = createStepSummarizer({
+			db,
+			userId: 'u1',
+			conversationId: conv.id,
+			fallback: { providerId: provider.id, modelId: 'm1' }
+		});
+		await expect(summarize({ transcript: 'steps', previous: null })).resolves.toBe('Summary.');
+
+		const [row] = listProxyRequests(db).rows.map(toPublic);
+		expect(row).toMatchObject({
+			source: 'chat',
+			purpose: 'compaction',
+			runId: null,
+			status: 'complete'
+		});
 	});
 });

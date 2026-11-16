@@ -35,6 +35,7 @@ const schema = z.object({
 	OIDC_SCOPES: z.string().default('openid profile email'),
 	AUTO_PROMOTE_FIRST_USER: boolFromString('true'),
 	AGENT_MAX_STEPS: z.coerce.number().int().min(1).default(25),
+	CHAT_MAX_STEPS: z.coerce.number().int().min(1).default(20),
 	CHAT_COMPACT_TOKENS: z.coerce.number().int().min(0).default(60000),
 	CHAT_COMPACT_KEEP_MESSAGES: z.coerce.number().int().min(2).default(10),
 	MAX_ATTACHMENT_SIZE_MB: z.coerce.number().int().min(1).default(50),
@@ -63,7 +64,12 @@ const schema = z.object({
 	APP_SECRET: z.string().min(16).optional(),
 	// Artificial Analysis API key for model Intelligence Index scores. Optional: the key can
 	// also be saved in Settings → Services; this one takes precedence when set.
-	ARTIFICIAL_ANALYSIS_API_KEY: z.string().min(1).optional()
+	ARTIFICIAL_ANALYSIS_API_KEY: z.string().min(1).optional(),
+	// Web search providers for the web_search tool. Optional: each can also be set in
+	// Settings → Services; these take precedence when set.
+	SEARXNG_URL: z.string().url().optional(),
+	BRAVE_SEARCH_API_KEY: z.string().min(1).optional(),
+	PERPLEXITY_API_KEY: z.string().min(1).optional()
 });
 
 export type Config = z.infer<typeof schema>;
