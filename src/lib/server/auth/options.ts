@@ -3,6 +3,9 @@ import { genericOAuth } from 'better-auth/plugins';
 import { config } from '../config.js';
 import { getAppSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('auth');
 
 const oidc =
 	config.OIDC_ISSUER && config.OIDC_CLIENT_ID && config.OIDC_CLIENT_SECRET
@@ -34,6 +37,21 @@ export function promoteFirstUser(db: Db, userId: string): boolean {
 	)();
 }
 
+/**
+ * Queues the welcome flow for a new account. Never fails the signup: without
+ * the setting the user just starts in the app (and can replay the tour later).
+ */
+export async function markForOnboarding(db: Db, userId: string): Promise<void> {
+	try {
+		// Loaded on first use: the repo pulls in `$lib` modules, which the
+		// better-auth CLI (scripts/auth-cli.ts) importing this file can't resolve.
+		const { startOnboarding } = await import('../db/repo/user-settings.js');
+		startOnboarding(db, userId);
+	} catch (e) {
+		log.error('could not queue onboarding', { userId, error: String(e) });
+	}
+}
+
 export function authOptions(): BetterAuthOptions {
 	return {
 		appName: 'Chatty',
@@ -55,7 +73,9 @@ export function authOptions(): BetterAuthOptions {
 					// Promote after the insert, in one conditional UPDATE, so two
 					// simultaneous first signups can't both see an empty table.
 					after: async (user) => {
-						if (config.AUTO_PROMOTE_FIRST_USER) promoteFirstUser(getDb(), user.id);
+						const db = getDb();
+						if (config.AUTO_PROMOTE_FIRST_USER) promoteFirstUser(db, user.id);
+						await markForOnboarding(db, user.id);
 					}
 				}
 			}

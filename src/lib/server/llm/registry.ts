@@ -68,7 +68,7 @@ export function invalidateProviderCache(providerId: string): void {
 	cache.delete(providerId);
 }
 
-function isOpenRouter(provider: ProviderRow): boolean {
+function isOpenRouter(provider: Pick<ProviderRow, 'type' | 'base_url'>): boolean {
 	return (
 		provider.type === 'openai-compatible' &&
 		(provider.base_url ?? '').replace(/\/$/, '').endsWith('openrouter.ai/api/v1')
@@ -164,7 +164,7 @@ export function listModelsGrouped(): ModelsByProvider[] {
 const ANTHROPIC_CONTEXT_LENGTH = 200_000;
 
 async function fetchAnthropicModels(
-	provider: ProviderRow,
+	provider: ProviderFetchConfig,
 	apiKey: string | undefined
 ): Promise<FetchedModel[]> {
 	if (!apiKey) throw new Error(`Provider "${provider.name}" requires an API key to list models`);
@@ -197,7 +197,7 @@ function contextLength(m: {
 }
 
 async function fetchOpenAICompatibleModels(
-	provider: ProviderRow,
+	provider: ProviderFetchConfig,
 	apiKey: string | undefined
 ): Promise<FetchedModel[]> {
 	if (!provider.base_url) throw new Error(`Provider "${provider.name}" is missing a base URL`);
@@ -293,9 +293,18 @@ async function fetchOpenAICompatibleModels(
 }
 
 export async function fetchProviderModels(providerId: string): Promise<FetchedModel[]> {
-	const db = getDb();
-	const provider = getProvider(db, providerId);
+	const provider = getProvider(getDb(), providerId);
 	if (!provider) throw new ModelUnavailableError(`Provider ${providerId} not found`);
+	return fetchModelsForProvider(provider);
+}
+
+/** What listing a provider's models needs: enough to try one before saving it. */
+export type ProviderFetchConfig = Pick<ProviderRow, 'name' | 'type' | 'base_url' | 'api_key_enc'>;
+
+/** Lists the models a provider offers, saved or not (onboarding tries one before saving it). */
+export async function fetchModelsForProvider(
+	provider: ProviderFetchConfig
+): Promise<FetchedModel[]> {
 	const apiKey = provider.api_key_enc ? decryptSecret(provider.api_key_enc) : undefined;
 	if (provider.type === 'anthropic') return fetchAnthropicModels(provider, apiKey);
 	const fetched = await fetchOpenAICompatibleModels(provider, apiKey);
@@ -308,7 +317,7 @@ export async function fetchProviderModels(providerId: string): Promise<FetchedMo
  * loaded with far less and compacting against the maximum would come too late.
  */
 async function withLmStudioContext(
-	provider: ProviderRow,
+	provider: ProviderFetchConfig,
 	fetched: FetchedModel[]
 ): Promise<FetchedModel[]> {
 	const native = await fetchLmStudioModels(provider);

@@ -38,6 +38,7 @@
 	import { DEFAULT_CODING_SUGGESTIONS, DEFAULT_SUGGESTIONS } from '$lib/user-settings.js';
 	import { START_MODE_COOKIE } from '$lib/coding-environments.js';
 	import { sharedDraft, takeSharedFiles } from '$lib/share-target.js';
+	import { MAX_PREFILL_PROMPT_LENGTH } from '$lib/onboarding.js';
 	import { onLaunchFiles } from '$lib/launch-files.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -140,12 +141,18 @@
 		const startMode = params.get('mode');
 		const shared = sharedDraft(params);
 		const withFiles = params.has('share_files');
-		if (startMode === null && shared === null) return;
+		// A starter prompt picked at the end of onboarding: filled in, not sent.
+		const prompt = params.get('prompt')?.trim().slice(0, MAX_PREFILL_PROMPT_LENGTH) ?? null;
+		if (startMode === null && shared === null && prompt === null) return;
 		untrack(() => {
 			if (startMode === 'chat' || startMode === 'coding') setMode(startMode);
 			if (shared !== null) {
 				setMode('chat');
 				if (shared) useSuggestion(shared);
+			}
+			if (prompt && input.trim() === '') {
+				setMode('chat');
+				useSuggestion(prompt);
 			}
 		});
 		if (withFiles) {
@@ -437,9 +444,17 @@
 		/>
 		{#if modelMissing && !coding}
 			<p class="mt-2 text-sm text-muted-foreground">
-				{hasModels
-					? 'Select a model to start chatting.'
-					: 'No models available. Ask an admin to configure one.'}
+				{#if hasModels}
+					Select a model to start chatting.
+				{:else if data.user.role === 'admin'}
+					No models available yet.
+					<a
+						href="{resolve('/welcome')}?replay"
+						class="font-medium text-foreground underline-offset-4 hover:underline">Finish setup</a
+					>
+				{:else}
+					No models available. Ask an admin to configure one.
+				{/if}
 			</p>
 		{/if}
 		{#if coding}

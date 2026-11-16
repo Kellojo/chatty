@@ -19,6 +19,7 @@
 	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
 	import { resolveProviderBrand } from '$lib/provider-brand.js';
+	import { PROVIDER_PRESETS, type ProviderPreset } from '$lib/provider-presets.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -55,22 +56,13 @@
 		'openai-compatible': 'OpenAI-compatible'
 	};
 
-	interface ProviderPreset {
-		label: string;
-		baseUrl: string;
-	}
-
-	const presets: Record<string, ProviderPreset> = {
-		custom: { label: 'Custom', baseUrl: '' },
-		openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1' },
-		openrouter: { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1' },
-		'lm-studio': { label: 'LM Studio', baseUrl: 'http://localhost:1234/v1' },
-		ollama: { label: 'Ollama', baseUrl: 'http://localhost:11434/v1' },
-		groq: { label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1' },
-		together: { label: 'Together AI', baseUrl: 'https://api.together.xyz/v1' },
-		deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1' },
-		mistral: { label: 'Mistral', baseUrl: 'https://api.mistral.ai/v1' }
-	};
+	// The dialog's type select covers Anthropic; presets fill in OpenAI-compatible URLs.
+	const presets: Record<string, ProviderPreset> = Object.fromEntries(
+		[...PROVIDER_PRESETS]
+			.filter((preset) => preset.type === 'openai-compatible')
+			.sort((a, b) => Number(b.id === 'custom') - Number(a.id === 'custom'))
+			.map((preset) => [preset.id, preset])
+	);
 
 	let addPreset = $state('custom');
 

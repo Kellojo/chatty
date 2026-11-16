@@ -210,6 +210,17 @@ export function findRoleModel(db: Db, role: ModelRole): ModelRow | undefined {
 		.get(role) as ModelRow | undefined;
 }
 
+/**
+ * The model a new chat starts with: the Default chat model, else the first
+ * enabled one. Null when nothing is usable yet.
+ */
+export function resolveDefaultChatModel(db: Db): ModelRow | null {
+	const role = findRoleModel(db, 'chat');
+	if (role) return role;
+	const first = listEnabledModels(db)[0];
+	return first ? (findModel(db, first.provider_id, first.model_id) ?? null) : null;
+}
+
 export interface FetchedModel {
 	id: string;
 	capabilities?: string[];

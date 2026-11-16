@@ -14,6 +14,8 @@
 	import UserAvatar from '$lib/components/app/UserAvatar.svelte';
 	import { signOutToLogin } from '$lib/auth-client.js';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
+	import { resolve } from '$app/paths';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { THEMES, TIME_FORMATS, type Theme, type TimeFormat } from '$lib/user-settings.js';
 	import { haptic, hapticsPref } from '$lib/haptics.svelte.js';
@@ -234,6 +236,22 @@
 		description="Light vibrations when you send, toggle or swipe, on phones and tablets. Applies to this device only."
 	>
 		<Switch id="pref-haptics" checked={hapticsPref.enabled} onCheckedChange={setHaptics} />
+	</SettingsRow>
+</SettingsSection>
+
+<SettingsSection title="Getting started">
+	<SettingsRow
+		label="Welcome tour"
+		description="Walk through setup and the basics of Chatty again."
+		stack
+	>
+		<Button
+			variant="outline"
+			class="w-full sm:w-auto"
+			href="{resolve('/welcome')}?replay&next={encodeURIComponent('/settings/account')}"
+		>
+			<SparklesIcon />Replay tour
+		</Button>
 	</SettingsRow>
 </SettingsSection>
 

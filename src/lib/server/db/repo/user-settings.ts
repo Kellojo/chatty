@@ -9,6 +9,11 @@ import {
 	type TimeFormat,
 	type UserSettings
 } from '$lib/user-settings.js';
+import {
+	parseOnboardingState,
+	type OnboardingState,
+	type OnboardingStep
+} from '$lib/onboarding.js';
 
 interface UserSettingRow {
 	key: string;
@@ -178,4 +183,35 @@ export function getUserSettings(db: Db, userId: string): UserSettings {
 		pushTriggers: readTriggers(stored.get('pushTriggers'), notificationTriggers),
 		speechVolume: parseSpeechVolume(stored.get('speechVolume'))
 	};
+}
+
+// ── Onboarding ──────────────────────────────────────────────────────────────
+// Kept out of `UserSettings` (and the generic settings PUT): it has its own
+// endpoint whose writes are ordered so a late step can't reopen a finished flow.
+
+const ONBOARDING_KEY = 'onboarding';
+
+export function getOnboarding(db: Db, userId: string): OnboardingState {
+	return parseOnboardingState(getUserSetting<unknown>(db, userId, ONBOARDING_KEY));
+}
+
+/** Marks a brand-new account to be shown the welcome flow on its next visit. */
+export function startOnboarding(db: Db, userId: string): void {
+	setUserSetting(db, userId, ONBOARDING_KEY, { status: 'pending', step: null });
+}
+
+/** Remembers the step reached. A no-op unless onboarding is still pending. */
+export function setOnboardingStep(db: Db, userId: string, step: OnboardingStep): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE user_settings SET value = json_set(value, '$.step', ?)
+				 WHERE user_id = ? AND key = ? AND json_extract(value, '$.status') = 'pending'`
+			)
+			.run(step, userId, ONBOARDING_KEY).changes > 0
+	);
+}
+
+export function finishOnboarding(db: Db, userId: string, status: 'done' | 'skipped'): void {
+	setUserSetting(db, userId, ONBOARDING_KEY, { status, step: null });
 }

@@ -225,3 +225,34 @@ describe('user-settings repo', () => {
 		expect(repo.getTheme(db, 'u1')).toBe('system');
 	});
 });
+
+describe('onboarding state', () => {
+	let db: ReturnType<typeof openDatabase>;
+
+	beforeEach(() => {
+		db = openDatabase(':memory:');
+		seedUser(db, 'u1');
+	});
+
+	it('is none for accounts that never started it', () => {
+		expect(repo.getOnboarding(db, 'u1')).toEqual({ status: 'none', step: null });
+	});
+
+	it('records steps while pending', () => {
+		repo.startOnboarding(db, 'u1');
+		expect(repo.setOnboardingStep(db, 'u1', 'concepts')).toBe(true);
+		expect(repo.getOnboarding(db, 'u1')).toEqual({ status: 'pending', step: 'concepts' });
+	});
+
+	it('ignores a late step write once finished', () => {
+		repo.startOnboarding(db, 'u1');
+		repo.finishOnboarding(db, 'u1', 'done');
+		expect(repo.setOnboardingStep(db, 'u1', 'model')).toBe(false);
+		expect(repo.getOnboarding(db, 'u1')).toEqual({ status: 'done', step: null });
+	});
+
+	it('never starts from a step write alone', () => {
+		expect(repo.setOnboardingStep(db, 'u1', 'welcome')).toBe(false);
+		expect(repo.getOnboarding(db, 'u1').status).toBe('none');
+	});
+});

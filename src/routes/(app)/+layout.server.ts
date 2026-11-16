@@ -10,14 +10,20 @@ import {
 	listUnreadChatIds,
 	toPublic
 } from '$lib/server/db/repo/conversations.js';
-import { getUserSettings } from '$lib/server/db/repo/user-settings.js';
+import { getOnboarding, getUserSettings } from '$lib/server/db/repo/user-settings.js';
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = async ({ locals, depends }) => {
+export const load: LayoutServerLoad = async ({ locals, depends, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	// Read markers and stream events refresh just this (see invalidateWhenIdle).
 	depends(CONVERSATIONS_KEY);
 	const db = getDb();
+	// New accounts start with the welcome flow. Only account creation sets `pending`,
+	// and every way into the app after that is a fresh load of this layout.
+	if (getOnboarding(db, locals.user.id).status === 'pending') {
+		const next = `${url.pathname}${url.search}`;
+		redirect(303, next === '/' ? '/welcome' : `/welcome?next=${encodeURIComponent(next)}`);
+	}
 	const settings = getUserSettings(db, locals.user.id);
 	const rows = listConversations(db, locals.user.id, { limit: CONVERSATIONS_PAGE_SIZE + 1 });
 	return {
