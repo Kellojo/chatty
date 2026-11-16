@@ -10,7 +10,7 @@ import {
 	listEnabledModelMappings,
 	toPublic as mappingToPublic
 } from '$lib/server/db/repo/model-mappings.js';
-import { findModel, findRoleModel, listEnabledModels } from '$lib/server/db/repo/models.js';
+import { findRoleModel, resolveDefaultChatModel } from '$lib/server/db/repo/models.js';
 import { getUserSettings } from '$lib/server/db/repo/user-settings.js';
 import { modelCatalogInfo } from '$lib/server/llm/model-catalog.js';
 import type { PageServerLoad } from './$types';
@@ -20,18 +20,10 @@ export const load: PageServerLoad = ({ locals, cookies, isDataRequest }) => {
 	if (!user) error(401, { message: 'Unauthorized' });
 	const db = getDb();
 	const settings = getUserSettings(db, user.id);
-	const roleModel = findRoleModel(db, 'chat');
-	let defaultModel: { providerId: string; modelId: string } | null = null;
-	if (roleModel) {
-		defaultModel = { providerId: roleModel.provider_id, modelId: roleModel.model_id };
-	} else {
-		const enabled = listEnabledModels(db);
-		const first =
-			enabled.length > 0 ? findModel(db, enabled[0].provider_id, enabled[0].model_id) : null;
-		if (first) {
-			defaultModel = { providerId: first.provider_id, modelId: first.model_id };
-		}
-	}
+	const chatModel = resolveDefaultChatModel(db);
+	const defaultModel = chatModel
+		? { providerId: chatModel.provider_id, modelId: chatModel.model_id }
+		: null;
 	const sttRoleModel = findRoleModel(db, 'speech-to-text');
 	let sttModel: { providerId: string; modelId: string } | null = null;
 	if (sttRoleModel) {

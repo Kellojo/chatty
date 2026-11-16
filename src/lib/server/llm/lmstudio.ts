@@ -22,7 +22,9 @@ export interface LmStudioModel {
 	loadedContextLength: number | null;
 }
 
-export function isLmStudioProvider(provider: ProviderRow): boolean {
+export function isLmStudioProvider(
+	provider: Pick<ProviderRow, 'name' | 'type' | 'base_url'>
+): boolean {
 	return (
 		provider.type === 'openai-compatible' &&
 		resolveProviderBrand({
@@ -94,7 +96,9 @@ function parseV0(body: unknown): LmStudioModel[] | null {
 }
 
 /** Lists the server's models, or null when it isn't reachable or isn't LM Studio. */
-export async function fetchLmStudioModels(provider: ProviderRow): Promise<LmStudioModel[] | null> {
+export async function fetchLmStudioModels(
+	provider: Pick<ProviderRow, 'base_url' | 'api_key_enc'>
+): Promise<LmStudioModel[] | null> {
 	if (!provider.base_url) return null;
 	const root = serverRoot(provider.base_url);
 	const headers: Record<string, string> = {};
