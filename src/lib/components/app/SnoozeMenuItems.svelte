@@ -41,13 +41,16 @@
 			<AlarmClockIcon class="size-4" />
 			{snoozed ? 'Snooze until…' : 'Snooze'}
 		</DropdownMenu.SubTrigger>
-		<DropdownMenu.SubContent class="w-56">
+		<DropdownMenu.SubContent class="w-auto min-w-60">
 			{#each snoozeOptions() as option (option.label)}
 				<DropdownMenu.Item
 					onSelect={() => void snoozeConversation(conversation, option.until, onchanged)}
 				>
-					{option.label}
-					<span class="ml-auto pl-3 text-xs text-muted-foreground tabular-nums">{option.when}</span>
+					<span class="whitespace-nowrap">{option.label}</span>
+					<span
+						class="ml-auto pl-6 text-xs font-normal whitespace-nowrap text-muted-foreground tabular-nums"
+						>{option.when}</span
+					>
 				</DropdownMenu.Item>
 			{/each}
 			<DropdownMenu.Separator />

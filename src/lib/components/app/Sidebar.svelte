@@ -57,6 +57,7 @@
 	import PullRequestIcon from './PullRequestIcon.svelte';
 	import SidebarPlanLimits from './usage/SidebarPlanLimits.svelte';
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
+	import { markedUnread, setConversationRead } from './marked-unread.svelte.js';
 	import SnoozeDialog from './SnoozeDialog.svelte';
 	import AlarmClockIcon from '@lucide/svelte/icons/alarm-clock';
 	import { formatSnoozeTime, isSnoozed } from '$lib/snooze.js';
@@ -677,7 +678,11 @@
 		// (a delegated task, a watched pull request) reports back: not done yet.
 		if (status === 'waiting') return 'waiting';
 		// Failures, like replies, stop asking for attention once they've been seen.
-		const unread = unreadIds.includes(c.id) && page.url.pathname !== `/chat/${c.id}`;
+		// The open chat marks itself read, so its marker is hidden meanwhile,
+		// unless the user just marked it unread from here.
+		const unread =
+			unreadIds.includes(c.id) &&
+			(page.url.pathname !== `/chat/${c.id}` || markedUnread.id === c.id);
 		if (!unread) return 'idle';
 		return status === 'failed' ? 'failed' : 'unread';
 	}
@@ -704,11 +709,13 @@
 		await invalidateAll();
 	}
 
+	$effect(() => {
+		// Reopening the chat later reads it again.
+		if (markedUnread.id !== null && markedUnread.id !== currentId) markedUnread.id = null;
+	});
+
 	async function setRead(c: Conversation, read: boolean) {
-		const res = await fetch(`/api/conversations/${c.id}/read`, {
-			method: read ? 'POST' : 'DELETE'
-		}).catch(() => null);
-		if (!res?.ok) {
+		if (!(await setConversationRead(c.id, read, currentId))) {
 			toast.error(read ? 'Failed to mark as read' : 'Failed to mark as unread');
 			return;
 		}
@@ -1030,17 +1037,7 @@
 							class="size-4"
 						/> Settle{/if}
 				</DropdownMenu.Item>
-				{#if !settled}
-					<DropdownMenu.Item onSelect={() => void togglePin(c.id)}>
-						{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
-					</DropdownMenu.Item>
-				{/if}
-				<SnoozeMenuItems
-					conversation={c}
-					onchanged={() => invalidateAll()}
-					oncustom={() => (snoozeTarget = c)}
-				/>
-				{#if state !== 'working' && state !== 'waiting' && state !== 'needs-you' && c.id !== currentId}
+				{#if state !== 'working' && state !== 'waiting' && state !== 'needs-you'}
 					{@const read = state === 'idle'}
 					<DropdownMenu.Item onSelect={() => void setRead(c, !read)}>
 						{#if read}
@@ -1048,6 +1045,16 @@
 						{:else}
 							<MailOpenIcon class="size-4" /> Mark as read
 						{/if}
+					</DropdownMenu.Item>
+				{/if}
+				<SnoozeMenuItems
+					conversation={c}
+					onchanged={() => invalidateAll()}
+					oncustom={() => (snoozeTarget = c)}
+				/>
+				{#if !settled}
+					<DropdownMenu.Item onSelect={() => void togglePin(c.id)}>
+						{#if c.pinned}<PinOffIcon class="size-4" /> Unpin{:else}<PinIcon class="size-4" /> Pin{/if}
 					</DropdownMenu.Item>
 				{/if}
 				<DropdownMenu.Item onSelect={() => openRename(c)}>

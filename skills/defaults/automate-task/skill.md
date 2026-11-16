@@ -22,12 +22,12 @@ Call `list_agents` first. If an agent already does this (or nearly), offer to ch
 
 ## 2. Pick the trigger
 
-| The user says | `triggerType` | `triggerConfig` |
-|---|---|---|
-| "every day / Monday / hour at …" | `schedule` | `cron` |
-| "whenever / each time X happens" | `event` | `event`, optionally `every` |
-| "I'll run it myself", "on demand" | `manual` | – |
-| "I want to chat with it" | `persona` | – (it becomes selectable in chat instead of running on its own) |
+| The user says                     | `triggerType` | `triggerConfig`                                                 |
+| --------------------------------- | ------------- | --------------------------------------------------------------- |
+| "every day / Monday / hour at …"  | `schedule`    | `cron`                                                          |
+| "whenever / each time X happens"  | `event`       | `event`, optionally `every`                                     |
+| "I'll run it myself", "on demand" | `manual`      | –                                                               |
+| "I want to chat with it"          | `persona`     | – (it becomes selectable in chat instead of running on its own) |
 
 Events: `chat.created`, `chat.message_completed`, `memory.changed`, `skill.created`, `skill.updated`, `skill.deleted`, `coding.thread.finished`. `every: N` runs only on every Nth occurrence. Use it for noisy events such as `chat.message_completed`. If what the user wants to react to isn't in this list, say so and suggest a schedule that checks for it instead.
 

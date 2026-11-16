@@ -24,9 +24,11 @@ import {
 	createCodingConversation,
 	getCodingConversation,
 	getCodingConversationForUser,
+	hasProposedCodingTask,
 	listLiveCodingConversations,
 	updateCodingConversation,
-	type CodingConversationRow
+	type CodingConversationRow,
+	type CodingTaskProposalRef
 } from '../db/repo/coding-conversations.js';
 import { getCodingEnvironment, type CodingEnvironmentRow } from '../db/repo/coding-environments.js';
 import { createConversation, getConversation } from '../db/repo/conversations.js';
@@ -460,11 +462,27 @@ export async function createCodingTask(
 		title?: string;
 		/** Runs before `chat.created` is published (e.g. to link an agent run first). */
 		onCreated?: (conversationId: string) => void;
+		/** The chat's `propose_coding_task` call this task starts; each starts one task. */
+		proposal?: CodingTaskProposalRef;
 	} = {}
 ) {
+	const proposal = opts.proposal;
+	if (proposal) {
+		// The chat is the user's own: a task can't be attached to someone else's.
+		if (!getConversation(db, userId, proposal.conversationId)) {
+			throw new CodingTaskError(404, 'The chat proposing this task was not found');
+		}
+		if (hasProposedCodingTask(db, proposal)) {
+			throw new CodingTaskError(409, 'This proposed task was already started');
+		}
+	}
 	const { env, project } = await resolveCodingTarget(userId, input, db);
 
 	const conversation = db.transaction(() => {
+		// Checked again inside the write: two starts can both pass the check above.
+		if (proposal && hasProposedCodingTask(db, proposal)) {
+			throw new CodingTaskError(409, 'This proposed task was already started');
+		}
 		const conv = createConversation(db, userId, {
 			kind: 'chat',
 			mode: 'agent',
@@ -479,7 +497,8 @@ export async function createCodingTask(
 			model: input.model,
 			runtimeMode: RUNTIME_MODES[input.autonomy],
 			workspaceMode: input.workspaceMode,
-			baseBranch: input.workspaceMode === 'worktree' ? (input.baseBranch ?? null) : null
+			baseBranch: input.workspaceMode === 'worktree' ? (input.baseBranch ?? null) : null,
+			proposal
 		});
 		opts.onCreated?.(conv.id);
 		return conv;
@@ -507,14 +526,15 @@ export async function launchCodingTask(
 	userId: string,
 	input: CreateCodingTaskInput & { prompt: string; title?: string },
 	db: Db = getDb(),
-	opts: { onCreated?: (conversationId: string) => void } = {}
+	opts: { onCreated?: (conversationId: string) => void; proposal?: CodingTaskProposalRef } = {}
 ) {
 	const prompt = input.prompt.trim();
 	if (!prompt) throw new CodingTaskError(400, 'Message is empty');
 	if (prompt.length > MAX_LAUNCH_PROMPT) throw new CodingTaskError(400, 'Message is too long');
 	const created = await createCodingTask(userId, input, db, {
 		title: input.title || titleFromPrompt(prompt),
-		onCreated: opts.onCreated
+		onCreated: opts.onCreated,
+		proposal: opts.proposal
 	});
 	const messageId = randomUUID();
 	createMessage(db, {

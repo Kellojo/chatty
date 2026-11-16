@@ -50,9 +50,13 @@ beforeAll(() => {
 	setUpdated.run(4000, otherId);
 });
 
-async function callTool(name: string, args: Record<string, unknown>) {
+async function callTool(
+	name: string,
+	args: Record<string, unknown>,
+	conversationId: string | null = null
+) {
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const server = createChatSearchServer(ctx);
+	const server = createChatSearchServer({ ...ctx, conversationId });
 	await server.connect(serverTransport);
 	const client = await createMCPClient({ transport: clientTransport, maxRetries: 0 });
 	try {
@@ -67,8 +71,8 @@ async function callTool(name: string, args: Record<string, unknown>) {
 	}
 }
 
-async function callSearch(args: Record<string, unknown>) {
-	return callTool('search_chats', args);
+async function callSearch(args: Record<string, unknown>, conversationId: string | null = null) {
+	return callTool('search_chats', args, conversationId);
 }
 
 function resultText(res: unknown): string {
@@ -162,6 +166,18 @@ describe('chat-search server', () => {
 		expect(bySince.find((h) => h.id === readId)).not.toHaveProperty('coding');
 
 		db.prepare('DELETE FROM conversations WHERE id = ?').run(codingId);
+	});
+
+	it('leaves out the conversation the tool is called from', async () => {
+		type Hit = { id: string };
+		const byQuery = JSON.parse(
+			resultText(await callSearch({ query: 'quarterly', limit: 1 }, ownByMessageId))
+		) as Hit[];
+		expect(byQuery.map((h) => h.id)).toEqual([ownId]);
+		const bySince = JSON.parse(
+			resultText(await callSearch({ since: '1970-01-01T00:00:02.000Z' }, readId))
+		) as Hit[];
+		expect(bySince.map((h) => h.id)).toEqual([ownByMessageId]);
 	});
 
 	it('rejects an unparseable since value', async () => {

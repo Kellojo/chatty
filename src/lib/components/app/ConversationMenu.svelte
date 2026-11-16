@@ -11,6 +11,11 @@
 	import CodingTaskDetails from './CodingTaskDetails.svelte';
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
 	import SnoozeDialog from './SnoozeDialog.svelte';
+	import { markedUnread, setConversationRead } from './marked-unread.svelte.js';
+	import { page } from '$app/state';
+	import { MediaQuery } from 'svelte/reactivity';
+	import MailIcon from '@lucide/svelte/icons/mail';
+	import MailOpenIcon from '@lucide/svelte/icons/mail-open';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import GitPullRequestCreateIcon from '@lucide/svelte/icons/git-pull-request-create';
@@ -48,6 +53,8 @@
 		/** Coding tasks on phones: the header's browser preview button. */
 		onpreview?: () => void;
 	} = $props();
+
+	const isPhone = new MediaQuery('(max-width: 639px)');
 
 	let renaming = $state(false);
 	let renameText = $state('');
@@ -92,6 +99,22 @@
 				? `${coding ? 'Task' : 'Conversation'} un-settled`
 				: `${coding ? 'Task' : 'Conversation'} settled`
 		);
+		await invalidateAll();
+	}
+
+	// The open chat reads itself, so it only counts as unread when marked so here
+	// or from the sidebar.
+	const unread = $derived(
+		markedUnread.id === conversation.id &&
+			((page.data.unreadIds as string[] | undefined)?.includes(conversation.id) ?? false)
+	);
+
+	async function toggleRead() {
+		const read = unread;
+		if (!(await setConversationRead(conversation.id, read, conversation.id))) {
+			toast.error(read ? 'Failed to mark as read' : 'Failed to mark as unread');
+			return;
+		}
 		await invalidateAll();
 	}
 
@@ -157,37 +180,42 @@
 	<DropdownMenu.Content
 		align="end"
 		collisionPadding={8}
-		class="max-w-[calc(100vw-1rem)] {coding ? 'w-80' : 'w-52'}"
+		class="max-h-(--bits-dropdown-menu-content-available-height) max-w-[calc(100vw-1rem)] {coding
+			? 'w-80'
+			: 'w-52'}"
 	>
-		<!-- Phone-only actions (the header has no room for them) lead the menu. -->
-		{#if oncreatepr}
-			<DropdownMenu.Item class="sm:hidden" onSelect={oncreatepr}>
-				<GitPullRequestCreateIcon class="size-4" />
-				Create pull request
-			</DropdownMenu.Item>
-			<DropdownMenu.Separator class="sm:hidden" />
-		{/if}
-		{#if onsettings || onpreview}
+		<!--
+			Phone-only actions (the header has no room for them) lead the menu. Not
+			rendered on wider screens, where hidden items would still take arrow-key focus.
+		-->
+		{#if isPhone.current}
+			{#if oncreatepr}
+				<DropdownMenu.Item onSelect={oncreatepr}>
+					<GitPullRequestCreateIcon class="size-4" />
+					Create pull request
+				</DropdownMenu.Item>
+			{/if}
 			{#if onsettings}
-				<DropdownMenu.Item class="sm:hidden" onSelect={onsettings}>
+				<DropdownMenu.Item onSelect={onsettings}>
 					<SlidersHorizontalIcon class="size-4" />
 					Model and permissions
 				</DropdownMenu.Item>
 			{/if}
 			{#if onpreview}
-				<DropdownMenu.Item class="sm:hidden" onSelect={onpreview}>
+				<DropdownMenu.Item onSelect={onpreview}>
 					<AppWindowIcon class="size-4" />
 					Browser preview
 				</DropdownMenu.Item>
 			{/if}
-			<DropdownMenu.Separator class="sm:hidden" />
-		{/if}
-		{#if onhandoff}
-			<DropdownMenu.Item class="sm:hidden" onSelect={onhandoff}>
-				<SquareTerminalIcon class="size-4" />
-				Hand off to coding agent
-			</DropdownMenu.Item>
-			<DropdownMenu.Separator class="sm:hidden" />
+			{#if onhandoff}
+				<DropdownMenu.Item onSelect={onhandoff}>
+					<SquareTerminalIcon class="size-4" />
+					Hand off to coding agent
+				</DropdownMenu.Item>
+			{/if}
+			{#if oncreatepr || onsettings || onpreview || onhandoff}
+				<DropdownMenu.Separator />
+			{/if}
 		{/if}
 
 		{#if coding}
@@ -202,10 +230,25 @@
 			</DropdownMenu.Item>
 			<DropdownMenu.Separator />
 		{/if}
-		<DropdownMenu.Item onSelect={openRename}>
-			<PencilIcon class="size-4" />
-			Rename
+		<DropdownMenu.Item onSelect={toggleSettled}>
+			{#if settled}
+				<ArchiveRestoreIcon class="size-4" /> Un-settle
+			{:else}
+				<ArchiveIcon class="size-4" /> Settle
+			{/if}
 		</DropdownMenu.Item>
+		<DropdownMenu.Item onSelect={toggleRead}>
+			{#if unread}
+				<MailOpenIcon class="size-4" /> Mark as read
+			{:else}
+				<MailIcon class="size-4" /> Mark as unread
+			{/if}
+		</DropdownMenu.Item>
+		<SnoozeMenuItems
+			{conversation}
+			onchanged={snoozeChanged}
+			oncustom={() => (pickingSnooze = true)}
+		/>
 		{#if !settled}
 			<DropdownMenu.Item onSelect={togglePin}>
 				{#if conversation.pinned}
@@ -215,17 +258,9 @@
 				{/if}
 			</DropdownMenu.Item>
 		{/if}
-		<SnoozeMenuItems
-			{conversation}
-			onchanged={snoozeChanged}
-			oncustom={() => (pickingSnooze = true)}
-		/>
-		<DropdownMenu.Item onSelect={toggleSettled}>
-			{#if settled}
-				<ArchiveRestoreIcon class="size-4" /> Un-settle
-			{:else}
-				<ArchiveIcon class="size-4" /> Settle
-			{/if}
+		<DropdownMenu.Item onSelect={openRename}>
+			<PencilIcon class="size-4" />
+			Rename
 		</DropdownMenu.Item>
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item variant="destructive" onSelect={() => (deleting = true)}>

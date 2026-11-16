@@ -20,9 +20,13 @@ export interface BuildToolsInput {
 	memoryEnabled: boolean;
 	workspaceDir?: string | null;
 	agentAllowlist?: string[];
+	/** Tools left out whatever the allowlist says (a subagent can't start subagents). */
+	excludeTools?: readonly string[];
 	author?: string;
 	conversationId?: string | null;
 	agentRunId?: string | null;
+	/** The user message the turn answers (recorded with skill invocations). */
+	messageId?: string | null;
 	/** Run builtins with this role instead of the user's (e.g. never admin). */
 	role?: string;
 	/** Only these servers' tools (default: every enabled server). */
@@ -46,7 +50,8 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		documentsDir: path.join(path.resolve(config.DOCUMENTS_VOLUME), input.userId),
 		author: input.author,
 		conversationId: input.conversationId,
-		agentRunId: input.agentRunId
+		agentRunId: input.agentRunId,
+		messageId: input.messageId
 	};
 	const rows = (input.servers ?? listEnabledMcpServers(db)).filter(
 		(row) => input.memoryEnabled || row.name !== 'memory'
@@ -100,6 +105,13 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 			rows.filter((row) => row.load_mode === 'deferred').map((row) => row.name)
 		);
 		deferred = pickDeferredTools(tools, toolToServer, deferredServers);
+	}
+	if (input.excludeTools?.length) {
+		filtered = { ...filtered };
+		for (const name of input.excludeTools) {
+			delete filtered[name];
+			deferred.delete(name);
+		}
 	}
 	return {
 		tools: filtered,

@@ -66,6 +66,14 @@ export function estimateToolChars(tools: Record<string, Tool> | undefined | null
 	return total;
 }
 
+/** The usual rule of thumb: about four characters per token. */
+const CHARS_PER_TOKEN = 4;
+
+/** Rough prompt tokens of a set of tool definitions (see estimateToolChars). */
+export function estimateToolTokens(tools: Record<string, Tool> | undefined | null): number {
+	return Math.ceil(estimateToolChars(tools) / CHARS_PER_TOKEN);
+}
+
 /**
  * Estimate the character cost of a set of UI messages (their text, tool
  * call inputs/results, and a fixed budget per file part).

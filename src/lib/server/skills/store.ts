@@ -101,6 +101,29 @@ export async function duplicateSkill(
 	});
 }
 
+/**
+ * Copies a skill's references/ folder from one scope to the other (e.g. when a
+ * user-scope override of a shared skill is created). Existing files in the
+ * destination are overwritten; no-op when the source has no references.
+ */
+export async function copySkillReferences(
+	from: SkillScope,
+	to: SkillScope,
+	userId: string,
+	name: string
+): Promise<void> {
+	const src = resolveSkillDir(from, userId, name);
+	const dest = resolveSkillDir(to, userId, name);
+	if (!src || !dest) throw new Error('Invalid skill name');
+	const srcRefs = path.join(src, 'references');
+	const hasRefs = await fsp.stat(srcRefs).then(
+		(s) => s.isDirectory(),
+		() => false
+	);
+	if (!hasRefs) return;
+	await fsp.cp(srcRefs, path.join(dest, 'references'), { recursive: true });
+}
+
 export async function promoteSkill(userId: string, name: string): Promise<Skill> {
 	const skill = await readSkill('user', userId, name);
 	if (!skill) throw new Error(`User skill not found: ${name}`);

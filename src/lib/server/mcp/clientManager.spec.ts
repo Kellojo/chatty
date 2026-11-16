@@ -5,7 +5,7 @@ process.env.DATABASE_PATH = ':memory:';
 process.env.APP_SECRET = 'test-secret-test-secret';
 
 const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
-const { connectServer } = await import('./clientManager.js');
+const { connectServer, listServerTools } = await import('./clientManager.js');
 type McpServerRow = import('../db/repo/mcp-servers.js').McpServerRow;
 
 // A tiny MCP server run as a child process (resolved from the repo's node_modules).
@@ -36,7 +36,8 @@ function stdioRow(command: string | null, args: string[]): McpServerRow {
 		oauth_client_secret_enc: null,
 		oauth_scope: null,
 		oauth_client_info_enc: null,
-		tool_count: null
+		tool_count: null,
+		tool_tokens: null
 	};
 }
 
@@ -78,5 +79,43 @@ describe('connectServer (stdio)', () => {
 
 	it('rejects a stdio row without a command', async () => {
 		await expect(connectServer(stdioRow(null, []), ctx)).rejects.toThrow(/no command/);
+	});
+});
+
+describe('connectServer (builtin)', () => {
+	it('cancels the server-side tool call when the caller aborts', async () => {
+		const row: McpServerRow = {
+			...stdioRow(null, []),
+			id: 'builtin-datetime',
+			name: 'datetime',
+			transport: 'builtin',
+			builtin: 1
+		};
+		const conn = await connectServer(row, ctx);
+		const setSpy = vi.spyOn(globalThis, 'setTimeout');
+		const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+		try {
+			const tools = (await listServerTools(conn, row)) as unknown as Record<
+				string,
+				{ execute: (input: unknown, options: unknown) => Promise<unknown> }
+			>;
+			const controller = new AbortController();
+			const call = tools.wait.execute(
+				{ seconds: 300 },
+				{ toolCallId: 't1', messages: [], abortSignal: controller.signal }
+			);
+			// The wait tool's own 300 s timer, set by the server's handler.
+			const waitTimer = () =>
+				setSpy.mock.results[setSpy.mock.calls.findIndex(([, ms]) => ms === 300_000)]?.value;
+			await vi.waitFor(() => expect(waitTimer()).toBeDefined());
+			controller.abort();
+			await expect(call).rejects.toThrow();
+			// The server got notifications/cancelled and cleared it.
+			await vi.waitFor(() =>
+				expect(clearSpy.mock.calls.some(([t]) => t === waitTimer())).toBe(true)
+			);
+		} finally {
+			await conn.close();
+		}
 	});
 });

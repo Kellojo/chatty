@@ -25,6 +25,14 @@ import { voiceNames } from '../speech/voices.js';
 
 type LanguageModelFactory = (modelId: string) => LanguageModel;
 
+/**
+ * The AI SDK provider name a provider row is registered under. Also the key
+ * its `providerOptions` / `providerMetadata` entries use.
+ */
+export function providerSlug(provider: Pick<ProviderRow, 'name'>): string {
+	return provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
 const cache = new Map<string, { signature: string; factory: LanguageModelFactory }>();
 
 function buildFactory(provider: ProviderRow): LanguageModelFactory {
@@ -37,7 +45,7 @@ function buildFactory(provider: ProviderRow): LanguageModelFactory {
 		throw new Error(`Provider "${provider.name}" is missing a base URL`);
 	}
 	const p = createOpenAICompatible({
-		name: provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+		name: providerSlug(provider),
 		apiKey,
 		baseURL: provider.base_url,
 		includeUsage: true
@@ -80,14 +88,14 @@ function buildImageFactory(provider: ProviderRow): (modelId: string) => ImageMod
 	if (isOpenRouter(provider)) {
 		return (modelId) =>
 			createOpenRouterImageModel({
-				provider: provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+				provider: providerSlug(provider),
 				modelId,
 				baseURL: provider.base_url!,
 				apiKey
 			});
 	}
 	const p = createOpenAICompatible({
-		name: provider.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+		name: providerSlug(provider),
 		apiKey,
 		baseURL: provider.base_url
 	});

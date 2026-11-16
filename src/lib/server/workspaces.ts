@@ -117,8 +117,16 @@ export function agentWorkspace(agentId: string, runId: string): string {
  */
 export function workspaceForConversation(
 	db: Db,
-	conversation: Pick<ConversationRow, 'id' | 'kind' | 'origin'>
+	conversation: Pick<ConversationRow, 'id' | 'kind' | 'origin'> &
+		Partial<Pick<ConversationRow, 'subagent_of'>>
 ): string | null {
+	// A subagent works in the workspace of whoever started it, so files pass both ways.
+	if (conversation.subagent_of) {
+		const parent = db
+			.prepare('SELECT id, kind, origin FROM conversations WHERE id = ?')
+			.get(conversation.subagent_of) as Pick<ConversationRow, 'id' | 'kind' | 'origin'> | undefined;
+		return parent ? workspaceForConversation(db, parent) : null;
+	}
 	if (conversation.kind !== 'agent-run' && conversation.origin !== 'dispatch') {
 		return conversationWorkspace(conversation.id);
 	}

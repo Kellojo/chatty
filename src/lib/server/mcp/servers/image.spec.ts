@@ -73,7 +73,7 @@ function resultText(res: unknown): string {
 
 function seedModel() {
 	const db = getDb();
-	createProvider(db, { name: 'Prov', type: 'openai-compatible', baseUrl: 'http://x' });
+	createProvider(db, { name: 'My Image Prov', type: 'openai-compatible', baseUrl: 'http://x' });
 	db.prepare("UPDATE providers SET id = 'p1'").run();
 	const model = createModel(db, { providerId: 'p1', modelId: 'img-1', capabilities: ['image'] });
 	setRoleDefault(db, 'image', model.id);
@@ -150,7 +150,10 @@ describe('image server', () => {
 		const call = generateImageMock.mock.calls[0][0] as Record<string, unknown>;
 		expect(call.aspectRatio).toBe('16:9');
 		expect(call.size).toBeUndefined();
-		expect(call.providerOptions).toEqual({ p1: { quality: 'hd', style: 'vivid' } });
+		// Keyed by the provider name the image model is registered under, not the provider ID.
+		expect(call.providerOptions).toEqual({ 'my-image-prov': { quality: 'hd', style: 'vivid' } });
+		const model = call.model as { provider: string };
+		expect(model.provider.split('.')[0]).toBe('my-image-prov');
 	});
 
 	it('omits size and aspectRatio when neither is given', async () => {
@@ -184,7 +187,7 @@ describe('image server', () => {
 			images: [{ base64: pngBase64(), mediaType: 'image/png' }],
 			warnings: [{ type: 'unsupported', feature: 'size', details: 'ignored by provider' }],
 			responses: [],
-			providerMetadata: { p1: { revisedPrompt: 'a fluffy cat, studio lighting' } },
+			providerMetadata: { 'my-image-prov': { revisedPrompt: 'a fluffy cat, studio lighting' } },
 			usage: USAGE
 		});
 		const res = await callGenerate({ prompt: 'a cat' });

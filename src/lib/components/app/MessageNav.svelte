@@ -20,13 +20,25 @@
 	/** Gap kept above a message when jumping to it. */
 	const JUMP_MARGIN = 16;
 	/** Height of the fade at each end of an overflowing rail. */
-	const RAIL_FADE = 16;
+	const RAIL_FADE = 24;
+	/**
+	 * Gap between the preview and the rail on the left side (mr-2; the ticks are
+	 * right-aligned, so the button's empty left part adds to it), plus a margin from
+	 * the pane edge.
+	 */
+	const PREVIEW_GUTTER = 8 + 8;
+	/** Narrowest gutter the preview opens into; below this it wraps too much. */
+	const PREVIEW_MIN_WIDTH = 160;
+	const PREVIEW_MAX_WIDTH = 256;
 	/** Ticks moved by PageUp / PageDown. */
 	const PAGE_STEP = 10;
 	const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
 
 	let activeId = $state<string | null>(null);
 	let hovered = $state<{ item: MessageNavItem; top: number } | null>(null);
+	/** Which side of the rail the preview opens on, and how wide it may be there. */
+	let previewSide = $state<'left' | 'right'>('right');
+	let previewMaxWidth = $state(PREVIEW_MAX_WIDTH);
 	let root = $state<HTMLElement | null>(null);
 	let list = $state<HTMLElement | null>(null);
 
@@ -265,6 +277,14 @@
 		clearTimeout(previewTimer);
 		if (!root) return;
 		const tickBox = target.getBoundingClientRect();
+		// Into the empty gutter when it's wide enough, so the preview doesn't cover the
+		// conversation; over the messages otherwise. Decided by the layout, not the text,
+		// so every tick in a view opens to the same side.
+		// The nav is positioned in the chat pane, so this is the gutter beside the sidebar.
+		const room = root.offsetLeft - PREVIEW_GUTTER;
+		previewSide = room >= PREVIEW_MIN_WIDTH ? 'left' : 'right';
+		previewMaxWidth =
+			previewSide === 'left' ? Math.min(PREVIEW_MAX_WIDTH, room) : PREVIEW_MAX_WIDTH;
 		hovered = { item, top: tickBox.top + tickBox.height / 2 - root.getBoundingClientRect().top };
 	}
 
@@ -283,6 +303,8 @@
 		hovered = null;
 	}
 
+	const activeIndex = $derived(items.findIndex((item) => item.id === activeId));
+
 	const hoveredPosition = $derived(
 		hovered ? items.findIndex((item) => item.id === hovered?.item.id) + 1 : 0
 	);
@@ -299,8 +321,8 @@
 	function updateFades() {
 		const rail = list;
 		if (!rail) return;
-		fadeTop = rail.scrollTop > 1;
-		fadeBottom = rail.scrollTop + rail.clientHeight < rail.scrollHeight - 1;
+		fadeTop = rail.scrollTop > 8;
+		fadeBottom = rail.scrollTop + rail.clientHeight < rail.scrollHeight - 8;
 	}
 
 	$effect(() => {
@@ -348,10 +370,11 @@
 				updateFades();
 			}}
 			style:mask-image={railMask}
-			class="pointer-events-auto flex max-h-[min(60vh,32rem)] [scrollbar-width:none] flex-col overflow-y-auto py-1 [&::-webkit-scrollbar]:hidden"
+			class="pointer-events-auto flex max-h-[min(70vh,40rem)] [scrollbar-width:none] flex-col overflow-y-auto py-1 [&::-webkit-scrollbar]:hidden"
 		>
 			{#each items as item, i (item.id)}
 				{@const active = item.id === activeId}
+				{@const distance = activeIndex === -1 ? Infinity : Math.abs(i - activeIndex)}
 				<li>
 					<button
 						type="button"
@@ -359,7 +382,7 @@
 						aria-label={`Message ${i + 1} of ${items.length}: ${previewText(item.text)}`}
 						aria-current={active ? 'location' : undefined}
 						tabindex={item.id === focusId ? 0 : -1}
-						class="group flex h-4 w-9 items-center rounded-full px-2 outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+						class="group flex h-4 w-9 cursor-pointer items-center justify-end rounded-sm px-1 outline-none focus-visible:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
 						onclick={() => jump(item.id)}
 						onkeydown={onRailKeydown}
 						onmouseenter={(e) => hoverPreview(item, e.currentTarget)}
@@ -374,10 +397,20 @@
 					>
 						<span
 							class={cn(
-								'rounded-full transition-all duration-150 motion-reduce:transition-none',
+								'rounded-full transition-[width,background-color] duration-200 ease-out motion-reduce:transition-none',
 								active
-									? 'h-[3px] w-5 bg-foreground'
-									: 'h-0.5 w-2.5 bg-muted-foreground group-hover:w-4 group-hover:bg-foreground/70 group-focus-visible:w-4 group-focus-visible:bg-foreground/70'
+									? 'h-[3px] w-7 bg-foreground'
+									: [
+											'h-0.5 group-hover:w-6 group-hover:bg-foreground/90 group-focus-visible:w-6 group-focus-visible:bg-foreground/90',
+											// Ticks swell towards the active one, so the rail reads as "you are here", not a ruler.
+											distance === 1
+												? 'w-5 bg-foreground/85'
+												: distance === 2
+													? 'w-3.5 bg-foreground/70'
+													: distance === 3
+														? 'w-2.5 bg-muted-foreground'
+														: 'w-2 bg-muted-foreground/80'
+										]
 							)}
 						></span>
 					</button>
@@ -387,11 +420,16 @@
 		{#if hovered}
 			<div
 				aria-hidden="true"
-				class="absolute left-full ml-2 w-max max-w-56 -translate-y-1/2 animate-in rounded-md border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md fade-in-0 zoom-in-95 motion-reduce:animate-none"
+				class={cn(
+					'absolute w-max -translate-y-1/2 animate-in rounded-lg border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg fade-in-0 zoom-in-95 motion-reduce:animate-none',
+					// Over the messages, its edge lines up with their text.
+					previewSide === 'left' ? 'right-full mr-2' : 'left-full ml-6'
+				)}
 				style:top="{hovered.top}px"
+				style:max-width="{previewMaxWidth}px"
 			>
 				{#if hoveredPosition > 0}
-					<span class="block text-muted-foreground tabular-nums"
+					<span class="block font-medium text-muted-foreground tabular-nums"
 						>{hoveredPosition} of {items.length}</span
 					>
 				{/if}

@@ -13,6 +13,13 @@
 	import { askUserInput, isAskUserPart } from '$lib/ask-user.js';
 	import GenerationInfoDialog from './GenerationInfoDialog.svelte';
 	import { readHtmlRender } from '$lib/html-render.js';
+	import {
+		isCodingTaskNoticeMessage,
+		isCodingTaskProposalPart,
+		readCodingTaskNotice
+	} from '$lib/coding-task-proposal.js';
+	import CodingTaskProposalCard from './CodingTaskProposalCard.svelte';
+	import CodingTaskNoticeRow from './CodingTaskNoticeRow.svelte';
 	import { groupParts, hasVisibleContent } from './timeline.js';
 	import { messageText } from '$lib/chat-history.js';
 	import { readableErrorText } from '$lib/error-text.js';
@@ -177,6 +184,10 @@
 								streaming={messageActive}
 							/>
 						{/if}
+					{:else if part && isCodingTaskProposalPart(part)}
+						<CodingTaskProposalCard part={part as never} active={messageActive} />
+					{:else if part && readCodingTaskNotice(part)}
+						<CodingTaskNoticeRow notice={readCodingTaskNotice(part)!} />
 					{:else if part && conversationId && readHtmlRender(part)}
 						<HtmlRenderFrame {conversationId} {part} />
 					{:else if part?.type === 'file'}
@@ -235,155 +246,162 @@
 					</p>
 				{/if}
 
-				<MessageActions class={message.role === 'user' ? 'justify-end' : ''}>
-					{#if mounted}
-						{@const ts = messageTimes?.get(message.id)}
-						{#if ts}
-							<span
-								class="text-xs text-muted-foreground tabular-nums"
-								title={formatDateTime(ts, timeFormat)}
-							>
-								{formatMessageTime(ts, timeFormat)}
-							</span>
-						{/if}
-					{/if}
-					{@const branch = status.branch}
-					{#if branch && branch.count > 1 && onswitchbranch}
-						{@const prev = branch.ids[branch.index - 1]}
-						{@const next = branch.ids[branch.index + 1]}
-						<!-- Divided off so "delete this version" never reads as one of the message actions. -->
-						<div
-							class="mr-1 flex items-center border-r border-border/60 pr-1 text-xs text-muted-foreground tabular-nums"
-							role="group"
-							aria-label="Message versions"
-						>
-							<button
-								title="Previous version"
-								aria-label="Previous version"
-								disabled={!prev || branchDisabled}
-								class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
-								onclick={() => prev && onswitchbranch(prev)}
-							>
-								<ChevronLeftIcon class="size-3.5" />
-							</button>
-							<span>{branch.index + 1} / {branch.count}</span>
-							<button
-								title="Next version"
-								aria-label="Next version"
-								disabled={!next || branchDisabled}
-								class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
-								onclick={() => next && onswitchbranch(next)}
-							>
-								<ChevronRightIcon class="size-3.5" />
-							</button>
-							{#if ondeletebranch}
-								<!-- Deleting removes this version and its replies for good: the first
-							     click only arms it. -->
-								{@const confirming = confirmDeleteId === message.id}
-								<button
-									title={confirming ? 'Click again to delete this version' : 'Delete this version'}
-									aria-label={confirming ? 'Confirm deleting this version' : 'Delete this version'}
-									disabled={branchDisabled}
-									class={cn(
-										'ml-0.5 flex items-center gap-1 rounded-md p-1 hover:bg-accent disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5',
-										confirming ? 'text-destructive' : 'hover:text-foreground'
-									)}
-									onclick={() => {
-										if (confirming) {
-											confirmDeleteId = null;
-											ondeletebranch(message.id);
-										} else {
-											confirmDeleteId = message.id;
-										}
-									}}
-									onblur={() => {
-										if (confirming) confirmDeleteId = null;
-									}}
+				<!-- A notice isn't a reply: nothing to copy, read aloud or regenerate. -->
+				{#if !isCodingTaskNoticeMessage(message)}
+					<MessageActions class={message.role === 'user' ? 'justify-end' : ''}>
+						{#if mounted}
+							{@const ts = messageTimes?.get(message.id)}
+							{#if ts}
+								<span
+									class="text-xs text-muted-foreground tabular-nums"
+									title={formatDateTime(ts, timeFormat)}
 								>
-									<Trash2Icon class="size-3.5" />
-									{#if confirming}<span>Delete?</span>{/if}
+									{formatMessageTime(ts, timeFormat)}
+								</span>
+							{/if}
+						{/if}
+						{@const branch = status.branch}
+						{#if branch && branch.count > 1 && onswitchbranch}
+							{@const prev = branch.ids[branch.index - 1]}
+							{@const next = branch.ids[branch.index + 1]}
+							<!-- Divided off so "delete this version" never reads as one of the message actions. -->
+							<div
+								class="mr-1 flex items-center border-r border-border/60 pr-1 text-xs text-muted-foreground tabular-nums"
+								role="group"
+								aria-label="Message versions"
+							>
+								<button
+									title="Previous version"
+									aria-label="Previous version"
+									disabled={!prev || branchDisabled}
+									class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
+									onclick={() => prev && onswitchbranch(prev)}
+								>
+									<ChevronLeftIcon class="size-3.5" />
 								</button>
-							{/if}
-						</div>
-					{/if}
-					{#if visible}
-						<button
-							title={index === lastAssistantIndex
-								? `Copy (${shortcutLabel('copy-last-reply')})`
-								: 'Copy'}
-							aria-label="Copy message"
-							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-							onclick={() => copyMessage(message)}
-						>
-							<CopyIcon class="size-3.5" />
-						</button>
-					{/if}
-					{#if visible && shareable && message.role === 'assistant' && !messageActive}
-						<button
-							title="Share"
-							aria-label="Share message"
-							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-							onclick={() => shareText({ text: messageText(message) })}
-						>
-							<ShareIcon class="size-3.5" />
-						</button>
-					{/if}
-					{#if visible && speech?.supported && message.role === 'assistant' && !messageActive}
-						{@const speaking = speech.activeId === message.id}
-						<button
-							title={speaking ? (speech.loading ? 'Cancel' : 'Stop reading') : 'Read aloud'}
-							aria-label={speaking
-								? speech.loading
-									? 'Cancel reading aloud'
-									: 'Stop reading aloud'
-								: 'Read message aloud'}
-							aria-busy={speaking && speech.loading}
-							class={cn(
-								'rounded-md p-1.5 hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5',
-								speaking ? 'text-foreground' : 'text-muted-foreground'
-							)}
-							onclick={() => speech.toggle(message.id, messageText(message))}
-						>
-							{#if speaking && speech.loading}
-								<LoaderIcon class="size-3.5 animate-spin" />
-							{:else if speaking}
-								<CircleStopIcon class="size-3.5" />
-							{:else}
-								<Volume2Icon class="size-3.5" />
-							{/if}
-						</button>
-					{/if}
-					{#if message.role === 'user' && onedit && !streaming}
-						<button
-							title="Edit"
-							aria-label="Edit message"
-							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-							onclick={() => onedit(message.id, messageText(message))}
-						>
-							<PencilIcon class="size-3.5" />
-						</button>
-					{/if}
-					{#if message.role === 'assistant' && index === lastAssistantIndex && onregenerate && !streaming}
-						<button
-							title="Regenerate"
-							aria-label="Regenerate response"
-							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-							onclick={() => onregenerate(message.id)}
-						>
-							<RefreshCwIcon class="size-3.5" />
-						</button>
-					{/if}
-					{#if message.role === 'assistant' && messageUsage(message)}
-						<button
-							title="Generation info"
-							aria-label="Generation info"
-							class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
-							onclick={() => (usageMessageId = message.id)}
-						>
-							<InfoIcon class="size-3.5" />
-						</button>
-					{/if}
-				</MessageActions>
+								<span>{branch.index + 1} / {branch.count}</span>
+								<button
+									title="Next version"
+									aria-label="Next version"
+									disabled={!next || branchDisabled}
+									class="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5"
+									onclick={() => next && onswitchbranch(next)}
+								>
+									<ChevronRightIcon class="size-3.5" />
+								</button>
+								{#if ondeletebranch}
+									<!-- Deleting removes this version and its replies for good: the first
+							     click only arms it. -->
+									{@const confirming = confirmDeleteId === message.id}
+									<button
+										title={confirming
+											? 'Click again to delete this version'
+											: 'Delete this version'}
+										aria-label={confirming
+											? 'Confirm deleting this version'
+											: 'Delete this version'}
+										disabled={branchDisabled}
+										class={cn(
+											'ml-0.5 flex items-center gap-1 rounded-md p-1 hover:bg-accent disabled:pointer-events-none disabled:opacity-40 pointer-coarse:-my-1 pointer-coarse:p-2.5',
+											confirming ? 'text-destructive' : 'hover:text-foreground'
+										)}
+										onclick={() => {
+											if (confirming) {
+												confirmDeleteId = null;
+												ondeletebranch(message.id);
+											} else {
+												confirmDeleteId = message.id;
+											}
+										}}
+										onblur={() => {
+											if (confirming) confirmDeleteId = null;
+										}}
+									>
+										<Trash2Icon class="size-3.5" />
+										{#if confirming}<span>Delete?</span>{/if}
+									</button>
+								{/if}
+							</div>
+						{/if}
+						{#if visible}
+							<button
+								title={index === lastAssistantIndex
+									? `Copy (${shortcutLabel('copy-last-reply')})`
+									: 'Copy'}
+								aria-label="Copy message"
+								class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+								onclick={() => copyMessage(message)}
+							>
+								<CopyIcon class="size-3.5" />
+							</button>
+						{/if}
+						{#if visible && shareable && message.role === 'assistant' && !messageActive}
+							<button
+								title="Share"
+								aria-label="Share message"
+								class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+								onclick={() => shareText({ text: messageText(message) })}
+							>
+								<ShareIcon class="size-3.5" />
+							</button>
+						{/if}
+						{#if visible && speech?.supported && message.role === 'assistant' && !messageActive}
+							{@const speaking = speech.activeId === message.id}
+							<button
+								title={speaking ? (speech.loading ? 'Cancel' : 'Stop reading') : 'Read aloud'}
+								aria-label={speaking
+									? speech.loading
+										? 'Cancel reading aloud'
+										: 'Stop reading aloud'
+									: 'Read message aloud'}
+								aria-busy={speaking && speech.loading}
+								class={cn(
+									'rounded-md p-1.5 hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5',
+									speaking ? 'text-foreground' : 'text-muted-foreground'
+								)}
+								onclick={() => speech.toggle(message.id, messageText(message))}
+							>
+								{#if speaking && speech.loading}
+									<LoaderIcon class="size-3.5 animate-spin" />
+								{:else if speaking}
+									<CircleStopIcon class="size-3.5" />
+								{:else}
+									<Volume2Icon class="size-3.5" />
+								{/if}
+							</button>
+						{/if}
+						{#if message.role === 'user' && onedit && !streaming}
+							<button
+								title="Edit"
+								aria-label="Edit message"
+								class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+								onclick={() => onedit(message.id, messageText(message))}
+							>
+								<PencilIcon class="size-3.5" />
+							</button>
+						{/if}
+						{#if message.role === 'assistant' && index === lastAssistantIndex && onregenerate && !streaming}
+							<button
+								title="Regenerate"
+								aria-label="Regenerate response"
+								class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+								onclick={() => onregenerate(message.id)}
+							>
+								<RefreshCwIcon class="size-3.5" />
+							</button>
+						{/if}
+						{#if message.role === 'assistant' && messageUsage(message)}
+							<button
+								title="Generation info"
+								aria-label="Generation info"
+								class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
+								onclick={() => (usageMessageId = message.id)}
+							>
+								<InfoIcon class="size-3.5" />
+							</button>
+						{/if}
+					</MessageActions>
+				{/if}
 			</Message>
 		{/if}
 	{/each}

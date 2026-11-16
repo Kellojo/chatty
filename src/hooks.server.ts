@@ -7,6 +7,7 @@ import { auth } from '$lib/server/auth/index.js';
 import { seedBuiltinAgent, seedMemoryCleanupAgent } from '$lib/server/agents/builtin.js';
 import { startAgentEventDispatcher } from '$lib/server/agents/events.js';
 import { startAgentScheduler } from '$lib/server/agents/scheduler.js';
+import { startCodingProposalReporter } from '$lib/server/chat/coding-proposals.js';
 import { startMessageQueueDispatcher } from '$lib/server/chat/queue.js';
 import { getDb } from '$lib/server/db/index.js';
 import { failRunningAgentRuns } from '$lib/server/db/repo/agent-runs.js';
@@ -74,6 +75,7 @@ if (!building) {
 	startAgentEventDispatcher();
 	startPushDispatcher();
 	startMessageQueueDispatcher();
+	startCodingProposalReporter();
 	startAgentScheduler(getDb());
 	startDailyJobs(getDb());
 	startHourlyJobs(getDb());

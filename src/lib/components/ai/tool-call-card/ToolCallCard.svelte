@@ -17,6 +17,10 @@
 	import DiffStat from '$lib/components/app/DiffStat.svelte';
 	import { AGENT_RUN_TOOLS } from '$lib/agent-run-tool.js';
 	import AgentRunRow from './AgentRunRow.svelte';
+	import SubagentRow from './SubagentRow.svelte';
+	import AgentRow, { type AgentRowTone } from './AgentRow.svelte';
+	import AgentRowSection from './AgentRowSection.svelte';
+	import { RUN_SUBAGENT_TOOL } from '$lib/subagent-tool.js';
 	import ToolIcon from './ToolIcon.svelte';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
@@ -62,6 +66,12 @@
 	const phase = $derived<SubagentPhase>(
 		subagentRunning ? 'running' : interrupted ? 'stopped' : failed ? 'failed' : 'done'
 	);
+	const SUBAGENT_TONE: Record<SubagentPhase, AgentRowTone> = {
+		running: 'working',
+		done: 'done',
+		failed: 'failed',
+		stopped: 'stopped'
+	};
 	const PHASE_LABEL: Record<SubagentPhase, string> = {
 		running: 'Running',
 		done: 'Done',
@@ -245,87 +255,57 @@
 	const labelled = $derived(showInput && hasResult);
 </script>
 
+{#snippet brandMark()}
+	{#if brand}<ProviderIcon {brand} class="size-3.5 shrink-0" />{/if}
+{/snippet}
+
+{#snippet subagentDetails()}
+	<!-- While it works: what it was asked. Once it's done: what it found first, then the task. -->
+	{#if running}
+		{#if showInput}
+			<AgentRowSection label="Task" text={inputBody} />
+		{/if}
+		{#if !resultText}
+			<p class="text-xs text-muted-foreground">Running…</p>
+		{/if}
+	{/if}
+	<!-- The whole result: the section cuts it to fit and offers the rest, like Chatty's own agents. -->
+	{#if resultText}
+		{#if failed}
+			<AgentRowSection label="Error" text={resultText} tone="error" />
+		{:else}
+			<AgentRowSection label="Result" text={resultText} markdown />
+		{/if}
+	{/if}
+	{#if !running && showInput}
+		<AgentRowSection label="Task" text={inputBody} />
+	{/if}
+{/snippet}
+
 {#if AGENT_RUN_TOOLS.has(name)}
 	<AgentRunRow {part} {name} {active} />
+{:else if name === RUN_SUBAGENT_TOOL}
+	<SubagentRow part={part as never} {active} />
 {:else}
 	<div class={cn('w-full min-w-0 text-sm', className)}>
 		{#if subagent}
-			<button
-				type="button"
-				class={cn(
-					'group/tool flex w-full min-w-0 items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
-					hasBody
-						? 'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
-						: 'cursor-default'
-				)}
-				aria-expanded={hasBody ? open : undefined}
-				disabled={!hasBody}
-				onclick={() => (open = !open)}
-			>
-				<span class="flex h-5 w-5 shrink-0 items-center justify-center">
-					{#if phase === 'running'}
-						<Loader2Icon class="size-4 animate-spin text-info" />
-					{:else if phase === 'done'}
-						<CircleCheckIcon class="size-4 text-success" />
-					{:else if phase === 'failed'}
-						<TriangleAlertIcon class="size-4 text-destructive" />
-					{:else}
-						<CircleSlashIcon class="size-4 text-muted-foreground" />
-					{/if}
-				</span>
-				<span class="flex min-w-0 flex-1 flex-col">
-					<span class="flex min-w-0 items-center gap-1.5">
-						{#if brand}
-							<ProviderIcon {brand} class="size-3.5 shrink-0" />
-						{/if}
-						<span
-							class="truncate font-medium text-foreground/90"
-							title={display.detail ?? undefined}
-						>
-							{display.detail ?? display.label}
-						</span>
-					</span>
-					{#if activity}
-						<span
-							class={cn(
-								'truncate text-xs',
-								phase === 'running' ? 'text-info-foreground' : 'text-muted-foreground',
-								phase === 'failed' && 'text-destructive/80'
-							)}
-							title={activity}>{activity}</span
-						>
-					{/if}
-				</span>
-				<span
-					class={cn(
-						'flex h-5 shrink-0 items-center gap-1.5 pl-2 text-xs',
-						phase === 'running' && 'text-info-foreground',
-						phase === 'done' && 'text-success-foreground',
-						phase === 'failed' && 'text-destructive',
-						phase === 'stopped' && 'text-muted-foreground'
-					)}
-				>
-					{PHASE_LABEL[phase]}
-					{#if subagentDuration}
-						<span
-							class="text-muted-foreground tabular-nums"
-							title={phase === 'running'
-								? `Running for ${subagentDuration}`
-								: `Took ${subagentDuration}`}>· {subagentDuration}</span
-						>
-					{/if}
-					<ChevronRightIcon
-						aria-hidden="true"
-						class={cn(
-							'size-3.5 text-muted-foreground transition',
-							hasBody
-								? 'opacity-50 group-hover/tool:opacity-100 group-focus-visible/tool:opacity-100'
-								: 'invisible',
-							open && 'rotate-90 opacity-100'
-						)}
-					/>
-				</span>
-			</button>
+			<!-- The same row as Chatty's own agents (AgentRow), so both read alike. -->
+			<AgentRow
+				tone={SUBAGENT_TONE[phase]}
+				status={PHASE_LABEL[phase]}
+				title={display.detail ?? display.label}
+				{activity}
+				activityInBody={(phase === 'done' || phase === 'failed') && !!resultText}
+				duration={subagentDuration}
+				durationHint={subagentDuration
+					? phase === 'running'
+						? `Running for ${subagentDuration}`
+						: `Took ${subagentDuration}`
+					: undefined}
+				bind:open
+				leading={brand ? brandMark : undefined}
+				body={hasBody ? subagentDetails : undefined}
+			/>
 		{:else}
 			<button
 				type="button"
@@ -398,7 +378,7 @@
 				</span>
 			</button>
 		{/if}
-		{#if open && hasBody}
+		{#if open && hasBody && !subagent}
 			<div class="mt-1 mb-2 ml-1 flex flex-col gap-2 sm:ml-9">
 				{#if showInput}
 					<div>

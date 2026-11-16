@@ -4,6 +4,8 @@
  * Shared by builtin MCP tools and coding-agent (T3) items.
  */
 
+import { parseSubagentToolResult } from './subagent-tool.js';
+
 export type ToolKind =
 	| 'command'
 	| 'code'
@@ -79,6 +81,8 @@ const SERVER_LABELS: Record<string, string> = {
 	settings: 'Settings',
 	memory: 'Memory',
 	agents: 'Agents',
+	subagents: 'Subagents',
+	coding: 'Coding',
 	skills: 'Skills',
 	'code-exec': 'Code',
 	image: 'Images',
@@ -95,7 +99,7 @@ export function serverLabel(server: string): string {
 export const TOOL_META: Record<string, ToolMeta> = {
 	fetch: { label: 'Fetch URL', server: 'webfetch', kind: 'web', detail: 'url' },
 	now: { label: 'Current time', server: 'datetime', kind: 'time' },
-	// Removed tool; kept so past chats still label its calls.
+	// Removed tools; kept so past chats still label their calls.
 	get_timezone: { label: 'Get timezone', server: 'datetime', kind: 'time' },
 	format: { label: 'Format date', server: 'datetime', kind: 'time', detail: 'iso' },
 	convert: { label: 'Convert timezone', server: 'datetime', kind: 'time', detail: 'to' },
@@ -114,6 +118,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	fs_mkdir: { label: 'Create directory', server: 'fs', kind: 'edit', detail: 'path' },
 	fs_rm: { label: 'Delete file', server: 'fs', kind: 'edit', detail: 'path' },
 	fs_curl: { label: 'Download file', server: 'fs', kind: 'web', detail: 'url' },
+	// The settings server was removed; kept so past chats still label its calls.
 	get_setting: { label: 'Get setting', server: 'settings', kind: 'settings', detail: 'key' },
 	list_settings: { label: 'List settings', server: 'settings', kind: 'settings' },
 	update_setting: { label: 'Update setting', server: 'settings', kind: 'settings', detail: 'key' },
@@ -130,6 +135,14 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	delete_agent: { label: 'Delete agent', server: 'agents', kind: 'agent', detail: 'agentId' },
 	start_agent: { label: 'Start agent', server: 'agents', kind: 'agent', detail: 'agentId' },
 	get_agent_run: { label: 'Check agent run', server: 'agents', kind: 'agent', detail: 'runId' },
+	list_coding_projects: { label: 'List coding projects', server: 'coding', kind: 'agent' },
+	run_subagent: { label: 'Subagent', server: 'subagents', kind: 'subagent', detail: 'description' },
+	propose_coding_task: {
+		label: 'Proposed a coding task',
+		server: 'coding',
+		kind: 'agent',
+		detail: 'title'
+	},
 	load_skill: { label: 'Load skill', server: 'skills', kind: 'skill', detail: 'name' },
 	read_skill_reference: {
 		label: 'Read skill reference',
@@ -144,7 +157,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	generate_image: { label: 'Generate image', server: 'image', kind: 'image', detail: 'prompt' },
 	edit_image: { label: 'Edit image', server: 'image', kind: 'image', detail: 'prompt' },
 	transcribe_audio: { label: 'Transcribe audio', server: 'speech', kind: 'audio' },
-	wait: { label: 'Wait', server: 'wait', kind: 'wait', detail: 'seconds' },
+	wait: { label: 'Wait', server: 'datetime', kind: 'wait', detail: 'seconds' },
 	get_weather: { label: 'Get weather', server: 'weather', kind: 'weather', detail: 'location' },
 	calculate: { label: 'Calculate', server: 'math', kind: 'math', detail: 'expression' },
 	search_tools: { label: 'Search tools', server: 'tools', kind: 'search', detail: 'query' },
@@ -444,6 +457,9 @@ export function subagentActivity(
 	const task = firstLine(args.prompt);
 	if (phase === 'running') return firstLine(args.progress) ?? task;
 	if (phase === 'stopped') return firstLine(args.progress) ?? task;
+	// Chatty's own subagents (run_subagent) return their report as JSON.
+	const own = parseSubagentToolResult(output);
+	if (own) return firstLine(phase === 'failed' ? own.error : own.result) ?? task;
 	if (phase === 'failed') return firstLine(output) ?? task;
 	const result = typeof output === 'string' ? output : null;
 	if (result && HANDBACK_NOTICE.test(result)) return 'Reported back to the main agent';

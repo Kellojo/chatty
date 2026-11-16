@@ -355,15 +355,11 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 			{ iso: '2026-11-07T17:02:11+01:00', timezone: 'Europe/Berlin', human: '2026-11-07 17:02' }
 		),
 		mcp(
-			'format',
-			{ iso: '2026-11-07T16:02:11Z', fmt: 'cccc, d LLLL', tz: 'Europe/Berlin' },
-			'Saturday, 7 November'
-		),
-		mcp(
 			'convert',
 			{ iso: '2026-11-07T17:00:00', from: 'Europe/Berlin', to: 'America/New_York' },
 			'2026-11-07T11:00:00-05:00'
-		)
+		),
+		mcp('wait', { seconds: 10 }, { waitedSeconds: 10, currentTime: '2026-11-07T16:02:21Z' })
 	],
 	'chat-search': [
 		mcp('search_chats', { query: 'sidebar' }, [
@@ -411,15 +407,6 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 			'fs_curl',
 			{ scope: 'workspace', url: 'https://example.com/data.csv', path: 'data.csv' },
 			'data.csv 18234 bytes'
-		)
-	],
-	settings: [
-		mcp('list_settings', {}, { 'websearch.default_limit': 5, 'websearch.language': 'auto' }),
-		mcp('get_setting', { key: 'websearch.language' }, 'auto'),
-		mcp(
-			'update_setting',
-			{ key: 'websearch.default_limit', value: 8 },
-			'updated websearch.default_limit'
 		)
 	],
 	memory: [
@@ -522,6 +509,57 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 			}
 		)
 	],
+	subagents: [
+		mcp(
+			'run_subagent',
+			{
+				description: 'Compare vector databases',
+				prompt:
+					'Compare pgvector, Qdrant and LanceDB for a self-hosted app with ~1M embeddings: setup effort, query speed, filtering and backups. Report a short table and a recommendation.'
+			},
+			{
+				status: 'completed',
+				result:
+					'**Recommendation: pgvector**, since the app already runs Postgres.\n\n| | Setup | Filtering | Backups |\n|---|---|---|---|\n| pgvector | none | SQL | with Postgres |\n| Qdrant | one container | rich | snapshots |\n| LanceDB | embedded | basic | files |',
+				truncated: false,
+				error: null,
+				conversationId: 'c-sub-1',
+				note: 'The subagent finished; `result` is its report.'
+			}
+		)
+	],
+	coding: [
+		mcp('list_coding_projects', {}, [
+			{
+				environmentId: 'env-1',
+				environmentName: 'devbox',
+				projects: [
+					{ projectId: 'p-1', title: 'ai-chat', isGitRepo: true, defaultBranch: 'main' },
+					{ projectId: 'p-2', title: 'notes', isGitRepo: false, defaultBranch: null }
+				]
+			}
+		]),
+		mcp(
+			'propose_coding_task',
+			{
+				title: 'Fix the login redirect',
+				environmentId: 'env-1',
+				projectId: 'p-1',
+				prompt:
+					'## Goal\n\nAfter signing in, users land on `/` instead of the page they came from.\n\n## Changes\n\n- Keep the `redirectTo` query parameter through the sign-in form.\n- Redirect there after a successful sign-in; fall back to `/`.\n- Only allow same-origin paths.\n\n## Verify\n\nRun `pnpm test:unit -- --run` and add a test for the redirect.'
+			},
+			{
+				proposed: true,
+				title: 'Fix the login redirect',
+				target: {
+					environmentId: 'env-1',
+					environmentName: 'devbox',
+					projectId: 'p-1',
+					projectTitle: 'ai-chat'
+				}
+			}
+		)
+	],
 	skills: [
 		mcp(
 			'load_skill',
@@ -553,7 +591,6 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 		)
 	],
 	image: [],
-	wait: [mcp('wait', { seconds: 10 }, { waitedSeconds: 10, currentTime: '2026-11-07T16:02:21Z' })],
 	math: [
 		mcp('calculate', { expression: '(2^10 - 24) / sqrt(16)' }, '250'),
 		mcp('calculate', { expression: '1 / 0' }, 'error: division by zero', { isError: true }),
@@ -563,16 +600,7 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 			'{"count":3,"sum":14,"mean":4.666666666666667,"median":4,"min":2,"max":8,"variance":6.222222222222222,"stdev":2.494438257849294}'
 		),
 		mcp('convert_units', { value: 50, from: 'km', to: 'mile' }, '31.068559611866696'),
-		mcp(
-			'convert_many',
-			{
-				conversions: [
-					{ value: 1, from: 'kg', to: 'lb' },
-					{ value: 30, from: 'C', to: 'F' }
-				]
-			},
-			['2.2046226218487757', '86']
-		),
+		mcp('convert_units', { from: '2h 45min', to: 'min' }, '165'),
 		mcp('list_units', { category: 'length' }, ['m', 'km', 'cm', 'mm', 'mile', 'yard', 'ft', 'in'])
 	],
 	weather: [mcp('get_weather', { location: 'Lisbon', days: 5 }, WEATHER)]

@@ -42,6 +42,11 @@ export interface CodingConversationRow {
 	run_started_at: number | null;
 	diff_insertions: number | null;
 	diff_deletions: number | null;
+	/** The chat whose `propose_coding_task` call this task was started from. */
+	proposed_in: string | null;
+	proposed_tool_call_id: string | null;
+	/** When the proposing chat got its "finished" notice; NULL until then. */
+	proposal_reported_at: number | null;
 	created_at: number;
 	updated_at: number;
 }
@@ -140,6 +145,14 @@ export interface CreateCodingConversationInput {
 	runtimeMode: string;
 	workspaceMode: CodingWorkspaceMode;
 	baseBranch: string | null;
+	/** The chat's `propose_coding_task` call this task starts (at most one task each). */
+	proposal?: CodingTaskProposalRef | null;
+}
+
+/** A `propose_coding_task` call: the chat it was made in and its tool call id. */
+export interface CodingTaskProposalRef {
+	conversationId: string;
+	toolCallId: string;
 }
 
 export function createCodingConversation(
@@ -149,8 +162,9 @@ export function createCodingConversation(
 	const now = Date.now();
 	db.prepare(
 		`INSERT INTO coding_conversations (conversation_id, environment_id, project_id, project_title,
-		   provider_instance_id, model, runtime_mode, workspace_mode, base_branch, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?)`
+		   provider_instance_id, model, runtime_mode, workspace_mode, base_branch, status,
+		   proposed_in, proposed_tool_call_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?)`
 	).run(
 		input.conversationId,
 		input.environmentId,
@@ -161,10 +175,53 @@ export function createCodingConversation(
 		input.runtimeMode,
 		input.workspaceMode,
 		input.baseBranch,
+		input.proposal?.conversationId ?? null,
+		input.proposal?.toolCallId ?? null,
 		now,
 		now
 	);
 	return getCodingConversation(db, input.conversationId)!;
+}
+
+/** The (not deleted) tasks started from proposals in `conversationId`, with their titles. */
+export function listProposedCodingTasks(
+	db: Db,
+	conversationId: string
+): (CodingConversationRow & { title: string })[] {
+	return db
+		.prepare(
+			`SELECT cc.*, c.title AS title FROM coding_conversations cc
+			 JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE cc.proposed_in = ? AND c.deleted_at IS NULL
+			 ORDER BY cc.created_at`
+		)
+		.all(conversationId) as (CodingConversationRow & { title: string })[];
+}
+
+/** Whether a task (deleted ones included) was already started from this proposal. */
+export function hasProposedCodingTask(db: Db, proposal: CodingTaskProposalRef): boolean {
+	return (
+		db
+			.prepare(
+				'SELECT 1 FROM coding_conversations WHERE proposed_in = ? AND proposed_tool_call_id = ?'
+			)
+			.get(proposal.conversationId, proposal.toolCallId) !== undefined
+	);
+}
+
+/**
+ * Claims the "finished" notice for a proposed task: true only for the first
+ * caller, so a task that finishes again (follow-up turns) is reported once.
+ */
+export function claimProposalReport(db: Db, conversationId: string): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE coding_conversations SET proposal_reported_at = ?
+				 WHERE conversation_id = ? AND proposed_in IS NOT NULL AND proposal_reported_at IS NULL`
+			)
+			.run(Date.now(), conversationId).changes > 0
+	);
 }
 
 export interface CodingConversationPatch {

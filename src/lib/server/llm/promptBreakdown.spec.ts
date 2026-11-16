@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { jsonSchema, type Tool, type UIMessage } from 'ai';
 import { z } from 'zod';
-import { estimateMessagesChars, estimateToolChars } from './promptBreakdown.js';
+import { estimateMessagesChars, estimateToolChars, estimateToolTokens } from './promptBreakdown.js';
+
+describe('estimateToolTokens', () => {
+	it('is about a quarter of the character estimate, rounded up', () => {
+		const tool = { description: 'x'.repeat(41), inputSchema: {} } as unknown as Tool;
+		const tools = { t: tool };
+		expect(estimateToolTokens(tools)).toBe(Math.ceil(estimateToolChars(tools) / 4));
+		expect(estimateToolTokens(undefined)).toBe(0);
+	});
+});
 
 describe('estimateToolChars', () => {
 	it('returns 0 for no tools', () => {

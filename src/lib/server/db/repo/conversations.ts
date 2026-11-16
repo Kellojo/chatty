@@ -32,6 +32,14 @@ export interface ConversationRow {
 	created_at: number;
 	updated_at: number;
 	deleted_at: number | null;
+	/** Set on a subagent's hidden conversation: the conversation that started it. */
+	subagent_of: string | null;
+	/** The parent's `run_subagent` tool call a subagent's conversation answers. */
+	subagent_tool_call_id: string | null;
+	/** How a subagent ended ('completed' | 'failed' | 'stopped'); null while it runs. */
+	subagent_status: string | null;
+	subagent_error: string | null;
+	subagent_ended_at: number | null;
 	/** Present only on queries that join `coding_conversations` (see SIDEBAR_SELECT). */
 	coding_project_title?: string | null;
 	coding_status?: string | null;
@@ -264,6 +272,11 @@ export interface CreateConversationInput {
 	systemPrompt?: string | null;
 	maxSteps?: number | null;
 	origin?: ConversationOrigin;
+	/** Defaults to on (the column's default). */
+	memoryEnabled?: boolean;
+	/** For a subagent's conversation: the conversation that started it. */
+	subagentOf?: string | null;
+	subagentToolCallId?: string | null;
 }
 
 export function createConversation(
@@ -275,8 +288,9 @@ export function createConversation(
 	const now = Date.now();
 	db.prepare(
 		`INSERT INTO conversations (id, user_id, kind, title, mode, provider_id, model_id, agent_id,
-		 system_prompt, max_steps, origin, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 system_prompt, max_steps, origin, memory_enabled, subagent_of, subagent_tool_call_id,
+		 created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
@@ -289,6 +303,9 @@ export function createConversation(
 		input.systemPrompt ?? null,
 		input.maxSteps ?? null,
 		input.origin ?? 'user',
+		input.memoryEnabled === false ? 0 : 1,
+		input.subagentOf ?? null,
+		input.subagentToolCallId ?? null,
 		now,
 		now
 	);

@@ -12,9 +12,9 @@ export { ASK_USER_TOOL };
 export function askUserTool(): Tool {
 	return tool({
 		description:
-			'Ask the user one question when you are blocked or need their decision, then stop: your turn ends and their reply continues the conversation. ' +
-			'Do everything you can on your own first. Call it at most once per turn and put related questions into one. ' +
-			'Offer concrete options when there are any, and always say which one you recommend.',
+			'Ask the user one question when blocked or when the decision is theirs; your turn ends and their reply continues it. ' +
+			'Do what you can on your own first. At most once per turn: combine related questions. ' +
+			'Offer concrete options when there are any and always give your recommendation.',
 		inputSchema: z.object({
 			question: z.string().min(1).describe('The question, short and self-contained'),
 			kind: z

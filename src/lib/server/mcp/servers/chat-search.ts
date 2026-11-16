@@ -45,15 +45,15 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 		'search_chats',
 		{
 			description:
-				"Search the user's chats by title and content, and/or list chats updated since a time. Any word can match and the best matches come first, so use a few distinctive keywords. Coding threads include a `coding` field (project, status, branch, PR, pending question…). " +
-				'To show an overview, reply with a ```chats fenced block of {"title":"optional","chats":[...]}: result objects verbatim, each optionally with a one-line "summary".',
+				"Search the user's chats by title and content (any word matches, best first: use a few distinctive keywords) and/or list chats updated since a time. Coding threads include a `coding` field (project, status, branch, PR, pending question). " +
+				'For an overview, reply with a ```chats block of {"title"?, "chats":[…]}: result objects verbatim, each optionally with a one-line "summary".',
 			inputSchema: {
 				query: z.string().optional(),
 				since: z
 					.string()
 					.optional()
 					.describe('Only chats updated at/after this time (ISO 8601 or epoch ms)'),
-				limit: z.number().int().optional()
+				limit: z.number().int().optional().describe('Default 10, max 50')
 			}
 		},
 		async ({ query, since, limit }) => {
@@ -69,16 +69,21 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 			if (!q && sinceMs === null) return err('provide a query and/or since');
 			const n = Math.min(50, Math.max(1, Math.floor(limit ?? 10)));
 			const db = getDb();
+			// The chat the tool is called from is never a useful hit.
+			const current = ctx.conversationId ?? null;
 			const rows = q
 				? searchConversationsRanked(db, ctx.userId, q, {
-						// The since filter below runs after the search, so fetch more to filter.
-						limit: sinceMs !== null ? MAX_SEARCH_PAGE_SIZE : n
+						// The filter below runs after the search: fetch more for since, and
+						// one extra to make up for dropping the current chat.
+						limit: sinceMs !== null ? MAX_SEARCH_PAGE_SIZE : current ? n + 1 : n
 					})
 				: // A plain "what changed since" listing is how memory extraction finds new
 					// chats; agent-run chats hold the agent's words, not the user's, so they
 					// are left out. A text query still finds them.
 					listConversationsSince(db, ctx.userId, sinceMs!, { excludeDispatched: true });
-			const filtered = sinceMs !== null ? rows.filter((r) => r.updated_at >= sinceMs) : rows;
+			const filtered = rows.filter(
+				(r) => r.id !== current && (sinceMs === null || r.updated_at >= sinceMs)
+			);
 			return text(
 				JSON.stringify(
 					filtered.slice(0, n).map((r) => ({
@@ -94,8 +99,11 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'read_chat',
 		{
-			description: "Read the messages of one of the current user's conversations",
-			inputSchema: { conversationId: z.string(), limit: z.number().int().optional() }
+			description: "Read a chat's latest messages (id from search_chats).",
+			inputSchema: {
+				conversationId: z.string(),
+				limit: z.number().int().optional().describe('Default 100, max 500')
+			}
 		},
 		async ({ conversationId, limit }) => {
 			const db = getDb();

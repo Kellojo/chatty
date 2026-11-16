@@ -51,7 +51,7 @@ const CASES: EvalCase[] = [
 	{
 		id: 'compound-units',
 		prompt: 'Convert 2h 45min into minutes.',
-		expect: ['convert_many', 'convert_units', 'calculate']
+		expect: ['convert_units', 'calculate']
 	},
 	{ id: 'weather', prompt: "What's the weather in Lisbon right now?", expect: ['get_weather'] },
 	{ id: 'forecast', prompt: 'Will it rain in Berlin tomorrow?', expect: ['get_weather'] },
@@ -88,9 +88,10 @@ const CASES: EvalCase[] = [
 	},
 	{ id: 'wait', prompt: 'Wait 5 seconds, then tell me a joke.', expect: ['wait'] },
 	{
-		id: 'settings',
-		prompt: 'Which of my app settings can you change?',
-		expect: ['list_settings', 'get_setting']
+		id: 'subagent',
+		prompt:
+			'Hand this to a subagent: research the pros and cons of SQLite WAL mode and report back.',
+		expect: ['run_subagent']
 	},
 	{
 		id: 'image',

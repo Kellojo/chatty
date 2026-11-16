@@ -75,7 +75,6 @@
 		return u.protocol === 'https:' || u.protocol === 'http:' ? u : null;
 	}
 
-
 	function parseSource(v: unknown): Source | null {
 		const l = rec(v);
 		const url = webUrl(l?.url ?? l?.href);

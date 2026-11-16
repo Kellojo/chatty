@@ -23,7 +23,11 @@ const MAX_PATTERN = 1000;
 const MAX_GREP_LINE = 10_000;
 const GREP_TIMEOUT_MS = 10_000;
 
-const SCOPE = z.enum(['workspace', 'documents']);
+const SCOPE = z
+	.enum(['workspace', 'documents'])
+	.describe(
+		"workspace: this chat's working folder; documents: the user's files, kept across chats"
+	);
 
 function cap(out: string): string {
 	return out.length > MAX_OUT ? `${out.slice(0, MAX_OUT)}\n… truncated` : out;
@@ -319,7 +323,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'fs_ls',
 		{
-			description: 'List directory contents, directories first',
+			description: 'List a directory (default: the root), directories first.',
 			inputSchema: { scope: SCOPE, path: z.string().optional() }
 		},
 		async ({ scope, path: rel }) => {
@@ -347,7 +351,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		'fs_read',
 		{
 			description:
-				'Print a file. head/tail print only its first/last N lines; stats=true prints its line, word and byte counts instead.',
+				'Read a text file (up to 1 MB). head/tail: only the first/last N lines; stats: line, word and byte counts instead.',
 			inputSchema: {
 				scope: SCOPE,
 				path: z.string(),
@@ -391,7 +395,8 @@ export function createFsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'fs_grep',
 		{
-			description: 'Search files with a regular expression',
+			description:
+				'Search file contents with a JavaScript regex, under path (a file or directory; default: the root). Up to 200 matching lines; .git, node_modules and build dirs are skipped unless path names them.',
 			inputSchema: {
 				scope: SCOPE,
 				pattern: z.string(),
@@ -461,7 +466,8 @@ export function createFsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'fs_glob',
 		{
-			description: 'Match paths against a glob pattern (* and ** supported)',
+			description:
+				'Find paths matching a glob, e.g. "src/**/*.ts" (* within a segment, ** across directories). Up to 500 results.',
 			inputSchema: { scope: SCOPE, pattern: z.string() }
 		},
 		async ({ scope, pattern }) => {
@@ -514,7 +520,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		'fs_write',
 		{
 			description:
-				'Write a file, creating parent directories. overwrite=false fails if the file already exists.',
+				'Write a text file, creating parent directories. Overwrites unless overwrite: false.',
 			inputSchema: {
 				scope: SCOPE,
 				path: z.string(),
@@ -540,7 +546,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 		'fs_edit',
 		{
 			description:
-				'Replace text in a file. `old` must match exactly once unless replaceAll is set, which replaces every occurrence.',
+				'Replace `old` with `new` in a file. `old` must occur exactly once, unless replaceAll replaces every occurrence.',
 			inputSchema: {
 				scope: SCOPE,
 				path: z.string(),
@@ -577,7 +583,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'fs_mkdir',
 		{
-			description: 'Create a directory and any missing parents',
+			description: 'Create a directory, with missing parents.',
 			inputSchema: { scope: SCOPE, path: z.string() }
 		},
 		async ({ scope, path: rel }) => {
@@ -591,7 +597,7 @@ export function createFsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'fs_rm',
 		{
-			description: 'Delete a file or directory (recursive)',
+			description: 'Delete a file or directory (recursively).',
 			inputSchema: { scope: SCOPE, path: z.string() }
 		},
 		async ({ scope, path: rel }) => {
@@ -615,7 +621,8 @@ export function createFsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'fs_curl',
 		{
-			description: 'Download a file from a URL. Defaults to a filename derived from the URL.',
+			description:
+				'Download a URL (any file type, up to 100 MB) to path; default: a filename taken from the URL.',
 			inputSchema: {
 				scope: SCOPE,
 				url: z.string().url(),

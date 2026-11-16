@@ -14,9 +14,18 @@ const TOP_TOOLS = 3;
  * Builtin servers left out of a new key's access. Coding agents (the gateway's
  * main clients) already have their own, better file, shell, math and clock
  * tools. `agents` starts runs that use the agent's own tools, which reaches
- * past the key's picks, so it must be chosen on purpose.
+ * past the key's picks, so it must be chosen on purpose. `subagents` and
+ * `coding` only work inside a conversation.
  */
-const HIDDEN_BY_DEFAULT = new Set(['fs', 'code-exec', 'math', 'datetime', 'wait', 'agents']);
+const HIDDEN_BY_DEFAULT = new Set([
+	'fs',
+	'code-exec',
+	'math',
+	'datetime',
+	'agents',
+	'subagents',
+	'coding'
+]);
 
 export function exposedByDefault(row: Pick<McpServerRow, 'name' | 'builtin'>): boolean {
 	return !(row.builtin === 1 && HIDDEN_BY_DEFAULT.has(row.name));

@@ -98,7 +98,9 @@ describe('tools registry', () => {
 			'search_chats',
 			'fs_read',
 			'fs_ls',
-			'get_setting',
+			'wait',
+			'calculate',
+			'run_subagent',
 			'search_memory',
 			'create_concept',
 			'code_exec',
@@ -106,12 +108,38 @@ describe('tools registry', () => {
 		]) {
 			expect(names).toContain(expected);
 		}
+		expect(names).not.toContain('get_setting');
+		expect(names).not.toContain('convert_many');
 		expect(built.toolToServer.now).toBe('datetime');
+		expect(built.toolToServer.wait).toBe('datetime');
+		expect(built.toolToServer.run_subagent).toBe('subagents');
+		expect(built.toolToServer.propose_coding_task).toBe('coding');
 		expect(built.toolToServer.fs_ls).toBe('fs');
 		expect(built.toolToServer.search_memory).toBe('memory');
 		expect(built.toolToServer.code_exec).toBe('code-exec');
 		expect(built.toolToServer.generate_image).toBe('image');
 		await built.close();
+	});
+
+	it('leaves excluded tools out, with or without an allowlist', async () => {
+		const all = await buildTools({
+			userId: 'u1',
+			memoryEnabled: true,
+			excludeTools: ['run_subagent', 'fetch']
+		});
+		expect(Object.keys(all.tools)).not.toContain('run_subagent');
+		expect(Object.keys(all.tools)).not.toContain('fetch');
+		expect(all.deferred.has('run_subagent')).toBe(false);
+		expect(Object.keys(all.tools)).toContain('now');
+		await all.close();
+		const listed = await buildTools({
+			userId: 'u1',
+			memoryEnabled: true,
+			agentAllowlist: ['now', 'run_subagent'],
+			excludeTools: ['run_subagent']
+		});
+		expect(Object.keys(listed.tools)).toEqual(['now']);
+		await listed.close();
 	});
 
 	it('skips disabled servers', async () => {
@@ -135,7 +163,8 @@ describe('tools registry', () => {
 	it('defers the tools of on-demand servers, unless an allowlist picks the tools', async () => {
 		const built = await buildTools({ userId: 'u1', memoryEnabled: true });
 		for (const name of [
-			'calculate',
+			'list_units',
+			'propose_coding_task',
 			'get_weather',
 			'list_agents',
 			'search_chats',
@@ -148,6 +177,11 @@ describe('tools registry', () => {
 		}
 		for (const name of [
 			'now',
+			'convert',
+			'wait',
+			'calculate',
+			'convert_units',
+			'run_subagent',
 			'fs_ls',
 			'fs_write',
 			'fetch',

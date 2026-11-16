@@ -1,7 +1,7 @@
 ---
 name: research-topic
 title: Research topic
-description: "Research a topic on the web: search, cross-check sources, and write a cited summary. Use when the user wants current or verified information, not a quick answer from memory."
+description: 'Research a topic on the web: search, cross-check sources, and write a cited summary. Use when the user wants current or verified information, not a quick answer from memory.'
 tools:
   - web_search
   - fetch

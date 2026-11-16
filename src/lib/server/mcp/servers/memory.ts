@@ -18,7 +18,9 @@ import { err, text } from './shared.js';
 
 const log = createLogger('memory');
 
-const scopeSchema = z.enum(['user', 'shared']);
+const scopeSchema = z
+	.enum(['user', 'shared'])
+	.describe("user (default): this user's memory; shared: the bundle all users see");
 
 const SNIPPET_MAX = 160;
 
@@ -60,8 +62,8 @@ function written(
 
 /** Widget instructions, given once (create_concept); the other writes point at them. */
 const FENCE_HINT =
-	'Returns a widget item; to show what was remembered, end your reply with a ```memory fenced block of {"items":[...]}: the items of all memory writes this turn, verbatim.';
-const SAME_ITEM = 'Returns a ```memory widget item (see create_concept).';
+	'To show what was remembered, end your reply with a ```memory block of {"items":[…]}: the returned items of all memory writes this turn, verbatim.';
+const SAME_ITEM = 'Returns a ```memory item (see create_concept).';
 const pathSchema = z
 	.string()
 	.describe('Concept path, e.g. "people/john.md" (".md" is appended automatically if missing)');
@@ -101,7 +103,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		'search_memory',
 		{
 			description:
-				"Search long-term memory (the user's and the shared bundle) by keyword. Any word can match and results are ranked by relevance, so use a few distinctive keywords about one topic per call (e.g. 'pocket-id oauth'), and make separate calls for unrelated topics rather than one long mixed query. Matching is by word, not meaning: if nothing relevant comes back, call list_concepts and pick by title and description instead.",
+				"Keyword search of long-term memory (the user's and shared), ranked by relevance. Matches words, not meaning: use a few distinctive keywords on one topic (e.g. 'pocket-id oauth') and a separate call per topic. If nothing fits, browse list_concepts instead.",
 			inputSchema: { query: z.string(), limit: z.number().int().optional() }
 		},
 		async ({ query, limit }) => {
@@ -118,7 +120,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'read_concept',
 		{
-			description: 'Read a single memory concept by path',
+			description: 'Read a memory concept by path.',
 			inputSchema: { path: pathSchema, scope: scopeSchema.optional() }
 		},
 		async ({ path, scope }) => {
@@ -142,7 +144,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		'list_concepts',
 		{
 			description:
-				'List memory concepts with their title and description, optionally under a directory prefix. Use it to find a concept by meaning when search_memory finds nothing that fits, e.g. a paraphrase or a question in another language.',
+				'List memory concepts (title, description), optionally under a path prefix. Use it to find a concept by meaning when search_memory misses, e.g. paraphrases or another language.',
 			inputSchema: { prefix: z.string().optional(), scope: scopeSchema.optional() }
 		},
 		async ({ prefix, scope }) => {
@@ -173,7 +175,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'create_concept',
 		{
-			description: `Create a new memory concept (fails if the path already exists). ${FENCE_HINT}`,
+			description: `Create a memory concept; fails if the path exists. ${FENCE_HINT}`,
 			inputSchema: {
 				path: pathSchema,
 				title: z.string(),

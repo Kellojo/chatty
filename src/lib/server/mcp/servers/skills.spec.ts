@@ -12,10 +12,11 @@ const { createSkillsServer } = await import('./skills.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
 const { readSkill, resolveSkill } = await import('../../skills/scanner.js');
+const { getDb } = await import('../../db/index.js');
 
 const userCtx = { userId: 'u1', role: 'user', workspaceDir: null, documentsDir: '' };
 
-type Ctx = typeof userCtx;
+type Ctx = typeof userCtx & { agentRunId?: string | null; messageId?: string | null };
 
 async function callTool(ctx: Ctx, name: string, args: Record<string, unknown>) {
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -167,6 +168,79 @@ describe('skills server create/update/delete', () => {
 		const delShared = await callTool(userCtx, 'delete_skill', { name: 'shared-skill' });
 		expect(isError(delShared)).toBe(true);
 		expect(resultText(delShared)).toContain('shared');
+	});
+
+	it('a shared skill override starts as a full copy of it, with the patch applied', async () => {
+		const sharedDir = path.join(process.env.SKILLS_VOLUME!, 'shared', 'shared-full');
+		fs.mkdirSync(path.join(sharedDir, 'references', 'guide'), { recursive: true });
+		fs.writeFileSync(
+			path.join(sharedDir, 'skill.md'),
+			[
+				'---',
+				'name: shared-full',
+				'description: shared desc',
+				'source: git:https://example.com/skills',
+				'triggers:',
+				'  - keyword: deploy',
+				'  - intent: ship a release',
+				'tools:',
+				'  - fs_read',
+				'---',
+				'shared body',
+				''
+			].join('\n')
+		);
+		fs.writeFileSync(path.join(sharedDir, 'references', 'a.md'), 'ref a');
+		fs.writeFileSync(path.join(sharedDir, 'references', 'guide', 'b.md'), 'ref b');
+
+		const updated = await callTool(userCtx, 'update_skill', {
+			name: 'shared-full',
+			description: 'patched desc',
+			references: [{ path: 'a.md', content: 'patched a' }]
+		});
+		expect(isError(updated)).toBe(false);
+
+		const user = await readSkill('user', 'u1', 'shared-full');
+		expect(user?.description).toBe('patched desc');
+		expect(user?.body).toBe('shared body');
+		expect(user?.frontmatter.triggers).toEqual([
+			{ keyword: 'deploy' },
+			{ intent: 'ship a release' }
+		]);
+		expect(user?.frontmatter.source).toBe('git:https://example.com/skills');
+		expect(user?.frontmatter.tools).toEqual(['fs_read']);
+		expect([...(user?.references ?? [])].sort()).toEqual([
+			'references/a.md',
+			'references/guide/b.md'
+		]);
+		expect(fs.readFileSync(path.join(skillDir('shared-full'), 'references', 'a.md'), 'utf8')).toBe(
+			'patched a'
+		);
+		// The shared copy is untouched.
+		expect(fs.readFileSync(path.join(sharedDir, 'references', 'a.md'), 'utf8')).toBe('ref a');
+	});
+
+	it('load_skill records the invocation with the user message of the turn, not the run ID', async () => {
+		await callTool(userCtx, 'create_skill', {
+			name: 'logged-skill',
+			description: 'd',
+			body: 'b',
+			tools: ['fs_read']
+		});
+		const res = await callTool(
+			{ ...userCtx, agentRunId: 'run-1', messageId: 'msg-1' },
+			'load_skill',
+			{
+				name: 'logged-skill'
+			}
+		);
+		const out = JSON.parse(resultText(res));
+		expect(out.declaredTools).toEqual(['fs_read']);
+		expect(out.note).toContain('declaredTools');
+		const row = getDb()
+			.prepare('SELECT message_id, triggered_by FROM skill_invocations WHERE skill_name = ?')
+			.get('logged-skill');
+		expect(row).toEqual({ message_id: 'msg-1', triggered_by: 'agent' });
 	});
 
 	it('returns an error when updating a missing skill', async () => {

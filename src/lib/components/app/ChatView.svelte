@@ -27,6 +27,7 @@
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ChatTopbar from './ChatTopbar.svelte';
+	import { setChatViewContext } from './chat-view-context.js';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
 	import MessageNav from './MessageNav.svelte';
@@ -130,6 +131,12 @@
 	// Local edits apply immediately; reloaded page data (e.g. a task settled or
 	// renamed on T3) replaces them.
 	let conversation = $derived(initialConversation);
+	// Coding tasks proposed in this chat (`propose_coding_task`) start from here.
+	setChatViewContext(() => ({
+		conversationId: conversation.id,
+		codingEnvironments,
+		codingAgents
+	}));
 	// The unsent text survives switching chats (this view remounts per chat).
 	let input = $state(drafts.get(untrack(() => initialConversation.id)));
 	const speech = sttModel ? createServerSpeechRecognition(sttModel) : createSpeechRecognition();
@@ -640,12 +647,12 @@
 		};
 	});
 
-	// Replies can change with no stream attached (a coding task's background
-	// subagent reporting progress after its turn ended); reload them while idle.
-	// Only the newest page is fetched: these updates can arrive every second, and
-	// reloading the whole page data would also re-send the layout and model list.
+	// Messages can change with no stream attached (a coding task's background
+	// subagent reporting progress after its turn ended, a proposed coding task's
+	// "finished" notice in a chat); reload them while idle. Only the newest page
+	// is fetched: these updates can arrive every second, and reloading the whole
+	// page data would also re-send the layout and model list.
 	$effect(() => {
-		if (!isCoding) return;
 		const id = conversation.id;
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		const reload = async () => {
@@ -1454,7 +1461,7 @@
 			items={navItems}
 			{scrollEl}
 			onjump={() => scroll?.stopScroll()}
-			class="hidden @4xl/chat:block"
+			class="left-[max(0.5rem,calc(50%-26.75rem))] hidden @4xl/chat:block"
 		/>
 	</div>
 	<div role="status" class="sr-only">{replyAnnouncement}</div>

@@ -1,7 +1,8 @@
 /**
  * Payload parsing and number/unit formatting for the ```calc widget. The math
- * MCP tools (calculate, convert_units, convert_many, statistics) return these
- * shapes as JSON so the model can paste them verbatim into the fence.
+ * MCP tools (calculate, convert_units, statistics) return these shapes as JSON
+ * so the model can paste them verbatim into the fence. A compound conversion
+ * (formerly the convert_many tool) has `from: { expression }` instead of a value.
  */
 
 export type Quantity = { value: number; unit: string; name?: string };

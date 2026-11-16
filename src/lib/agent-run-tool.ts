@@ -5,6 +5,7 @@
 
 import { isStoppedRun } from './agent-labels.js';
 import { openAskUserCall } from './ask-user.js';
+import { toolFailed } from './tool-meta.js';
 import type { AgentRun, AgentRunStatus } from './types.js';
 
 export const AGENT_RUN_TOOLS: ReadonlySet<string> = new Set(['start_agent', 'get_agent_run']);
@@ -158,6 +159,21 @@ export function describeRefusal(text: string): { reason: string; runId: string |
 		reason: reason ? reason.charAt(0).toUpperCase() + reason.slice(1) : 'The call failed',
 		runId: null
 	};
+}
+
+/**
+ * Why a tool call was turned down (a thrown error, or an MCP error result),
+ * worded for the user; null when it wasn't.
+ */
+export function toolRefusal(part: {
+	state: string;
+	output?: unknown;
+	errorText?: string;
+}): { reason: string; runId: string | null } | null {
+	if (part.state === 'output-error') return describeRefusal(part.errorText ?? '');
+	if (!toolFailed(part)) return null;
+	const content = (part.output as { content?: { text?: unknown }[] }).content;
+	return describeRefusal(typeof content?.[0]?.text === 'string' ? content[0].text : '');
 }
 
 /** The reply's first readable line, for the collapsed row. */

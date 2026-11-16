@@ -1,5 +1,6 @@
 import ivm from 'isolated-vm';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -13,6 +14,9 @@ const MAX_TIMEOUT = 30000; // 30 seconds
 const MAX_MEMORY = 512; // 512MB
 const DEFAULT_TIMEOUT = 5000; // 5 seconds
 const DEFAULT_MEMORY = 128; // 128MB
+const MIN_TIMEOUT = 100; // 100ms
+/** isolated-vm's own floor; smaller limits are silently raised. */
+const MIN_MEMORY = 8; // 8MB
 const MAX_CONCURRENT = 4;
 /** Largest file readFile/writeFile move between host and sandbox. */
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB
@@ -31,11 +35,7 @@ function validateWorkspaceDir(workspaceDir: string | null): string {
 	if (workspaceDir == null || workspaceDir === '') {
 		throw new Error('workspace directory is not configured');
 	}
-	const resolved = path.resolve(workspaceDir);
-	if (!path.isAbsolute(resolved)) {
-		throw new Error('workspace directory must be an absolute path');
-	}
-	return resolved;
+	return path.resolve(workspaceDir);
 }
 
 export function createCodeExecServer(ctx: CallerContext): McpServer {
@@ -53,6 +53,9 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 
 		try {
 			const workspaceDir = validateWorkspaceDir(ctx.workspaceDir);
+			// A fresh conversation has no workspace dir yet; the real-path checks in
+			// readFile/writeFile need the root to exist.
+			await fsp.mkdir(workspaceDir, { recursive: true });
 
 			if (activeExecutions >= MAX_CONCURRENT) {
 				return err(`Too many concurrent executions (max ${MAX_CONCURRENT}). Try again later.`);
@@ -92,10 +95,10 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 					if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_BYTES) {
 						throw new Error(`content too large (max ${MAX_FILE_BYTES / 1024 / 1024}MB)`);
 					}
-					try {
-						fs.lstatSync(abs);
-					} catch (e) {
-						if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+					// Same rule as readFile: never write through a symlink, even one
+					// that points inside the workspace.
+					if (fs.lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) {
+						throw new Error('accessing symlinks is not allowed');
 					}
 					fs.mkdirSync(path.dirname(abs), { recursive: true });
 					fs.writeFileSync(abs, content, 'utf-8');
@@ -186,21 +189,25 @@ export function createCodeExecServer(ctx: CallerContext): McpServer {
 		'code_exec',
 		{
 			description:
-				'Execute JavaScript code in a sandbox with workspace file access. Use console.log()/console.error() for output; the last evaluated expression is returned as the result. Globals: readFile(path), writeFile(path, content).',
+				'Run modern JavaScript in an isolated sandbox. Output via console.log/console.error; the last expression is the result (awaited if a promise). ' +
+				'NOT Node.js: no process, require, import, global, Buffer, fetch or network. ' +
+				'Workspace files only via the globals readFile(path): string and writeFile(path, content: string), paths relative to the workspace.',
 			inputSchema: {
 				code: z.string().describe('JavaScript code to execute'),
 				timeoutMs: z
 					.number()
 					.int()
+					.min(MIN_TIMEOUT)
 					.max(MAX_TIMEOUT)
 					.optional()
-					.describe(`Timeout in milliseconds (default: ${DEFAULT_TIMEOUT}, max: ${MAX_TIMEOUT})`),
+					.describe(`Timeout in ms (default ${DEFAULT_TIMEOUT})`),
 				memoryMb: z
 					.number()
 					.int()
+					.min(MIN_MEMORY)
 					.max(MAX_MEMORY)
 					.optional()
-					.describe(`Memory limit in MB (default: ${DEFAULT_MEMORY}, max: ${MAX_MEMORY})`)
+					.describe(`Memory limit in MB (default ${DEFAULT_MEMORY})`)
 			}
 		},
 		async ({ code, timeoutMs = DEFAULT_TIMEOUT, memoryMb = DEFAULT_MEMORY }) => {

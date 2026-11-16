@@ -5,6 +5,9 @@
 	import McpUsageStats from '$lib/components/app/settings/McpUsageStats.svelte';
 	import { DEFAULT_USAGE_PERIOD, type UsagePeriod } from '$lib/components/app/usage/usage.js';
 	import McpUsageDialog from '$lib/components/app/settings/McpUsageDialog.svelte';
+	import McpContextBar, {
+		type ContextEntry
+	} from '$lib/components/app/settings/McpContextBar.svelte';
 	import McpTestDialog, {
 		type McpTestResult
 	} from '$lib/components/app/settings/McpTestDialog.svelte';
@@ -20,6 +23,8 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { resolve } from '$app/paths';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import SearchIcon from '@lucide/svelte/icons/search';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import CopyButton from '$lib/components/app/settings/CopyValue.svelte';
 	import BlocksIcon from '@lucide/svelte/icons/blocks';
 	import { BUILTIN_ICON, BUILTIN_PURPOSE } from '$lib/components/app/settings/mcp-builtins.js';
@@ -371,30 +376,109 @@
 		}
 	}
 
-	/** The usage line under a server: how much it was used, or that it sat idle. */
-	function usageLabel(server: McpServerInfo): string {
+	/** Hover text for a server's usage columns: the full picture behind the short numbers. */
+	function usageTitle(server: McpServerInfo): string {
 		const usage = data.usage[server.id];
-		const window = `${data.usageWindowDays} days`;
-		if (!usage || usage.calls === 0) {
-			const last = usage?.lastUsedAt ? ` · last used ${formatTimeAgo(usage.lastUsedAt)}` : '';
-			return `Not used in the last ${window}${last}`;
-		}
-		const parts = [
-			`${plural(usage.calls, 'call')} in ${window}`,
-			plural(usage.users, 'user'),
-			...(usage.errors > 0 ? [`${failureRate(usage.calls, usage.errors)} failed`] : [])
-		];
-		if (usage.lastUsedAt) parts.push(`last used ${formatTimeAgo(usage.lastUsedAt)}`);
-		return parts.join(' · ');
+		const window = `the last ${data.usageWindowDays} days`;
+		if (!usage?.calls) return `No tool calls in ${window} · click for details`;
+		const parts = [`${plural(usage.calls, 'call')} in ${window}`, plural(usage.users, 'user')];
+		if (usage.errors > 0) parts.push(`${plural(usage.errors, 'failure')}`);
+		return `${parts.join(' · ')} · click for details`;
 	}
 
-	function isUnused(server: McpServerInfo): boolean {
-		return !data.usage[server.id]?.calls;
+	/** Share of failed calls, when it's high enough to be worth flagging on the row. */
+	function failureRate(server: McpServerInfo): number | null {
+		const usage = data.usage[server.id];
+		// A failure or two on a barely used server is noise, not a signal.
+		if (!usage || usage.calls < FAILURE_FLAG_MIN_CALLS || usage.errors === 0) return null;
+		const rate = Math.max(1, Math.round((usage.errors / usage.calls) * 100));
+		return rate >= FAILURE_FLAG_PERCENT ? rate : null;
+	}
+	const FAILURE_FLAG_PERCENT = 10;
+	const FAILURE_FLAG_MIN_CALLS = 5;
+
+	/** Non-default connection settings, shown as quiet labels before the host. */
+	function rowFlags(server: McpServerInfo) {
+		const flags: { label: string; title: string }[] = [];
+		if (server.auth === 'oauth')
+			flags.push({ label: 'OAuth', title: 'Each user signs in under Settings → Connected apps' });
+		if (server.transport === 'sse')
+			flags.push({ label: 'SSE', title: 'Server-sent events transport' });
+		if (server.transport === 'stdio')
+			flags.push({ label: 'stdio', title: 'Runs a local command on the Chatty host' });
+		return flags;
+	}
+
+	/** Shared by the column header and every row, so the stat columns stay aligned. */
+	const STAT_GROUP = 'mr-2 flex gap-3 px-1';
+	const COL = {
+		tools: 'w-9',
+		calls: 'w-18 whitespace-nowrap',
+		lastUsed: 'w-15 whitespace-nowrap'
+	} as const;
+
+	/** Last used before the usage window: the date recedes like an empty cell. */
+	function isStale(server: McpServerInfo): boolean {
+		const at = data.usage[server.id]?.lastUsedAt;
+		return !at || Date.now() - at > data.usageWindowDays * 86_400_000;
+	}
+	/** An empty stat cell (no tools listed, no calls), so used servers stand out. */
+	const DIM = 'text-muted-foreground/70';
+
+	/** When a server was last called: "7m ago", "50d ago", then a short date; "–" if never. */
+	const lastUsed = (server: McpServerInfo) => {
+		const at = data.usage[server.id]?.lastUsedAt;
+		if (!at) return '–';
+		const days = Math.floor((Date.now() - at) / 86_400_000);
+		if (days < 30) return formatTimeAgo(at);
+		if (days < 90) return `${days}d ago`;
+		return new Intl.DateTimeFormat(undefined, { month: 'short', year: '2-digit' }).format(at);
+	};
+
+	/** The host of a remote server's URL; the full URL stays in the hover text. */
+	function shortConnection(server: McpServerInfo): string {
+		if (server.transport === 'stdio') {
+			// The package or script it runs names it best: "@scope/server-x" -> "server-x".
+			const last = server.args.findLast((arg) => !arg.startsWith('-'));
+			return last?.split(/[\\/]/).pop() || (server.command ?? '');
+		}
+		if (!server.url) return '';
+		try {
+			const url = new URL(server.url);
+			// The port stays in the hover text; the host is what tells servers apart.
+			return url.hostname + (url.pathname === '/' || url.pathname === '/mcp' ? '' : url.pathname);
+		} catch {
+			return server.url;
+		}
 	}
 
 	const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
-	const failureRate = (calls: number, errors: number) =>
-		`${Math.max(1, Math.round((errors / calls) * 100))}%`;
+
+	let query = $state('');
+	const needle = $derived(query.trim().toLowerCase());
+	const matches = (server: McpServerInfo) =>
+		!needle ||
+		[server.name, BUILTIN_PURPOSE[server.name] ?? '', connectionLabel(server)].some((text) =>
+			text.toLowerCase().includes(needle)
+		);
+	const shownCustom = $derived(customServers.filter(matches));
+	const shownBuiltin = $derived(builtinServers.filter(matches));
+
+	/** A list's enabled servers whose tool definitions were measured (on their last connect). */
+	const contextEntries = (servers: McpServerInfo[]): ContextEntry[] =>
+		servers
+			.filter((s) => (enabledOverride[s.id] ?? s.enabled) && s.toolTokens)
+			.map((s) => ({
+				id: s.id,
+				name: s.name,
+				tokens: s.toolTokens ?? 0,
+				toolCount: s.toolCount,
+				always: (loadModeOverride[s.id] ?? s.loadMode) === 'always'
+			}));
+	const onCount = (servers: McpServerInfo[]) =>
+		servers.filter((s) => enabledOverride[s.id] ?? s.enabled).length;
+	const matchCount = (shown: McpServerInfo[], all: McpServerInfo[]) =>
+		`${shown.length} of ${all.length} match`;
 
 	type Tab = 'servers' | 'statistics';
 	// The tab and the statistics period live in the URL, so a reload or a shared link keeps them.
@@ -564,6 +648,20 @@
 {#snippet serverRow(server: McpServerInfo)}
 	{@const enabled = enabledOverride[server.id] ?? server.enabled}
 	{@const connection = connectionLabel(server)}
+	{@const calls = data.usage[server.id]?.calls ?? 0}
+	{@const failing = failureRate(server)}
+	{@const alwaysLoaded = (loadModeOverride[server.id] ?? server.loadMode) === 'always'}
+	<!-- Phones have no stat columns: the numbers join the meta line instead. -->
+	{@const mobileParts = [
+		enabled ? null : 'Off',
+		server.toolCount ? plural(server.toolCount, 'tool') : null,
+		calls
+			? `${plural(calls, 'call')} · ${lastUsed(server)}`
+			: data.usage[server.id]?.lastUsedAt
+				? `Last used ${lastUsed(server)}`
+				: 'No calls'
+	].filter((part): part is string => !!part)}
+	{@const mobileStats = mobileParts.join(' · ')}
 	<SettingsListItem
 		title={server.name}
 		muted={!enabled}
@@ -574,62 +672,83 @@
 			<Icon class="size-4" />
 		{/snippet}
 		{#snippet badges()}
-			{#if server.toolCount}
-				<Badge
-					variant="outline"
-					class="text-muted-foreground tabular-nums"
-					title="Tools listed the last time Chatty connected"
-				>
-					{plural(server.toolCount, 'tool')}
-				</Badge>
-			{/if}
-			{#if !server.builtin && server.transport !== 'builtin'}
-				<Badge variant="outline">{transportLabels[server.transport]}</Badge>
-			{/if}
-			{#if server.auth === 'oauth'}
-				<Badge variant="secondary" title="Each user signs in under Settings → Connected apps">
-					OAuth
-				</Badge>
-			{/if}
-			{#if enabled && isUnused(server)}
-				<Badge
-					variant="outline"
+			<!-- Only what departs from the norm; tool count and usage live in the columns. -->
+			{#if alwaysLoaded}
+				<!-- Common among built-ins, so a quiet glyph rather than a label. -->
+				<span
 					class="text-muted-foreground"
-					title="No tool calls in the last {data.usageWindowDays} days"
+					title="Always loaded: all its tools are in every prompt instead of loading when the model searches for them"
+					><ZapIcon class="size-3.5" /><span class="sr-only">Always loaded</span></span
 				>
-					Unused
-				</Badge>
 			{/if}
-			{#if (loadModeOverride[server.id] ?? server.loadMode) === 'deferred'}
-				<Badge
-					variant="secondary"
-					title="Tools load only when the model searches for them, keeping the prompt small"
+			{#if failing !== null}
+				<!-- Opens the usage details, where the failing tools are listed. -->
+				<button
+					type="button"
+					class="relative z-10 rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+					title="{data.usage[server.id]?.errors} of {data.usage[server.id]
+						?.calls} calls failed in the last {data.usageWindowDays} days · click for details"
+					onclick={() => openUsage(server)}
 				>
-					On demand
-				</Badge>
+					<Badge
+						variant="outline"
+						class="border-amber-500/40 font-normal text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+						><TriangleAlertIcon class="size-3" />{failing}% failed</Badge
+					>
+				</button>
 			{/if}
 		{/snippet}
 		{#snippet meta()}
-			{#if connection}
-				<span class="font-mono" title={connection}>{connection}</span>
-			{:else if BUILTIN_PURPOSE[server.name]}
-				{BUILTIN_PURPOSE[server.name]}
-			{/if}
+			<!-- Wraps to a second line rather than cutting the purpose short. -->
+			<span
+				class="line-clamp-2 block whitespace-normal"
+				title={connection || BUILTIN_PURPOSE[server.name] || undefined}
+			>
+				<!-- Settings that differ from the default lead the line as plain labels. -->
+				{#each rowFlags(server) as flag (flag.label)}<span
+						class="font-medium text-foreground/70"
+						title={flag.title}>{flag.label}</span
+					><span aria-hidden="true" class="mx-1">·</span>{/each}
+				{#if connection}
+					<span class="font-mono" title={connection}>{shortConnection(server)}</span>
+				{:else}
+					{BUILTIN_PURPOSE[server.name] ?? ''}
+				{/if}
+			</span>
+			<!-- One unbreakable chunk per stat, so a wrap never strands a separator. -->
+			<span class="flex flex-wrap gap-x-1.5 text-foreground/70 tabular-nums sm:hidden">
+				{#each mobileParts as part, i (i)}
+					<span class="whitespace-nowrap {part === 'No calls' ? DIM : ''}"
+						>{#if i > 0}<span aria-hidden="true" class="mr-1.5">·</span>{/if}{part}</span
+					>
+				{/each}
+			</span>
 		{/snippet}
-		<!-- Above the row's stretched click target, so it opens the usage, not the edit dialog. -->
-		<button
-			type="button"
-			class="relative z-10 w-fit rounded-sm text-left text-xs text-muted-foreground hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-			onclick={() => openUsage(server)}
-		>
-			{usageLabel(server)}
-		</button>
 		{#snippet trailing()}
 			{#if testBusyId === server.id}
 				<span class="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
 					<Loader2Icon class="size-4 animate-spin" />Testing…
 				</span>
 			{/if}
+			<!-- Opens the usage details; sits above the row's stretched edit target. -->
+			<button
+				type="button"
+				class="{STAT_GROUP} rounded-md py-1 text-xs text-muted-foreground tabular-nums hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-sm:hidden"
+				class:opacity-60={!enabled}
+				title={usageTitle(server)}
+				aria-label="Usage of {server.name}: {mobileStats}"
+				onclick={() => openUsage(server)}
+			>
+				<span class="{COL.tools} text-right {server.toolCount ? '' : DIM}"
+					>{server.toolCount ?? '–'}</span
+				>
+				<span class="{COL.calls} text-right {calls ? '' : DIM}"
+					>{calls ? calls.toLocaleString() : '–'}</span
+				>
+				<span class="{COL.lastUsed} text-right {isStale(server) ? DIM : ''}"
+					>{lastUsed(server)}</span
+				>
+			</button>
 			<Switch
 				checked={enabled}
 				aria-label="Enable {server.name}"
@@ -664,47 +783,110 @@
 	</Tabs.Content>
 </Tabs.Root>
 
-{#snippet serverList()}
-	<SettingsSection
-		title="Your servers"
-		description="Servers you've connected over HTTP, SSE or stdio."
-		flush
+{#snippet columnHeader()}
+	<!-- Column labels; mirrors the row's trailing layout (stats, switch, menu). -->
+	<div
+		class="sticky top-0 z-20 flex items-center gap-2 border-y border-border/60 bg-card px-(--card-spacing) py-1.5 text-xs font-medium text-foreground/70 max-sm:hidden"
+		aria-hidden="true"
 	>
-		{#if customServers.length === 0}
-			<div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
-				<div
-					class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
-				>
-					<BlocksIcon class="size-5" />
-				</div>
-				<div class="flex flex-col gap-1">
-					<p class="text-sm font-medium">No servers added yet</p>
-					<p class="text-sm text-muted-foreground">
-						Add a remote server over HTTP or run a local one over stdio.
-					</p>
-				</div>
-				<Button size="sm" onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
-			</div>
-		{:else}
-			<ul class="divide-y divide-border/60" aria-label="Your MCP servers">
-				{#each customServers as server (server.id)}
-					{@render serverRow(server)}
-				{/each}
-			</ul>
-		{/if}
-	</SettingsSection>
+		<span class="flex-1"></span>
+		<span class={STAT_GROUP}>
+			<span class="{COL.tools} text-right">Tools</span>
+			<span
+				class="{COL.calls} text-right"
+				title="Tool calls in the last {data.usageWindowDays} days"
+				>Calls ({data.usageWindowDays}d)</span
+			>
+			<span class="{COL.lastUsed} text-right" title="Most recent tool call, ever">Last used</span>
+		</span>
+		<!-- Switch, then the actions menu. -->
+		<span class="w-11"></span>
+		<span class="w-8"></span>
+	</div>
+{/snippet}
 
-	{#if builtinServers.length > 0}
+<!-- Each list gets its own column labels, which stick while it scrolls (as on Models). -->
+{#snippet serverRows(servers: McpServerInfo[], label: string)}
+	{@render columnHeader()}
+	<ul class="divide-y divide-border/60 border-t border-border/60 sm:border-t-0" aria-label={label}>
+		{#each servers as server (server.id)}
+			{@render serverRow(server)}
+		{/each}
+	</ul>
+{/snippet}
+
+<!-- How a list's servers split the prompt; hidden while searching or before anything was measured. -->
+{#snippet contextBar(servers: McpServerInfo[], label: string)}
+	{@const entries = contextEntries(servers)}
+	{#if entries.length > 0 && !needle}
+		<McpContextBar {entries} {label} />
+	{/if}
+{/snippet}
+
+{#snippet serverList()}
+	{#if data.servers.length > 8}
+		<div class="relative">
+			<SearchIcon
+				class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+			/>
+			<Input
+				type="search"
+				bind:value={query}
+				placeholder="Search servers"
+				aria-label="Search servers"
+				class="h-9 pl-9"
+			/>
+		</div>
+	{/if}
+	{#if needle && shownCustom.length === 0 && shownBuiltin.length === 0}
+		<p class="px-1 py-6 text-center text-sm text-muted-foreground">
+			No servers match “{query.trim()}”.
+		</p>
+	{/if}
+	{#if !needle || shownCustom.length > 0}
+		<SettingsSection
+			title="Your servers"
+			description={needle
+				? matchCount(shownCustom, customServers)
+				: customServers.length
+					? `${onCount(customServers)} of ${customServers.length} on`
+					: "Servers you've connected over HTTP, SSE or stdio."}
+			flush
+			class="overflow-visible"
+		>
+			{#if customServers.length === 0}
+				<div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
+					<div
+						class="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"
+					>
+						<BlocksIcon class="size-5" />
+					</div>
+					<div class="flex flex-col gap-1">
+						<p class="text-sm font-medium">No servers added yet</p>
+						<p class="text-sm text-muted-foreground">
+							Add a remote server over HTTP or run a local one over stdio.
+						</p>
+					</div>
+					<Button size="sm" onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
+				</div>
+			{:else}
+				{@render contextBar(customServers, 'Tool context of your servers')}
+				{@render serverRows(shownCustom, 'Your MCP servers')}
+			{/if}
+		</SettingsSection>
+	{/if}
+
+	{#if shownBuiltin.length > 0}
 		<SettingsSection
 			title="Built-in"
-			description="Tools that ship with Chatty. Turn off any you don't want models to use."
+			description={needle
+				? matchCount(shownBuiltin, builtinServers)
+				: `Included with Chatty · ${onCount(builtinServers)} of ${builtinServers.length} on`}
 			flush
+			class="overflow-visible"
 		>
-			<ul class="divide-y divide-border/60" aria-label="Built-in MCP servers">
-				{#each builtinServers as server (server.id)}
-					{@render serverRow(server)}
-				{/each}
-			</ul>
+			{@render contextBar(builtinServers, 'Tool context of the built-in servers')}
+			{@render serverRows(shownBuiltin, 'Built-in MCP servers')}
 		</SettingsSection>
 	{/if}
 {/snippet}

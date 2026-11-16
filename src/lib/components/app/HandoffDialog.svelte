@@ -16,6 +16,7 @@
 	import CodingModelSelect from './CodingModelSelect.svelte';
 	import { AUTONOMY_OPTIONS, CodingTaskState } from '$lib/state/coding-task.svelte.js';
 	import type { CodingEnvironment } from '$lib/coding-environments.js';
+	import type { CodingTaskProposal } from '$lib/coding-task-proposal.js';
 	import type { Agent, AgentRun, Conversation } from '$lib/types.js';
 
 	let {
@@ -23,10 +24,19 @@
 		conversationId,
 		codingEnvironments,
 		codingAgents,
-		messageCount
+		messageCount,
+		proposal = null,
+		onstarted
 	}: {
+		/** After a task started (before navigating to it), with its conversation id. */
+		onstarted?: (conversationId: string) => void;
 		open?: boolean;
 		conversationId: string;
+		/**
+		 * A task the chat model proposed (`propose_coding_task`). The dialog then
+		 * starts from it instead of drafting one from the chat.
+		 */
+		proposal?: CodingTaskProposal | null;
 		/**
 		 * Messages in the chat. While it's unchanged, reopening keeps the drafted
 		 * (or edited) task instead of drafting again; without it every opening redrafts.
@@ -125,9 +135,21 @@
 		untrack(() => {
 			if (!taskInitialized && codingEnvironments.length > 0) {
 				taskInitialized = true;
-				task.init();
+				// A proposal that names its project starts there; the user can still change it.
+				const wanted = proposal?.target;
+				if (wanted && codingEnvironments.some((e) => e.id === wanted.environmentId)) {
+					target = 'task';
+					void task.selectEnvironment(wanted.environmentId, { projectId: wanted.projectId });
+				} else {
+					task.init();
+				}
 			}
 			redraftArmedFor = null;
+			if (proposal) {
+				// Reopening keeps the user's edits to the proposal.
+				if (!prompt.trim()) prompt = draftedPrompt = proposal.prompt;
+				return;
+			}
 			const key = messageCount === undefined ? null : `${conversationId}:${messageCount}`;
 			if (key !== null && key === draftedFor && prompt.trim()) return;
 			draftedFor = key;
@@ -145,7 +167,12 @@
 				const res = await fetch('/api/coding/tasks', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ ...task.draft, prompt })
+					body: JSON.stringify({
+						...task.draft,
+						prompt,
+						title: proposal?.title ?? undefined,
+						proposal: proposal?.source ?? undefined
+					})
 				});
 				if (!res.ok) throw new Error(await errorMessage(res, 'Could not start the coding task'));
 				conversation = ((await res.json()) as { conversation: Conversation }).conversation.id;
@@ -161,6 +188,7 @@
 			open = false;
 			// Started: the next handoff begins from a fresh draft.
 			draftedFor = null;
+			if (conversation) onstarted?.(conversation);
 			toast.success('Coding agent started');
 			if (conversation) await goto(resolve(`/chat/${conversation}`));
 		} catch (e) {
@@ -179,7 +207,9 @@
 		escapeKeydownBehavior={submitting ? 'ignore' : 'close'}
 	>
 		<Dialog.Header>
-			<Dialog.Title>Hand off to a coding agent</Dialog.Title>
+			<Dialog.Title>
+				{proposal ? 'Start the proposed coding task' : 'Hand off to a coding agent'}
+			</Dialog.Title>
 			<Dialog.Description>
 				The coding agent hasn't seen this chat. It starts from the task below.
 			</Dialog.Description>
@@ -189,16 +219,19 @@
 			<div class="grid gap-2">
 				<div class="flex items-center justify-between gap-2">
 					<Label for="handoff-prompt">Task</Label>
-					<Button
-						variant="ghost"
-						size="xs"
-						class={redraftArmed ? 'text-destructive hover:text-destructive' : undefined}
-						disabled={drafting || submitting}
-						onclick={redraft}
-					>
-						<RefreshCwIcon />
-						{redraftArmed ? 'Discard edits and redraft?' : 'Redraft'}
-					</Button>
+					<!-- A proposal is the chat's own task; redrafting from the chat would replace it. -->
+					{#if !proposal}
+						<Button
+							variant="ghost"
+							size="xs"
+							class={redraftArmed ? 'text-destructive hover:text-destructive' : undefined}
+							disabled={drafting || submitting}
+							onclick={redraft}
+						>
+							<RefreshCwIcon />
+							{redraftArmed ? 'Discard edits and redraft?' : 'Redraft'}
+						</Button>
+					{/if}
 				</div>
 				{#if drafting}
 					<div
@@ -226,7 +259,8 @@
 				</p>
 			</div>
 
-			{#if codingEnvironments.length > 0 && codingAgents.length > 0}
+			<!-- A linked proposal starts a new task: a saved agent's run can't be linked to it. -->
+			{#if codingEnvironments.length > 0 && codingAgents.length > 0 && !proposal?.source}
 				<Tabs.Root value={target} onValueChange={(v) => (target = v as Target)}>
 					<Tabs.List class="w-full">
 						<Tabs.Trigger value="task" disabled={submitting}>New coding task</Tabs.Trigger>

@@ -128,8 +128,61 @@ function histogram(sorted: number[], min: number, max: number): number[] {
 	return counts;
 }
 
-const FENCE_HINT =
-	'Returns JSON; to show it as a result card in chat, reply with a ```calc fenced code block containing that JSON verbatim.';
+type ToolResult = ReturnType<typeof text>;
+
+/** `value` in unit `from` -> each target unit. */
+function convertValue(value: number, from: string, units: string[]): ToolResult {
+	const fromKind = getMeasureKind(from as Unit);
+	if (fromKind === undefined) return err(`unknown unit: "${from}"`);
+	const out = [];
+	for (const unit of units) {
+		const toKind = getMeasureKind(unit as Unit);
+		if (toKind === undefined) return err(`unknown unit: "${unit}"`);
+		if (fromKind !== toKind) {
+			return err(
+				`cannot convert between different measures: ${measureName(fromKind)} and ${measureName(toKind)}`
+			);
+		}
+		let result: number;
+		try {
+			result = convert(value, from as Unit).to(unit as Unit) as number;
+		} catch (e) {
+			return err(e instanceof Error ? e.message : String(e));
+		}
+		const bad = checkFinite(result);
+		if (bad) return bad;
+		out.push(quantity(result, unit));
+	}
+	return payload({
+		kind: 'convert',
+		measure: measureName(fromKind),
+		from: quantity(value, from),
+		to: out
+	});
+}
+
+/** A quantity expression ("2h 30min", "5 km") -> each target unit. */
+function convertQuantity(expression: string, units: string[]): ToolResult {
+	const out = [];
+	let measure = '';
+	for (const unit of units) {
+		const toKind = getMeasureKind(unit as Unit);
+		if (toKind === undefined) return err(`unknown unit: "${unit}"`);
+		let result: number;
+		try {
+			result = convertMany(expression as never).to(unit as Unit) as number;
+		} catch (e) {
+			return err(e instanceof Error ? e.message : String(e));
+		}
+		const bad = checkFinite(result);
+		if (bad) return bad;
+		measure = measureName(toKind);
+		out.push(quantity(result, unit));
+	}
+	return payload({ kind: 'convert', measure, from: { expression: expression.trim() }, to: out });
+}
+
+const FENCE_HINT = 'For a result card, reply with a ```calc block of the result JSON verbatim.';
 
 export function createMathServer(): McpServer {
 	const server = new McpServer({ name: 'ai-chat-math', version: '0.2.0' });
@@ -138,11 +191,10 @@ export function createMathServer(): McpServer {
 		'calculate',
 		{
 			description:
-				'Evaluate an arithmetic expression exactly. Operators: + - * / % (modulo) ^ or ** (power), ! (factorial), parentheses. ' +
+				'Evaluate an arithmetic expression exactly; prefer it over code for any calculation. Operators: + - * / % (modulo) ^ or ** (power) ! (factorial), parentheses. ' +
 				'Constants: pi, e, tau. Functions: ' +
 				MATH_FUNCTION_NAMES.join(', ') +
-				'. log(x) is natural log, log(x, base) any base; round(x, places); trig uses radians (deg()/rad() convert). ' +
-				'Percentages: "15% of 80" is 0.15 * 80. ' +
+				'. log(x) is natural log, log(x, base); round(x, places); trig in radians (deg()/rad() convert). "15% of 80" works. ' +
 				FENCE_HINT,
 			inputSchema: {
 				expression: z.string().min(1).max(2000).describe('e.g. "(2^10 - 24) / sqrt(16)"')
@@ -166,7 +218,7 @@ export function createMathServer(): McpServer {
 		'statistics',
 		{
 			description:
-				'Summary statistics of a list of numbers: count, sum, mean, median, quartiles, min, max, variance and standard deviation (population by default; sample=true for sample). ' +
+				'Summary statistics of numbers (prefer it over code): count, sum, mean, median, quartiles, min, max, variance, standard deviation. Population by default; sample: true for sample. ' +
 				FENCE_HINT,
 			inputSchema: {
 				values: z.array(z.number()).min(1).max(100_000),
@@ -206,79 +258,25 @@ export function createMathServer(): McpServer {
 		'convert_units',
 		{
 			description:
-				'Convert a numeric value from one unit to one or more others (length, mass, temperature, time, data, volume, etc.). Use list_units to discover valid unit strings. ' +
+				'Exact unit conversion (length, mass, temperature, time, data, volume, area, energy, …); prefer it over code. ' +
+				'Pass value + from, or only from as a compound quantity ("2h 30min", "5kg 200g"). Look up unit names with list_units. ' +
 				FENCE_HINT,
 			inputSchema: {
-				value: z.number(),
-				from: z.string().describe('Source unit, e.g. "km", "mile", "C", "GB"'),
+				value: z
+					.number()
+					.optional()
+					.describe('Amount in `from` units; omit when `from` is a quantity'),
+				from: z
+					.string()
+					.describe(
+						'Source unit ("km", "mile", "C", "GB") or, without value, a quantity ("2h 30min")'
+					),
 				to: targets
 			}
 		},
 		async ({ value, from, to }) => {
-			const fromKind = getMeasureKind(from as Unit);
-			if (fromKind === undefined) return err(`unknown unit: "${from}"`);
-			const out = [];
-			for (const unit of typeof to === 'string' ? [to] : to) {
-				const toKind = getMeasureKind(unit as Unit);
-				if (toKind === undefined) return err(`unknown unit: "${unit}"`);
-				if (fromKind !== toKind) {
-					return err(
-						`cannot convert between different measures: ${measureName(fromKind)} and ${measureName(toKind)}`
-					);
-				}
-				let result: number;
-				try {
-					result = convert(value, from as Unit).to(unit as Unit) as number;
-				} catch (e) {
-					return err(e instanceof Error ? e.message : String(e));
-				}
-				const bad = checkFinite(result);
-				if (bad) return bad;
-				out.push(quantity(result, unit));
-			}
-			return payload({
-				kind: 'convert',
-				measure: measureName(fromKind),
-				from: quantity(value, from),
-				to: out
-			});
-		}
-	);
-
-	server.registerTool(
-		'convert_many',
-		{
-			description:
-				'Convert a compound quantity expression (e.g. "2h 30min", "5kg 200g") to one or more units. Use list_units to discover valid unit strings. ' +
-				FENCE_HINT,
-			inputSchema: {
-				expression: z.string().describe('Quantity expression, e.g. "2h 30min" or "5kg 200g"'),
-				to: targets
-			}
-		},
-		async ({ expression, to }) => {
-			const out = [];
-			let measure = '';
-			for (const unit of typeof to === 'string' ? [to] : to) {
-				const toKind = getMeasureKind(unit as Unit);
-				if (toKind === undefined) return err(`unknown unit: "${unit}"`);
-				let result: number;
-				try {
-					result = convertMany(expression as never).to(unit as Unit) as number;
-				} catch (e) {
-					return err(e instanceof Error ? e.message : String(e));
-				}
-				const bad = checkFinite(result);
-				if (bad) return bad;
-				measure = measureName(toKind);
-				out.push(quantity(result, unit));
-			}
-			return payload({
-				kind: 'convert',
-				measure,
-				from: { expression: expression.trim() },
-				to: out
-			});
+			const units = typeof to === 'string' ? [to] : to;
+			return value === undefined ? convertQuantity(from, units) : convertValue(value, from, units);
 		}
 	);
 
@@ -286,9 +284,9 @@ export function createMathServer(): McpServer {
 		'list_units',
 		{
 			description:
-				'List units supported by convert_units and convert_many, optionally filtered by measure. Returns each unit with its full names and symbols.',
+				'List the units convert_units accepts (names and symbols), optionally for one measure.',
 			inputSchema: {
-				measure: MEASURE_ENUM.optional().describe('Limit results to a single measure')
+				measure: MEASURE_ENUM.optional()
 			}
 		},
 		async ({ measure }) => {

@@ -147,4 +147,103 @@ describe('weather server', () => {
 		expect(forecastCall).toBeDefined();
 		expect(forecastCall).toContain('forecast_days=3');
 	});
+
+	describe('geocoding', () => {
+		const AMSTERDAM_NL = {
+			name: 'Amsterdam',
+			latitude: 52.37,
+			longitude: 4.89,
+			country: 'Netherlands',
+			country_code: 'NL',
+			admin1: 'North Holland'
+		};
+		const AMSTERDAM_US = {
+			name: 'Amsterdam',
+			latitude: 42.94,
+			longitude: -74.19,
+			country: 'United States',
+			country_code: 'US',
+			admin1: 'New York'
+		};
+		const PORTLAND_ME = {
+			name: 'Portland',
+			latitude: 43.66,
+			longitude: -70.26,
+			country: 'United States',
+			country_code: 'US',
+			admin1: 'Maine'
+		};
+		const PORTLAND_OR = {
+			name: 'Portland',
+			latitude: 45.52,
+			longitude: -122.68,
+			country: 'United States',
+			country_code: 'US',
+			admin1: 'Oregon'
+		};
+
+		/** Fake geocoder: matches on `name` only, honours `countryCode`, like Open-Meteo. */
+		function geocoder(places: Array<Record<string, unknown>>) {
+			return mockFetch((url) => {
+				if (!url.includes('geocoding')) return { body: FORECAST };
+				const params = new URL(url).searchParams;
+				const code = params.get('countryCode');
+				const results = places.filter(
+					(p) => p.name === params.get('name') && (!code || p.country_code === code)
+				);
+				return { body: results.length ? { results } : {} };
+			});
+		}
+
+		function geoUrls(spy: ReturnType<typeof mockFetch>): URL[] {
+			return spy.mock.calls
+				.map((c) => new URL(String(c[0])))
+				.filter((u) => u.hostname.startsWith('geocoding'));
+		}
+
+		it('searches only the name and passes an ISO-2 code as countryCode', async () => {
+			const spy = geocoder([AMSTERDAM_US, AMSTERDAM_NL]);
+			vi.stubGlobal('fetch', spy);
+			const payload = JSON.parse(resultText(await callGetWeather({ location: 'Amsterdam, NL' })));
+			expect(payload.location.country).toBe('Netherlands');
+			const [first] = geoUrls(spy);
+			expect(first.searchParams.get('name')).toBe('Amsterdam');
+			expect(first.searchParams.get('countryCode')).toBe('NL');
+		});
+
+		it('matches a country or region name among several candidates', async () => {
+			vi.stubGlobal('fetch', geocoder([AMSTERDAM_US, AMSTERDAM_NL, PORTLAND_ME, PORTLAND_OR]));
+			const nl = JSON.parse(
+				resultText(await callGetWeather({ location: 'Amsterdam, Netherlands' }))
+			);
+			expect(nl.location.country).toBe('Netherlands');
+			const or = JSON.parse(resultText(await callGetWeather({ location: 'Portland, Oregon' })));
+			expect(or.location.admin1).toBe('Oregon');
+			const both = JSON.parse(
+				resultText(await callGetWeather({ location: 'Portland, Oregon, US' }))
+			);
+			expect(both.location.admin1).toBe('Oregon');
+		});
+
+		it('asks for more candidates only when there is a qualifier', async () => {
+			const spy = geocoder([AMSTERDAM_US, AMSTERDAM_NL]);
+			vi.stubGlobal('fetch', spy);
+			await callGetWeather({ location: 'Amsterdam' });
+			await callGetWeather({ location: 'Amsterdam, Netherlands' });
+			const [plain, qualified] = geoUrls(spy);
+			expect(plain.searchParams.get('count')).toBe('1');
+			expect(Number(qualified.searchParams.get('count'))).toBeGreaterThan(1);
+		});
+
+		it('falls back to the first result when nothing matches the qualifier', async () => {
+			vi.stubGlobal('fetch', geocoder([AMSTERDAM_US, AMSTERDAM_NL]));
+			const atlantis = JSON.parse(
+				resultText(await callGetWeather({ location: 'Amsterdam, Atlantis' }))
+			);
+			expect(atlantis.location.country).toBe('United States');
+			// A two-letter qualifier that is not a country code ("TX") falls back to a name search.
+			const tx = JSON.parse(resultText(await callGetWeather({ location: 'Amsterdam, TX' })));
+			expect(tx.location.country).toBe('United States');
+		});
+	});
 });

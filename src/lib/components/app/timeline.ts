@@ -1,4 +1,5 @@
 import { isAskUserPart } from '$lib/ask-user.js';
+import { CODING_TASK_NOTICE_PART, isCodingTaskProposalPart } from '$lib/coding-task-proposal.js';
 import { readHtmlRender } from '$lib/html-render.js';
 import { describeTool, toolFailed, type ToolKind } from '$lib/tool-meta.js';
 
@@ -34,6 +35,8 @@ function isActivity(part: PartLike): boolean {
 	if (readHtmlRender(part)) return false;
 	// So is an agent's question for the user (answered in the composer's panel).
 	if (isAskUserPart(part)) return false;
+	// And a proposed coding task, which waits on the user to start it.
+	if (isCodingTaskProposalPart(part)) return false;
 	return part.type === 'reasoning' || isToolPart(part);
 }
 
@@ -51,7 +54,7 @@ export function hasVisibleContent(parts: PartLike[]): boolean {
 		if (part.type === 'text' || part.type === 'reasoning') {
 			return ((part as { text?: string }).text ?? '').trim() !== '';
 		}
-		return part.type === 'file' || isToolPart(part);
+		return part.type === 'file' || part.type === CODING_TASK_NOTICE_PART || isToolPart(part);
 	});
 }
 

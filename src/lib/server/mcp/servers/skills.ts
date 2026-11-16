@@ -7,11 +7,12 @@ import { recordSkillInvocation } from '../../db/repo/skill-invocations.js';
 import { publishServerEvent } from '../../events/bus.js';
 import { readSkill, resolveSkill, invalidateSkillCache } from '../../skills/scanner.js';
 import { findSkillFile, resolveSkillDir, resolveSkillReference } from '../../skills/paths.js';
-import { deleteSkill, writeSkill } from '../../skills/store.js';
+import { copySkillReferences, deleteSkill, writeSkill } from '../../skills/store.js';
 import type { CallerContext } from '../types.js';
 import { err, text } from './shared.js';
 
 const MAX_REFERENCE_BYTES = 256 * 1024;
+const REFERENCE_PATH = 'Path under references/, e.g. "template.md" or "guide/setup.md"';
 
 export function createSkillsServer(ctx: CallerContext): McpServer {
 	const server = new McpServer({ name: 'ai-chat-skills', version: '0.1.0' });
@@ -20,7 +21,7 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 		'load_skill',
 		{
 			description:
-				'Load a skill (instruction pack) by name. Returns the skill instructions and the list of reference files available via read_skill_reference.',
+				'Load a skill (instruction pack) by name: returns its instructions and its reference files (read them with read_skill_reference).',
 			inputSchema: { name: z.string().describe('Skill name, e.g. "summarize-conversation"') }
 		},
 		async ({ name }) => {
@@ -32,22 +33,27 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 				scope: skill.scope,
 				userId: ctx.userId,
 				conversationId: ctx.conversationId ?? null,
-				messageId: ctx.agentRunId ?? null,
+				// The user message the turn answers (the reply is only persisted later).
+				messageId: ctx.messageId ?? null,
 				triggeredBy: ctx.agentRunId ? 'agent' : 'auto'
 			});
-			const missing = skill.frontmatter.tools.length > 0 ? skill.frontmatter.tools : [];
+			// This server cannot see which tools the conversation has registered (it
+			// is created per caller, independent of the chat's tool set), so it can't
+			// compute which declared tools are missing — the model can, from its own
+			// tool list, so it is asked to check.
+			const declaredTools = skill.frontmatter.tools;
 			return text(
 				JSON.stringify({
 					name: skill.name,
 					title: skill.title,
 					description: skill.description,
 					when: skill.frontmatter.when,
-					declaredTools: skill.frontmatter.tools,
+					declaredTools,
 					references: skill.references,
 					body: skill.body,
-					...(missing.length > 0
+					...(declaredTools.length > 0
 						? {
-								note: 'This skill declares tools it expects to be available. If a listed tool is not registered in this conversation, tell the user it is unavailable.'
+								note: 'This skill declares tools it expects to be available. Compare declaredTools with the tools you have; if one is missing, tell the user it is unavailable.'
 							}
 						: {})
 				})
@@ -58,12 +64,10 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'read_skill_reference',
 		{
-			description: 'Read a reference markdown file bundled with a skill',
+			description: 'Read a reference file bundled with a skill.',
 			inputSchema: {
 				name: z.string().describe('Skill name'),
-				path: z
-					.string()
-					.describe('Reference path as listed by load_skill, e.g. "references/examples.md"')
+				path: z.string().describe('Path as listed by load_skill, e.g. "references/examples.md"')
 			}
 		},
 		async ({ name, path: relPath }) => {
@@ -89,15 +93,15 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 		'create_skill',
 		{
 			description:
-				'Create a new user-scope skill (instruction pack). Fails if a skill with this name already exists in user or shared scope. Use lowercase dash-separated names.',
+				'Create a user skill (instruction pack). Fails if the name exists as a user or shared skill.',
 			inputSchema: {
 				name: z
 					.string()
 					.describe('Skill name: lowercase letters, digits, dashes, e.g. "weekly-report"'),
-				description: z.string().describe('When the skill applies, max 500 chars'),
+				description: z.string().describe('When the skill applies (max 500 chars)'),
 				body: z.string().describe('Skill instructions (markdown)'),
 				title: z.string().optional().describe('Display title; defaults to humanized name'),
-				when: z.string().optional().describe('Optional extra condition describing when to load'),
+				when: z.string().optional().describe('Extra condition for when to load it'),
 				tools: z
 					.array(z.string())
 					.optional()
@@ -105,16 +109,12 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 				references: z
 					.array(
 						z.object({
-							path: z
-								.string()
-								.describe(
-									'Reference filename as reported by load_skill, e.g. "template.md" or "guide/setup.md"; stored under references/'
-								),
+							path: z.string().describe(REFERENCE_PATH),
 							content: z.string()
 						})
 					)
 					.optional()
-					.describe('Optional reference markdown files bundled with the skill')
+					.describe('Reference markdown files bundled with the skill')
 			}
 		},
 		async ({ name, description, body, title, when, tools, references }) => {
@@ -144,25 +144,21 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 		'update_skill',
 		{
 			description:
-				'Update an existing user-scope skill. If the name only exists as a shared skill, creates a user-scope override (shadow) instead. Omitted fields keep their current values.',
+				'Update a user skill; omitted fields are kept, null clears. For a shared skill this creates a user override.',
 			inputSchema: {
 				name: z.string().describe('Skill name'),
 				body: z.string().optional().describe('New skill instructions (markdown)'),
 				title: z.string().optional(),
 				description: z.string().optional(),
-				when: z.string().nullable().optional().describe('Set to null to clear'),
+				when: z.string().nullable().optional(),
 				tools: z.array(z.string()).optional(),
 				enabled: z.boolean().optional(),
-				version: z.string().nullable().optional().describe('Set to null to clear'),
-				author: z.string().nullable().optional().describe('Set to null to clear'),
+				version: z.string().nullable().optional(),
+				author: z.string().nullable().optional(),
 				references: z
 					.array(
 						z.object({
-							path: z
-								.string()
-								.describe(
-									'Reference filename as reported by load_skill, e.g. "template.md" or "guide/setup.md"; stored under references/'
-								),
+							path: z.string().describe(REFERENCE_PATH),
 							content: z.string()
 						})
 					)
@@ -184,21 +180,30 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 		}) => {
 			const existing = await resolveSkill(ctx.userId, name);
 			if (!existing) return err(`skill not found: ${name}`);
+			// A shared-only skill gets a user-scope override that starts as a full
+			// copy of it (frontmatter and reference files), with the patch applied.
+			const creatingOverride = existing.scope === 'shared';
 			let skill;
 			try {
 				skill = await writeSkill('user', ctx.userId, {
 					name: existing.name,
 					title: title ?? existing.title,
 					description: description ?? existing.description,
+					triggers: existing.frontmatter.triggers,
 					when: when === undefined ? existing.frontmatter.when : when,
 					tools: tools ?? existing.frontmatter.tools,
 					enabled: enabled ?? existing.enabled,
+					source: existing.frontmatter.source,
 					version: version === undefined ? existing.version : version,
 					author: author === undefined ? existing.author : author,
 					body: body ?? existing.body
 				});
-				await writeReferences(ctx.userId, name, references);
+				if (creatingOverride) {
+					await copySkillReferences('shared', 'user', ctx.userId, existing.name);
+				}
+				await writeReferences(ctx.userId, existing.name, references);
 			} catch (e) {
+				if (creatingOverride) await deleteSkill('user', ctx.userId, existing.name);
 				return err(e instanceof Error ? e.message : 'failed to update skill');
 			}
 			publishServerEvent(ctx.userId, { type: 'skills.changed' });
@@ -210,8 +215,7 @@ export function createSkillsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'delete_skill',
 		{
-			description:
-				'Delete a user-scope skill, including its reference files. Shared skills cannot be deleted this way.',
+			description: "Delete a user skill and its reference files (shared skills can't be deleted).",
 			inputSchema: { name: z.string().describe('Skill name') }
 		},
 		async ({ name }) => {

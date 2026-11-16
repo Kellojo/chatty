@@ -17,11 +17,29 @@ describe('mcp-servers repo', () => {
 	it('seeds the bundled servers', () => {
 		const names = repo.listMcpServers(db).map((r) => r.name);
 		expect(names).toEqual(
-			expect.arrayContaining(['webfetch', 'datetime', 'chat-search', 'fs', 'settings', 'wait'])
+			expect.arrayContaining(['webfetch', 'datetime', 'chat-search', 'fs', 'subagents', 'coding'])
 		);
+		expect(names).not.toContain('settings');
+		expect(names).not.toContain('wait');
 		expect(names).not.toContain('bash');
 		expect(names).not.toContain('documents');
 		expect(repo.listMcpServers(db).every((r) => r.builtin === 1)).toBe(true);
+	});
+
+	it('records tool count and token estimate, exposed on the public shape', () => {
+		const created = repo.createMcpServer(db, {
+			name: 'measured',
+			transport: 'http',
+			url: 'https://mcp.example.com'
+		});
+		expect(repo.toPublic(created).toolTokens).toBeNull();
+		repo.setMcpToolStats(db, created.id, 3, 420);
+		let pub = repo.toPublic(repo.getMcpServer(db, created.id)!);
+		expect(pub).toMatchObject({ toolCount: 3, toolTokens: 420 });
+		// A changed estimate alone is still written.
+		repo.setMcpToolStats(db, created.id, 3, 512);
+		pub = repo.toPublic(repo.getMcpServer(db, created.id)!);
+		expect(pub.toolTokens).toBe(512);
 	});
 
 	it('creates, reads and deletes a remote server', () => {
@@ -84,7 +102,7 @@ describe('mcp-servers repo', () => {
 		repo.updateMcpServer(db, 'builtin-fs', { enabled: false });
 		const names = repo.listEnabledMcpServers(db).map((r) => r.name);
 		expect(names).not.toContain('fs');
-		expect(names).toContain('settings');
+		expect(names).toContain('webfetch');
 	});
 
 	it('rejects duplicate names', () => {

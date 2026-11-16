@@ -23,6 +23,14 @@ const ARTICLE =
 	'<link rel="icon" href="/static/icon.svg"><meta property="og:image" content="img/cover.png">' +
 	'</head><body><p>Article body</p></body></html>';
 
+const RICH =
+	'<html><head><title>Rich</title></head><body><nav><a href="/home">Home</a></nav>' +
+	'<h1>Main &amp; Title</h1><p>Some <strong>bold</strong> and <em>italic</em> text with ' +
+	'<a href="/docs?a=1&amp;b=2">a link</a> and <code>x &lt; y</code>.</p>' +
+	'<ul><li>One</li><li>Two<ol><li>Nested</li></ol></li></ul>' +
+	'<pre><code class="language-js">if (a &lt; b) {\n  go();\n}</code></pre>' +
+	'<p>Caf&eacute;? &copy; 2024 &#8211; &quot;quoted&quot;&nbsp;end</p></body></html>';
+
 let httpServer: http.Server;
 let base: string;
 
@@ -49,6 +57,22 @@ beforeAll(async () => {
 		}
 		if (req.url === '/article') {
 			res.writeHead(200, { 'content-type': 'text/html' }).end(ARTICLE);
+			return;
+		}
+		if (req.url === '/rich') {
+			res.writeHead(200, { 'content-type': 'text/html' }).end(RICH);
+			return;
+		}
+		if (req.url === '/doc.pdf') {
+			res.writeHead(200, { 'content-type': 'application/pdf' }).end('%PDF-1.7 \u0000\u0001binary');
+			return;
+		}
+		if (req.url === '/untyped') {
+			res.end(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x1a]));
+			return;
+		}
+		if (req.url === '/json') {
+			res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }).end('{"a":1}');
 			return;
 		}
 		if (req.url === '/plain') {
@@ -89,14 +113,54 @@ function resultText(res: unknown): string {
 }
 
 describe('webfetch server', () => {
-	it('converts HTML to markdown-ish text', async () => {
+	it('converts HTML to markdown by default', async () => {
 		const res = await callFetch({ url: `${base}/` });
 		const out = resultText(res);
-		expect(out).toContain('Hello World');
+		expect(out).toContain('Hello **World**');
 		expect(out).toContain('Second para');
 		expect(out).not.toContain('<p>');
 		expect(out).not.toContain('var x=1');
 		expect(out).not.toContain('color:red');
+	});
+
+	it('renders headings, links, lists, emphasis and code as markdown', async () => {
+		const out = resultText(await callFetch({ url: `${base}/rich`, format: 'markdown' }));
+		expect(out).toContain('# Main & Title');
+		expect(out).toContain('Some **bold** and *italic* text');
+		expect(out).toContain(`[a link](${base}/docs?a=1&b=2)`);
+		expect(out).toContain('`x < y`');
+		expect(out).toContain('- One\n- Two\n  1. Nested');
+		expect(out).toContain('```js\nif (a < b) {\n  go();\n}\n```');
+		expect(out).toContain('Café? © 2024 – "quoted" end');
+		expect(out).not.toContain('Home'); // nav is noise
+		expect(out).not.toMatch(/<\/?[a-z]/i);
+	});
+
+	it('returns plain text with decoded entities for format=text', async () => {
+		const out = resultText(await callFetch({ url: `${base}/rich`, format: 'text' }));
+		expect(out).toContain('Main & Title');
+		expect(out).not.toContain('#');
+		expect(out).not.toContain('**');
+		expect(out).toContain('Some bold and italic text with a link and x < y.');
+		expect(out).toContain('if (a < b) {\n  go();\n}');
+		expect(out).toContain('Café? © 2024 – "quoted" end');
+	});
+
+	it('refuses binary content types and points to fs_curl', async () => {
+		const res = await callFetch({ url: `${base}/doc.pdf` });
+		expect((res as { isError?: boolean }).isError).toBe(true);
+		expect(resultText(res)).toContain('application/pdf');
+		expect(resultText(res)).toContain('fs_curl');
+	});
+
+	it('refuses untyped binary bodies', async () => {
+		const res = await callFetch({ url: `${base}/untyped` });
+		expect((res as { isError?: boolean }).isError).toBe(true);
+		expect(resultText(res)).toContain('fs_curl');
+	});
+
+	it('returns JSON responses as text', async () => {
+		expect(resultText(await callFetch({ url: `${base}/json` }))).toBe('{"a":1}');
 	});
 
 	it('returns raw HTML with format=html', async () => {

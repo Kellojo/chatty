@@ -8,15 +8,6 @@ const MAX_BYTES = 1024 * 1024;
 /** Only the start of a page is searched for <head> metadata. */
 const MAX_HEAD_BYTES = 256 * 1024;
 
-function htmlToText(html: string): string {
-	return html
-		.replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, '')
-		.replace(/<\/(p|div|li|h1|h2|h3|h4|h5|h6|tr|section|article)>|<br\s*\/?>/gi, '\n')
-		.replace(/<[^>]*>/g, '')
-		.replace(/\n{3,}/g, '\n\n')
-		.trim();
-}
-
 /** A page's source card: one entry of a ```links fence's `links` array. */
 export type PageMeta = {
 	url: string;
@@ -41,18 +32,224 @@ const NAMED_ENTITIES: Record<string, string> = {
 	rsquo: '’',
 	lsquo: '‘',
 	rdquo: '”',
-	ldquo: '“'
+	ldquo: '“',
+	sbquo: '‚',
+	bdquo: '„',
+	laquo: '«',
+	raquo: '»',
+	lsaquo: '‹',
+	rsaquo: '›',
+	bull: '•',
+	copy: '©',
+	reg: '®',
+	trade: '™',
+	euro: '€',
+	pound: '£',
+	yen: '¥',
+	cent: '¢',
+	sect: '§',
+	para: '¶',
+	deg: '°',
+	plusmn: '±',
+	times: '×',
+	divide: '÷',
+	minus: '−',
+	frac12: '½',
+	frac14: '¼',
+	frac34: '¾',
+	larr: '←',
+	rarr: '→',
+	uarr: '↑',
+	darr: '↓',
+	iexcl: '¡',
+	iquest: '¿',
+	szlig: 'ß',
+	shy: '',
+	zwj: '',
+	zwnj: '',
+	ensp: ' ',
+	emsp: ' ',
+	thinsp: ' '
+};
+
+/** Combining marks for accented-letter entities such as `&eacute;` or `&Ouml;`. */
+const ACCENTS: Record<string, string> = {
+	grave: '̀',
+	acute: '́',
+	circ: '̂',
+	tilde: '̃',
+	uml: '̈',
+	ring: '̊',
+	cedil: '̧'
 };
 
 function decodeEntities(s: string): string {
-	return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+	return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (match, entity: string) => {
 		if (entity.startsWith('#')) {
 			const hex = entity[1] === 'x' || entity[1] === 'X';
 			const code = parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
 			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
 		}
-		return NAMED_ENTITIES[entity.toLowerCase()] ?? match;
+		const named = NAMED_ENTITIES[entity.toLowerCase()];
+		if (named !== undefined) return named;
+		const accented = /^([a-z])(grave|acute|circ|tilde|uml|ring|cedil)$/i.exec(entity);
+		if (accented) {
+			const letter = `${accented[1]}${ACCENTS[accented[2].toLowerCase()]}`.normalize('NFC');
+			if (letter.length === 1) return letter;
+		}
+		return match;
 	});
+}
+
+/** Tags whose content is never page text. */
+const NOISE = /<(script|style|noscript|template|svg|nav|head|iframe)\b[\s\S]*?<\/\1\s*>/gi;
+const BLOCK =
+	/<\/?(?:p|div|section|article|main|header|footer|aside|blockquote|figure|figcaption|table|thead|tbody|tfoot|tr|form|fieldset|address|details|summary|dl|dt|dd|hr|h[1-6]|ul|ol|li|pre)\b[^>]*>/gi;
+const BR = /<br\s*\/?>/gi;
+
+/**
+ * Keeps finished snippets (code, URLs, headings, lists) behind private-use-character
+ * tokens so later passes — whitespace collapsing, tag stripping, entity
+ * decoding — leave them alone. `restore` puts them back, nested tokens included.
+ */
+class Stash {
+	private parts: string[] = [];
+	put(s: string): string {
+		this.parts.push(s);
+		return `\uE000${this.parts.length - 1}\uE000`;
+	}
+	restore(s: string): string {
+		return s.replace(/\uE000(\d+)\uE000/g, (_, i: string) => this.restore(this.parts[Number(i)]));
+	}
+}
+
+const stripTags = (html: string) => html.replace(/<[^>]*>/g, '');
+
+/** Inline content as one line of decoded text. */
+const inline = (html: string) => decodeEntities(stripTags(html)).replace(/\s+/g, ' ').trim();
+
+/** Body with noise and comments dropped, `<pre>` blocks stashed and source whitespace collapsed. */
+function prepare(html: string, stash: Stash, fence: boolean): string {
+	return (
+		html
+			.replace(/[\uE000\uE001]/g, '')
+			.replace(/<!--[\s\S]*?-->/g, '')
+			.replace(NOISE, '')
+			.replace(/<pre\b([^>]*)>([\s\S]*?)<\/pre\s*>/gi, (_, attrsRaw: string, inner: string) => {
+				const code = decodeEntities(stripTags(inner.replace(BR, '\n'))).replace(/^\n+|\s+$/g, '');
+				if (!fence) return `\n\n${stash.put(code)}\n\n`;
+				const lang = /lang(?:uage)?-([\w+#-]+)/i.exec(`${attrsRaw} ${inner.slice(0, 200)}`)?.[1];
+				const longest = Math.max(0, ...[...code.matchAll(/`+/g)].map((m) => m[0].length));
+				const ticks = '`'.repeat(Math.max(3, longest + 1));
+				return `\n\n${stash.put(`${ticks}${lang ?? ''}\n${code}\n${ticks}`)}\n\n`;
+			})
+			// HTML collapses source whitespace; line breaks come from the markup alone.
+			.replace(/\s+/g, ' ')
+	);
+}
+
+/** Final pass of both formats: strip leftover tags, decode entities, tidy blank lines. */
+function finish(s: string, stash: Stash): string {
+	const body = decodeEntities(stripTags(s))
+		.split('\n')
+		.map((line) => line.replace(/[ \t]+/g, ' ').trim())
+		.join('\n')
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
+	return stash.restore(body);
+}
+
+function htmlToText(html: string): string {
+	const stash = new Stash();
+	const s = prepare(html, stash, false)
+		.replace(BR, '\n')
+		.replace(/<\/(?:td|th)\s*>/gi, '\t')
+		.replace(BLOCK, '\n');
+	return finish(s, stash);
+}
+
+/** Converts innermost lists first, so a parent item can indent the lists nested in it. */
+function convertLists(html: string, stash: Stash): string {
+	const innermost = /<(ul|ol)\b[^>]*>((?:(?!<(?:ul|ol)\b)[\s\S])*?)<\/\1\s*>/i;
+	const listToken = /\uE001(\d+)\uE001/g;
+	const lists: string[] = [];
+	let s = html;
+	for (let m = innermost.exec(s); m; m = innermost.exec(s)) {
+		const ordered = m[1].toLowerCase() === 'ol';
+		const items = m[2].split(/<li\b[^>]*>/i).slice(1);
+		const lines = items.map((item, i) => {
+			const marker = ordered ? `${i + 1}.` : '-';
+			const pad = ' '.repeat(marker.length + 1);
+			const nested = [...item.matchAll(listToken)].map((t) =>
+				lists[Number(t[1])].replace(/^/gm, pad)
+			);
+			const own = inline(item.replace(listToken, ' ').replace(BR, ' '));
+			return [`${marker} ${own}`, ...nested].join('\n');
+		});
+		lists.push(lines.join('\n'));
+		s = `${s.slice(0, m.index)}\uE001${lists.length - 1}\uE001${s.slice(m.index + m[0].length)}`;
+	}
+	// Top-level lists become stashed blocks; their text is already decoded.
+	return s.replace(listToken, (_, i: string) => `\n\n${stash.put(lists[Number(i)])}\n\n`);
+}
+
+/** HTML → markdown: headings, links, images, lists, emphasis, quotes, code and paragraphs. */
+function htmlToMarkdown(html: string, pageUrl: string): string {
+	const stash = new Stash();
+	const emphasis = (mark: string) => (match: string, _tag: string, inner: string) =>
+		stripTags(inner).trim() ? `${mark}${inner.trim()}${mark}` : inner;
+	const block = (md: string) => (md ? `\n\n${stash.put(md)}\n\n` : '');
+	let s = prepare(html, stash, true)
+		.replace(/<code\b[^>]*>([\s\S]*?)<\/code\s*>/gi, (_, inner: string) => {
+			const code = inline(inner);
+			if (!code) return '';
+			return stash.put(code.includes('`') ? `\`\` ${code} \`\`` : `\`${code}\``);
+		})
+		.replace(/<img\b[^>]*>/gi, (tag) => {
+			const a = attrs(tag);
+			const src = absolute(a.src, pageUrl);
+			return src ? stash.put(`![${(a.alt ?? '').replace(/[[\]]/g, '')}](${src})`) : '';
+		})
+		.replace(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi, (_, attrsRaw: string, inner: string) => {
+			const href = absolute(attrs(attrsRaw).href, pageUrl);
+			return href && stripTags(inner).trim() ? `[${inner.trim()}](${stash.put(href)})` : inner;
+		})
+		.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi, emphasis('**'))
+		.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi, emphasis('*'))
+		.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi, (_, level: string, inner: string) => {
+			const t = inline(inner);
+			return t ? block(`${'#'.repeat(Number(level))} ${t}`) : '';
+		})
+		.replace(/<hr\b[^>]*>/gi, () => block('---'))
+		.replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote\s*>/gi, (_, inner: string) => {
+			const paras = inner
+				.split(/<\/?(?:p|div)\b[^>]*>|<br\s*\/?>/i)
+				.map(inline)
+				.filter(Boolean);
+			return block(paras.map((p) => `> ${p}`).join('\n>\n'));
+		});
+	s = convertLists(s, stash)
+		.replace(BR, '\n')
+		.replace(/<\/(?:td|th)\s*>/gi, ' | ')
+		.replace(BLOCK, '\n\n');
+	return finish(s, stash);
+}
+
+/** Content types whose bytes are meant to be read as text. */
+function isTextType(mime: string): boolean {
+	return (
+		mime.startsWith('text/') ||
+		/[/+](?:json|xml|yaml|x-yaml|javascript|ecmascript|csv|x-ndjson|graphql)$/.test(mime) ||
+		mime === 'application/x-www-form-urlencoded' ||
+		mime === 'application/x-sh'
+	);
+}
+
+function binaryError(contentType: string) {
+	return err(
+		`the response is ${contentType} content, which can't be returned as text. ` +
+			'Use fs_curl to download it into the workspace instead.'
+	);
 }
 
 /** Collapse whitespace, decode entities and cap the length on a word boundary. */
@@ -143,9 +340,10 @@ export function createWebfetchServer(): McpServer {
 		'fetch',
 		{
 			description:
-				'Fetch a URL and return its body. format=html returns raw HTML; text/markdown strip markup from HTML pages. ' +
-				'HTML pages also return a JSON source card; to cite pages you fetched, end your answer with a ' +
-				'```links fenced code block containing {"links":[card, …]} (cards verbatim) and cite them inline as [1], [2] in that order.',
+				'Fetch a URL as text. HTML pages come as markdown (default), plain text or raw html per format. ' +
+				'Text responses only: save PDFs, images and other binary files to the workspace with fs_curl. ' +
+				'HTML pages also return a source card; to cite fetched pages, cite inline as [1], [2]… and end your answer with a ' +
+				'```links block of {"links":[card, …]} (cards verbatim, in citation order).',
 			inputSchema: {
 				url: z.string(),
 				format: z.enum(['markdown', 'text', 'html']).optional()
@@ -163,19 +361,31 @@ export function createWebfetchServer(): McpServer {
 				return err(`fetch failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
 			if (!res.ok) return err(`fetch failed with status ${res.status}`);
+			const contentType = res.headers.get('content-type') ?? '';
+			const mime = contentType.split(';')[0].trim().toLowerCase();
+			if (mime && !isTextType(mime)) {
+				await res.body?.cancel().catch(() => {});
+				return binaryError(mime);
+			}
 			let limited;
 			try {
 				limited = await readBodyLimited(res, MAX_BYTES);
 			} catch (e) {
 				return err(`fetch failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
+			// Untyped responses are sniffed: NUL bytes don't occur in text.
+			if (!mime && limited.body.subarray(0, 8192).includes(0)) {
+				return binaryError('binary (no content type)');
+			}
 			const body = limited.body.toString('utf-8');
 			const suffix = limited.truncated ? '\n… truncated' : '';
-			const contentType = res.headers.get('content-type') ?? '';
-			if (!/text\/html|application\/xhtml/i.test(contentType)) return text(body + suffix);
-			const result = text(fmt === 'html' ? body + suffix : htmlToText(body) + suffix);
+			if (!/text\/html|application\/xhtml/i.test(mime)) return text(body + suffix);
+			const pageUrl = res.url || url;
+			const converted =
+				fmt === 'html' ? body : fmt === 'text' ? htmlToText(body) : htmlToMarkdown(body, pageUrl);
+			const result = text(converted + suffix);
 			// The body stays the first content part; the card is an extra part.
-			const card = extractPageMeta(body, res.url || url);
+			const card = extractPageMeta(body, pageUrl);
 			result.content.push({ type: 'text', text: `Source card: ${JSON.stringify(card)}` });
 			return result;
 		}

@@ -12,7 +12,9 @@ interface GeoResult {
 	latitude: number;
 	longitude: number;
 	country?: string;
+	country_code?: string;
 	admin1?: string;
+	admin2?: string;
 }
 
 interface GeoResponse {
@@ -53,10 +55,56 @@ async function fetchJson(url: string): Promise<unknown> {
 	return res.json();
 }
 
+/** How many candidates to fetch when the location has a qualifier to match against. */
+const GEO_CANDIDATES = 10;
+
+const norm = (s: string | undefined) =>
+	(s ?? '').normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase();
+
+/** True when a "City, <qualifier>" qualifier names the result's country, country code or region. */
+function matchesQualifier(r: GeoResult, qualifier: string): boolean {
+	const q = norm(qualifier);
+	return [r.country_code, r.country, r.admin1, r.admin2].some(
+		(v) => v !== undefined && norm(v) === q
+	);
+}
+
+/**
+ * Open-Meteo's geocoder searches by place name only, so "Amsterdam, NL" finds
+ * nothing. Search the part before the first comma instead and use the rest to
+ * pick among the candidates: an ISO-2 code becomes the `countryCode` filter, any
+ * other qualifier (or a code that filters everything out) is matched against
+ * country / region names, falling back to the first (most relevant) result.
+ */
 async function geocode(location: string): Promise<GeoResult | null> {
-	const url = `${GEO_URL}?name=${encodeURIComponent(location)}&count=1&language=en&format=json`;
-	const data = (await fetchJson(url)) as GeoResponse;
-	return data.results?.[0] ?? null;
+	const [name, ...rest] = location.split(',').map((p) => p.trim());
+	const qualifiers = rest.filter(Boolean);
+	if (!name) return null;
+	const search = async (countryCode?: string): Promise<GeoResult[]> => {
+		const params = new URLSearchParams({
+			name,
+			count: String(qualifiers.length ? GEO_CANDIDATES : 1),
+			language: 'en',
+			format: 'json'
+		});
+		if (countryCode) params.set('countryCode', countryCode);
+		const data = (await fetchJson(`${GEO_URL}?${params}`)) as GeoResponse;
+		return data.results ?? [];
+	};
+	const code = qualifiers.find((q) => /^[a-z]{2}$/i.test(q));
+	if (code) {
+		// Not every two-letter qualifier is a country ("Paris, TX"): an unknown code is no match.
+		const byCode = await search(code.toUpperCase()).catch(() => []);
+		const others = qualifiers.filter((q) => q !== code);
+		if (byCode.length)
+			return byCode.find((r) => others.some((q) => matchesQualifier(r, q))) ?? byCode[0];
+	}
+	const results = await search();
+	for (const q of [...qualifiers].reverse()) {
+		const hit = results.find((r) => matchesQualifier(r, q));
+		if (hit) return hit;
+	}
+	return results[0] ?? null;
 }
 
 export function createWeatherServer(): McpServer {
@@ -66,18 +114,15 @@ export function createWeatherServer(): McpServer {
 		'get_weather',
 		{
 			description:
-				'Get current weather and daily forecast for a location. Returns a JSON payload. ' +
-				'To display a weather widget in chat, reply with a ```weather fenced code block ' +
-				'containing this JSON verbatim (no extra text inside the fence).',
+				'Current weather and daily forecast for a place. For a weather widget, reply with a ' +
+				'```weather block of the result JSON verbatim (nothing else inside the fence).',
 			inputSchema: {
-				location: z.string().describe('City or place name, e.g. "Berlin" or "Paris, FR"'),
-				days: z
-					.number()
-					.int()
-					.min(1)
-					.max(MAX_DAYS)
-					.optional()
-					.describe('Number of forecast days (1-16), default 7')
+				location: z
+					.string()
+					.describe(
+						'Place, optionally with country or region: "Berlin", "Paris, FR", "Portland, Oregon"'
+					),
+				days: z.number().int().min(1).max(MAX_DAYS).optional().describe('Forecast days (default 7)')
 			}
 		},
 		async ({ location, days }) => {

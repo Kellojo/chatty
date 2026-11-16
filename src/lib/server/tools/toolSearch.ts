@@ -63,8 +63,7 @@ const ON_DEMAND_BUILTIN_TOOLS: Record<string, readonly string[]> = {
 	skills: ['create_skill', 'update_skill', 'delete_skill'],
 	fs: ['fs_curl', 'fs_mkdir', 'fs_rm'],
 	memory: ['delete_concept'],
-	// `now` takes a timezone, which covers the common case.
-	datetime: ['format', 'convert']
+	math: ['list_units']
 };
 
 /**
@@ -258,7 +257,7 @@ export function withToolSearch(
 
 	const search = tool({
 		description:
-			'Load tools that are not loaded yet. Search by keywords describing the task (e.g. "weather forecast", "unit conversion") or by exact tool names (comma-separated). The matching tools can be called right after.',
+			'Load tools that are not loaded yet, by task keywords (e.g. "weather forecast", "unit conversion") or exact tool names (comma-separated). Found tools can be called right after.',
 		inputSchema: z.object({
 			query: z.string().min(1).max(500),
 			limit: z.number().int().min(1).max(MAX_LIMIT).optional()

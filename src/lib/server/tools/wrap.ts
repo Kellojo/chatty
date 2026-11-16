@@ -1,4 +1,5 @@
 import type { Tool } from 'ai';
+import { runInToolCall } from './call-context.js';
 
 /** How one tool call went, for usage tracking. */
 export interface McpToolCallOutcome {
@@ -45,7 +46,9 @@ export function wrapMcpTools(
 					onCall?.({ tool: name, ok, durationMs: performance.now() - started });
 				let result: unknown;
 				try {
-					result = await execute(input as never, options as never);
+					result = await runInToolCall(options?.toolCallId, () =>
+						execute(input as never, options as never)
+					);
 				} catch (e) {
 					settle(false);
 					onError?.(e);

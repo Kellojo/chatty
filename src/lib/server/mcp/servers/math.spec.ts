@@ -164,7 +164,7 @@ describe('math server', () => {
 			expect(temp.from.unit).toBe('°C');
 			expect(temp.to[0]).toEqual({ value: 68, unit: '°F', name: 'fahrenheit' });
 			const many = JSON.parse(
-				resultText(await callTool('convert_many', { expression: '2h 30min', to: ['min', 's'] }))
+				resultText(await callTool('convert_units', { from: '2h 30min', to: ['min', 's'] }))
 			);
 			expect(many.from).toEqual({ expression: '2h 30min' });
 			expect(many.measure).toBe('time');
@@ -179,20 +179,20 @@ describe('math server', () => {
 			expect(resultText(res)).toContain('different measures');
 		});
 
-		it('converts compound expressions', async () => {
-			expect(resultNum(await callTool('convert_many', { expression: '2h 30min', to: 'min' }))).toBe(
-				150
-			);
-			expect(resultNum(await callTool('convert_many', { expression: '5kg 200g', to: 'g' }))).toBe(
-				5200
-			);
+		it('converts compound quantities when value is omitted', async () => {
+			expect(resultNum(await callTool('convert_units', { from: '2h 30min', to: 'min' }))).toBe(150);
+			expect(resultNum(await callTool('convert_units', { from: '5kg 200g', to: 'g' }))).toBe(5200);
+			expect(resultNum(await callTool('convert_units', { from: '5 km', to: 'm' }))).toBe(5000);
 		});
 
-		it('rejects garbage expressions and unknown target units', async () => {
-			expect(isErr(await callTool('convert_many', { expression: 'garbage input', to: 'm' }))).toBe(
-				true
-			);
-			expect(isErr(await callTool('convert_many', { expression: '5km', to: 'bogus' }))).toBe(true);
+		it('rejects garbage quantities, unknown targets and cross-measure quantities', async () => {
+			expect(isErr(await callTool('convert_units', { from: 'garbage input', to: 'm' }))).toBe(true);
+			expect(isErr(await callTool('convert_units', { from: '5km', to: 'bogus' }))).toBe(true);
+			expect(isErr(await callTool('convert_units', { from: '5kg 200g', to: 'm' }))).toBe(true);
+		});
+
+		it('no longer exposes convert_many', async () => {
+			await expect(callTool('convert_many', { expression: '2h', to: 'min' })).rejects.toThrow();
 		});
 
 		it('lists all units when no measure is given', async () => {

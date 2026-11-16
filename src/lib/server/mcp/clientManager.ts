@@ -6,9 +6,10 @@ import { getDb, type Db } from '../db/index.js';
 import {
 	getMcpServer,
 	parseMcpArgs,
-	setMcpToolCount,
+	setMcpToolStats,
 	type McpServerRow
 } from '../db/repo/mcp-servers.js';
+import { estimateToolTokens } from '../llm/promptBreakdown.js';
 import { createLogger } from '../logger.js';
 import { connectionAuthProvider, oauthFetch, toSignInError } from './oauth.js';
 import { BUILTIN_SERVERS } from './servers/index.js';
@@ -54,7 +55,7 @@ export async function withTimeout<T>(
 
 /**
  * Lists a connected server's tools within MCP_LIST_TIMEOUT_MS and remembers how
- * many there are, for Settings → MCP servers.
+ * many there are and how much prompt they take, for Settings → MCP servers.
  */
 export async function listServerTools(
 	conn: ServerConnection,
@@ -67,10 +68,10 @@ export async function listServerTools(
 		MCP_LIST_TIMEOUT_MS
 	);
 	try {
-		setMcpToolCount(getDb(), row.id, Object.keys(tools).length);
+		setMcpToolStats(getDb(), row.id, Object.keys(tools).length, estimateToolTokens(tools));
 	} catch (e) {
 		// Only shown in settings: never fail a turn over it.
-		log.warn(`Recording the tool count of ${row.name} failed`, { error: String(e) });
+		log.warn(`Recording the tool stats of ${row.name} failed`, { error: String(e) });
 	}
 	return tools;
 }
@@ -84,6 +85,36 @@ export function connectServer(row: McpServerRow, ctx: CallerContext): Promise<Se
 	);
 }
 
+/**
+ * The AI SDK's MCP client drops an aborted request locally but never tells the
+ * server, so a builtin tool (e.g. `wait`) would keep running. Sends the
+ * protocol's `notifications/cancelled` when a request's signal aborts; the
+ * server then aborts the handler's `extra.signal`. A cancel for a request that
+ * already finished is ignored by the server.
+ */
+export function forwardCancellation(transport: InMemoryTransport): InMemoryTransport {
+	const send = transport.send.bind(transport);
+	transport.send = async (message, options) => {
+		const signal = (options as { signal?: AbortSignal } | undefined)?.signal;
+		if (signal && 'id' in message && 'method' in message && !signal.aborted) {
+			const requestId = message.id;
+			signal.addEventListener(
+				'abort',
+				() => {
+					void send({
+						jsonrpc: '2.0',
+						method: 'notifications/cancelled',
+						params: { requestId, reason: String(signal.reason ?? 'aborted') }
+					}).catch(() => undefined);
+				},
+				{ once: true }
+			);
+		}
+		return send(message, options);
+	};
+	return transport;
+}
+
 async function openServer(row: McpServerRow, ctx: CallerContext): Promise<ServerConnection> {
 	if (row.transport === 'builtin') {
 		const factory = BUILTIN_SERVERS[row.name];
@@ -92,7 +123,7 @@ async function openServer(row: McpServerRow, ctx: CallerContext): Promise<Server
 		const server = factory(ctx);
 		await server.connect(serverTransport);
 		const client = await createMCPClient({
-			transport: clientTransport as unknown as MCPTransport,
+			transport: forwardCancellation(clientTransport) as unknown as MCPTransport,
 			maxRetries: 2
 		});
 		return {

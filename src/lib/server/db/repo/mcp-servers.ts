@@ -28,6 +28,8 @@ export interface McpServerRow {
 	oauth_client_info_enc: string | null;
 	/** Tools listed on the last successful connect; null before the first. */
 	tool_count: number | null;
+	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
+	tool_tokens: number | null;
 }
 
 export interface McpServer {
@@ -48,6 +50,8 @@ export interface McpServer {
 	oauthScope: string | null;
 	/** Tools listed on the last successful connect; null before the first. */
 	toolCount: number | null;
+	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
+	toolTokens: number | null;
 }
 
 /** Parses the JSON `args` column, tolerating malformed values. */
@@ -77,7 +81,8 @@ export function toPublic(row: McpServerRow): McpServer {
 		oauthClientId: row.oauth_client_id,
 		hasOauthClientSecret: !!row.oauth_client_secret_enc,
 		oauthScope: row.oauth_scope,
-		toolCount: row.tool_count ?? null
+		toolCount: row.tool_count ?? null,
+		toolTokens: row.tool_tokens ?? null
 	};
 }
 
@@ -91,13 +96,15 @@ export function listEnabledMcpServers(db: Db): McpServerRow[] {
 	return listMcpServers(db).filter((row) => row.enabled === 1);
 }
 
-/** Remembers how many tools a server listed; writes only when the count changed. */
-export function setMcpToolCount(db: Db, id: string, count: number): void {
-	db.prepare('UPDATE mcp_servers SET tool_count = ? WHERE id = ? AND tool_count IS NOT ?').run(
-		count,
-		id,
-		count
-	);
+/**
+ * Remembers how many tools a server listed and roughly how many prompt tokens
+ * their definitions take; writes only when either changed.
+ */
+export function setMcpToolStats(db: Db, id: string, count: number, tokens: number): void {
+	db.prepare(
+		`UPDATE mcp_servers SET tool_count = ?, tool_tokens = ?
+		 WHERE id = ? AND (tool_count IS NOT ? OR tool_tokens IS NOT ?)`
+	).run(count, tokens, id, count, tokens);
 }
 
 export function getMcpServer(db: Db, id: string): McpServerRow | undefined {

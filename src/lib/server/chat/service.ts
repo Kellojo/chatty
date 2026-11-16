@@ -62,6 +62,7 @@ import {
 } from '../agents/stepCompaction.js';
 import { openAskUserCall } from '$lib/ask-user.js';
 import { ASK_USER_TOOL, askUserTool, withAskUserAnswers } from '../tools/askUser.js';
+import { withCodingTaskProposals } from './coding-proposals.js';
 import { getCodingConversation } from '../db/repo/coding-conversations.js';
 import { queueThreadStatePush } from '../t3/thread-state.js';
 import { CodingTaskError, startCodingTurn } from '../t3/tasks.js';
@@ -598,13 +599,44 @@ function storeTurnMessage(
 	return { id: stored.id, role: 'user', parts: stored.parts as UIMessage['parts'] };
 }
 
+/**
+ * The tools a conversation's turns may use: its agent's allowlist (a persona
+ * chat, an agent run), or undefined for every enabled tool. Subagents start
+ * from this too, so they never get more than the conversation that started them.
+ */
+export function conversationToolAllowlist(
+	db: Db,
+	conversation: Pick<ConversationRow, 'agent_id'>
+): string[] | undefined {
+	const agent = conversation.agent_id ? getAgent(db, conversation.agent_id) : undefined;
+	if (!agent?.tool_allowlist) return undefined;
+	try {
+		return JSON.parse(agent.tool_allowlist) as string[];
+	} catch {
+		// An unreadable allowlist allows nothing rather than everything.
+		return [];
+	}
+}
+
+/** Tools both lists allow; undefined (every tool) only when neither limits them. */
+function intersectAllowlists(
+	a: string[] | undefined,
+	b: string[] | undefined
+): string[] | undefined {
+	if (!a) return b;
+	if (!b) return a;
+	const allowed = new Set(b);
+	return a.filter((name) => allowed.has(name));
+}
+
 /** Everything between claiming the conversation and building the prompt. */
 async function prepareTurn(
 	db: Db,
 	userId: string,
 	initial: ConversationRow,
 	body: { message: UIMessage; branchFrom?: string },
-	run: RunTurnContext | undefined
+	run: RunTurnContext | undefined,
+	limits: TurnToolLimits = {}
 ) {
 	const conversation = ensureModel(db, userId, initial);
 	const agent = conversation.agent_id ? getAgent(db, conversation.agent_id) : undefined;
@@ -642,12 +674,15 @@ async function prepareTurn(
 		memoryEnabled: conversation.memory_enabled === 1,
 		workspaceDir:
 			workspaceForConversation(db, conversation) ?? conversationWorkspace(conversation.id),
-		agentAllowlist: agent?.tool_allowlist
-			? (JSON.parse(agent.tool_allowlist) as string[])
-			: undefined,
+		agentAllowlist: intersectAllowlists(
+			conversationToolAllowlist(db, conversation),
+			limits.allowlist
+		),
+		excludeTools: limits.exclude,
 		author: run?.author,
 		conversationId: conversation.id,
-		agentRunId: run?.runId ?? null
+		agentRunId: run?.runId ?? null,
+		messageId: lastUserMessage.id
 	});
 	// A run turn knows whether it may ask; in a chat the user talks to, an agent
 	// that is allowed to ask can always do so.
@@ -672,6 +707,15 @@ export interface ChatTurnRequest {
 export interface ChatTurnOptions {
 	/** Runs the turn for this agent run (dispatched, or resumed by the runner). */
 	run?: RunTurnContext;
+	/** Narrows the turn's tools (a subagent's: at most its parent's). */
+	tools?: TurnToolLimits;
+}
+
+export interface TurnToolLimits {
+	/** Only these tools (further narrowed by the conversation's agent, if it has an allowlist). */
+	allowlist?: string[];
+	/** Never these, whatever the allowlist says. */
+	exclude?: readonly string[];
 }
 
 export interface ChatTurn {
@@ -750,7 +794,7 @@ export async function runChatTurn(
 
 	let turn: Awaited<ReturnType<typeof prepareTurn>>;
 	try {
-		turn = await prepareTurn(db, userId, conversation, body, run);
+		turn = await prepareTurn(db, userId, conversation, body, run, opts.tools);
 	} catch (e) {
 		releaseStream(conversation.id, controller);
 		settleEarly({ status: 'failed', error: describe(e), abortReason: null, openAskUser: null });
@@ -857,7 +901,11 @@ export async function runChatTurn(
 			.filter(Boolean)
 			.join('\n\n');
 		history = historyFromDb(db, conversation.id);
-		promptHistory = withAskUserAnswers(await inlineAttachmentParts(db, conversation.id, history));
+		promptHistory = withCodingTaskProposals(
+			db,
+			conversation.id,
+			withAskUserAnswers(await inlineAttachmentParts(db, conversation.id, history))
+		);
 	} catch (e) {
 		try {
 			deleteMessage(db, assistantMessageId);

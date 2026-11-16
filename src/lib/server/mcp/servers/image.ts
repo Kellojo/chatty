@@ -5,24 +5,33 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { generateImage, NoImageGeneratedError, type GenerateImageResult } from 'ai';
 import { z } from 'zod';
 import { getDb } from '../../db/index.js';
-import { createAttachment, listAttachmentsByConversation } from '../../db/repo/attachments.js';
+import { createAttachment } from '../../db/repo/attachments.js';
 import { findModel, findRoleModel } from '../../db/repo/models.js';
+import { getProvider } from '../../db/repo/providers.js';
 import { createProxyRequest, finalizeProxyRequest } from '../../db/repo/proxy-requests.js';
 import { computeUsageCostUsd } from '../../proxy/pricing.js';
-import { resolveImageModel } from '../../llm/registry.js';
-import { ensureAttachmentsDir, resolveAttachment } from '../../workspaces.js';
+import { providerSlug, resolveImageModel } from '../../llm/registry.js';
+import { ensureAttachmentsDir } from '../../workspaces.js';
 import type { CallerContext } from '../types.js';
+import { extractAttachmentId, loadConversationAttachment } from './attachments.js';
 import { err, text } from './shared.js';
 
 const MAX_N = 4;
 const MAX_BASE64_LEN = 20 * 1024 * 1024;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
+// Mapped refs (`mapping:` provider IDs) are not supported for images, so the
+// ref always names a real provider row.
 function imageModelRef(): { providerId: string; modelId: string } | null {
 	const row = findRoleModel(getDb(), 'image');
 	if (!row || row.provider_id.startsWith('mapping:')) return null;
 	return { providerId: row.provider_id, modelId: row.model_id };
+}
+
+/** The key the image model reads `providerOptions` and writes `providerMetadata` under. */
+function providerOptionsKey(providerId: string): string {
+	const provider = getProvider(getDb(), providerId);
+	return provider ? providerSlug(provider) : providerId;
 }
 
 /**
@@ -85,22 +94,12 @@ export function createImageServer(ctx: CallerContext): McpServer {
 		'generate_image',
 		{
 			description:
-				'Generate one or more images from a text prompt using the configured image model. ' +
-				'Pass either size (WxH, e.g. "1024x1024") or aspectRatio (W:H, e.g. "16:9"), never both — ' +
-				'use the one the model supports (many providers, e.g. Flux/Imagen, use aspect ratios). ' +
-				'Generated images are saved as attachments and shown inline in the chat.',
+				'Generate images from a text prompt with the configured image model; they are shown in the chat. ' +
+				'Pass size or aspectRatio, never both: whichever the model supports (Flux, Imagen and others use aspect ratios).',
 			inputSchema: {
 				prompt: z.string().min(1),
-				size: z
-					.string()
-					.regex(SIZE_RE)
-					.optional()
-					.describe('"{width}x{height}", e.g. "1024x1024" — mutually exclusive with aspectRatio'),
-				aspectRatio: z
-					.string()
-					.regex(ASPECT_RE)
-					.optional()
-					.describe('"{w}:{h}", e.g. "16:9" — mutually exclusive with size'),
+				size: z.string().regex(SIZE_RE).optional().describe('WxH, e.g. "1024x1024"'),
+				aspectRatio: z.string().regex(ASPECT_RE).optional().describe('W:H, e.g. "16:9"'),
 				n: z.number().int().min(1).max(MAX_N).optional(),
 				quality: z.enum(['standard', 'hd']).optional(),
 				style: z.enum(['vivid', 'natural']).optional()
@@ -120,7 +119,7 @@ export function createImageServer(ctx: CallerContext): McpServer {
 				return err('pass only one of size or aspectRatio, not both');
 			}
 
-			const providerName = ref.providerId.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+			const providerName = providerOptionsKey(ref.providerId);
 			const providerOptions: Record<string, Record<string, string>> = {};
 			const opts: Record<string, string> = {};
 			if (quality) opts.quality = quality;
@@ -194,17 +193,14 @@ export function createImageServer(ctx: CallerContext): McpServer {
 		'edit_image',
 		{
 			description:
-				'Edit an existing image with a text instruction (e.g. "remove the background", "make it more vibrant"). ' +
-				'For the source image, pass the attachment ID shown next to an image in the conversation ' +
-				'(in a "[attachment id: <uuid>]" note) or a base64-encoded PNG/JPEG string. ' +
-				'The edited image is saved as an attachment and shown inline in the chat.',
+				'Edit an image with a text instruction (e.g. "remove the background"); the result is shown in the chat.',
 			inputSchema: {
 				prompt: z.string().min(1).describe('What to change in the image'),
 				image: z
 					.string()
 					.min(1)
 					.describe(
-						'Attachment ID of an image in this conversation, or a base64-encoded PNG/JPEG string'
+						'Attachment id from the image\'s "[attachment id: <uuid>]" note, or a base64 PNG/JPEG'
 					)
 			}
 		},
@@ -220,27 +216,14 @@ export function createImageServer(ctx: CallerContext): McpServer {
 			}
 
 			const db = getDb();
-			const uuidMatch = image.match(UUID_RE);
 			let normalized: string;
-			if (uuidMatch) {
-				const attachmentId = uuidMatch[0];
-				const available = listAttachmentsByConversation(db, ctx.conversationId).filter((a) =>
-					a.mime.startsWith('image/')
-				);
-				const row = available.find((a) => a.id === attachmentId);
-				if (!row) {
-					const hint =
-						available.length > 0
-							? `available image attachment IDs in this conversation: ${available.map((a) => a.id).join(', ')}`
-							: 'there are no image attachments in this conversation';
-					return err(`no image attachment found with id ${attachmentId} — ${hint}`);
-				}
-				try {
-					const bytes = await fsp.readFile(await resolveAttachment(row.path));
-					normalized = bytes.toString('base64');
-				} catch {
-					return err(`could not read attachment ${attachmentId} from disk`);
-				}
+			if (extractAttachmentId(image)) {
+				const loaded = await loadConversationAttachment(ctx.conversationId, image, {
+					kind: 'image',
+					accepts: (mime) => mime.startsWith('image/')
+				});
+				if (!loaded.ok) return err(loaded.error);
+				normalized = loaded.bytes.toString('base64');
 			} else {
 				if (image.length > MAX_BASE64_LEN) {
 					return err('image is too large (max 20MB base64)');

@@ -97,6 +97,42 @@ describe('code-exec server', () => {
 		expect(content).toBe('written content');
 	});
 
+	it('creates a not-yet-existing workspace dir before running', async () => {
+		const fresh = path.join(tmpDir, 'fresh-conversation', 'workspace');
+		const res = await callCodeExec(
+			{ code: "writeFile('fib.csv', '1,1,2,3'); readFile('fib.csv')" },
+			{ workspaceDir: fresh }
+		);
+		expect((res as { isError?: boolean }).isError).toBeFalsy();
+		expect(resultText(res)).toContain('Result: 1,1,2,3');
+		expect(await fsp.readFile(path.join(fresh, 'fib.csv'), 'utf-8')).toBe('1,1,2,3');
+	});
+
+	it('refuses to write through a symlink', async () => {
+		const target = path.join(tmpDir, 'link-target.txt');
+		await fsp.writeFile(target, 'original');
+		try {
+			await fsp.symlink(target, path.join(tmpDir, 'link.txt'));
+		} catch {
+			// Symlinks need extra privileges on Windows; nothing to test there.
+			expect(true).toBe(true);
+			return;
+		}
+		const res = await callCodeExec({ code: "writeFile('link.txt', 'changed')" });
+		expect((res as { isError?: boolean }).isError).toBe(true);
+		expect(await fsp.readFile(target, 'utf-8')).toBe('original');
+	});
+
+	it('rejects timeouts and memory limits below the minimum', async () => {
+		const tooFast = await callCodeExec({ code: '1', timeoutMs: 0 }).catch((e: unknown) => e);
+		const tooSmall = await callCodeExec({ code: '1', memoryMb: 1 }).catch((e: unknown) => e);
+		for (const res of [tooFast, tooSmall]) {
+			const failed =
+				res instanceof Error || (res as { isError?: boolean } | undefined)?.isError === true;
+			expect(failed).toBe(true);
+		}
+	});
+
 	it('prevents path traversal outside workspace', async () => {
 		const res = await callCodeExec({ code: "readFile('../etc/passwd')" });
 		expect((res as { isError?: boolean }).isError).toBe(true);

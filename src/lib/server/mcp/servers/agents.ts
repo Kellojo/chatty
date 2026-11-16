@@ -31,8 +31,20 @@ import { err, text } from './shared.js';
 const log = createLogger('mcp:agents');
 
 const MODEL_FIELD_DESCRIPTIONS = {
-	providerId: 'Provider id (must be given together with modelId)',
-	modelId: 'Model id (must be given together with providerId)'
+	providerId: 'Provider id; give together with modelId',
+	modelId: 'Model id; give together with providerId'
+};
+
+/** What the bare shared agent schema fields mean, for the model. */
+const FIELD_DESCRIPTIONS = {
+	triggerType:
+		'persona: selectable in chat; schedule: runs on triggerConfig.cron; event: runs on triggerConfig.event; http: started by HTTP request; manual: started by hand or start_agent',
+	triggerConfig:
+		'cron (schedule), event (event), every (run on every Nth event), instructions (the task a triggered run is given)',
+	systemPrompt: "The agent's role and standing instructions",
+	toolAllowlist: 'Tool names the agent may use; null: all tools',
+	canAsk:
+		'Whether its runs may ask the user: never, approvals (only to approve actions) or any question'
 };
 
 /** Card instructions, given once (create_agent); get/update_agent point at them. */
@@ -68,8 +80,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'list_agents',
 		{
-			description:
-				"List the current user's agents (including built-in agents), with their triggers and status"
+			description: "List the user's agents (including built-in ones) with their trigger and status."
 		},
 		async () => {
 			const db = getDb();
@@ -102,7 +113,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'get_agent',
 		{
-			description: `Get the full configuration of one agent by id. ${SAME_CARD}`,
+			description: `Get an agent's full configuration. ${SAME_CARD}`,
 			inputSchema: { agentId: z.string() }
 		},
 		async ({ agentId }) => {
@@ -120,11 +131,20 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'create_agent',
 		{
-			description:
-				'Create a new agent for the current user. triggerType persona makes it selectable in chat; schedule requires a cron expression; event requires an event name. ' +
-				CARD_HINT,
+			description: 'Create an agent for the user. ' + CARD_HINT,
 			inputSchema: {
 				...agentCreateSchema.shape,
+				triggerType: agentCreateSchema.shape.triggerType.describe(FIELD_DESCRIPTIONS.triggerType),
+				triggerConfig: agentCreateSchema.shape.triggerConfig.describe(
+					FIELD_DESCRIPTIONS.triggerConfig
+				),
+				systemPrompt: agentCreateSchema.shape.systemPrompt.describe(
+					FIELD_DESCRIPTIONS.systemPrompt
+				),
+				toolAllowlist: agentCreateSchema.shape.toolAllowlist.describe(
+					FIELD_DESCRIPTIONS.toolAllowlist
+				),
+				canAsk: agentCreateSchema.shape.canAsk.describe(FIELD_DESCRIPTIONS.canAsk),
 				providerId: agentCreateSchema.shape.providerId.describe(
 					MODEL_FIELD_DESCRIPTIONS.providerId
 				),
@@ -149,15 +169,20 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'update_agent',
 		{
-			description: `Update an agent owned by the current user; only given fields change. ${SAME_CARD}`,
+			description: `Update one of the user's agents; only given fields change. ${SAME_CARD}`,
 			inputSchema: {
 				agentId: z.string(),
 				...agentPatchSchema.shape,
 				providerId: agentPatchSchema.shape.providerId.describe(MODEL_FIELD_DESCRIPTIONS.providerId),
 				modelId: agentPatchSchema.shape.modelId.describe(MODEL_FIELD_DESCRIPTIONS.modelId),
+				triggerType: agentPatchSchema.shape.triggerType.describe(FIELD_DESCRIPTIONS.triggerType),
 				triggerConfig: agentPatchSchema.shape.triggerConfig.describe(
-					'Fields given here are merged into the existing trigger config'
-				)
+					`Merged into the existing config. ${FIELD_DESCRIPTIONS.triggerConfig}`
+				),
+				toolAllowlist: agentPatchSchema.shape.toolAllowlist.describe(
+					FIELD_DESCRIPTIONS.toolAllowlist
+				),
+				canAsk: agentPatchSchema.shape.canAsk.describe(FIELD_DESCRIPTIONS.canAsk)
 			}
 		},
 		async ({ agentId, ...patch }) => {
@@ -188,7 +213,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'delete_agent',
 		{
-			description: 'Delete an agent owned by the current user. Built-in agents cannot be deleted.',
+			description: "Delete one of the user's agents (built-in agents can't be deleted).",
 			inputSchema: { agentId: z.string() }
 		},
 		async ({ agentId }) => {
@@ -212,7 +237,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		'start_agent',
 		{
 			description:
-				"Start a run of the user's agent. Returns right away unless wait: true, which returns the agent's reply as `result` once the run finishes or asks a question.",
+				"Start a run of one of the user's agents. Returns right away with the run, or with wait: true, once it finishes or asks a question, with the agent's reply as `result`.",
 			inputSchema: {
 				agentId: z.string(),
 				instructions: z
@@ -224,7 +249,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 					.boolean()
 					.optional()
 					.describe(
-						`Wait for the run to finish and return its result (up to ${RUN_WAIT_MAX_MS / 60_000} minutes). Use it when you need the result to answer the user.`
+						`Wait up to ${RUN_WAIT_MAX_MS / 60_000} minutes for the result; use it when you need it to answer`
 					)
 			}
 		},
@@ -284,15 +309,14 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 	server.registerTool(
 		'get_agent_run',
 		{
-			description:
-				"Get an agent run's status and, once it has finished, the agent's reply as `result`. With wait: true it returns once a running run has finished (or asks the user a question).",
+			description: "Get an agent run's status and, once finished, the agent's reply as `result`.",
 			inputSchema: {
 				runId: z.string(),
 				wait: z
 					.boolean()
 					.optional()
 					.describe(
-						`Wait for a running run to finish (up to ${RUN_WAIT_MAX_MS / 60_000} minutes) before returning`
+						`Wait up to ${RUN_WAIT_MAX_MS / 60_000} minutes for a running run to finish or ask a question`
 					)
 			}
 		},

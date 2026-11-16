@@ -69,7 +69,8 @@ describe('pickDeferredTools', () => {
 			fs_read: fakeTool('f'),
 			fs_rm: fakeTool('rm'),
 			now: fakeTool('n'),
-			convert: fakeTool('c')
+			convert: fakeTool('c'),
+			list_units: fakeTool('u')
 		};
 		const toolToServer = {
 			load_skill: 'skills',
@@ -78,18 +79,19 @@ describe('pickDeferredTools', () => {
 			fs_read: 'fs',
 			fs_rm: 'fs',
 			now: 'datetime',
-			convert: 'datetime'
+			convert: 'datetime',
+			list_units: 'math'
 		};
 		expect([...pickDeferredTools(tools, toolToServer, new Set())].sort()).toEqual([
-			'convert',
 			'create_skill',
-			'fs_rm'
+			'fs_rm',
+			'list_units'
 		]);
 		// Even with the whole skills server on demand, the skills index keeps working.
 		expect([...pickDeferredTools(tools, toolToServer, new Set(['skills']))].sort()).toEqual([
-			'convert',
 			'create_skill',
-			'fs_rm'
+			'fs_rm',
+			'list_units'
 		]);
 	});
 
