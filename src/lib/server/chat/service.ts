@@ -3,7 +3,8 @@ import {
 	filterTargets,
 	PrivateDataBlockedError,
 	turnTrust,
-	type Privacy
+	type Privacy,
+	type Trust
 } from '../privacy/policy.js';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -690,7 +691,7 @@ async function prepareTurn(
 		throw new ChatRequestError(409, new PrivateDataBlockedError().message);
 	}
 	// Only a turn whose every target is trusted may be handed private items.
-	const trust = turnTrust(db, allowed);
+	const trust: Trust = limits.trust === 'untrusted' ? 'untrusted' : turnTrust(db, allowed);
 	const privacy = new TurnPrivacy(db, userId, {
 		conversationId: conversation.id,
 		agentRunId: run?.runId ?? null,
@@ -713,7 +714,8 @@ async function prepareTurn(
 		agentRunId: run?.runId ?? null,
 		messageId: lastUserMessage.id,
 		privacy,
-		trust
+		trust,
+		privateOnly: limits.privateOnly
 	});
 	// A run turn knows whether it may ask; in a chat the user talks to, an agent
 	// that is allowed to ask can always do so.
@@ -756,6 +758,13 @@ export interface TurnToolLimits {
 	exclude?: readonly string[];
 	/** The turn starts tainted (a subagent of a parent holding private data). */
 	tainted?: boolean;
+	/**
+	 * Caps the turn's trust: 'untrusted' gives it the non-private view even on a
+	 * trusted model (a memory run's public pass, or a subagent of one).
+	 */
+	trust?: Trust;
+	/** Data tools return private items only (a memory run's private pass). */
+	privateOnly?: boolean;
 }
 
 export interface ChatTurn {

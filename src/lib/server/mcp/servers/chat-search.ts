@@ -1,3 +1,4 @@
+import { getStrictMemoryPrivacy } from '../../db/repo/user-settings.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getDb } from '../../db/index.js';
@@ -84,19 +85,25 @@ export function createChatSearchServer(ctx: CallerContext): McpServer {
 			// Private chats only reach a turn that may see them (filtered in SQL,
 			// before any limit); others learn how many were left out.
 			const includePrivate = seesPrivate(ctx);
+			// A memory run's private pass only reads private chats.
+			const privateOnly = includePrivate && ctx.privateOnly === true;
+			// Strict memory privacy: untrusted models get no past chats at all, not even a count.
+			if (!includePrivate && getStrictMemoryPrivacy(db, ctx.userId)) return text('[]');
 			const rows = q
 				? searchConversationsRanked(db, ctx.userId, q, {
 						// The filter below runs after the search: fetch more for since, and
 						// one extra to make up for dropping the current chat.
 						limit: sinceMs !== null ? MAX_SEARCH_PAGE_SIZE : current ? n + 1 : n,
-						includePrivate
+						includePrivate,
+						privateOnly
 					})
 				: // A plain "what changed since" listing is how memory extraction finds new
 					// chats; agent-run chats hold the agent's words, not the user's, so they
 					// are left out. A text query still finds them.
 					listConversationsSince(db, ctx.userId, sinceMs!, {
 						excludeDispatched: true,
-						includePrivate
+						includePrivate,
+						privateOnly
 					});
 			const shown = rows
 				.filter((r) => r.id !== current && (sinceMs === null || r.updated_at >= sinceMs))

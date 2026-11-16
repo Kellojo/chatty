@@ -7,6 +7,8 @@
 		/** Comma-separated, as stored in the page's editor state. */
 		tags: string;
 		body: string;
+		/** Only models trusted with private data may see it. */
+		private: boolean;
 	};
 </script>
 
@@ -16,6 +18,7 @@
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
+	import { Switch } from '$lib/components/ui/switch/index.js';
 	import MarkdownEditor, { type LinkTarget } from './MarkdownEditor.svelte';
 	import TagInput from './TagInput.svelte';
 	import SuggestInput from './SuggestInput.svelte';
@@ -36,6 +39,8 @@
 		typeSuggestions = [],
 		folders = [],
 		linkTargets = [],
+		showPrivate = false,
+		canChangePrivate = true,
 		onsubmit,
 		oncancel,
 		onfilenameedit
@@ -56,6 +61,10 @@
 		/** Existing folders, offered for the path. */
 		folders?: string[];
 		linkTargets?: LinkTarget[];
+		/** Offer the private switch (private data is turned on for this server). */
+		showPrivate?: boolean;
+		/** False where only admins may change it (shared memories). */
+		canChangePrivate?: boolean;
 		onsubmit: (event: SubmitEvent) => void;
 		oncancel: () => void;
 		/** The file name was typed by hand, so it stops following the title. */
@@ -75,8 +84,14 @@
 	// Phones only: the details card starts open for new memories, folded otherwise.
 	let metaOpen = $state(untrack(() => mode === 'new'));
 	const metaSummary = $derived(
-		[tags.map((t) => `#${t}`).join(' '), draft.type, draft.path].filter(Boolean).join(' · ') ||
-			'Tags, type and location'
+		[
+			showPrivate && draft.private ? 'Private' : '',
+			tags.map((t) => `#${t}`).join(' '),
+			draft.type,
+			draft.path
+		]
+			.filter(Boolean)
+			.join(' · ') || 'Tags, type and location'
 	);
 	const folder = $derived(
 		draft.path.includes('/') ? draft.path.slice(0, draft.path.lastIndexOf('/')) : ''
@@ -223,6 +238,26 @@
 					</p>
 				{/if}
 			</div>
+
+			{#if showPrivate}
+				<Label for="mem-private" class="mt-2 self-start text-muted-foreground sm:mt-0 sm:pt-0.5"
+					>Private</Label
+				>
+				<div class="flex items-start gap-2.5">
+					<Switch
+						id="mem-private"
+						size="sm"
+						class="mt-0.5"
+						bind:checked={draft.private}
+						disabled={!canChangePrivate}
+						aria-describedby="{uid}-private-hint"
+					/>
+					<p id="{uid}-private-hint" class="text-xs text-muted-foreground">
+						Only models trusted with private data can see this note.{#if !canChangePrivate}
+							Only admins can change this for shared memories.{/if}
+					</p>
+				</div>
+			{/if}
 		</div>
 	</div>
 

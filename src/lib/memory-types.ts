@@ -6,6 +6,8 @@ export interface MemoryTreeNode {
 	kind: 'dir' | 'concept';
 	title?: string;
 	description?: string;
+	/** A private concept (frontmatter `private: true`): only trusted models may see it. */
+	private?: boolean;
 	children?: MemoryTreeNode[];
 }
 
@@ -15,6 +17,8 @@ export interface ConceptFrontmatter {
 	description: string;
 	tags: string[];
 	timestamp: string;
+	/** Only trusted models may see it. Absent means public. */
+	private?: boolean;
 }
 
 export interface Concept {
@@ -43,6 +47,8 @@ export interface MemorySearchHit {
 	description: string;
 	tags: string[];
 	snippet: string;
+	/** A private concept (only returned where private items may be seen). */
+	private: boolean;
 }
 
 export interface MemoryWriteEntry {
@@ -67,6 +73,8 @@ export interface MemoryGraphNode {
 	tags: string[];
 	/** Top-level folder, '' for memories at the bundle root, `Shared` for shared memories. */
 	folder: string;
+	/** A private concept: only trusted models may see it. */
+	private?: boolean;
 }
 
 export interface MemoryGraphEdge {

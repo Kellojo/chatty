@@ -29,7 +29,10 @@ const putSchema = z.object({
 		title: z.string().min(1),
 		type: z.string().optional(),
 		description: z.string().optional(),
-		tags: z.array(z.string()).optional()
+		tags: z.array(z.string()).optional(),
+		// Omitted keeps the current flag. Only a person can clear it, here; the
+		// shared bundle is admin-only, so its flag is too.
+		private: z.boolean().optional()
 	}),
 	body: z.string()
 });

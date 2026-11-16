@@ -19,6 +19,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import EyeIcon from '@lucide/svelte/icons/eye';
 	import LinkIcon from '@lucide/svelte/icons/link';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import TagIcon from '@lucide/svelte/icons/tag';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -35,6 +36,7 @@
 		tags,
 		body,
 		timestamp,
+		isPrivate = false,
 		views = null,
 		knownPaths,
 		connections,
@@ -53,6 +55,8 @@
 		tags: string[];
 		body: string;
 		timestamp: string;
+		/** Only models trusted with private data can see it. */
+		isPrivate?: boolean;
 		/** How often the AI came across this memory; null while unknown. */
 		views?: MemoryViewTotals | null;
 		/** Every memory path in this scope, to resolve links between memories. */
@@ -170,6 +174,14 @@
 		</div>
 
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
+			{#if isPrivate}
+				<span
+					class="inline-flex items-center gap-1 font-medium"
+					title="Only models trusted with private data can see this memory"
+				>
+					<LockIcon class="size-3" />Private
+				</span>
+			{/if}
 			{#if type}
 				<span class="rounded-md bg-secondary px-1.5 py-0.5 font-medium text-secondary-foreground"
 					>{type}</span

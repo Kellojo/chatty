@@ -20,4 +20,6 @@ export interface CallerContext {
 	 * is trusted). Missing means untrusted: the gateway, background callers.
 	 */
 	trust?: Trust;
+	/** Data tools return private items only (a memory run's private pass). */
+	privateOnly?: boolean;
 }

@@ -48,7 +48,8 @@ export function createSubagentsServer(ctx: CallerContext): McpServer {
 					tools,
 					toolCallId: currentToolCallId(),
 					signal: extra.signal,
-					parentPrivacy: callerPrivacy(ctx)
+					parentPrivacy: callerPrivacy(ctx),
+					parentPrivateOnly: ctx.privateOnly
 				});
 				const outcome =
 					result.status === 'completed' && !result.result

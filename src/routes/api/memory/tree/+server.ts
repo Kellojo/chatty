@@ -6,5 +6,6 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = async ({ locals, url }) => {
 	const scope = url.searchParams.get('scope') === 'shared' ? 'shared' : 'user';
 	const user = scope === 'shared' ? requireAdmin(locals) : requireUser(locals);
+	// Unfiltered: the owner's own browser may see private concepts (flagged on each node).
 	return json({ tree: await listTree(scope, user.id) });
 };

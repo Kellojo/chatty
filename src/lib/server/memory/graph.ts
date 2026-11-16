@@ -2,6 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseFrontmatter } from '../frontmatter.js';
 import { bundleDir } from './paths.js';
+import { conceptIsPrivate } from './private.js';
 import type { MemoryScope } from './paths.js';
 import type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from '$lib/memory-types.js';
 
@@ -42,10 +43,12 @@ export const graphNodeId = (scope: MemoryScope, relPath: string) => `${scope}:${
  * Memories as a graph: one node per concept, an edge per markdown link between
  * memories of the same bundle, and a weaker edge between memories (of any of the
  * given scopes) that share a tag. Shared memories are grouped as one folder.
+ * Without `includePrivate`, private concepts (and their edges) are left out.
  */
 export async function buildMemoryGraph(
 	scopes: MemoryScope[],
-	userId: string
+	userId: string,
+	options: { includePrivate: boolean }
 ): Promise<MemoryGraph> {
 	const nodes: MemoryGraphNode[] = [];
 	const edges: MemoryGraphEdge[] = [];
@@ -65,6 +68,7 @@ export async function buildMemoryGraph(
 			let tags: string[] = [];
 			let type = '';
 			let body = raw;
+			let isPrivate = conceptIsPrivate(null, raw);
 			try {
 				const parsed = parseFrontmatter(raw);
 				const d = parsed.data as Record<string, unknown>;
@@ -76,13 +80,24 @@ export async function buildMemoryGraph(
 						.map((t) => t.toLowerCase());
 				}
 				body = parsed.content;
+				isPrivate = conceptIsPrivate(d, raw);
 			} catch {
 				// keep the filename title
 			}
+			if (isPrivate && !options.includePrivate) return;
 			const dir = path.posix.dirname(p);
 			const folder = scope === 'shared' ? SHARED_FOLDER : dir === '.' ? '' : dir.split('/')[0];
 			const id = graphNodeId(scope, p);
-			nodes.push({ id, scope, path: p, title, type, tags, folder });
+			nodes.push({
+				id,
+				scope,
+				path: p,
+				title,
+				type,
+				tags,
+				folder,
+				...(isPrivate ? { private: true } : {})
+			});
 			for (const m of body.matchAll(LINK_RE)) {
 				let decoded: string;
 				try {
@@ -118,5 +133,7 @@ export async function buildMemoryGraph(
 			}
 		}
 	}
-	return { nodes, edges };
+	// Links into concepts left out (private ones) go too.
+	const ids = new Set(nodes.map((n) => n.id));
+	return { nodes, edges: edges.filter((e) => ids.has(e.source) && ids.has(e.target)) };
 }

@@ -36,10 +36,11 @@ export const TOOL_EGRESS: Readonly<Record<string, EgressClass>> = {
 	'memory/search_memory': 'none',
 	'memory/read_concept': 'none',
 	'memory/list_concepts': 'none',
-	// Concepts have no private flag yet, so a tainted context can't write them.
-	'memory/create_concept': 'persist',
-	'memory/update_concept': 'persist',
-	'memory/delete_concept': 'persist',
+	// Private-aware: a tainted context's writes are forced private, and private
+	// concepts don't exist for untrusted turns (mcp/servers/memory.ts).
+	'memory/create_concept': 'none',
+	'memory/update_concept': 'none',
+	'memory/delete_concept': 'none',
 
 	// Workspaces are private through their conversation; `documents/` writes are
 	// redirected to `documents/private/` from a tainted context.

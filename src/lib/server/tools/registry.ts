@@ -40,6 +40,8 @@ export interface BuildToolsInput {
 	privacy?: Privacy;
 	/** Whether the turn may be handed private items (see CallerContext.trust). */
 	trust?: Trust;
+	/** See CallerContext.privateOnly. */
+	privateOnly?: boolean;
 }
 
 export interface BuiltTools extends ToolCatalog {
@@ -60,7 +62,8 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		agentRunId: input.agentRunId,
 		messageId: input.messageId,
 		privacy: input.privacy,
-		trust: input.trust
+		trust: input.trust,
+		privateOnly: input.privateOnly
 	};
 	// Fixed for the catalog; every call is checked again when it runs.
 	const taintedAtStart = isPrivateContext(db, callerPrivacy(ctx));

@@ -75,6 +75,11 @@ export interface UserSettings {
 	pushTriggers: NotificationTriggers;
 	/** Read-aloud volume, from 0 (muted) to 1 (full). */
 	speechVolume: number;
+	/**
+	 * Strict memory privacy: models that may not see private data get nothing
+	 * from memory or past chats, not even a count of hidden items.
+	 */
+	strictMemoryPrivacy: boolean;
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -87,5 +92,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 	favoriteModels: [],
 	notificationTriggers: DEFAULT_NOTIFICATION_TRIGGERS,
 	pushTriggers: DEFAULT_NOTIFICATION_TRIGGERS,
-	speechVolume: 1
+	speechVolume: 1,
+	strictMemoryPrivacy: false
 };

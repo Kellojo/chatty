@@ -7,6 +7,8 @@
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import LockIcon from '@lucide/svelte/icons/lock';
+	import LockOpenIcon from '@lucide/svelte/icons/lock-open';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ZapIcon from '@lucide/svelte/icons/zap';
@@ -18,6 +20,8 @@
 	import EmptyState from '$lib/components/app/EmptyState.svelte';
 	import PageHeader from '$lib/components/app/PageHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
+	import RowMenu from '$lib/components/app/settings/RowMenu.svelte';
+	import PrivateBadge from '$lib/components/app/PrivateBadge.svelte';
 	import { guardUnsavedChanges, isSaveShortcut, missingHint } from '$lib/form-guards.js';
 	import MemoryAuditEntry from '$lib/components/app/MemoryAuditEntry.svelte';
 	import MemoryGraphView from '$lib/components/app/MemoryGraph.svelte';
@@ -45,6 +49,10 @@
 	]);
 
 	let scope = $state<MemoryScope>('user');
+	// Private memories and everything about them stay out of sight until private data is on.
+	const privateEnabled = $derived(data.privateData.enabled);
+	// Shared memories are admin-only to change, privacy included.
+	const canChangePrivate = $derived(scope === 'user' || isAdmin);
 	// Initial tree comes from the load function; afterwards it is refetched client-side.
 	let tree = $state<MemoryTreeNode[]>(untrack(() => data.tree));
 	let treeLoading = $state(false);
@@ -69,6 +77,20 @@
 		return count;
 	}
 
+	/** Only private memories, keeping the folders that still hold one. */
+	function privateOnlyTree(nodes: MemoryTreeNode[]): MemoryTreeNode[] {
+		const out: MemoryTreeNode[] = [];
+		for (const node of nodes) {
+			if (node.kind === 'concept') {
+				if (node.private) out.push(node);
+				continue;
+			}
+			const children = privateOnlyTree(node.children ?? []);
+			if (children.length) out.push({ ...node, children });
+		}
+		return out;
+	}
+
 	function applyTree(nodes: MemoryTreeNode[]) {
 		tree = nodes;
 		const defaults: string[] = [];
@@ -78,6 +100,15 @@
 
 	untrack(() => applyTree(data.tree));
 
+	// The "Private" chip narrows the list, search results and map to private memories.
+	let privateOnly = $state(false);
+	const privateFilter = $derived(privateEnabled && privateOnly);
+	const shownTree = $derived(privateFilter ? privateOnlyTree(tree) : tree);
+	const privateCount = $derived(privateEnabled ? countFiles(privateOnlyTree(tree)) : 0);
+	const shownResults = $derived(
+		searchResults && privateFilter ? searchResults.filter((h) => h.private) : searchResults
+	);
+
 	// The map tab shows every memory you can open: your own, plus shared ones for admins.
 	// It also feeds the "Connected memories" list, so it loads up front.
 	let view = $state<'browse' | 'map'>('browse');
@@ -85,6 +116,16 @@
 	// Bumped per request so a slow response can't overwrite a newer one.
 	let graphToken = 0;
 	let graphFailed = $state(false);
+	const shownGraph = $derived.by((): MemoryGraph | null => {
+		if (!graph || !privateFilter) return graph;
+		const nodes = graph.nodes.filter((n) => n.private);
+		const ids = new Set(nodes.map((n) => n.id));
+		return {
+			nodes,
+			edges: graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target))
+		};
+	});
+	const privateGraphCount = $derived(graph ? graph.nodes.filter((n) => n.private).length : 0);
 
 	async function refreshGraph() {
 		const token = ++graphToken;
@@ -242,6 +283,7 @@
 		tags: string;
 		body: string;
 		timestamp: string;
+		private: boolean;
 	};
 
 	const emptyEditor: EditorState = {
@@ -253,7 +295,8 @@
 		description: '',
 		tags: '',
 		body: '',
-		timestamp: ''
+		timestamp: '',
+		private: false
 	};
 
 	let editor = $state<EditorState>({ ...emptyEditor });
@@ -282,7 +325,7 @@
 	let editorLoading = $state(false);
 	const dirty = $derived(
 		editor.mode !== 'none' &&
-			(['path', 'type', 'title', 'description', 'tags', 'body'] as const).some(
+			(['path', 'type', 'title', 'description', 'tags', 'body', 'private'] as const).some(
 				(key) => editor[key] !== baseline[key]
 			)
 	);
@@ -401,7 +444,8 @@
 			description: concept.frontmatter.description,
 			tags: concept.frontmatter.tags.join(', '),
 			body: concept.body,
-			timestamp: concept.frontmatter.timestamp
+			timestamp: concept.frontmatter.timestamp,
+			private: concept.frontmatter.private === true
 		};
 	}
 
@@ -510,7 +554,9 @@
 				title: editor.title.trim(),
 				...(editor.type.trim() ? { type: editor.type.trim() } : {}),
 				description: editor.description.trim(),
-				tags: parseTags(editor.tags)
+				tags: parseTags(editor.tags),
+				// Left out while private data is off, so the server keeps whatever flag is set.
+				...(privateEnabled && canChangePrivate ? { private: editor.private } : {})
 			};
 			const targetPath = editor.path.trim();
 			let currentPath = editor.mode === 'edit' ? editor.savedPath : targetPath;
@@ -598,6 +644,39 @@
 		}
 	}
 
+	let markBusy = $state(false);
+
+	/** Flags every memory under a folder as private (or not). */
+	async function markFolder(prefix: string, makePrivate: boolean) {
+		if (markBusy) return;
+		markBusy = true;
+		try {
+			const res = await fetch('/api/memory/private', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ scope, prefix, private: makePrivate })
+			});
+			const body = (await res.json().catch(() => null)) as {
+				updated?: number;
+				message?: string;
+			} | null;
+			if (!res.ok) throw new Error(body?.message ?? `Request failed (${res.status})`);
+			const n = body?.updated ?? 0;
+			toast.success(
+				`${n} ${n === 1 ? 'note' : 'notes'} marked ${makePrivate ? 'private' : 'not private'}`
+			);
+			await refreshTree();
+			// The open memory may be one of them; reload it unless it has unsaved edits.
+			if (editor.mode === 'edit' && !dirty && editor.savedPath.startsWith(`${prefix}/`)) {
+				void selectConcept(editor.savedPath);
+			}
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to update the folder');
+		} finally {
+			markBusy = false;
+		}
+	}
+
 	async function extractNow() {
 		if (extractBusy) return;
 		extractBusy = true;
@@ -614,28 +693,71 @@
 	}
 </script>
 
+{#snippet privateChip(count: number)}
+	<Button
+		variant={privateOnly ? 'default' : 'outline'}
+		size="sm"
+		class="h-9 shrink-0 gap-1.5 px-2.5 text-xs"
+		aria-pressed={privateOnly}
+		title={privateOnly ? 'Show all memories' : 'Show only private memories'}
+		onclick={() => (privateOnly = !privateOnly)}
+	>
+		<LockIcon class="size-3.5" />Private
+		<span class="tabular-nums opacity-70">{count}</span>
+	</Button>
+{/snippet}
+
 {#snippet treeNodes(nodes: MemoryTreeNode[], depth: number)}
 	{#each nodes as node (node.path)}
 		{#if node.kind === 'dir'}
 			<li>
-				<button
-					type="button"
-					class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-					aria-expanded={expanded.has(node.path)}
-					onclick={() => {
-						if (expanded.has(node.path)) expanded.delete(node.path);
-						else expanded.add(node.path);
-					}}
-				>
-					<ChevronRightIcon
-						class="size-3.5 shrink-0 transition-transform {expanded.has(node.path)
-							? 'rotate-90'
+				<div class="group/folder relative flex items-center">
+					<button
+						type="button"
+						class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground {privateEnabled &&
+						canChangePrivate
+							? 'pr-9'
 							: ''}"
-					/>
-					<FolderIcon class="size-4 shrink-0" />
-					<span class="truncate font-medium">{node.name}</span>
-					<span class="ml-auto text-xs tabular-nums">{countFiles(node.children ?? [])}</span>
-				</button>
+						aria-expanded={expanded.has(node.path)}
+						onclick={() => {
+							if (expanded.has(node.path)) expanded.delete(node.path);
+							else expanded.add(node.path);
+						}}
+					>
+						<ChevronRightIcon
+							class="size-3.5 shrink-0 transition-transform {expanded.has(node.path)
+								? 'rotate-90'
+								: ''}"
+						/>
+						<FolderIcon class="size-4 shrink-0" />
+						<span class="truncate font-medium">{node.name}</span>
+						<span class="ml-auto text-xs tabular-nums">{countFiles(node.children ?? [])}</span>
+					</button>
+					{#if privateEnabled && canChangePrivate}
+						<!-- Shows on hover or focus; always there on touch screens. -->
+						<div
+							class="absolute right-0.5 opacity-0 group-focus-within/folder:opacity-100 group-hover/folder:opacity-100 has-data-[state=open]:opacity-100 pointer-coarse:opacity-100"
+						>
+							<RowMenu
+								label="Actions for folder {node.name}"
+								items={[
+									{
+										label: 'Mark folder private',
+										icon: LockIcon,
+										disabled: markBusy,
+										onSelect: () => void markFolder(node.path, true)
+									},
+									{
+										label: 'Mark folder not private',
+										icon: LockOpenIcon,
+										disabled: markBusy,
+										onSelect: () => void markFolder(node.path, false)
+									}
+								]}
+							/>
+						</div>
+					{/if}
+				</div>
 				{#if expanded.has(node.path) && node.children}
 					<ul class="ml-[15px] border-l border-border/60 pl-1.5">
 						{@render treeNodes(node.children, depth + 1)}
@@ -655,9 +777,10 @@
 						if (canLeaveEditor()) void selectConcept(node.path);
 					}}
 				>
-					<span class="truncate text-sm {selected ? 'font-medium' : ''}"
-						>{node.title || node.name.replace(/\.md$/, '')}</span
-					>
+					<span class="flex items-center gap-1.5 text-sm {selected ? 'font-medium' : ''}">
+						<span class="truncate">{node.title || node.name.replace(/\.md$/, '')}</span>
+						{#if privateEnabled && node.private}<PrivateBadge />{/if}
+					</span>
 					{#if node.description}
 						<span class="line-clamp-1 text-xs text-muted-foreground" title={node.description}>
 							{node.description}
@@ -737,9 +860,24 @@
 							{graph.nodes.length === 1 ? 'memory' : 'memories'} · click to open, drag to explore
 						</p>
 					{/if}
+					{#if privateEnabled && (privateGraphCount > 0 || privateOnly)}
+						<div class="ml-auto">{@render privateChip(privateGraphCount)}</div>
+					{/if}
 				</div>
-				{#if graph && graph.nodes.length > 0}
-					<MemoryGraphView {graph} selected={openId} insetTop={44} onselect={openNode} />
+				{#if shownGraph && shownGraph.nodes.length > 0}
+					<MemoryGraphView graph={shownGraph} selected={openId} insetTop={44} onselect={openNode} />
+				{:else if graph && graph.nodes.length > 0 && privateFilter}
+					<div class="flex size-full items-center justify-center">
+						<EmptyState
+							icon={LockIcon}
+							title="No private memories"
+							description="Mark a memory or a folder private and it shows up here."
+						>
+							<Button size="sm" variant="outline" onclick={() => (privateOnly = false)}
+								>Show all</Button
+							>
+						</EmptyState>
+					</div>
 				{:else if graph || graphFailed}
 					<div class="flex size-full items-center justify-center">
 						<EmptyState
@@ -795,18 +933,23 @@
 							: 'hidden md:flex'}"
 					aria-label="Memories"
 				>
-					<div class="relative">
-						<SearchIcon
-							class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-						/>
-						<Input
-							type="search"
-							placeholder="Search memory"
-							aria-label="Search memory"
-							class="pl-9"
-							bind:value={query}
-							oninput={onSearchInput}
-						/>
+					<div class="flex items-center gap-2">
+						<div class="relative min-w-0 flex-1">
+							<SearchIcon
+								class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+							/>
+							<Input
+								type="search"
+								placeholder="Search memory"
+								aria-label="Search memory"
+								class="pl-9"
+								bind:value={query}
+								oninput={onSearchInput}
+							/>
+						</div>
+						{#if privateEnabled && (privateCount > 0 || privateOnly)}
+							{@render privateChip(privateCount)}
+						{/if}
 					</div>
 
 					<div
@@ -817,9 +960,9 @@
 								<p class="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
 									<LoaderCircleIcon class="size-4 animate-spin" />Searching…
 								</p>
-							{:else if searchResults}
+							{:else if shownResults}
 								<ul class="flex flex-col" aria-label="Search results">
-									{#each searchResults as hit (`${hit.scope}:${hit.path}`)}
+									{#each shownResults as hit (`${hit.scope}:${hit.path}`)}
 										<li>
 											<button
 												type="button"
@@ -828,6 +971,7 @@
 											>
 												<span class="flex items-center gap-1.5 text-sm">
 													<span class="truncate">{hit.title || hit.path}</span>
+													{#if privateEnabled && hit.private}<PrivateBadge />{/if}
 													{#if hit.scope === 'shared'}
 														<Badge variant="secondary" class="shrink-0">Shared</Badge>
 													{/if}
@@ -847,7 +991,7 @@
 										</li>
 									{:else}
 										<li class="px-2 py-6 text-center text-sm text-muted-foreground">
-											Nothing matches “{query.trim()}”.
+											{privateFilter ? 'No private memory matches' : 'Nothing matches'} “{query.trim()}”.
 										</li>
 									{/each}
 								</ul>
@@ -858,9 +1002,13 @@
 							</p>
 						{:else if tree.length === 0}
 							<p class="px-2 py-6 text-center text-sm text-muted-foreground">No memories yet.</p>
+						{:else if shownTree.length === 0}
+							<p class="px-2 py-6 text-center text-sm text-muted-foreground">
+								No private memories here.
+							</p>
 						{:else}
 							<ul class="flex flex-col" aria-label="Memories">
-								{@render treeNodes(tree, 0)}
+								{@render treeNodes(shownTree, 0)}
 							</ul>
 						{/if}
 					</div>
@@ -900,6 +1048,7 @@
 							tags={parseTags(editor.tags)}
 							body={editor.body}
 							timestamp={editor.timestamp}
+							isPrivate={privateEnabled && editor.private}
 							{views}
 							{knownPaths}
 							{connections}
@@ -944,6 +1093,8 @@
 							{typeSuggestions}
 							{folders}
 							{linkTargets}
+							showPrivate={privateEnabled}
+							{canChangePrivate}
 							onsubmit={save}
 							oncancel={stopEditing}
 							onfilenameedit={() => (pathEdited = true)}

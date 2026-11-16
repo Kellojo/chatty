@@ -9,6 +9,7 @@ import { getDb } from '$lib/server/db/index.js';
 import { getMemoryWrite } from '$lib/server/db/repo/memory-writes.js';
 import { writeConcept } from '$lib/server/memory/bundle.js';
 import { normalizeConceptPath, resolveConceptAbs } from '$lib/server/memory/paths.js';
+import { rawConceptIsPrivate } from '$lib/server/memory/private.js';
 import type { RequestHandler } from './$types';
 
 const restoreSchema = z.object({
@@ -45,6 +46,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			currentRaw = '';
 		}
 	}
+	const currentPrivate = rawConceptIsPrivate(currentRaw);
 	const [patch] = parsePatch(write.diff ?? '');
 	if (!patch) error(409, { message: 'Cannot restore: no diff recorded for this write' });
 	const restored = applyPatch(currentRaw, reversePatch(patch));
@@ -69,7 +71,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 					tags: Array.isArray(fm.tags)
 						? fm.tags.filter((t): t is string => typeof t === 'string')
 						: undefined,
-					timestamp: typeof fm.timestamp === 'string' ? fm.timestamp : undefined
+					timestamp: typeof fm.timestamp === 'string' ? fm.timestamp : undefined,
+					// Restoring an older version never makes a private concept public.
+					private: fm.private === true || currentPrivate ? true : undefined
 				},
 				body: content
 			},

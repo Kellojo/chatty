@@ -76,6 +76,10 @@ function parseSpeechVolume(value: unknown): number {
 		: DEFAULT_USER_SETTINGS.speechVolume;
 }
 
+function parseStrictMemoryPrivacy(value: unknown): boolean {
+	return typeof value === 'boolean' ? value : DEFAULT_USER_SETTINGS.strictMemoryPrivacy;
+}
+
 /** Stored trigger flags merged over `base`, so new trigger keys default sensibly. */
 function readTriggers(value: unknown, base: NotificationTriggers): NotificationTriggers {
 	const triggers = { ...base };
@@ -117,6 +121,14 @@ export function getSidebarOpen(db: Db, userId: string): boolean {
 
 export function getFavoriteModels(db: Db, userId: string): string[] {
 	return parseFavoriteModels(getUserSetting<unknown>(db, userId, 'favoriteModels'));
+}
+
+/**
+ * Strict memory privacy (Q5): turns that may not see private data get nothing
+ * from memory or past chats, not even a count of what was hidden.
+ */
+export function getStrictMemoryPrivacy(db: Db, userId: string): boolean {
+	return parseStrictMemoryPrivacy(getUserSetting<unknown>(db, userId, 'strictMemoryPrivacy'));
 }
 
 /** What an open tab alerts about. */
@@ -181,7 +193,8 @@ export function getUserSettings(db: Db, userId: string): UserSettings {
 		favoriteModels: parseFavoriteModels(stored.get('favoriteModels')),
 		notificationTriggers,
 		pushTriggers: readTriggers(stored.get('pushTriggers'), notificationTriggers),
-		speechVolume: parseSpeechVolume(stored.get('speechVolume'))
+		speechVolume: parseSpeechVolume(stored.get('speechVolume')),
+		strictMemoryPrivacy: parseStrictMemoryPrivacy(stored.get('strictMemoryPrivacy'))
 	};
 }
 

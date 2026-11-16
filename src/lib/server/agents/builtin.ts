@@ -1,7 +1,8 @@
 import { MAX_CONCURRENT_SUBAGENTS, RUN_SUBAGENT_TOOL } from '$lib/subagent-tool.js';
 import type { AgentTriggerConfig } from '$lib/types.js';
 import type { Db } from '../db/index.js';
-import { createAgent, updateAgent } from '../db/repo/agents.js';
+import { createAgent, updateAgent, type AgentRow } from '../db/repo/agents.js';
+import type { TurnToolLimits } from '../chat/service.js';
 
 export const MEMORY_EXTRACTION_AGENT = 'memory-extraction';
 export const MEMORY_CLEANUP_AGENT = 'memory-cleanup';
@@ -153,4 +154,59 @@ export function seedMemoryCleanupAgent(db: Db): void {
 			'delete_concept'
 		]
 	});
+}
+
+/** The built-in memory agents (extraction and cleanup), which run per pass. */
+export function isBuiltinMemoryAgent(agent: Pick<AgentRow, 'user_id' | 'name'>): boolean {
+	return (
+		agent.user_id === null &&
+		(agent.name === MEMORY_EXTRACTION_AGENT || agent.name === MEMORY_CLEANUP_AGENT)
+	);
+}
+
+/**
+ * Which part of memory a memory agent's run works on (design C7):
+ * - public: the non-private view, like an untrusted turn, so what it writes
+ *   stays public. The only pass on a memory model that isn't trusted.
+ * - private: only private chats and private concepts; tainted from the start
+ *   (its conversation is private), so everything it writes is private. Only
+ *   on a trusted memory model.
+ * Without the split, sticky taint would make every concept written after the
+ * first private read private, including those from public chats.
+ */
+export type MemoryPass = 'public' | 'private';
+
+/**
+ * The turn limits of a pass. `trust` caps the turn's trust and `privateOnly`
+ * narrows its data tools to private items; both are read by chat/service.ts
+ * (TurnToolLimits) and passed on to the tools' CallerContext.
+ */
+export function memoryPassLimits(pass: MemoryPass): TurnToolLimits {
+	return pass === 'public' ? { trust: 'untrusted' } : { tainted: true, privateOnly: true };
+}
+
+/** Appended to a private pass's instructions. */
+export const PRIVATE_PASS_NOTE =
+	'This is the private pass: you only see the user’s private chats and private memory concepts, and everything you write is saved as private. Public chats and concepts are handled by a separate pass; leave them alone.';
+
+/**
+ * Start time of the latest successful run of this pass. Each pass keeps its
+ * own extraction window, so one failing doesn't make the other skip chats.
+ * A run's pass is its conversation's privacy (a deleted one counts as public).
+ */
+export function lastSuccessfulMemoryPassAt(
+	db: Db,
+	agentId: string,
+	userId: string,
+	pass: MemoryPass
+): number | null {
+	const row = db
+		.prepare(
+			`SELECT MAX(r.started_at) AS at FROM agent_runs r
+			 LEFT JOIN conversations c ON c.id = r.conversation_id
+			 WHERE r.agent_id = ? AND r.user_id = ? AND r.status = 'success'
+			   AND COALESCE(c.private, 0) = ?`
+		)
+		.get(agentId, userId, pass === 'private' ? 1 : 0) as { at: number | null };
+	return row.at;
 }

@@ -4,18 +4,27 @@ import path from 'node:path';
 import { parseFrontmatter } from '../frontmatter.js';
 import type { Db } from '../db/index.js';
 import { memoryRoot } from './paths.js';
+import { conceptIsPrivate } from './private.js';
 
 export function upsertMemoryFts(
 	db: Db,
 	scope: string,
 	path: string,
-	fm: { title: string; description: string; tags: string[] },
+	fm: { title: string; description: string; tags: string[]; private?: boolean },
 	body: string
 ): void {
 	deleteMemoryFts(db, scope, path);
 	db.prepare(
-		'INSERT INTO memory_fts (scope, path, title, description, tags, body) VALUES (?, ?, ?, ?, ?, ?)'
-	).run(scope, path, fm.title, fm.description, fm.tags.join(' '), body);
+		'INSERT INTO memory_fts (scope, path, title, description, tags, body, private) VALUES (?, ?, ?, ?, ?, ?, ?)'
+	).run(
+		scope,
+		path,
+		fm.title,
+		fm.description,
+		fm.tags.join(' '),
+		body,
+		fm.private === true ? 1 : 0
+	);
 }
 
 export function deleteMemoryFts(db: Db, scope: string, path: string): void {
@@ -29,6 +38,18 @@ export interface MemorySearchHit {
 	description: string;
 	tags: string[];
 	snippet: string;
+	/** A private concept; only returned with `includePrivate`. */
+	private: boolean;
+}
+
+export interface MemoryReadOptions {
+	/**
+	 * Whether private concepts may be returned. Only the owner's own browser
+	 * and trusted turns may see them; everyone else gets them filtered in SQL.
+	 */
+	includePrivate: boolean;
+	/** Only private concepts (memory agents' private pass). Needs `includePrivate`. */
+	privateOnly?: boolean;
 }
 
 /**
@@ -42,9 +63,16 @@ function sanitizeQuery(query: string): string {
 	return tokens.map((t) => `"${t.replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ')}"`).join(' OR ');
 }
 
-// bm25 weights per column (scope, path, title, description, tags, body): a hit
-// in the title or tags says far more about a concept than one in its body.
-const BM25_WEIGHTS = '0.0, 0.0, 10.0, 5.0, 5.0, 1.0';
+// bm25 weights per column (scope, path, title, description, tags, body,
+// private): a hit in the title or tags says far more about a concept than one
+// in its body.
+const BM25_WEIGHTS = '0.0, 0.0, 10.0, 5.0, 5.0, 1.0, 0.0';
+
+/** The WHERE condition for `options`: applied before ranking and LIMIT. */
+function privacyClause(options: MemoryReadOptions): string {
+	if (!options.includePrivate) return 'AND private = 0';
+	return options.privateOnly ? 'AND private = 1' : '';
+}
 
 // snippet() copies concept text verbatim, so the highlight markers are control
 // characters that can't appear in it, swapped for the real markup afterwards.
@@ -64,13 +92,15 @@ function renderSnippet(raw: string, html: boolean): string {
  * Full-text search over memory concepts. Snippets wrap matches in `<mark>`;
  * with `html`, the rest of the snippet is HTML-escaped so it's safe to render
  * as markup (concept text is often model-written and can contain anything).
+ * Without `includePrivate`, private concepts are dropped before ranking and
+ * LIMIT (see countPrivateMemoryHits for how many).
  */
 export function searchMemoryFts(
 	db: Db,
 	scopes: string[],
 	query: string,
-	limit = 10,
-	options: { html?: boolean } = {}
+	limit: number,
+	options: MemoryReadOptions & { html?: boolean }
 ): MemorySearchHit[] {
 	const match = sanitizeQuery(query);
 	if (!match || scopes.length === 0) return [];
@@ -78,34 +108,65 @@ export function searchMemoryFts(
 	const placeholders = scopes.map(() => '?').join(', ');
 	const rows = db
 		.prepare(
-			`SELECT scope, path, title, description, tags,
+			`SELECT scope, path, title, description, tags, private,
 				snippet(memory_fts, 5, ?, ?, '…', 24) AS snippet
 			FROM memory_fts
-			WHERE memory_fts MATCH ? AND scope IN (${placeholders})
+			WHERE memory_fts MATCH ? AND scope IN (${placeholders}) ${privacyClause(options)}
 			ORDER BY bm25(memory_fts, ${BM25_WEIGHTS})
 			LIMIT ?`
 		)
 		.all(MARK_OPEN, MARK_CLOSE, match, ...scopes, n) as Array<
-		Omit<MemorySearchHit, 'tags'> & { tags: string }
+		Omit<MemorySearchHit, 'tags' | 'private'> & { tags: string; private: number }
 	>;
 	return rows.map((r) => ({
 		...r,
+		private: r.private === 1,
 		snippet: renderSnippet(r.snippet, options.html === true),
 		tags: r.tags ? r.tags.split(' ').filter((t) => t.length > 0) : []
 	}));
 }
 
+/** How many private concepts match `query`: the "N private results hidden" count. */
+export function countPrivateMemoryHits(db: Db, scopes: string[], query: string): number {
+	const match = sanitizeQuery(query);
+	if (!match || scopes.length === 0) return 0;
+	const placeholders = scopes.map(() => '?').join(', ');
+	const row = db
+		.prepare(
+			`SELECT count(*) AS n FROM memory_fts
+			WHERE memory_fts MATCH ? AND scope IN (${placeholders}) AND private = 1`
+		)
+		.get(match, ...scopes) as { n: number };
+	return row.n;
+}
+
 export interface MemorySummary {
 	title: string;
 	description: string;
+	private: boolean;
 }
 
-/** Titles and descriptions of every indexed concept in a scope, keyed by path. */
-export function memorySummaries(db: Db, scope: string): Map<string, MemorySummary> {
+/**
+ * Titles and descriptions of the indexed concepts in a scope, keyed by path;
+ * private ones only with `includePrivate`.
+ */
+export function memorySummaries(
+	db: Db,
+	scope: string,
+	options: MemoryReadOptions
+): Map<string, MemorySummary> {
 	const rows = db
-		.prepare('SELECT path, title, description FROM memory_fts WHERE scope = ?')
-		.all(scope) as Array<MemorySummary & { path: string }>;
-	return new Map(rows.map((r) => [r.path, { title: r.title, description: r.description }]));
+		.prepare(
+			`SELECT path, title, description, private FROM memory_fts
+			WHERE scope = ? ${privacyClause(options)}`
+		)
+		.all(scope) as Array<Omit<MemorySummary, 'private'> & { path: string; private: number }>;
+	return new Map(
+		rows.map((r) => [
+			r.path,
+			{ title: r.title, description: r.description, private: r.private === 1 }
+		])
+	);
 }
 
 interface DiskEntry {
@@ -153,7 +214,7 @@ async function listDiskEntries(): Promise<DiskEntry[]> {
 
 interface DiskConcept {
 	entry: DiskEntry;
-	fm: { title: string; description: string; tags: string[] };
+	fm: { title: string; description: string; tags: string[]; private: boolean };
 	body: string;
 }
 
@@ -161,18 +222,22 @@ async function readFromDisk(entry: DiskEntry): Promise<DiskConcept> {
 	let title = path.basename(entry.abs, '.md');
 	let description = '';
 	let tags: string[] = [];
+	let isPrivate = false;
 	let body = '';
 	try {
-		const parsed = parseFrontmatter(await fs.readFile(entry.abs, 'utf8'));
+		const raw = await fs.readFile(entry.abs, 'utf8');
+		isPrivate = conceptIsPrivate(null, raw);
+		const parsed = parseFrontmatter(raw);
 		const d = parsed.data as Record<string, unknown>;
 		if (typeof d.title === 'string' && d.title.trim()) title = d.title;
 		if (typeof d.description === 'string') description = d.description;
 		if (Array.isArray(d.tags)) tags = d.tags.filter((t): t is string => typeof t === 'string');
+		isPrivate = conceptIsPrivate(d, raw);
 		body = parsed.content;
 	} catch {
 		// unreadable file or invalid frontmatter: index with filename as title
 	}
-	return { entry, fm: { title, description, tags }, body };
+	return { entry, fm: { title, description, tags, private: isPrivate }, body };
 }
 
 // Files read concurrently while rebuilding, to stay well clear of fd limits.

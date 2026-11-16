@@ -61,6 +61,8 @@ export interface SubagentInput {
 	 * tainted subagent, and a subagent that read private data taints the parent.
 	 */
 	parentPrivacy?: Privacy;
+	/** The parent only reads private items (a memory run's private pass). */
+	parentPrivateOnly?: boolean;
 }
 
 /** What a parent that may not see private data gets instead of a private subagent's report. */
@@ -309,7 +311,12 @@ export async function runSubagent(input: SubagentInput, db: Db = getDb()): Promi
 					tools: {
 						allowlist,
 						exclude: [RUN_SUBAGENT_TOOL, ASK_USER_TOOL],
-						tainted: parentTainted
+						tainted: parentTainted,
+						// A subagent never sees more than its parent (e.g. a memory run's public pass).
+						...(isTurnPrivacy(input.parentPrivacy) && input.parentPrivacy.trust === 'untrusted'
+							? { trust: 'untrusted' as const }
+							: {}),
+						privateOnly: input.parentPrivateOnly
 					}
 				}
 			);

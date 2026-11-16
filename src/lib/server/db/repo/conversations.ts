@@ -244,14 +244,15 @@ export function listConversationsSince(
 	db: Db,
 	userId: string,
 	since: number,
-	opts: { excludeDispatched?: boolean; includePrivate: boolean }
+	opts: { excludeDispatched?: boolean; includePrivate: boolean; privateOnly?: boolean }
 ): ConversationRow[] {
 	const dispatched = opts.excludeDispatched ? `AND c.origin != 'dispatch'` : '';
+	const scope: PrivateScope = opts.privateOnly ? 'private' : opts.includePrivate ? 'all' : 'public';
 	return db
 		.prepare(
 			`${SIDEBAR_SELECT}
 			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.updated_at >= ?
-			   ${dispatched} ${privateClause(opts.includePrivate ? 'all' : 'public')}
+			   ${dispatched} ${privateClause(scope)}
 			 ORDER BY c.updated_at DESC`
 		)
 		.all(userId, since) as ConversationRow[];
@@ -735,9 +736,14 @@ export function searchConversationsRanked(
 	db: Db,
 	userId: string,
 	query: string,
-	options: { limit?: number; includePrivate: boolean }
+	/** `privateOnly`: only private chats (a memory run's private pass). */
+	options: { limit?: number; includePrivate: boolean; privateOnly?: boolean }
 ): ConversationRow[] {
-	const scope: PrivateScope = options.includePrivate ? 'all' : 'public';
+	const scope: PrivateScope = options.privateOnly
+		? 'private'
+		: options.includePrivate
+			? 'all'
+			: 'public';
 	const terms = searchTerms(query);
 	if (terms.length === 0) {
 		return searchConversations(db, userId, query, { limit: options.limit, scope });
