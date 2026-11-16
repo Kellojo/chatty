@@ -1,7 +1,9 @@
 import { APICallError } from 'ai';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+	forgetLearnedContextLimit,
 	isContextOverflowError,
+	learnedContextInfo,
 	learnedContextLength,
 	MIN_LEARNED_CONTEXT,
 	noteContextOverflow,
@@ -79,5 +81,19 @@ describe('learned context limits', () => {
 		expect(learnedContextLength(ref, 131_072, 1000)).toBeNull();
 		noteContextOverflow(ref, { promptTokens: 20_000, basis: 75_000 }, 0);
 		expect(learnedContextLength(ref, 75_000, 25 * 60 * 60 * 1000)).toBeNull();
+	});
+
+	it('describes and forgets what was learned', () => {
+		expect(learnedContextInfo(ref, null)).toBeNull();
+		noteContextOverflow(ref, { promptTokens: 20_000, basis: null }, 1000);
+		noteContextSuccess(ref, { tokens: 12_000, basis: null }, 2000);
+		expect(learnedContextInfo(ref, null, 3000)).toEqual({
+			limit: 20_000,
+			largestFit: 12_000,
+			learnedAt: 1000,
+			expiresAt: 1000 + 24 * 60 * 60 * 1000
+		});
+		expect(forgetLearnedContextLimit(ref)).toBe(true);
+		expect(learnedContextLength(ref, null)).toBeNull();
 	});
 });

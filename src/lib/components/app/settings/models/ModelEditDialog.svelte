@@ -26,7 +26,7 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
-	import { formatCount } from '$lib/formats.js';
+	import { formatAge, formatCount } from '$lib/formats.js';
 	import {
 		CAPABILITY_GROUPS,
 		isEditableCapability,
@@ -71,6 +71,47 @@
 	let saveError = $state<string | null>(null);
 	let saving = $state(false);
 
+	interface LearnedContext {
+		limit: number;
+		largestFit: number;
+		learnedAt: number;
+		expiresAt: number;
+	}
+	/** What overflow errors taught the server about this model's real context, if anything. */
+	let learned = $state<LearnedContext | null>(null);
+	let reported = $state<number | null>(null);
+	let forgetting = $state(false);
+
+	async function loadLearned(id: string) {
+		try {
+			const res = await fetch(`/api/models/${id}/context`);
+			if (!res.ok || model?.id !== id) return;
+			const body = (await res.json()) as {
+				reported: number | null;
+				learned: LearnedContext | null;
+			};
+			reported = body.reported;
+			learned = body.learned;
+		} catch {
+			// informational only
+		}
+	}
+
+	async function forgetLearned() {
+		if (!model) return;
+		forgetting = true;
+		try {
+			const res = await fetch(`/api/models/${model.id}/context`, { method: 'DELETE' });
+			if (!res.ok) throw new Error(`Request failed (${res.status})`);
+			learned = null;
+			toast.success('Learned context limit forgotten');
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not forget the limit');
+		} finally {
+			forgetting = false;
+		}
+	}
+
 	function emptyValues(): Record<FieldKey, string> {
 		return {
 			priceInput: '',
@@ -109,6 +150,9 @@
 		};
 		errors = {};
 		saveError = null;
+		learned = null;
+		reported = null;
+		void loadLearned(model.id);
 		// untrack: reading the form here must not make edits re-run this load.
 		initial = untrack(snapshot);
 	});
@@ -383,6 +427,36 @@
 						<p class="text-xs text-muted-foreground">
 							Used to compact long chats automatically. Synced from providers that report it.
 						</p>
+						{#if learned}
+							<div
+								class="mt-1 flex items-start gap-3 rounded-lg border border-border/60 bg-muted/50 px-3 py-2 text-sm"
+								aria-live="polite"
+							>
+								<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+									<span>
+										Learned limit:
+										<span class="font-medium tabular-nums"
+											>{learned.limit.toLocaleString('en-US')} tokens</span
+										>
+									</span>
+									<span class="text-xs text-muted-foreground">
+										The model rejected a longer prompt {formatAge(Date.now() - learned.learnedAt)} ago{reported
+											? ` (it reports ${reported.toLocaleString('en-US')})`
+											: ''}, so prompts are kept below this. {learned.largestFit > 0
+											? `Largest request that fit since: ${learned.largestFit.toLocaleString('en-US')}. `
+											: ''}Forgotten after a day or when the reported context changes.
+									</span>
+								</div>
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									class="shrink-0"
+									disabled={forgetting}
+									onclick={forgetLearned}>Forget</Button
+								>
+							</div>
+						{/if}
 					</div>
 				</Tabs.Content>
 			</Tabs.Root>

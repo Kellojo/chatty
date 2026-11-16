@@ -246,6 +246,70 @@ describe('event run concurrency', () => {
 	});
 });
 
+describe('memory cleanup waits for extraction', () => {
+	function seedBuiltins() {
+		const extraction = createAgent(db, null, {
+			name: 'memory-extraction',
+			systemPrompt: 'x',
+			triggerType: 'event',
+			triggerConfig: { event: 'chat.created' }
+		});
+		const cleanup = createAgent(db, null, {
+			name: 'memory-cleanup',
+			systemPrompt: 'x',
+			triggerType: 'event',
+			triggerConfig: { event: 'memory.changed' }
+		});
+		return { extraction, cleanup };
+	}
+
+	it("queues cleanup while the user's extraction runs and starts it once that ends", async () => {
+		const { extraction, cleanup } = seedBuiltins();
+		const run = createAgentRun(db, { agentId: extraction.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md' }, db, runFn);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'b.md' }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+
+		finishAgentRun(db, run.id, 'success');
+		handleServerEvent(
+			'u1',
+			{ type: 'agent.run.finished', agentId: extraction.id, runId: run.id, status: 'success' },
+			db,
+			runFn
+		);
+		expect(runFn).toHaveBeenCalledTimes(1);
+		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u1', expect.stringContaining('b.md'));
+	});
+
+	it("doesn't hold up cleanup for another user", async () => {
+		const { extraction, cleanup } = seedBuiltins();
+		createAgentRun(db, { agentId: extraction.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u2', { path: 'a.md' }, db, runFn);
+		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u2', expect.any(String));
+	});
+
+	it('only applies to the built-in agents', async () => {
+		const extraction = createAgent(db, null, {
+			name: 'memory-extraction',
+			systemPrompt: 'x',
+			triggerType: 'event',
+			triggerConfig: { event: 'chat.created' }
+		});
+		const mine = createAgent(db, 'u1', {
+			name: 'memory-cleanup',
+			systemPrompt: 'x',
+			triggerType: 'event',
+			triggerConfig: { event: 'memory.changed' }
+		});
+		createAgentRun(db, { agentId: extraction.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', {}, db, runFn);
+		expect(runFn).toHaveBeenCalledWith(mine.id, 'u1', expect.any(String));
+	});
+});
+
 describe('coding agents', () => {
 	const codingTarget = {
 		environmentId: 'env-1',
