@@ -7,6 +7,7 @@
 	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import BrainIcon from '@lucide/svelte/icons/brain';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import KeyboardIcon from '@lucide/svelte/icons/keyboard';
 	import Link2Icon from '@lucide/svelte/icons/link-2';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
@@ -126,9 +127,9 @@
 			group: 'Integrations'
 		},
 		{
-			href: '/settings/general',
-			label: 'General',
-			icon: SettingsIcon,
+			href: '/settings/private-data',
+			label: 'Private data',
+			icon: LockIcon,
 			adminOnly: true,
 			group: 'Admin'
 		},

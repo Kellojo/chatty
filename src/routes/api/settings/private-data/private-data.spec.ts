@@ -11,7 +11,7 @@ const { PUT } = await import('./+server.js');
 async function put(role: string, body: unknown): Promise<number> {
 	const event = {
 		locals: { user: { id: 'u1', role }, session: null },
-		request: new Request('http://localhost/api/settings/general', {
+		request: new Request('http://localhost/api/settings/private-data', {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(body)
@@ -27,7 +27,7 @@ async function put(role: string, body: unknown): Promise<number> {
 
 beforeEach(() => closeDb());
 
-describe('Settings → General: private data', () => {
+describe('Settings → Private data', () => {
 	it('is off until an admin turns it on, and the app shell follows', async () => {
 		const db = getDb();
 		expect(isPrivateDataEnabled(db)).toBe(false);

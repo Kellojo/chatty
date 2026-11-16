@@ -161,7 +161,7 @@ claude mcp add --scope user --transport http chatty <ORIGIN>/api/mcp --header "A
 
 ## Private data
 
-An admin turns on **Settings → General → Allow private data** to let users mark chats, memory notes, documents and agents as private (off by default; turning it off only hides the controls, so what is already private stays private). **The rule:** private data only reaches providers an admin marked **Can process private data** (Settings → Providers), so a chat holding private data only ever runs on those models. Tools are not restricted.
+An admin turns on **Settings → Private data → Allow private data** to let users mark chats, memory notes, documents and agents as private (off by default; turning it off only hides the controls, so what is already private stays private). **The rule:** private data only reaches providers an admin marked **Can process private data** (Settings → Providers), so a chat holding private data only ever runs on those models. Tools are not restricted.
 
 - **Trusted providers.** Tick _Can process private data_ in a provider's create or edit dialog. Any provider type qualifies; the dialog hints when a URL looks local and warns when private data would go to a public host. Nothing is trusted after an upgrade, so nothing changes until you opt in.
 - **What is private.** A chat you lock (composer or chat menu), a chat started from a private agent, notes marked _Private_ in the memory editor (admins only for shared notes), and files under `documents/<user>/private/`. **A chat becomes private permanently** once it reads private data (a private note, a private chat, a private agent's result); it says so in the chat. Making it public again needs a confirmation, and text an untrusted provider already received can't be recalled.

@@ -1,6 +1,6 @@
 /**
  * Whether users can mark chats, memory and agents private: an admin switch in
- * Settings → General, off by default. It only shows or hides the private
+ * Settings → Private data, off by default. It only shows or hides the private
  * controls; the checks always run, so turning it off never exposes data that
  * is already private.
  */

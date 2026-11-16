@@ -10,7 +10,7 @@ const bodySchema = z.object({
 	privateDataEnabled: z.boolean().optional()
 });
 
-/** App-wide settings an admin changes in Settings → General. */
+/** The private-data switch an admin changes in Settings → Private data. */
 export const PUT: RequestHandler = async ({ locals, request }) => {
 	requireAdmin(locals);
 	const parsed = bodySchema.safeParse(await request.json().catch(() => null));

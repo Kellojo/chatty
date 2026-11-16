@@ -17,7 +17,7 @@
 	/**
 	 * How private data works, at a glance: what can be private, the fork it
 	 * takes (trusted models yes, other models never), what tools do, and how
-	 * things become private. Shown where the feature is turned on (General) and
+	 * things become private. Shown where the feature is turned on (Private data) and
 	 * used (Conversation).
 	 */
 	let {

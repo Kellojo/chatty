@@ -228,7 +228,7 @@ export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
 
 /** Private-data switches for the app shell (layout data `privateData`). */
 export interface PrivateDataStatus {
-	/** Settings → General → Private data: the private toggles are shown at all. */
+	/** Settings → Private data → Allow private data: the private toggles are shown at all. */
 	enabled: boolean;
 	/** At least one enabled provider may process private data (else the toggles are disabled). */
 	available: boolean;

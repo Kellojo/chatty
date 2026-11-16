@@ -19,7 +19,7 @@
 	async function setPrivateData(value: boolean) {
 		pending = value;
 		try {
-			const res = await fetch('/api/settings/general', {
+			const res = await fetch('/api/settings/private-data', {
 				method: 'PUT',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ privateDataEnabled: value })
@@ -38,14 +38,14 @@
 	}
 </script>
 
-<svelte:head><title>General · Settings · Chatty</title></svelte:head>
+<svelte:head><title>Private data · Settings · Chatty</title></svelte:head>
 
-<SettingsHeader title="General" description="Settings that apply to everyone on this Chatty." />
-
-<SettingsSection
+<SettingsHeader
 	title="Private data"
-	description="Private chats, memory notes, documents and agents only reach models on providers you trust with private data."
->
+	description="Private chats, memory notes, documents and agents only reach models on providers you trust with private data. This applies to everyone on this Chatty."
+/>
+
+<SettingsSection>
 	<SettingsRow
 		label="Allow private data"
 		for="general-private-data"
