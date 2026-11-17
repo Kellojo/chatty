@@ -55,6 +55,7 @@
 		withLatestPage
 	} from '$lib/chat-history.js';
 	import { pendingMessage, pendingVoice } from '$lib/state/pending-message.svelte.js';
+	import { startFlight } from '$lib/send-flight.js';
 	import { messageQueue, type QueuedMessage } from '$lib/state/message-queue.svelte.js';
 	import QueuedMessages from './QueuedMessages.svelte';
 	import { parseSkillCommand, uploadAttachments } from '$lib/chat-send.js';
@@ -758,34 +759,50 @@
 		untrack(() => void messageQueue.load(id).catch(() => undefined));
 	});
 
-	/** Sends the composer's message, or queues it while the chat is busy. */
-	async function send(text: string) {
+	/**
+	 * Send from the composer itself: as `send`, with the text gliding into the
+	 * message it becomes, or into the queue. (Not for edits or typed answers to a
+	 * coding task, which don't add a message.)
+	 */
+	async function sendFromComposer(text: string) {
+		const trimmed = text.trim();
+		const plain = !editing && !(codingAnswerTarget && trimmed && selectedFiles.length === 0);
+		const flight = plain
+			? startFlight(composerTextarea(), trimmed, willQueue() ? 'queue' : 'message')
+			: null;
+		const sent = await send(text);
+		if (sent) flight?.land();
+		else flight?.cancel();
+	}
+
+	/** Sends the composer's message, or queues it while the chat is busy. Resolves true once it's on its way. */
+	async function send(text: string): Promise<boolean> {
 		speech.stop();
 		speech.reset();
 		const trimmed = text.trim();
 		if (trimmed || selectedFiles.length > 0 || editing?.keptFiles.length) haptic('light');
 		if (editing) {
-			if (!trimmed && selectedFiles.length === 0 && editing.keptFiles.length === 0) return;
+			if (!trimmed && selectedFiles.length === 0 && editing.keptFiles.length === 0) return false;
 			// An edit starts a new branch from the edited message, so it never waits in the queue.
 			const edit = { messageId: editing.messageId, keptFiles: editing.keptFiles };
-			if (await deliver(trimmed, selectedFiles, edit)) {
-				editing = null;
-				input = '';
-				clearFiles();
-			}
-			return;
+			if (!(await deliver(trimmed, selectedFiles, edit))) return false;
+			editing = null;
+			input = '';
+			clearFiles();
+			return true;
 		}
-		if (!trimmed && selectedFiles.length === 0) return;
+		if (!trimmed && selectedFiles.length === 0) return false;
 		// While the coding task waits on the user, typed text answers it (files
 		// can't go with an answer, so a message with attachments is a new turn).
 		if (codingAnswerTarget && trimmed && selectedFiles.length === 0) {
-			if (await answerCodingRequest(codingAnswerTarget.requestId, trimmed)) input = '';
-			return;
-		}
-		if (await submit(trimmed, selectedFiles)) {
+			if (!(await answerCodingRequest(codingAnswerTarget.requestId, trimmed))) return false;
 			input = '';
-			clearFiles();
+			return true;
 		}
+		if (!(await submit(trimmed, selectedFiles))) return false;
+		input = '';
+		clearFiles();
+		return true;
 	}
 
 	/** The coding task's pending request that composer text answers, if any (see send). */
@@ -822,10 +839,13 @@
 	 * Sends a message, or queues it while the chat is busy: behind earlier queued
 	 * messages unless the queue waits for the user. Returns false on failure.
 	 */
+	/** Whether a message submitted now waits in the queue (see submit). */
+	function willQueue(): boolean {
+		return streaming || sending || (queue.length > 0 && !queuePaused);
+	}
+
 	function submit(text: string, files: File[]): Promise<boolean> {
-		if (streaming || sending || (queue.length > 0 && !queuePaused)) {
-			return queueMessage(text, files);
-		}
+		if (willQueue()) return queueMessage(text, files);
 		if (queuePaused) resumeQueueAfterStart(conversation.id);
 		return deliver(text, files);
 	}
@@ -1560,9 +1580,10 @@
 			<VoiceBar {voice} />
 		{:else}
 			<PromptInput
+				class="launch-composer"
 				value={displayInput}
 				onValueChange={(v) => (input = v)}
-				onSubmit={() => send(displayInput)}
+				onSubmit={() => sendFromComposer(displayInput)}
 			>
 				<PendingAttachments files={selectedFiles} onremove={removeFile} />
 				<PromptInputTextarea
@@ -1621,7 +1642,7 @@
 							disabled={!canSend}
 							aria-label={queues ? 'Queue message' : sendAnswers ? 'Send answer' : 'Send'}
 							title={queues ? 'Queue — sends when the reply finishes' : undefined}
-							onclick={() => send(displayInput)}
+							onclick={() => sendFromComposer(displayInput)}
 						>
 							{#if queues}
 								<ListEndIcon class="size-4" />
