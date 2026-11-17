@@ -6,7 +6,10 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 
 const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { createAgent } = await import('$lib/server/db/repo/agents.js');
-const { createConversation } = await import('$lib/server/db/repo/conversations.js');
+const { createConversation, getConversation } =
+	await import('$lib/server/db/repo/conversations.js');
+const { isConversationPrivate } = await import('$lib/server/privacy/policy.js');
+const { seedPrivacyFixture } = await import('$lib/server/privacy/fixtures.js');
 const { createMessage } = await import('$lib/server/db/repo/messages.js');
 const { PATCH } = await import('./+server.js');
 
@@ -137,5 +140,55 @@ describe('PATCH /api/conversations/[id] agentId guard', () => {
 		});
 		expect(res.status).toBe(200);
 		expect(res.body.conversation.agentId).toBe(a1.id);
+	});
+});
+
+describe('PATCH /api/conversations/[id] with a private agent', () => {
+	function privatePersona(db: Db, model: { providerId: string; modelId: string }) {
+		return createAgent(db, 'u1', {
+			name: 'private persona',
+			systemPrompt: 'private prompt',
+			triggerType: 'persona',
+			private: true,
+			...model
+		});
+	}
+
+	it('makes the chat private, as starting one with it does', async () => {
+		const db = getDb();
+		const fx = seedPrivacyFixture(db);
+		const agent = privatePersona(db, fx.trusted);
+		const conversation = createConversation(db, 'u1');
+		const res = await call<{ conversation: { agentId: string | null; private: boolean } }>(PATCH, {
+			user: u1,
+			params: { id: conversation.id },
+			body: { agentId: agent.id }
+		});
+		expect(res.status).toBe(200);
+		expect(res.body.conversation.agentId).toBe(agent.id);
+		expect(res.body.conversation.private).toBe(true);
+		expect(isConversationPrivate(db, conversation.id)).toBe(true);
+	});
+
+	it('refuses keeping the chat public, or without a trusted provider', async () => {
+		const db = getDb();
+		const agent = privatePersona(db, seedPrivacyFixture(db).trusted);
+		const conversation = createConversation(db, 'u1');
+		const kept = await call(PATCH, {
+			user: u1,
+			params: { id: conversation.id },
+			body: { agentId: agent.id, private: false }
+		});
+		expect(kept.status).toBe(409);
+
+		db.prepare('UPDATE providers SET allow_private = 0').run();
+		const untrusted = await call(PATCH, {
+			user: u1,
+			params: { id: conversation.id },
+			body: { agentId: agent.id }
+		});
+		expect(untrusted.status).toBe(409);
+		expect(getConversation(db, 'u1', conversation.id)?.agent_id).toBeNull();
+		expect(isConversationPrivate(db, conversation.id)).toBe(false);
 	});
 });

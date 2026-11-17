@@ -194,7 +194,7 @@ describe('egress canary: private memory (PR 6)', () => {
 		const seen = await readAllMemory(ctx);
 		expect(seen).not.toContain(CANARY);
 		expect(seen).toContain('fruit.md');
-		expect(seen).toContain('private result');
+		expect(seen).toContain('Private results are never shown here');
 		expectNoLeak();
 	});
 

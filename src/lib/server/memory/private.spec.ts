@@ -83,6 +83,20 @@ describe('private concepts: frontmatter round trip', () => {
 		expect(tree.find((t) => t.name === 'other.md')?.private).toBeUndefined();
 	});
 
+	it("records a person's privacy choice as checked, so the sweep doesn't undo it", async () => {
+		const checked = (relPath: string) =>
+			db
+				.prepare('SELECT 1 FROM memory_privacy_checks WHERE scope = ? AND path = ?')
+				.get('user:p3', relPath) !== undefined;
+		await write('p3', 'a.md', { title: 'A', private: true }, 'alpha');
+		await write('p3', 'b.md', { title: 'B' }, 'beta');
+		expect(await bundle.setConceptPathsPrivate(db, 'user', 'p3', ['a.md'], false, audit)).toBe(1);
+		expect(checked('a.md')).toBe(true);
+		// Unchanged notes aren't recorded: the person didn't decide anything about them.
+		expect(await bundle.setConceptsPrivate(db, 'user', 'p3', '', false, audit)).toBe(0);
+		expect(checked('b.md')).toBe(false);
+	});
+
 	it('fails closed on a file whose frontmatter is broken', () => {
 		const raw = '---\ntitle: [unclosed\nprivate: true\n---\nsecret';
 		expect(rawConceptIsPrivate(raw)).toBe(true);
@@ -92,7 +106,7 @@ describe('private concepts: frontmatter round trip', () => {
 });
 
 describe('private concepts: search', () => {
-	it('drops private concepts before ranking and LIMIT, and counts them', async () => {
+	it('drops private concepts before ranking and LIMIT', async () => {
 		const db = getDb();
 		for (let i = 0; i < 3; i++) {
 			await write('s1', `p${i}.md`, { title: `kumquat ${i}`, private: true }, 'kumquat kumquat');
@@ -100,7 +114,8 @@ describe('private concepts: search', () => {
 		await write('s1', 'pub.md', { title: 'note' }, 'one kumquat');
 		const pub = fts.searchMemoryFts(db, ['user:s1'], 'kumquat', 1, PUBLIC);
 		expect(pub.map((h) => h.path)).toEqual(['pub.md']);
-		expect(fts.countPrivateMemoryHits(db, ['user:s1'], 'kumquat')).toBe(3);
+		expect(fts.hasPrivateMemory(db, ['user:s1'])).toBe(true);
+		expect(fts.hasPrivateMemory(db, ['user:nobody'])).toBe(false);
 		const all = fts.searchMemoryFts(db, ['user:s1'], 'kumquat', 10, ALL);
 		expect(all).toHaveLength(4);
 		expect(all.filter((h) => h.private)).toHaveLength(3);

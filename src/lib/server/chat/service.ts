@@ -1,6 +1,7 @@
 import { TurnPrivacy } from '../privacy/taint.js';
 import { PRIVACY_NOTICE_PART } from '$lib/private-data.js';
 import {
+	assertModelAllowed,
 	filterTargets,
 	PrivateDataBlockedError,
 	turnTrust,
@@ -1115,6 +1116,10 @@ export async function runChatTurn(
 						stopWhen,
 						experimental_repairToolCall: toolSearch.repairToolCall,
 						prepareStep: async (options) => {
+							// Re-checked every step: the chat may have turned private (or the
+							// provider lost its trust) since the model was resolved. Throws
+							// PrivateDataBlockedError, which never falls back.
+							assertModelAllowed(db, target, privacy);
 							const activeTools = toolSearch.activeTools();
 							const base = lastStep(options);
 							const messages = compactSteps ? await compactSteps.prepare(options) : undefined;

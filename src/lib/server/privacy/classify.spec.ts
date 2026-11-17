@@ -7,22 +7,44 @@ process.env.DATABASE_PATH = ':memory:';
 process.env.MEMORY_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-classify-'));
 
 /** What the fake Decisions model says yes to, and every request it got. */
-const decisions = vi.hoisted(() => ({ yes: [] as string[], calls: [] as unknown[], weak: false }));
+const decisions = vi.hoisted(() => ({
+	yes: [] as string[],
+	calls: [] as unknown[],
+	weak: false,
+	/** Says yes only to inputs holding this text (a detail somewhere in a long note). */
+	onlyWith: null as string | null,
+	/** The call fails, as when the model is down. */
+	failing: false,
+	/** Replaces the answers (a provider's odd or partial reply). */
+	answers: null as unknown[] | null,
+	/** Runs while a request is in flight, e.g. to edit a note meanwhile. */
+	during: null as (() => Promise<void>) | null
+}));
 vi.mock('../decisions/handler.js', async (importOriginal) => {
 	const original = await importOriginal<typeof import('../decisions/handler.js')>();
 	return {
 		...original,
 		forwardDecisions: vi.fn(
-			async (request: { questions: { name: string }[] }, privacy: { tainted: boolean }) => {
-				decisions.calls.push({ request, privacy });
+			async (
+				request: { input: string; questions: { name: string }[] },
+				privacy: { tainted: boolean },
+				ref?: unknown
+			) => {
+				decisions.calls.push({ request, privacy, ref });
+				await decisions.during?.();
+				if (decisions.failing) throw new Error('model down');
+				const matches = decisions.onlyWith === null || request.input.includes(decisions.onlyWith);
 				return new Response(
 					JSON.stringify({
 						// LM Studio's decision models answer with a probability per question.
-						answers: request.questions.map((q) => ({
-							type: 'predicate',
-							name: q.name,
-							probability: decisions.yes.includes(q.name) ? (decisions.weak ? 0.32 : 0.86) : 0.1
-						}))
+						answers:
+							decisions.answers ??
+							request.questions.map((q) => ({
+								type: 'predicate',
+								name: q.name,
+								probability:
+									matches && decisions.yes.includes(q.name) ? (decisions.weak ? 0.32 : 0.86) : 0.1
+							}))
 					})
 				);
 			}
@@ -31,13 +53,14 @@ vi.mock('../decisions/handler.js', async (importOriginal) => {
 });
 
 const { closeDb, getDb } = await import('../db/index.js');
-const { classifySensitive, canClassify } = await import('./classify.js');
+const { classifySensitive, canClassify, classificationWindows, verdictOf } =
+	await import('./classify.js');
 const { sweepMemoryPrivacy, recordPrivacyCheck } = await import('./sweep.js');
 const { reviewUpdate, PRIVATE_REVIEW_NOTE } = await import('./classify.js');
 const { TurnPrivacy } = await import('./taint.js');
 const { createConversation } = await import('../db/repo/conversations.js');
 const { seedPrivacyFixture, setRole } = await import('./fixtures.js');
-const { readConcept, writeConcept } = await import('../memory/bundle.js');
+const { deleteConcept, readConcept, writeConcept } = await import('../memory/bundle.js');
 const { createMemoryServer } = await import('../mcp/servers/memory.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
@@ -49,6 +72,10 @@ beforeEach(() => {
 	decisions.yes = [];
 	decisions.calls = [];
 	decisions.weak = false;
+	decisions.onlyWith = null;
+	decisions.failing = false;
+	decisions.answers = null;
+	decisions.during = null;
 });
 
 async function createConcept(args: Record<string, unknown>): Promise<string> {
@@ -99,7 +126,11 @@ describe('automatic privacy classification', () => {
 			'money'
 		]);
 		expect(decisions.calls).toEqual([
-			expect.objectContaining({ privacy: expect.objectContaining({ tainted: true }) })
+			expect.objectContaining({
+				privacy: expect.objectContaining({ tainted: true }),
+				// The configured provider's model, not just its name (another provider may share it).
+				ref: { providerId: fx.trusted.providerId, modelId: fx.trusted.modelId }
+			})
 		]);
 		decisions.yes = [];
 		expect(await classifySensitive(db, 'I like teal')).toEqual([]);
@@ -109,6 +140,77 @@ describe('automatic privacy classification', () => {
 		expect(await classifySensitive(db, 'Send the invoice to Katharina Schulz')).toEqual([
 			'a full name'
 		]);
+	});
+
+	it('checks all of a long text, window by window', async () => {
+		setRole(getDb(), 'decisions', fx.trusted);
+		decisions.yes = ['contact'];
+		decisions.onlyWith = '+49 170 1234567';
+		const text = `${'harmless words '.repeat(500)}Call me on +49 170 1234567. ${'more '.repeat(300)}`;
+		expect(text.indexOf('+49')).toBeGreaterThan(7000);
+		expect(await classifySensitive(getDb(), text)).toEqual(['contact details']);
+		expect(decisions.calls.length).toBe(classificationWindows(text).length);
+
+		// Any failed window fails the check, so it isn't recorded as done.
+		decisions.failing = true;
+		expect(await classifySensitive(getDb(), text)).toBeNull();
+	});
+
+	it('fails on a reply it cannot read, instead of finding nothing', async () => {
+		setRole(getDb(), 'decisions', fx.trusted);
+		const all = [
+			'health',
+			'money',
+			'contact',
+			'birthdate',
+			'name',
+			'people',
+			'secrets',
+			'intimate'
+		];
+		decisions.answers = [];
+		expect(await classifySensitive(getDb(), 'some text')).toBeNull();
+		// One question missing.
+		decisions.answers = all.slice(1).map((name) => ({ name, value: false }));
+		expect(await classifySensitive(getDb(), 'some text')).toBeNull();
+		// An answer without a verdict it knows.
+		decisions.answers = all.map((name) => ({ name, verdict: 'maybe' }));
+		expect(await classifySensitive(getDb(), 'some text')).toBeNull();
+		// Booleans and yes/no strings in any of the known fields are read.
+		decisions.answers = all.map((name) => ({ name, answer: name === 'money' ? 'yes' : 'no' }));
+		expect(await classifySensitive(getDb(), 'some text')).toEqual(['money']);
+	});
+
+	it('reads verdicts from probabilities, booleans and yes/no', () => {
+		expect(verdictOf({ probability: 0.31 })).toBe(true);
+		expect(verdictOf({ probability: 0.2 })).toBe(false);
+		expect(verdictOf({ value: false })).toBe(false);
+		expect(verdictOf({ result: ' Yes ' })).toBe(true);
+		expect(verdictOf({ choice: 'no' })).toBe(false);
+		expect(verdictOf({ value: 'perhaps' })).toBeNull();
+		expect(verdictOf({})).toBeNull();
+	});
+
+	it('stops when the Decisions model is untrusted between windows', async () => {
+		setRole(getDb(), 'decisions', fx.trusted);
+		decisions.during = async () => {
+			setRole(getDb(), 'decisions', fx.untrusted);
+		};
+		expect(await classifySensitive(getDb(), 'z'.repeat(20_000))).toBeNull();
+		expect(decisions.calls.length).toBe(1);
+	});
+
+	it('splits texts into overlapping windows that cover both ends, at most 8', () => {
+		expect(classificationWindows('short')).toEqual(['short']);
+		const mid = 'x'.repeat(20_000);
+		const windows = classificationWindows(mid);
+		expect(windows.length).toBe(4);
+		expect(windows.every((w) => w.length <= 6000)).toBe(true);
+		const huge = `START${'y'.repeat(200_000)}END`;
+		const capped = classificationWindows(huge);
+		expect(capped.length).toBe(8);
+		expect(capped[0].startsWith('START')).toBe(true);
+		expect(capped[7].endsWith('END')).toBe(true);
 	});
 
 	it('marks a sensitive note private when a memory tool saves it', async () => {
@@ -172,6 +274,56 @@ describe('automatic privacy classification', () => {
 		const publicNote = await readConcept('user', fx.userId, 'a/b');
 		expect(publicNote?.frontmatter.private).toBeUndefined();
 		expect(publicNote?.frontmatter.privateReason).toBeUndefined();
+	});
+
+	it('sweep: skips a note it cannot check and still marks the next one', async () => {
+		const db = getDb();
+		const userId = 'sweep-poison';
+		seedPrivacyFixture(db, undefined, userId);
+		const save = (p: string, body: string) =>
+			writeConcept(
+				db,
+				'user',
+				userId,
+				p,
+				{ frontmatter: { title: p }, body },
+				{ author: 't', userId }
+			);
+		await save('a-poison', 'POISON');
+		await save('b-person', 'Katharina Schulz');
+		setRole(db, 'decisions', fx.trusted);
+		decisions.yes = ['name'];
+		decisions.during = async () => {
+			const last = decisions.calls.at(-1) as { request: { input: string } };
+			decisions.failing = last.request.input.includes('POISON');
+		};
+		const res = await sweepMemoryPrivacy(db, 'user', userId);
+		expect(res.marked).toEqual(['b-person.md']);
+		expect(res.checked).toBe(2);
+	});
+
+	it('sweep: gives up after 3 failed checks in a row and records nothing', async () => {
+		const db = getDb();
+		const userId = 'sweep-down';
+		seedPrivacyFixture(db, undefined, userId);
+		for (const p of ['a', 'b', 'c', 'd']) {
+			await writeConcept(
+				db,
+				'user',
+				userId,
+				p,
+				{ frontmatter: { title: p }, body: 'text' },
+				{ author: 't', userId }
+			);
+		}
+		setRole(db, 'decisions', fx.trusted);
+		decisions.failing = true;
+		const down = await sweepMemoryPrivacy(db, 'user', userId);
+		expect(down).toEqual({ checked: 3, marked: [], flagged: [] });
+		expect(decisions.calls.length).toBe(3);
+		// Back up: every note is still due.
+		decisions.failing = false;
+		expect((await sweepMemoryPrivacy(db, 'user', userId)).checked).toBe(4);
 	});
 
 	it('sweeps public notes once per content, and leaves a note made public alone', async () => {
@@ -239,6 +391,59 @@ describe('automatic privacy classification', () => {
 			marked: [],
 			flagged: []
 		});
+	});
+
+	it('sweep: leaves a note edited, deleted or marked while it was classified', async () => {
+		const db = getDb();
+		setRole(db, 'decisions', fx.trusted);
+		const body = 'Send the invoice to Katharina Schulz';
+		/** A user with one public note, swept while `meanwhile` changes it. */
+		type Save = (text: string, extra?: Record<string, unknown>) => Promise<unknown>;
+		const sweepWhile = async (userId: string, meanwhile: (save: Save) => Promise<void>) => {
+			seedPrivacyFixture(db, undefined, userId);
+			const write: Save = (text, extra = {}) =>
+				writeConcept(
+					db,
+					'user',
+					userId,
+					'a/note',
+					{ frontmatter: { title: 'Note', ...extra }, body: text },
+					{ author: 't', userId }
+				);
+			await write(body);
+			decisions.yes = ['name'];
+			decisions.during = async () => {
+				decisions.during = null;
+				await meanwhile(write);
+			};
+			// Classified as it was read, but that must not be written back.
+			expect((await sweepMemoryPrivacy(db, 'user', userId)).marked).toEqual([]);
+			return readConcept('user', userId, 'a/note');
+		};
+
+		const edited = await sweepWhile('racer-edit', (save) =>
+			save('Send the invoice to accounting').then(() => undefined)
+		);
+		expect(edited?.body.trim()).toBe('Send the invoice to accounting');
+		expect(edited?.frontmatter.private).toBeUndefined();
+		// Not recorded as checked: the next run checks it as it is now.
+		decisions.yes = [];
+		expect((await sweepMemoryPrivacy(db, 'user', 'racer-edit')).checked).toBe(1);
+
+		const gone = await sweepWhile('racer-delete', () =>
+			deleteConcept(db, 'user', 'racer-delete', 'a/note', {
+				author: 't',
+				userId: 'racer-delete'
+			}).then(() => undefined)
+		);
+		expect(gone).toBeNull();
+
+		// A person makes it private meanwhile: their decision stands, without a reason.
+		const marked = await sweepWhile('racer-mark', (save) =>
+			save(body, { private: true }).then(() => undefined)
+		);
+		expect(marked?.frontmatter.private).toBe(true);
+		expect(marked?.frontmatter.privateReason).toBeUndefined();
 	});
 
 	it('flags automatically marked notes that no longer look personal, and leaves the rest', () => {

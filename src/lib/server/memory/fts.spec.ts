@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import matter from 'gray-matter';
@@ -59,6 +60,68 @@ describe('memory fts', () => {
 		const result = await fts.reconcileMemoryFts(db);
 		expect(result.removed).toBe(1);
 		expect(fts.searchMemoryFts(db, ['user:u1'], 'oat', 10, { includePrivate: true })).toEqual([]);
+	});
+
+	it('reconcile leaves rows written while it read the disk', async () => {
+		writeExternal('u3', 'race.md', 'Race', 'old public text');
+		const reconcile = fts.reconcileMemoryFts(db);
+		// Written while the reconcile reads: marked private, and a note not on disk yet.
+		const fm = { title: 'Race', description: '', tags: [], private: true };
+		fts.upsertMemoryFts(db, 'user:u3', 'race.md', fm, 'new private text');
+		fts.upsertMemoryFts(db, 'user:u3', 'fresh.md', fm, 'fresh private text');
+		await reconcile;
+		const search = (q: string, includePrivate: boolean) =>
+			fts.searchMemoryFts(db, ['user:u3'], q, 10, { includePrivate }).map((h) => h.path);
+		expect(search('text', false)).toEqual([]);
+		expect(search('new', true)).toEqual(['race.md']);
+		expect(search('fresh', true)).toEqual(['fresh.md']);
+		// The next reconcile, with nothing written meanwhile, syncs with the disk.
+		await fts.reconcileMemoryFts(db);
+		expect(search('text', false)).toEqual(['race.md']);
+		fs.rmSync(path.join(paths.memoryRoot(), 'u3'), { recursive: true });
+		await fts.reconcileMemoryFts(db);
+	});
+
+	it('reindex leaves rows written while it read the disk', async () => {
+		writeExternal('u4', 'race.md', 'Race', 'old public text');
+		const reindex = fts.reindexMemoryFts(db);
+		const fm = { title: 'Race', description: '', tags: [], private: true };
+		fts.upsertMemoryFts(db, 'user:u4', 'race.md', fm, 'new private text');
+		await reindex;
+		const search = (q: string, includePrivate: boolean) =>
+			fts.searchMemoryFts(db, ['user:u4'], q, 10, { includePrivate }).map((h) => h.path);
+		expect(search('text', false)).toEqual([]);
+		expect(search('new', true)).toEqual(['race.md']);
+		fs.rmSync(path.join(paths.memoryRoot(), 'u4'), { recursive: true });
+		await fts.reconcileMemoryFts(db);
+	});
+
+	it("keeps an unreadable file's row as it is", async () => {
+		const fm = { title: 'Locked', description: '', tags: [], private: true };
+		fts.upsertMemoryFts(db, 'user:u5', 'locked.md', fm, 'locked private text');
+		// On disk, but reading it fails (as with a transient EBUSY on Windows).
+		const abs = path.join(paths.memoryRoot(), 'u5', 'locked.md');
+		writeExternal('u5', 'locked.md', 'Locked', 'locked private text');
+		const readFile = fsp.readFile.bind(fsp);
+		const spy = vi
+			.spyOn(fsp, 'readFile')
+			.mockImplementation(((file: string, ...rest: never[]) =>
+				String(file) === abs
+					? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' }))
+					: readFile(file, ...rest)) as typeof fsp.readFile);
+		try {
+			const result = await fts.reconcileMemoryFts(db);
+			expect(result.removed).toBe(0);
+		} finally {
+			spy.mockRestore();
+		}
+		const hits = fts.searchMemoryFts(db, ['user:u5'], 'locked', 10, { includePrivate: false });
+		expect(hits).toEqual([]);
+		expect(
+			fts.searchMemoryFts(db, ['user:u5'], 'locked', 10, { includePrivate: true })[0].private
+		).toBe(true);
+		fs.rmSync(path.dirname(abs), { recursive: true });
+		await fts.reconcileMemoryFts(db);
 	});
 
 	it('reindex rebuilds the table and returns the count', async () => {

@@ -10,6 +10,12 @@
 	import AttentionNotifier from '$lib/components/app/AttentionNotifier.svelte';
 	import OfflineBanner from '$lib/components/app/OfflineBanner.svelte';
 	import ShortcutsDialog from '$lib/components/app/ShortcutsDialog.svelte';
+	import CommandPalette from '$lib/components/app/CommandPalette.svelte';
+	import { registerCommands } from '$lib/state/commands.js';
+	import BoxesIcon from '@lucide/svelte/icons/boxes';
+	import CopyIcon from '@lucide/svelte/icons/copy';
+	import KeyboardIcon from '@lucide/svelte/icons/keyboard';
+	import SquarePenIcon from '@lucide/svelte/icons/square-pen';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { cn } from '$lib/utils.js';
@@ -62,7 +68,7 @@
 
 	/** `moveFocus` is off for the keyboard shortcut, which leaves focus where you were typing. */
 	async function toggleSidebar(moveFocus = true) {
-		// Closing with focus inside (e.g. Ctrl+K, then Ctrl+B) mustn't leave it in a hidden field.
+		// Closing with focus inside (e.g. the search box) mustn't leave it in a hidden field.
 		const focusInside = !!document.activeElement?.closest('aside');
 		if (isDesktop.current) {
 			setSidebarOpen(!sidebarOpen);
@@ -77,18 +83,7 @@
 		if (!open && focusInside && !focusComposer()) sidebarButton?.focus({ preventScroll: true });
 	}
 
-	/** Ctrl/Cmd+K: search lives in the sidebar, so show it first if it's closed. */
 	let sidebarSearch = $state<HTMLInputElement | null>(null);
-	async function focusSearch() {
-		if (isDesktop.current) {
-			if (!sidebarOpen) setSidebarOpen(true);
-		} else {
-			mobileOpen = true;
-		}
-		await tick();
-		sidebarSearch?.focus({ preventScroll: true });
-		sidebarSearch?.select();
-	}
 
 	async function closeSidebar() {
 		const fromCloseButton = !!sidebarCloseButton && document.activeElement === sidebarCloseButton;
@@ -127,7 +122,7 @@
 		overContent = false;
 	});
 
-	// ── keyboard shortcuts (Ctrl/Cmd+K lives in the sidebar's search) ────────
+	// ── keyboard shortcuts and the command palette ───────────────────────────
 	const OVERLAY = '[role=dialog], [role=alertdialog], [role=menu], [role=listbox], dialog';
 
 	/** Focus is in, or a modal is showing, something that owns its own keys. */
@@ -198,6 +193,77 @@
 	}
 
 	let shortcutsOpen = $state(false);
+	let paletteOpen = $state(false);
+
+	function newChat() {
+		void goto(resolve('/')).then(focusComposer);
+	}
+
+	function openChat(id: string) {
+		void goto(resolve(`/chat/${id}`)).then(focusComposer);
+	}
+
+	// The shell's own actions in the command palette.
+	onMount(() =>
+		registerCommands(() => {
+			const lastReply = chatShortcuts()?.lastReply();
+			const picker = modelPicker();
+			return [
+				{
+					id: 'new-chat',
+					label: 'New chat',
+					group: 'Actions',
+					icon: SquarePenIcon,
+					keywords: ['start', 'conversation'],
+					shortcut: 'new-chat',
+					run: newChat
+				},
+				...(picker
+					? [
+							{
+								id: 'model-picker',
+								label: 'Choose a model',
+								group: 'Actions' as const,
+								icon: BoxesIcon,
+								keywords: ['switch model', 'provider'],
+								shortcut: 'model-picker' as const,
+								run: () => void picker()
+							}
+						]
+					: []),
+				...(lastReply
+					? [
+							{
+								id: 'copy-last-reply',
+								label: 'Copy the last reply',
+								group: 'Actions' as const,
+								icon: CopyIcon,
+								keywords: ['clipboard', 'answer'],
+								run: () => copyLastReply(lastReply)
+							}
+						]
+					: []),
+				{
+					id: 'toggle-sidebar',
+					label: (isDesktop.current ? sidebarOpen : mobileOpen) ? 'Hide sidebar' : 'Show sidebar',
+					group: 'Actions',
+					icon: PanelLeftIcon,
+					keywords: ['toggle sidebar'],
+					shortcut: 'toggle-sidebar',
+					run: () => toggleSidebar(false)
+				},
+				{
+					id: 'show-shortcuts',
+					label: 'Keyboard shortcuts',
+					group: 'Actions',
+					icon: KeyboardIcon,
+					keywords: ['keys', 'hotkeys', 'help'],
+					shortcut: 'show-shortcuts',
+					run: () => (shortcutsOpen = true)
+				}
+			];
+		})
+	);
 
 	// ── phone drawer swipe: right on a chat to open, left on the drawer to close ──
 	let drawerTrack = $state<HTMLElement | null>(null);
@@ -257,7 +323,7 @@
 				// The sidebar's own fields (search) handle Esc; it shouldn't stop a reply.
 				if (inOverlay(event.target)) return;
 				if (event.target instanceof Element && event.target.closest('aside')) {
-					// Esc in an empty search box goes back to where you were (Ctrl+K, then Esc).
+					// Esc in an empty search box goes back to where you were.
 					if (event.target === sidebarSearch && !sidebarSearch.value) {
 						event.preventDefault();
 						if (!isDesktop.current) mobileOpen = false;
@@ -274,7 +340,13 @@
 			case 'new-chat':
 				if (inOverlay(event.target)) return;
 				event.preventDefault();
-				void goto(resolve('/')).then(focusComposer);
+				newChat();
+				return;
+			case 'command-palette':
+				// Toggles, like the shortcuts list; never on top of another modal.
+				if (!paletteOpen && inOverlay(event.target)) return;
+				event.preventDefault();
+				paletteOpen = !paletteOpen;
 				return;
 			case 'show-shortcuts':
 				// Toggles: the same keys close it again, but don't stack it on another modal.
@@ -282,21 +354,10 @@
 				event.preventDefault();
 				shortcutsOpen = !shortcutsOpen;
 				return;
-			case 'search':
-				if (inOverlay(event.target)) return;
-				event.preventDefault();
-				void focusSearch();
-				return;
 			case 'toggle-sidebar':
 				if (inOverlay(event.target)) return;
 				event.preventDefault();
 				void toggleSidebar(false);
-				return;
-			case 'open-settings':
-				if (inOverlay(event.target)) return;
-				event.preventDefault();
-				// Already in settings: stay on the section you're in.
-				if (!page.url.pathname.startsWith('/settings')) void goto(resolve('/settings'));
 				return;
 			case 'previous-chat':
 			case 'next-chat':
@@ -307,14 +368,6 @@
 				if (inOverlay(event.target)) return;
 				if (modelPicker()?.()) event.preventDefault();
 				return;
-			case 'copy-last-reply': {
-				if (inOverlay(event.target)) return;
-				const text = chatShortcuts()?.lastReply();
-				if (!text) return;
-				event.preventDefault();
-				void copyLastReply(text);
-				return;
-			}
 		}
 	}
 
@@ -341,6 +394,12 @@
 <OfflineBanner />
 
 <ShortcutsDialog bind:open={shortcutsOpen} />
+
+<CommandPalette
+	bind:open={paletteOpen}
+	isAdmin={data.user.role === 'admin'}
+	onopenchat={openChat}
+/>
 
 <AttentionNotifier
 	conversations={data.conversations}

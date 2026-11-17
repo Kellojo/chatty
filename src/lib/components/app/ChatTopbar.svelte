@@ -78,8 +78,9 @@
 	// Phones put the picker under the title (left), wider screens on the right.
 	const isPhone = new MediaQuery('(max-width: 639px)');
 	// Room for the floating sidebar button, only as much as it overlaps the centred
-	// column: 2.5rem (+ the column's 1rem padding) when the column touches the left
-	// edge, shrinking to nothing once the margin beside the column clears the button.
+	// column: 2.5rem on phones, 3rem on desktop (+ the column's 1rem padding) when the
+	// column touches the left edge, shrinking to nothing once the margin beside the
+	// column clears the button (and a gap after it).
 	// Breakpoint classes rather than a JS media query, which renders as mobile on the
 	// server and jumps on desktop. On desktop the button only shows with the sidebar closed.
 	const sidebarOffset = $derived(
@@ -87,7 +88,7 @@
 			? ''
 			: sidebar.open
 				? 'max-md:pl-[min(2.5rem,max(0px,calc(3.5rem_-_(100%_-_48rem)/2)))]'
-				: 'pl-[min(2.5rem,max(0px,calc(3.5rem_-_(100%_-_48rem)/2)))] md:pl-[min(2.5rem,max(0px,calc(4rem_-_(100%_-_48rem)/2)))]'
+				: 'pl-[min(2.5rem,max(0px,calc(3.5rem_-_(100%_-_48rem)/2)))] md:pl-[min(3rem,max(0px,calc(4.5rem_-_(100%_-_48rem)/2)))]'
 	);
 
 	const defaultModelValue = $derived(defaultModel ? encodeModelRef(defaultModel) : '');
@@ -168,20 +169,37 @@
 						</Badge>
 					{/if}
 				</div>
-				<!-- Quiet so the title leads. On phones: a small "model ⌄" line, pulled left by
-				     its padding so the logo lines up with the title. Its invisible ::after fills
-				     the whole title block (the positioned wrapper), so tapping the title opens it too;
-				     the block dims as feedback and takes the focus ring. -->
-				<ModelPicker
-					{groups}
-					{mappings}
-					value={currentModelValue}
-					onselect={selectModel}
-					disabled={saving}
-					privateOnly={isPrivate}
-					align={isPhone.current ? 'start' : 'end'}
-					class="w-auto shrink-0 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground max-sm:static max-sm:-mx-1.5 max-sm:mt-px max-sm:max-w-full max-sm:gap-0.5 max-sm:self-start max-sm:border-0 max-sm:px-1.5 max-sm:py-0 max-sm:text-xs max-sm:leading-4 max-sm:font-medium max-sm:shadow-none max-sm:after:absolute max-sm:after:-inset-x-1.5 max-sm:after:inset-y-1 max-sm:after:rounded-lg max-sm:after:content-[''] max-sm:hover:bg-transparent max-sm:focus-visible:ring-0 max-sm:focus-visible:after:ring-[3px] max-sm:focus-visible:after:ring-ring/50 max-sm:data-[size=default]:h-auto sm:ml-auto sm:max-w-44 sm:pr-2 sm:data-[size=default]:h-8 lg:max-w-56 sm:pointer-coarse:data-[size=default]:h-10 max-sm:[&_[data-model-icon=brand]>*]:size-3 max-sm:[&_[data-model-icon=generic]]:hidden max-sm:[&_[data-model-source]]:hidden max-sm:[&>svg:last-child]:size-3"
-				/>
+				<!-- The subtitle row on phones; dissolves from sm up like its parent. Phones have
+				     no room for the persona badge, so the persona leads the subtitle instead. -->
+				<div class="flex min-w-0 items-center max-sm:mt-px sm:contents">
+					{#if personaLabel}
+						<span
+							class="max-w-[45%] shrink-0 truncate text-xs leading-4 font-medium text-muted-foreground sm:hidden"
+							title="Persona: {personaLabel}"
+						>
+							{personaLabel}
+						</span>
+						<!-- Wide enough to absorb the picker's negative margin below. -->
+						<span
+							class="pr-2.5 pl-1 text-xs leading-4 text-muted-foreground/60 sm:hidden"
+							aria-hidden="true">·</span
+						>
+					{/if}
+					<!-- Quiet so the title leads; the provider stays in the tooltip and the list. On phones: a small "model ⌄" line, pulled left by
+					     its padding so the logo lines up with the title. Its invisible ::after fills
+					     the whole title block (the positioned wrapper), so tapping the title opens it
+					     too; the block dims as feedback and takes the focus ring. -->
+					<ModelPicker
+						{groups}
+						{mappings}
+						value={currentModelValue}
+						onselect={selectModel}
+						disabled={saving}
+						privateOnly={isPrivate}
+						align={isPhone.current ? 'start' : 'end'}
+						class="w-auto shrink-0 bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground max-sm:static max-sm:-mx-1.5 max-sm:min-w-0 max-sm:shrink max-sm:gap-0.5 max-sm:self-start max-sm:border-0 max-sm:px-1.5 max-sm:py-0 max-sm:text-xs max-sm:leading-4 max-sm:font-medium max-sm:shadow-none max-sm:after:absolute max-sm:after:-inset-x-1.5 max-sm:after:inset-y-1 max-sm:after:rounded-lg max-sm:after:content-[''] max-sm:hover:bg-transparent max-sm:focus-visible:ring-0 max-sm:focus-visible:after:ring-[3px] max-sm:focus-visible:after:ring-ring/50 max-sm:data-[size=default]:h-auto sm:ml-auto sm:max-w-48 sm:pr-2 sm:data-[size=default]:h-8 md:max-w-60 lg:max-w-64 sm:pointer-coarse:data-[size=default]:h-10 max-sm:[&_[data-model-icon=brand]>*]:size-3 max-sm:[&_[data-model-icon=generic]]:hidden [&_[data-model-source]]:hidden max-sm:[&>svg:last-child]:size-3"
+					/>
+				</div>
 			</div>
 			<div class="flex shrink-0 items-center gap-0.5 sm:gap-1">
 				{#if canHandoff}
@@ -195,8 +213,8 @@
 						onclick={() => (handoffOpen = true)}
 					>
 						<SquareTerminalIcon />
-						<!-- Icon-only until there is room, so the title keeps its space. -->
-						<span class="max-lg:sr-only">Hand off</span>
+						<!-- Icon-only until there is room, and whenever the persona badge already crowds the title. -->
+						<span class={personaLabel ? 'sr-only' : 'max-lg:sr-only'}>Hand off</span>
 					</Button>
 				{/if}
 			</div>

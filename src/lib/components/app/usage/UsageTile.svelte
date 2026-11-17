@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import * as Card from '$lib/components/ui/card/index.js';
+	import AnimatedNumber, { type NumberFormatKind } from '../AnimatedNumber.svelte';
 	import ProviderBillingBadge from './ProviderBillingBadge.svelte';
 	import type { BillingType } from './usage.js';
 
@@ -8,13 +9,20 @@
 		billing,
 		label,
 		value,
+		format = 'usd',
+		prefix,
+		suffix,
 		subtitle,
 		caption,
 		children
 	}: {
 		billing: BillingType;
 		label: string;
-		value: string;
+		/** A number animates on change; a string (e.g. "Not priced") shows as-is; null is "—". */
+		value: number | string | null;
+		format?: NumberFormatKind;
+		prefix?: string;
+		suffix?: string;
 		subtitle: string;
 		/** Explains the headline value itself (e.g. why it is "—"), right under it. */
 		caption?: string;
@@ -30,7 +38,13 @@
 			<ProviderBillingBadge {billing} />
 		</div>
 		<div class="flex flex-col">
-			<span class="text-3xl font-semibold tabular-nums">{value}</span>
+			<AnimatedNumber
+				class="text-3xl font-semibold tabular-nums"
+				{value}
+				{format}
+				{prefix}
+				{suffix}
+			/>
 			{#if caption}
 				<span class="text-sm font-medium text-muted-foreground">{caption}</span>
 			{/if}

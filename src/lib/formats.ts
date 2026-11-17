@@ -5,19 +5,34 @@ const COUNT_UNITS = [
 	{ value: 1e3, suffix: 'k' }
 ] as const;
 
-/** Compact count: 843, 1.5k, 2.5M, 3.1B, 1.2T (one decimal, trailing .0 dropped). */
-export function formatCount(n: number): string {
-	if (!Number.isFinite(n)) return '—';
-	const sign = n < 0 ? '-' : '';
+/**
+ * `formatCount` split into a number and its unit suffix (`1.5` + `k`), so animated
+ * displays can tween the number and keep the same lowercase units as everywhere else.
+ */
+export function countParts(n: number): { value: number; suffix: string } {
+	const sign = n < 0 ? -1 : 1;
 	const abs = Math.abs(n);
-	if (Math.round(abs) < 1000) return `${sign}${Math.round(abs)}`;
+	if (Math.round(abs) < 1000) return { value: sign * Math.round(abs), suffix: '' };
 	// Pick the unit after rounding so 999_950 becomes "1M", not "1000k".
 	for (let i = COUNT_UNITS.length - 1; i >= 0; i--) {
 		const unit = COUNT_UNITS[i];
 		const rounded = Math.round((abs / unit.value) * 10) / 10;
-		if (rounded < 1000 || i === 0) return `${sign}${rounded}${unit.suffix}`;
+		if (rounded < 1000 || i === 0) return { value: sign * rounded, suffix: unit.suffix };
 	}
-	return `${sign}${abs}`;
+	return { value: n, suffix: '' };
+}
+
+/** Compact count: 843, 1.5k, 2.5M, 3.1B, 1.2T (one decimal, trailing .0 dropped). */
+export function formatCount(n: number): string {
+	if (!Number.isFinite(n)) return '—';
+	const { value, suffix } = countParts(n);
+	return `${value}${suffix}`;
+}
+
+/** Share as a whole percent: any nonzero part counts as at least 1%. Returns a 0–1 fraction. */
+export function shareOf(part: number, whole: number): number {
+	if (whole === 0 || part === 0) return 0;
+	return Math.max(1, Math.round((part / whole) * 100)) / 100;
 }
 
 /** `formatCount` for a chart axis of whole things: fractional ticks ("1.5 calls") stay unlabelled. */
@@ -85,13 +100,35 @@ export function formatUsdPerMillion(value: number): string {
 	return `$${Number(value.toPrecision(6))}`;
 }
 
-/** Compact running time for live timers: `42s`, `4m 05s`, `1h 12m`. */
-export function formatElapsed(ms: number): string {
+/**
+ * `formatElapsed` as parts, so live timers can animate each one: `42s` is one part,
+ * `4m 05s` and `1h 12m` are two, and every part after the first is zero-padded.
+ * `coarse` drops the seconds after the first minute (`4m`), for glanceable lists.
+ */
+export function elapsedParts(
+	ms: number,
+	{ coarse = false }: { coarse?: boolean } = {}
+): { value: number; unit: 'h' | 'm' | 's' }[] {
 	const total = Math.max(0, Math.floor(ms / 1000));
-	if (total < 60) return `${total}s`;
+	if (total < 60) return [{ value: total, unit: 's' }];
 	const m = Math.floor(total / 60);
-	if (m < 60) return `${m}m ${String(total % 60).padStart(2, '0')}s`;
-	return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+	if (m < 60 && coarse) return [{ value: m, unit: 'm' }];
+	if (m < 60)
+		return [
+			{ value: m, unit: 'm' },
+			{ value: total % 60, unit: 's' }
+		];
+	return [
+		{ value: Math.floor(m / 60), unit: 'h' },
+		{ value: m % 60, unit: 'm' }
+	];
+}
+
+/** Compact running time for live timers: `42s`, `4m 05s` (`4m` when coarse), `1h 12m`. */
+export function formatElapsed(ms: number, options: { coarse?: boolean } = {}): string {
+	return elapsedParts(ms, options)
+		.map((p, i) => `${i ? String(p.value).padStart(2, '0') : p.value}${p.unit}`)
+		.join(' ');
 }
 
 /** Compact age for list rows: `<1m`, `5m`, `3h`, `2d`, `3w`, `4mo`, `1y`. */

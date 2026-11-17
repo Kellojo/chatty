@@ -9,6 +9,7 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 process.env.MEMORY_VOLUME = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-mem-private-mcp-'));
 
 const { createMemoryServer, memoryView } = await import('./memory.js');
+const { hiddenNote } = await import('./private-items.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
 const { getDb } = await import('../../db/index.js');
@@ -34,6 +35,26 @@ function seedUser(id: string, role: 'user' | 'admin') {
 function untrusted(userId: string, role: 'user' | 'admin' = 'user'): Ctx {
 	seedUser(userId, role);
 	return { userId, role, workspaceDir: null, documentsDir: '' };
+}
+
+/** An untrusted chat turn: a turn whose model may not see private data. */
+function untrustedTurn(userId: string): Ctx {
+	seedUser(userId, 'user');
+	const db = getDb();
+	const conversation = createConversation(db, userId, { title: 't' });
+	const privacy = new TurnPrivacy(db, userId, {
+		conversationId: conversation.id,
+		trust: 'untrusted'
+	});
+	return {
+		userId,
+		role: 'user',
+		workspaceDir: null,
+		documentsDir: '',
+		conversationId: conversation.id,
+		privacy,
+		trust: 'untrusted'
+	};
 }
 
 /** A trusted turn in a fresh public conversation (optionally tainted from the start). */
@@ -101,25 +122,49 @@ const fileOf = (scope: 'user' | 'shared', userId: string, relPath: string) =>
 	fs.readFileSync(path.join(bundleDir(scope, userId), relPath), 'utf8');
 
 describe('memory tools: untrusted turns', () => {
-	it('hide private concepts from search and lists, with a count', async () => {
+	it('hide private concepts from search and lists; a chat turn gets a note', async () => {
 		await save('user', 'a1', 'pub.md', 'Pub', 'the zebra is public');
 		await save('user', 'a1', 'sec.md', 'Sec', 'the zebra is secret', true);
-		const ctx = untrusted('a1');
-		expect(memoryView(ctx)).toBe('public');
+		for (const [ctx, note] of [
+			[untrustedTurn('a1'), hiddenNote()],
+			// The gateway isn't told private notes exist at all.
+			[untrusted('a1'), undefined]
+		] as const) {
+			expect(memoryView(ctx)).toBe('public');
 
-		const found = await callTool(ctx, 'search_memory', { query: 'zebra' });
-		const [json, note] = texts(found);
-		expect((JSON.parse(json) as Array<{ path: string }>).map((h) => h.path)).toEqual(['pub.md']);
-		expect(note).toBe(
-			'1 private result hidden: this chat can reach a model that may not see private data'
-		);
-		expect(JSON.stringify(found)).not.toContain('secret');
+			const found = await callTool(ctx, 'search_memory', { query: 'zebra' });
+			const [json, shownNote] = texts(found);
+			expect((JSON.parse(json) as Array<{ path: string }>).map((h) => h.path)).toEqual(['pub.md']);
+			expect(shownNote).toBe(note);
+			expect(JSON.stringify(found)).not.toContain('secret');
 
-		const listed = await callTool(ctx, 'list_concepts', {});
-		expect((JSON.parse(texts(listed)[0]) as Array<{ path: string }>).map((c) => c.path)).toEqual([
-			'pub.md'
-		]);
-		expect(texts(listed)[1]).toMatch(/^1 private result hidden/);
+			const listed = await callTool(ctx, 'list_concepts', {});
+			expect((JSON.parse(texts(listed)[0]) as Array<{ path: string }>).map((c) => c.path)).toEqual([
+				'pub.md'
+			]);
+			expect(texts(listed)[1]).toBe(note);
+		}
+	});
+
+	it('give the same note whether or not the query or prefix matches a private concept', async () => {
+		await save('user', 'a5', 'pub.md', 'Pub', 'the heron is public');
+		await save('user', 'a5', 'priv/sec.md', 'Sec', 'the kumquat is secret', true);
+		const ctx = untrustedTurn('a5');
+		const matching = texts(await callTool(ctx, 'search_memory', { query: 'kumquat' }));
+		const other = texts(await callTool(ctx, 'search_memory', { query: 'nothingmatches' }));
+		expect(matching).toEqual(['[]', hiddenNote()]);
+		expect(other).toEqual(matching);
+		const underPrivate = texts(await callTool(ctx, 'list_concepts', { prefix: 'priv' }));
+		const underNothing = texts(await callTool(ctx, 'list_concepts', { prefix: 'nothing' }));
+		expect(underPrivate).toEqual(['[]', hiddenNote()]);
+		expect(underNothing).toEqual(underPrivate);
+	});
+
+	it('get no note when the user has no private concepts', async () => {
+		await save('user', 'a6', 'pub.md', 'Pub', 'the heron is public');
+		const ctx = untrustedTurn('a6');
+		expect(texts(await callTool(ctx, 'search_memory', { query: 'heron' }))).toHaveLength(1);
+		expect(texts(await callTool(ctx, 'list_concepts', {}))).toHaveLength(1);
 	});
 
 	it('answer reads, updates and deletes of a private concept like a missing one', async () => {
@@ -136,20 +181,23 @@ describe('memory tools: untrusted turns', () => {
 			expect(res.isError, tool).toBe(true);
 			expect(texts(res), tool).toEqual(missing);
 		}
-		const invalid = texts(
-			await callTool(ctx, 'create_concept', { path: '../x', title: 'X', body: 'b' })
+		// A create answers like for any occupied path, visible or not.
+		await save('user', 'a2', 'pub.md', 'Pub', 'public body');
+		const occupied = texts(
+			await callTool(ctx, 'create_concept', { path: 'pub.md', title: 'X', body: 'b' })
 		);
+		expect(occupied).toEqual(['error: concept already exists']);
 		const create = await callTool(ctx, 'create_concept', {
 			path: 'sec.md',
 			title: 'Probe',
 			body: 'overwritten'
 		});
 		expect(create.isError).toBe(true);
-		expect(texts(create)).toEqual(invalid);
+		expect(texts(create)).toEqual(occupied);
 		expect(fileOf('user', 'a2', 'sec.md')).toBe(before);
 	});
 
-	it('get nothing at all under strict memory privacy, not even a count', async () => {
+	it('get nothing at all under strict memory privacy, not even the note', async () => {
 		await save('user', 'a3', 'pub.md', 'Pub', 'the walrus is public');
 		await save('user', 'a3', 'sec.md', 'Sec', 'the walrus is secret', true);
 		const ctx = untrusted('a3');

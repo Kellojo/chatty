@@ -49,6 +49,13 @@ describe('normalizeConceptPath', () => {
 		expect(paths.normalizeConceptPath('a/b.txt')).toBe('a/b.txt.md');
 	});
 
+	it('rejects index.md in any letter case (case-insensitive file systems)', () => {
+		expect(paths.normalizeConceptPath('Index.md')).toBeNull();
+		expect(paths.normalizeConceptPath('INDEX.md')).toBeNull();
+		expect(paths.normalizeConceptPath('dir/Index')).toBeNull();
+		expect(paths.normalizeConceptPath('Index/note.md')).toBe('Index/note.md');
+	});
+
 	it('still rejects index after appending the extension', () => {
 		expect(paths.normalizeConceptPath('index')).toBeNull();
 		expect(paths.normalizeConceptPath('dir/index')).toBeNull();

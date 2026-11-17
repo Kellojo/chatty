@@ -3,9 +3,9 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
-	import { MAX_GLOBAL_INSTRUCTIONS_LENGTH, THEMES, type Theme } from '$lib/user-settings.js';
+	import { MAX_GLOBAL_INSTRUCTIONS_LENGTH, type Theme } from '$lib/user-settings.js';
 	import StepFooter from './StepFooter.svelte';
-	import ThemePreview from './ThemePreview.svelte';
+	import ThemePicker from '../ThemePicker.svelte';
 	import type { OnboardingFlowState } from './onboarding-state.svelte.js';
 
 	let {
@@ -14,7 +14,6 @@
 		onnext
 	}: { flow: OnboardingFlowState; onback: () => void; onnext: () => void } = $props();
 
-	const themeLabels: Record<Theme, string> = { light: 'Light', dark: 'Dark', system: 'System' };
 	const QUICK_ADDS = [
 		'Be concise; skip the preamble.',
 		'Explain things like I’m new to the topic.',
@@ -88,36 +87,7 @@
 
 <section class="mt-8" aria-labelledby="look-title">
 	<h2 id="look-title" class="text-sm font-medium">Appearance</h2>
-	<div class="mt-3 grid grid-cols-3 gap-3" role="radiogroup" aria-labelledby="look-title">
-		{#each THEMES as theme (theme)}
-			{@const selected = flow.theme === theme}
-			<button
-				type="button"
-				role="radio"
-				aria-checked={selected}
-				onclick={() => chooseTheme(theme)}
-				class={[
-					'group flex flex-col gap-2 rounded-2xl border p-2 text-left transition-all outline-none focus-visible:ring-3 focus-visible:ring-ring/30 motion-reduce:transition-none',
-					selected
-						? 'border-foreground/70 bg-card shadow-md ring-1 ring-foreground/70'
-						: 'border-border/70 bg-card/60 hover:border-foreground/25 hover:bg-card'
-				]}
-			>
-				<ThemePreview {theme} />
-				<span class="flex items-center justify-between px-1 pb-0.5 text-sm font-medium">
-					{themeLabels[theme]}
-					<span
-						class={[
-							'flex size-4 items-center justify-center rounded-full transition-all',
-							selected ? 'bg-foreground text-background' : 'border border-border'
-						]}
-					>
-						{#if selected}<CheckIcon class="size-3" aria-hidden="true" />{/if}
-					</span>
-				</span>
-			</button>
-		{/each}
-	</div>
+	<ThemePicker value={flow.theme} onchange={chooseTheme} labelledby="look-title" class="mt-3" />
 </section>
 
 <section class="mt-8" aria-labelledby="about-title">

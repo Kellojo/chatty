@@ -12,8 +12,30 @@ import { roleTrusted } from './models.js';
 
 const log = createLogger('privacy');
 
-/** Longer texts are cut; the start of a note says what it's about. */
-const MAX_INPUT = 6000;
+/** Characters per classification call; longer texts are checked window by window. */
+const WINDOW = 6000;
+/** Windows overlap by this much, so a detail on a window boundary is seen whole. */
+const OVERLAP = 200;
+/** The most calls for one text; past that, windows are spread evenly over it. */
+const MAX_WINDOWS = 8;
+
+/**
+ * The windows of `text` to classify: all of it when it fits in MAX_WINDOWS,
+ * else MAX_WINDOWS windows spread from the start to the end.
+ */
+export function classificationWindows(text: string): string[] {
+	if (text.length <= WINDOW) return [text];
+	const step = WINDOW - OVERLAP;
+	const starts: number[] = [];
+	for (let at = 0; at < text.length - OVERLAP; at += step) starts.push(at);
+	const picked =
+		starts.length <= MAX_WINDOWS
+			? starts
+			: Array.from({ length: MAX_WINDOWS }, (_, i) =>
+					Math.round((i * (text.length - WINDOW)) / (MAX_WINDOWS - 1))
+				);
+	return picked.map((at) => text.slice(at, at + WINDOW));
+}
 
 /**
  * One yes/no question per kind of sensitive data, with the label a person sees.
@@ -82,15 +104,20 @@ export function canClassify(db: Db): boolean {
  */
 const YES_PROBABILITY = 0.3;
 
-/** A predicate answer's yes: a probability, or a boolean in whatever field the provider uses. */
-function saidYes(answer: Record<string, unknown>): boolean {
+/**
+ * A predicate answer's verdict: a probability, or a boolean (or "yes"/"no")
+ * in whatever field the provider uses; null when it holds none of these, so
+ * an answer the check can't read never passes for "nothing sensitive".
+ */
+export function verdictOf(answer: Record<string, unknown>): boolean | null {
 	if (typeof answer.probability === 'number') return answer.probability >= YES_PROBABILITY;
 	for (const key of ['value', 'answer', 'result', 'choice', 'predicate']) {
 		const v = answer[key];
-		if (v === true) return true;
+		if (typeof v === 'boolean') return v;
 		if (typeof v === 'string' && /^(true|yes)$/i.test(v.trim())) return true;
+		if (typeof v === 'string' && /^(false|no)$/i.test(v.trim())) return false;
 	}
-	return false;
+	return null;
 }
 
 /**
@@ -99,10 +126,26 @@ function saidYes(answer: Record<string, unknown>): boolean {
  * or the call failed). Callers treat null as "leave it as it is".
  */
 export async function classifySensitive(db: Db, text: string): Promise<string[] | null> {
-	const input = text.trim().slice(0, MAX_INPUT);
-	if (!input || !canClassify(db)) return null;
-	const role = findRoleModel(db, 'decisions');
-	if (!role) return null;
+	const input = text.trim();
+	if (!input) return null;
+	const found = new Set<string>();
+	// One window at a time: a long note's details can be anywhere in it. Any
+	// failed window fails the whole check, so it is never recorded as done.
+	for (const window of classificationWindows(input)) {
+		// Read for every call: an admin may change or untrust the model meanwhile.
+		const role = canClassify(db) ? findRoleModel(db, 'decisions') : undefined;
+		if (!role) return null;
+		const labels = await classifyWindow(role, window);
+		if (labels === null) return null;
+		for (const l of labels) found.add(l);
+	}
+	return QUESTIONS.filter((q) => found.has(q.label)).map((q) => q.label);
+}
+
+async function classifyWindow(
+	role: { provider_id: string; model_id: string },
+	input: string
+): Promise<string[] | null> {
 	const request: DecisionsRequest = {
 		model: role.model_id,
 		input,
@@ -114,16 +157,27 @@ export async function classifySensitive(db: Db, text: string): Promise<string[] 
 	};
 	try {
 		// Private from the start: the text never goes to an untrusted target, fallbacks included.
-		const res = await forwardDecisions(request, { tainted: true, reason: 'classification' });
+		// The exact configured model: its name alone could resolve on another provider.
+		const res = await forwardDecisions(
+			request,
+			{ tainted: true, reason: 'classification' },
+			{ providerId: role.provider_id, modelId: role.model_id }
+		);
+		if (!res.ok) throw new Error(`Decisions call failed with ${res.status}`);
 		const body = (await res.json()) as { answers?: unknown };
-		if (!Array.isArray(body.answers)) return null;
-		const yes = new Set(
+		if (!Array.isArray(body.answers)) throw new Error('Decisions reply has no answers');
+		const answers = new Map(
 			body.answers
 				.filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null)
-				.filter(saidYes)
-				.map((a) => a.name)
+				.map((a) => [a.name, verdictOf(a)])
 		);
-		return QUESTIONS.filter((q) => yes.has(q.name)).map((q) => q.label);
+		// Every question needs a readable answer: a partial or odd reply is a
+		// failed check, never "nothing sensitive".
+		const unread = QUESTIONS.filter((q) => typeof answers.get(q.name) !== 'boolean');
+		if (unread.length > 0) {
+			throw new Error(`Decisions reply has no verdict for ${unread.map((q) => q.name).join(', ')}`);
+		}
+		return QUESTIONS.filter((q) => answers.get(q.name) === true).map((q) => q.label);
 	} catch (e) {
 		log.warn('Privacy classification failed', {
 			error: e instanceof Error ? e.message : String(e)

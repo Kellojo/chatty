@@ -45,6 +45,7 @@
 		tools,
 		codingEnvironments = [],
 		timeFormat = '24h',
+		timeZone = 'UTC',
 		readonly = false,
 		privateData = PRIVATE_DATA_OFF,
 		onreset
@@ -55,6 +56,8 @@
 		tools: ToolInfo[];
 		codingEnvironments?: CodingEnvironment[];
 		timeFormat?: TimeFormat;
+		/** IANA zone the scheduler runs in. */
+		timeZone?: string;
 		readonly?: boolean;
 		/** The app shell's private-data switches: the Private agent switch follows them. */
 		privateData?: PrivateDataStatus;
@@ -562,7 +565,7 @@
 			</Select.Root>
 		</SettingsRow>
 		{#if form.triggerType === 'schedule'}
-			<CronScheduleInput bind:value={form.cron} {timeFormat} {readonly} />
+			<CronScheduleInput bind:value={form.cron} {timeFormat} {timeZone} {readonly} />
 		{:else if form.triggerType === 'event'}
 			<SettingsRow label="Event" stack>
 				<Select.Root type="single" bind:value={form.event} disabled={readonly}>

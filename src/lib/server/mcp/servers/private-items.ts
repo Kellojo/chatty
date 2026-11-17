@@ -25,7 +25,21 @@ export function reportPrivate(ctx: CallerContext, reason: string): void {
 	ctx.privacy.markTainted(reason);
 }
 
-/** The note an untrusted caller gets instead of the private items it may not see. */
-export function hiddenNote(count: number): string {
-	return `${count} private result${count === 1 ? '' : 's'} hidden: this chat can reach a model that may not see private data`;
+/**
+ * Whether an untrusted caller is told that private items are left out: only a
+ * chat turn (the user may wonder why a note or chat is missing), and only when
+ * the user has any private item of the kind at all. Never the gateway or
+ * background callers.
+ */
+export function showsHiddenNote(ctx: CallerContext, hasPrivateItems: () => boolean): boolean {
+	return !seesPrivate(ctx) && isTurnPrivacy(ctx.privacy) && hasPrivateItems();
+}
+
+/**
+ * The note an untrusted chat turn gets in place of private items. It is the
+ * same whatever was searched for, so it can't tell which queries match a
+ * private item (see showsHiddenNote).
+ */
+export function hiddenNote(): string {
+	return 'Private results are never shown here: this chat can reach a model that may not see private data';
 }

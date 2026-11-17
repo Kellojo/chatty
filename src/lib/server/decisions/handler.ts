@@ -3,15 +3,17 @@ import { getDb } from '../db/index.js';
 import { findModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
 import { decryptSecret } from '../crypto.js';
-import { ModelUnavailableError } from '../llm/mapped.js';
+import { ModelUnavailableError, resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
 import { resolveTargets } from '../proxy/handler.js';
 import {
 	assertModelAllowed,
 	filterTargets,
+	NON_PRIVATE,
 	PrivateDataBlockedError,
 	type Privacy
 } from '../privacy/policy.js';
+import type { ModelRef } from '$lib/model-ref.js';
 
 const log = createLogger('decisions');
 
@@ -97,11 +99,19 @@ export type DecisionsRequest = z.infer<typeof decisionsRequestSchema>;
  */
 export async function forwardDecisions(
 	request: DecisionsRequest,
-	privacy: Privacy
+	privacy: Privacy,
+	/**
+	 * The exact provider model (or `mapping:` ref) to use, for internal callers
+	 * with a configured model; `request.model` is then only a label. Without
+	 * it, `request.model` is resolved by name like the proxy does.
+	 */
+	ref?: ModelRef
 ): Promise<Response> {
 	const db = getDb();
 
-	const resolved = resolveTargets(db, request.model);
+	const resolved = ref
+		? { targets: resolveRefTargets(ref, db).targets, privacy: NON_PRIVATE }
+		: resolveTargets(db, request.model);
 	if (!resolved) {
 		throw new ModelUnavailableError(`No model found for decisions request "${request.model}"`);
 	}

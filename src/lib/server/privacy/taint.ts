@@ -17,6 +17,7 @@ export class TurnPrivacy implements Privacy {
 	reason?: string;
 	readonly conversationId: string | null;
 	readonly agentRunId: string | null;
+	readonly trust: Trust;
 
 	constructor(
 		private readonly db: Db,
@@ -33,12 +34,15 @@ export class TurnPrivacy implements Privacy {
 		this.conversationId = init.conversationId ?? null;
 		this.agentRunId = init.agentRunId ?? null;
 		this.trust = init.trust;
-		this.tainted = false;
-		this.tainted = init.tainted === true || isPrivateContext(db, this);
+		this.tainted =
+			init.tainted === true ||
+			isPrivateContext(db, {
+				tainted: false,
+				conversationId: this.conversationId,
+				agentRunId: this.agentRunId
+			});
 		if (this.tainted) this.reason = init.reason ?? 'private chat';
 	}
-
-	readonly trust: Trust;
 
 	/**
 	 * Called once when this turn makes its conversation private (not for chats

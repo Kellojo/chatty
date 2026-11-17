@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import DailyStackedChart from '$lib/components/app/usage/DailyStackedChart.svelte';
 	import EnvironmentCard from '$lib/components/app/usage/EnvironmentCard.svelte';
 	import QuotaCard from '$lib/components/app/usage/QuotaCard.svelte';
@@ -176,15 +177,20 @@
 								</span>
 								<!-- Same units on every card: tokens first, value second. -->
 								<span class="text-xl font-semibold tabular-nums">
-									{formatCount(p.tokens)} tokens
+									<AnimatedNumber value={p.tokens} format="count" /> tokens
 								</span>
 								<span class="text-sm text-muted-foreground tabular-nums">
 									{#if p.costUsd === 0 && !p.priced}
 										Not priced — no API list price known
 									{:else}
-										{formatApiValue(p.costUsd, !p.priced)} API value
+										<AnimatedNumber
+											value={p.costUsd}
+											format="usd"
+											prefix="≈ "
+											suffix={p.priced ? '' : '+'}
+										/> API value
 									{/if}
-									· {formatCount(p.sessions)}
+									· <AnimatedNumber value={p.sessions} format="count" />
 									{p.sessions === 1 ? 'session' : 'sessions'}
 								</span>
 							</Card.Content>
@@ -218,9 +224,15 @@
 					<Card.Content class="flex flex-col gap-4">
 						<p class="text-sm text-muted-foreground">
 							{#if metric === 'cost'}
-								<span class="font-medium text-foreground tabular-nums"
-									>{formatApiValue(subs.totalValueUsd, subs.anyUnpriced)}</span
-								>
+								<AnimatedNumber
+									class="font-medium text-foreground tabular-nums"
+									value={subs.totalValueUsd === 0 && subs.anyUnpriced
+										? formatApiValue(0, true)
+										: subs.totalValueUsd}
+									format="usd"
+									prefix="≈ "
+									suffix={subs.anyUnpriced ? '+' : ''}
+								/>
 								API value, {rangeLabel} — covered by your subscriptions, not billed per token.
 							{:else}
 								Input, cached and output tokens combined.

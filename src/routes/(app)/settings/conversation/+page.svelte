@@ -1,7 +1,5 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { invalidateAll } from '$app/navigation';
-	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { guardUnsavedChanges } from '$lib/components/app/settings/unsaved-changes.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
@@ -15,7 +13,7 @@
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { onMount, untrack } from 'svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
-	import PrivateDataDiagram from '$lib/components/app/settings/PrivateDataDiagram.svelte';
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import SpeechPreviewButton from '$lib/components/app/settings/SpeechPreviewButton.svelte';
 	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { PageData } from './$types';
@@ -31,7 +29,6 @@
 		codingSuggestions?: string[];
 		globalInstructions?: string;
 		speechVolume?: number;
-		privateByDefault?: boolean;
 	}) {
 		const res = await fetch('/api/user/settings', {
 			method: 'PUT',
@@ -83,21 +80,6 @@
 		}
 	}
 
-	// Shown while a change is saving, until the refreshed settings agree.
-	let privatePending = $state<boolean | null>(null);
-	const privateByDefault = $derived(privatePending ?? data.settings.privateByDefault);
-
-	async function setPrivateByDefault(value: boolean) {
-		privatePending = value;
-		try {
-			await putSettings({ privateByDefault: value });
-			await invalidateAll().catch(() => undefined);
-		} catch {
-			toast.error("Couldn't change the setting. Try again.");
-		}
-		if (privatePending === value) privatePending = null;
-	}
-
 	const instructionsDirty = $derived(instructions.trim() !== savedInstructions);
 	guardUnsavedChanges(() => instructionsDirty);
 </script>
@@ -123,9 +105,11 @@
 		/>
 		<div class="flex justify-between gap-4 text-xs text-muted-foreground">
 			<span>Leave empty for no global instructions.</span>
-			<span class="shrink-0 tabular-nums"
-				>{instructions.length.toLocaleString()} / {MAX_GLOBAL_INSTRUCTIONS_LENGTH.toLocaleString()}</span
-			>
+			<AnimatedNumber
+				class="shrink-0 tabular-nums"
+				value={instructions.length}
+				suffix=" / {MAX_GLOBAL_INSTRUCTIONS_LENGTH.toLocaleString('en-US')}"
+			/>
 		</div>
 	</div>
 	<div class="flex items-center justify-end gap-2">
@@ -147,25 +131,6 @@
 	</div>
 </SettingsSection>
 
-{#if data.privateData.enabled}
-	<SettingsSection title="Private data">
-		<SettingsRow
-			label="New chats are private"
-			for="pref-private-by-default"
-			description={data.privateData.available
-				? 'New chats start with the lock on. You can still turn it off per chat.'
-				: 'Takes effect once a provider is trusted with private data (Settings → Providers).'}
-		>
-			<Switch
-				id="pref-private-by-default"
-				checked={privateByDefault}
-				onCheckedChange={setPrivateByDefault}
-			/>
-		</SettingsRow>
-		<PrivateDataDiagram trustedProviders={data.trustedProviders} class="mb-1" />
-	</SettingsSection>
-{/if}
-
 <SettingsSection
 	title="Read aloud"
 	description="How replies sound when you use the read-aloud button."
@@ -183,9 +148,11 @@
 				aria-valuetext={`${volume}%`}
 				class="h-2 w-full cursor-pointer accent-primary sm:w-48"
 			/>
-			<span class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
-				>{volume}%</span
-			>
+			<AnimatedNumber
+				class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
+				value={volume / 100}
+				format="percent"
+			/>
 			<SpeechPreviewButton
 				{playback}
 				label="Test"

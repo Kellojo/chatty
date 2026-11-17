@@ -81,6 +81,14 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		if (!agent || (agent.user_id !== user.id && agent.user_id !== null)) {
 			error(404, { message: 'Agent not found' });
 		}
+		// A private agent's chats are private, as when one is started with it
+		// (POST): its prompt is private data.
+		if (agent.private === 1) {
+			if (data.private === false) {
+				error(409, { message: "A private agent's chats are private" });
+			}
+			data.private = true;
+		}
 		if (data.systemPrompt === undefined) data.systemPrompt = agent.system_prompt;
 		if (agent.provider_id && agent.model_id) {
 			if (data.providerId === undefined) data.providerId = agent.provider_id;

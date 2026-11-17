@@ -313,9 +313,16 @@ export const PRIVATE_DOCS_DIR = 'private';
 
 /** Whether a path relative to the documents root lies in the private folder (or is it). */
 export function isPrivateDocRel(rel: string): boolean {
-	const first = toPosix(rel).split('/')[0];
-	// Case-insensitive: on Windows and macOS `Private/` is the same folder.
-	return first.toLowerCase() === PRIVATE_DOCS_DIR;
+	// Compared the way Windows and macOS resolve names, so no alias slips past:
+	// case-insensitive (`Private`), an NTFS stream suffix (`private::$DATA`)
+	// and trailing dots or spaces (`private.`) all open the same folder. On
+	// Linux these are other folders; treating them as private fails closed.
+	const first = toPosix(rel)
+		.split('/')[0]
+		.split(':')[0]
+		.replace(/[. ]+$/, '')
+		.toLowerCase();
+	return first === PRIVATE_DOCS_DIR;
 }
 
 /**

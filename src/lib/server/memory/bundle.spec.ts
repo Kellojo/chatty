@@ -208,6 +208,35 @@ describe('memory bundle', () => {
 		});
 	});
 
+	it("flags memory.changed events of private notes, so the path doesn't reach public agents", async () => {
+		const { subscribeServerEvents } = await import('../events/bus.js');
+		const seen: Array<{ action: string; path: string; private?: boolean }> = [];
+		const unsub = subscribeServerEvents('u1', (_userId, event) => {
+			if (event.type === 'memory.changed') seen.push(event);
+		});
+		const write = (relPath: string, fm: { title: string; private?: boolean }) =>
+			bundle.writeConcept(db, 'user', 'u1', relPath, { frontmatter: fm, body: 'b' }, audit);
+		try {
+			await write('people/secret.md', { title: 'S', private: true });
+			// A save that doesn't mention the flag keeps it, and so does the event.
+			await write('people/secret.md', { title: 'S2' });
+			await bundle.moveConcept(db, 'user', 'u1', 'people/secret.md', 'people/s.md', audit);
+			await bundle.deleteConcept(db, 'user', 'u1', 'people/s.md', audit);
+			await write('people/open.md', { title: 'O' });
+			await bundle.deleteConcept(db, 'user', 'u1', 'people/open.md', audit);
+		} finally {
+			unsub();
+		}
+		expect(seen.map((e) => [e.action, e.path, e.private])).toEqual([
+			['create', 'people/secret.md', true],
+			['update', 'people/secret.md', true],
+			['update', 'people/s.md', true],
+			['delete', 'people/s.md', true],
+			['create', 'people/open.md', undefined],
+			['delete', 'people/open.md', undefined]
+		]);
+	});
+
 	it('deleteConcept prunes the now-empty directory chain', async () => {
 		await bundle.writeConcept(
 			db,

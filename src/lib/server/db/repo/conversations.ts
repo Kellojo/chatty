@@ -238,7 +238,7 @@ function privateClause(scope: PrivateScope): string {
  * Chats updated since `since`. `excludeDispatched` leaves out chats Chatty
  * started for agent runs: their content is the agent's, not the user's (memory
  * extraction lists recent chats this way). `includePrivate: false` leaves out
- * private chats (count them with `countPrivateConversationsSince`).
+ * private chats.
  */
 export function listConversationsSince(
 	db: Db,
@@ -258,22 +258,21 @@ export function listConversationsSince(
 		.all(userId, since) as ConversationRow[];
 }
 
-/** How many private chats `listConversationsSince` leaves out without `includePrivate`. */
-export function countPrivateConversationsSince(
-	db: Db,
-	userId: string,
-	since: number,
-	opts: { excludeDispatched?: boolean } = {}
-): number {
-	const dispatched = opts.excludeDispatched ? `AND origin != 'dispatch'` : '';
-	const row = db
-		.prepare(
-			`SELECT COUNT(*) AS n FROM conversations
-			 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND updated_at >= ?
-			   AND private = 1 ${dispatched}`
-		)
-		.get(userId, since) as { n: number };
-	return row.n;
+/**
+ * Whether the user has any private chat. Deliberately ignores what was
+ * searched for, so the "private results hidden" note it gates can't be used
+ * to probe private chats' content.
+ */
+export function hasPrivateConversations(db: Db, userId: string): boolean {
+	return (
+		db
+			.prepare(
+				`SELECT 1 FROM conversations
+				 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND private = 1
+				 LIMIT 1`
+			)
+			.get(userId) !== undefined
+	);
 }
 
 /** One conversation with the coding-task and agent-run summary the sidebar shows. */
@@ -729,8 +728,7 @@ function rankedCandidates(
  * only the shown version: membership still comes from the version-aware
  * search, so this only shifts the order.
  *
- * `includePrivate: false` leaves private chats out in SQL, before any limit
- * (count them with `countPrivateSearchMatches`).
+ * `includePrivate: false` leaves private chats out in SQL, before any limit.
  */
 export function searchConversationsRanked(
 	db: Db,
@@ -779,22 +777,6 @@ export function searchConversationsRanked(
 		(a, b) => b.score - a.score || b.row.pinned - a.row.pinned || b.activity - a.activity
 	);
 	return scored.slice(0, limit).map((s) => s.row);
-}
-
-/** How many private chats match `query`: what `searchConversationsRanked` hides without `includePrivate`. */
-export function countPrivateSearchMatches(
-	db: Db,
-	userId: string,
-	query: string,
-	opts: { since?: number | null } = {}
-): number {
-	const terms = searchTerms(query);
-	const rows =
-		terms.length === 0
-			? searchConversations(db, userId, query, { limit: MAX_SEARCH_PAGE_SIZE, scope: 'private' })
-			: [...rankedCandidates(db, userId, query, terms, 'private').values()];
-	const since = opts.since ?? null;
-	return since === null ? rows.length : rows.filter((r) => r.updated_at >= since).length;
 }
 
 /**

@@ -11,7 +11,9 @@
 	{#snippet description()}
 		Move around without the mouse. Press <ShortcutKeys
 			entry={{ combos: [COMBOS['show-shortcuts']] }}
-		/> anywhere to see this list.
+		/> anywhere to see this list. Everything else is in the command palette: press <ShortcutKeys
+			entry={{ combos: [COMBOS['command-palette']] }}
+		/> and start typing.
 	{/snippet}
 </SettingsHeader>
 

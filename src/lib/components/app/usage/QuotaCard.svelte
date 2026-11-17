@@ -2,6 +2,7 @@
 	import TicketIcon from '@lucide/svelte/icons/ticket';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import * as Card from '$lib/components/ui/card/index.js';
+	import AnimatedNumber from '../AnimatedNumber.svelte';
 	import { providerLabel } from '$lib/coding-environments.js';
 	import type { CodingUsageLimitWindow } from '$lib/coding-environments.js';
 	import { formatTimeAgo } from '$lib/datetime.js';
@@ -145,9 +146,11 @@
 					· {mainLabel.toLowerCase()} limit
 				</span>
 				<span class="flex items-baseline gap-2">
-					<span class="text-4xl font-semibold tracking-tight tabular-nums"
-						>{Math.round(pool.remaining)}%</span
-					>
+					<AnimatedNumber
+						class="text-4xl font-semibold tracking-tight tabular-nums"
+						value={Math.round(pool.remaining) / 100}
+						format="percent"
+					/>
 					<span class="text-sm text-muted-foreground">
 						{multi ? `left of ${pool.capacity}%` : 'left'}
 					</span>
@@ -190,7 +193,13 @@
 				<div class="flex flex-col">
 					<dt class="text-xs text-muted-foreground">{mainLabel} reset</dt>
 					{#if nextReset}
-						<dd class="font-medium tabular-nums">+{Math.round(nextReset.gain)}%</dd>
+						<dd class="font-medium tabular-nums">
+							<AnimatedNumber
+								value={Math.round(nextReset.gain) / 100}
+								format="percent"
+								prefix="+"
+							/>
+						</dd>
 						<dd class="text-xs text-muted-foreground tabular-nums">{time(nextReset.at)}</dd>
 					{:else}
 						<dd class="text-muted-foreground">—</dd>
@@ -199,7 +208,9 @@
 				<div class="flex flex-col">
 					<dt class="text-xs text-muted-foreground">Burn rate</dt>
 					{#if pool.burnPerHour !== null}
-						<dd class="font-medium tabular-nums">{pool.burnPerHour.toFixed(1)}%/h</dd>
+						<dd class="font-medium tabular-nums">
+							<AnimatedNumber value={pool.burnPerHour} format="decimal" suffix="%/h" />
+						</dd>
 						<dd class="text-xs text-muted-foreground">
 							avg this {mainLabel === 'Weekly' ? 'week' : 'window'}
 						</dd>

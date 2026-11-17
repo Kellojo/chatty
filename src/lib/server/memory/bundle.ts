@@ -12,7 +12,7 @@ import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { deleteMemoryFts, upsertMemoryFts } from './fts.js';
 import { ftsScope, bundleDir, normalizeConceptPath, resolveConceptAbs } from './paths.js';
-import { conceptIsPrivate } from './private.js';
+import { conceptIsPrivate, rawConceptIsPrivate } from './private.js';
 import type { MemoryScope } from './paths.js';
 
 export interface ConceptFrontmatter {
@@ -407,7 +407,8 @@ export async function writeConcept(
 		path: target.relPath,
 		action,
 		author: audit.author,
-		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {}),
+		...(fm.private ? { private: true } : {})
 	});
 	scheduleIndex(path.dirname(target.abs));
 	upsertMemoryFts(db, ftsScope(scope, userId), target.relPath, fm, input.body);
@@ -451,7 +452,8 @@ export async function deleteConcept(
 		path: target.relPath,
 		action: 'delete',
 		author: audit.author,
-		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {}),
+		...(rawConceptIsPrivate(oldRaw) ? { private: true } : {})
 	});
 	deleteMemoryFts(db, ftsScope(scope, userId), target.relPath);
 	return true;
@@ -508,7 +510,8 @@ export async function moveConcept(
 		path: to.relPath,
 		action: 'update',
 		author: audit.author,
-		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {}),
+		...(rawConceptIsPrivate(raw) ? { private: true } : {})
 	});
 	return concept;
 }
@@ -651,7 +654,9 @@ export async function setConceptsPrivate(
 
 /**
  * Sets the private flag on the given concepts (paths in the bundle); missing
- * ones and those already flagged are skipped. Returns how many changed.
+ * ones and those already flagged are skipped. Returns how many changed. A
+ * person decided their privacy, so each changed one is recorded as checked:
+ * the privacy sweep doesn't mark a note made public private again.
  */
 export async function setConceptPathsPrivate(
 	db: Db,
@@ -661,11 +666,13 @@ export async function setConceptPathsPrivate(
 	value: boolean,
 	audit: MemoryAuditInfo
 ): Promise<number> {
+	// Loaded here: the sweep imports this module (and the classifier with it).
+	const { recordPrivacyCheck } = await import('../privacy/sweep.js');
 	let updated = 0;
 	for (const relPath of relPaths) {
 		const concept = await readConcept(scope, userId, relPath);
 		if (!concept || (concept.frontmatter.private === true) === value) continue;
-		await writeConcept(
+		const saved = await writeConcept(
 			db,
 			scope,
 			userId,
@@ -680,6 +687,7 @@ export async function setConceptPathsPrivate(
 			},
 			audit
 		);
+		recordPrivacyCheck(db, saved, userId);
 		updated++;
 	}
 	return updated;

@@ -49,6 +49,8 @@
 	import { askUserInput, askUserRequest, isAskUserPart, type AskUserPart } from '$lib/ask-user.js';
 	import { drafts } from '$lib/state/drafts.js';
 	import { registerChatShortcuts, shortcutLabel } from '$lib/state/shortcuts.js';
+	import { registerCommands } from '$lib/state/commands.js';
+	import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
 	import {
 		messageFiles,
 		messageText,
@@ -611,6 +613,13 @@
 			});
 	}
 
+	/** A reply shown as still being generated ('partial') although none is being received. */
+	function showsUnsettledReply(): boolean {
+		return chat.messages.some(
+			(m) => (m.metadata as UIMessageMetadata | undefined)?.status === 'partial'
+		);
+	}
+
 	/** Shows the persisted newest messages, unless a new reply has started meanwhile. */
 	async function reloadLatest(id: string) {
 		const latest = await fetchLatest(id);
@@ -724,19 +733,36 @@
 	// "finished" notice in a chat); reload them while idle. Only the newest page
 	// is fetched: these updates can arrive every second, and reloading the whole
 	// page data would also re-send the layout and model list.
+	//
+	// A reload can also catch a reply the server hasn't settled yet: Stop aborts
+	// the server's side without waiting, so the messages reloaded right after can
+	// still hold it as 'partial' ("Still generating…") with nothing attached to
+	// end it. The server announces `chat.stream.finished` once it has saved the
+	// final state, so reload then too whenever such a stale reply is shown.
 	$effect(() => {
 		const id = conversation.id;
 		let timer: ReturnType<typeof setTimeout> | null = null;
-		const reload = async () => {
+		const reload = async (onlyIfStale = false) => {
 			timer = null;
 			if (streaming || conversation.id !== id) return;
+			if (onlyIfStale && !showsUnsettledReply()) return;
 			const latest = await fetchLatest(id);
 			if (!latest || streaming || sending || conversation.id !== id) return;
 			showLatest(latest.messages, latest.hasOlder);
 		};
 		const off = onServerEvent((event) => {
-			if (event.type !== 'chat.messages.updated' || event.conversationId !== id) return;
-			timer ??= setTimeout(() => void reload(), 300);
+			if (event.type === 'chat.messages.updated' && event.conversationId === id) {
+				timer ??= setTimeout(() => void reload(), 300);
+			} else if (
+				event.type === 'chat.stream.finished' &&
+				event.conversationId === id &&
+				!remoteGenerating
+			) {
+				// Following a remote reply settles it itself (see `finish` above).
+				// Checked after the delay: a reload already in flight may only now
+				// bring in the stale reply.
+				timer ??= setTimeout(() => void reload(true), 300);
+			}
 		});
 		return () => {
 			off();
@@ -1319,6 +1345,48 @@
 				return (last && messageText(last)) || null;
 			}
 		})
+	);
+
+	// The command palette's entries for what this view owns (the ⋯ menu adds the rest).
+	onMount(() =>
+		registerCommands(() => [
+			...(streaming
+				? [
+						{
+							id: 'chat:stop',
+							label: 'Stop the reply',
+							group: 'This chat' as const,
+							icon: SquareIcon,
+							keywords: ['cancel', 'abort'],
+							shortcut: 'escape' as const,
+							run: stop
+						}
+					]
+				: []),
+			...(voice.active
+				? [
+						{
+							id: 'chat:voice',
+							label: 'End voice mode',
+							group: 'This chat' as const,
+							icon: AudioLinesIcon,
+							shortcut: 'escape' as const,
+							run: () => voice.stop()
+						}
+					]
+				: voiceSupported && !isCoding && !editing && !sending && !dictating
+					? [
+							{
+								id: 'chat:voice',
+								label: 'Start voice mode',
+								group: 'This chat' as const,
+								icon: AudioLinesIcon,
+								keywords: ['talk', 'speak', 'microphone'],
+								run: startVoice
+							}
+						]
+					: [])
+		])
 	);
 
 	// ── earlier messages ─────────────────────────────────────────────────────

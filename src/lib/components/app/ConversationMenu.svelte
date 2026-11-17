@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
@@ -14,6 +15,12 @@
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
 	import SnoozeDialog from './SnoozeDialog.svelte';
 	import { markedUnread, setConversationRead } from './marked-unread.svelte.js';
+	import { registerCommands, type PaletteCommand } from '$lib/state/commands.js';
+	import { isSnoozed, snoozeOptions } from '$lib/snooze.js';
+	import { snoozeConversation, wakeConversation } from '$lib/snooze-actions.js';
+	import AlarmClockIcon from '@lucide/svelte/icons/alarm-clock';
+	import AlarmClockOffIcon from '@lucide/svelte/icons/alarm-clock-off';
+	import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
 	import { page } from '$app/state';
 	import { MediaQuery } from 'svelte/reactivity';
 	import MailIcon from '@lucide/svelte/icons/mail';
@@ -195,6 +202,124 @@
 		}
 	}
 
+	// The same actions in the command palette (Mod+K), read when it opens.
+	onMount(() =>
+		registerCommands(() => {
+			const commands: Omit<PaletteCommand, 'group'>[] = [];
+			const add = (command: Omit<PaletteCommand, 'group'>) => commands.push(command);
+			if (oncreatepr)
+				add({
+					id: 'chat:create-pr',
+					label: 'Create pull request',
+					icon: GitPullRequestCreateIcon,
+					run: oncreatepr
+				});
+			if (onsettings)
+				add({
+					id: 'chat:coding-settings',
+					label: 'Model and permissions',
+					icon: SlidersHorizontalIcon,
+					run: onsettings
+				});
+			if (onpreview)
+				add({ id: 'chat:preview', label: 'Browser preview', icon: AppWindowIcon, run: onpreview });
+			if (onhandoff)
+				add({
+					id: 'chat:handoff',
+					label: 'Hand off to coding agent',
+					icon: SquareTerminalIcon,
+					keywords: ['t3', 'code'],
+					run: onhandoff
+				});
+			const agentId = conversation.agentId;
+			if (agentId)
+				add({
+					id: 'chat:open-agent',
+					label: 'Open agent',
+					icon: BotIcon,
+					run: () => goto(resolve(`/agents/${agentId}`))
+				});
+			add({
+				id: 'chat:settle',
+				label: settled ? `Un-settle ${noun}` : `Settle ${noun}`,
+				icon: settled ? ArchiveRestoreIcon : ArchiveIcon,
+				keywords: ['archive', 'done'],
+				run: toggleSettled
+			});
+			add({
+				id: 'chat:read',
+				label: unread ? 'Mark as read' : 'Mark as unread',
+				icon: unread ? MailOpenIcon : MailIcon,
+				searchOnly: true,
+				run: toggleRead
+			});
+			if (!settled) {
+				if (isSnoozed(conversation))
+					add({
+						id: 'chat:wake',
+						label: 'Wake now',
+						icon: AlarmClockOffIcon,
+						keywords: ['unsnooze'],
+						run: () => wakeConversation(conversation, snoozeChanged)
+					});
+				for (const option of snoozeOptions())
+					add({
+						id: `chat:snooze:${option.label}`,
+						label: `Snooze: ${option.label}`,
+						hint: option.when,
+						icon: AlarmClockIcon,
+						keywords: ['remind', 'later'],
+						searchOnly: true,
+						run: () => snoozeConversation(conversation, option.until, snoozeChanged)
+					});
+				add({
+					id: 'chat:snooze-custom',
+					label: 'Snooze until…',
+					icon: CalendarClockIcon,
+					keywords: ['remind', 'later', 'date'],
+					run: () => (pickingSnooze = true)
+				});
+				add({
+					id: 'chat:pin',
+					label: conversation.pinned ? `Unpin ${noun}` : `Pin ${noun}`,
+					icon: conversation.pinned ? PinOffIcon : PinIcon,
+					run: togglePin
+				});
+			}
+			add({
+				id: 'chat:rename',
+				label: `Rename ${noun}…`,
+				icon: PencilIcon,
+				keywords: ['title'],
+				run: openRename
+			});
+			if (showPrivacy && conversation.private)
+				add({
+					id: 'chat:make-public',
+					label: 'Make public…',
+					icon: LockOpenIcon,
+					keywords: ['private'],
+					run: () => (confirmingPublic = true)
+				});
+			else if (showPrivacy && privateData.available)
+				add({
+					id: 'chat:make-private',
+					label: 'Make private…',
+					icon: LockIcon,
+					run: () => (confirmingPrivate = true)
+				});
+			add({
+				id: 'chat:delete',
+				label: `Delete ${noun}…`,
+				icon: Trash2Icon,
+				keywords: ['remove', 'trash'],
+				destructive: true,
+				run: () => (deleting = true)
+			});
+			return commands.map((command) => ({ ...command, group: 'This chat' }));
+		})
+	);
+
 	async function confirmDelete() {
 		deleting = false;
 		if (await request('', { method: 'DELETE' }, `Failed to delete ${noun}`)) {
@@ -225,7 +350,7 @@
 		collisionPadding={8}
 		class="max-h-(--bits-dropdown-menu-content-available-height) max-w-[calc(100vw-1rem)] {coding
 			? 'w-80'
-			: 'w-52'}"
+			: 'w-60'}"
 	>
 		<!--
 			Phone-only actions (the header has no room for them) lead the menu. Not

@@ -23,7 +23,6 @@
 	import { groupParts, hasVisibleContent } from './timeline.js';
 	import { messageText } from '$lib/chat-history.js';
 	import { readableErrorText } from '$lib/error-text.js';
-	import { shortcutLabel } from '$lib/state/shortcuts.js';
 	import { canShare, shareText } from '$lib/web-share.js';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import ShareIcon from '@lucide/svelte/icons/share';
@@ -329,9 +328,7 @@
 						{/if}
 						{#if visible}
 							<button
-								title={index === lastAssistantIndex
-									? `Copy (${shortcutLabel('copy-last-reply')})`
-									: 'Copy'}
+								title="Copy"
 								aria-label="Copy message"
 								class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
 								onclick={() => copyMessage(message)}

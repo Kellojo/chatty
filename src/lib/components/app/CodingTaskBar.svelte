@@ -178,11 +178,16 @@
 				rel="noopener noreferrer"
 				variant="outline"
 				size="sm"
+				class="max-sm:w-8 max-sm:px-0 max-sm:pointer-coarse:w-10"
 				aria-label="Open pull request {number ?? ''}{prState ? ` (${prState.toLowerCase()})` : ''}"
-				title={prState ? `Open pull request (${prState.toLowerCase()})` : 'Open pull request'}
+				title={number
+					? `Open pull request ${number}${prState ? ` (${prState.toLowerCase()})` : ''}`
+					: prState
+						? `Open pull request (${prState.toLowerCase()})`
+						: 'Open pull request'}
 			>
+				<!-- Icon-only on phones, so the title keeps its room; the tint shows the state. -->
 				<PullRequestIcon state={coding.prState} />
-				<span class="sm:hidden">{number ?? 'PR'}</span>
 				<span class="hidden sm:inline">{number ? `PR ${number}` : 'Pull request'}</span>
 				{#if prState}
 					<span class="hidden text-muted-foreground sm:inline">· {prState}</span>

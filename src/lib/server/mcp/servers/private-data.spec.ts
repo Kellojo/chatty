@@ -1,6 +1,6 @@
 /**
  * The data tools and private data: untrusted turns never see private chats,
- * documents or agent runs (filtered, with a count at most), trusted turns do
+ * documents or agent runs (filtered, with a query-independent note at most), trusted turns do
  * and are tainted by them before the result returns, and writes from a
  * private context stay private.
  */
@@ -17,7 +17,7 @@ process.env.APP_SECRET = 'test-secret-test-secret';
 const { getDb } = await import('../../db/index.js');
 const { createConversation } = await import('../../db/repo/conversations.js');
 const { createMessage } = await import('../../db/repo/messages.js');
-const { createAgent } = await import('../../db/repo/agents.js');
+const { createAgent, getAgent } = await import('../../db/repo/agents.js');
 const { createAgentRun, finishAgentRun } = await import('../../db/repo/agent-runs.js');
 const { isConversationPrivate } = await import('../../privacy/policy.js');
 const { TurnPrivacy } = await import('../../privacy/taint.js');
@@ -25,8 +25,9 @@ const { CANARY, markConversationPrivate, seedPrivacyFixture, setRole } =
 	await import('../../privacy/fixtures.js');
 const { prepareAgentCreate, PRIVATE_AGENT_MODEL_ERROR } = await import('../../agentInput.js');
 const { createChatSearchServer } = await import('./chat-search.js');
-const { createFsServer } = await import('./fs.js');
+const { createFsServer, isPrivateDocRel } = await import('./fs.js');
 const { createAgentsServer, PRIVATE_RUN_NOTE } = await import('./agents.js');
+const { hiddenNote } = await import('./private-items.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
 
@@ -114,22 +115,36 @@ describe('chat search', () => {
 		privateBodyId = chat('other', `${CANARY} zebra zebra zebra`, { private: true });
 	});
 
-	it('hides private chats from an untrusted turn, before the limit, with a count', async () => {
-		for (const ctx of [turn('untrusted').ctx, gatewayCtx()]) {
+	it('hides private chats from an untrusted turn, before the limit, with a note', async () => {
+		for (const [ctx, note] of [
+			[turn('untrusted').ctx, hiddenNote()],
+			// The gateway isn't told that private chats exist at all.
+			[gatewayCtx(), undefined]
+		] as const) {
 			const res = await call(createChatSearchServer, ctx, 'search_chats', {
 				query: 'zebra',
 				limit: 1
 			});
 			expect(res.isError).toBe(false);
-			const [json, note] = res.text.split('\n');
+			const [json, shownNote] = res.text.split('\n');
 			expect(JSON.parse(json).map((r: { id: string }) => r.id)).toEqual([publicId]);
-			expect(note).toBe(
-				'2 private results hidden: this chat can reach a model that may not see private data'
-			);
+			expect(shownNote).toBe(note);
 			expect(res.text).not.toContain(CANARY);
 			expect(res.text).not.toContain('secret');
 			expect(res.text).not.toContain(privateTitleId);
 		}
+	});
+
+	it('gives an untrusted turn the same note whether or not the query matches a private chat', async () => {
+		const { ctx } = turn('untrusted');
+		const matching = await call(createChatSearchServer, ctx, 'search_chats', { query: 'secret' });
+		const other = await call(createChatSearchServer, ctx, 'search_chats', {
+			query: 'nothingmatchesthisword'
+		});
+		const [matchingJson, matchingNote] = matching.text.split('\n');
+		expect(matchingJson).not.toContain(privateTitleId);
+		expect(matchingNote).toBe(hiddenNote());
+		expect(other.text).toBe(`[]\n${hiddenNote()}`);
 	});
 
 	it('hides private chats from an untrusted "since" listing', async () => {
@@ -137,7 +152,7 @@ describe('chat search', () => {
 		const ids = JSON.parse(res.text.split('\n')[0]).map((r: { id: string }) => r.id);
 		expect(ids).toContain(publicId);
 		expect(ids).not.toContain(privateBodyId);
-		expect(res.text).toMatch(/\d+ private results? hidden/);
+		expect(res.text.split('\n')).toHaveLength(1);
 	});
 
 	it('returns private chats to a trusted turn and taints it', async () => {
@@ -216,6 +231,24 @@ describe('chat search', () => {
 });
 
 describe('documents/private', () => {
+	it('treats every name Windows or macOS opens as the private folder as private', () => {
+		for (const rel of [
+			'private',
+			'private/a.md',
+			'Private/a.md',
+			'private./a.md',
+			'private ./a.md',
+			'private::$DATA',
+			'private:stream/a.md',
+			'private\\a.md'
+		]) {
+			expect(isPrivateDocRel(rel), rel).toBe(true);
+		}
+		for (const rel of ['privates/a.md', 'notes/private/a.md', 'a.md', '.private/a.md']) {
+			expect(isPrivateDocRel(rel), rel).toBe(false);
+		}
+	});
+
 	it('does not exist for an untrusted turn', async () => {
 		for (const ctx of [turn('untrusted').ctx, gatewayCtx()]) {
 			const read = (p: string) =>
@@ -389,6 +422,127 @@ describe('private agents', () => {
 		expect(moved).toEqual({ isError: true, text: `error: ${PRIVATE_AGENT_MODEL_ERROR}` });
 	});
 
+	it("hides a private agent's name and prompt from an untrusted caller", async () => {
+		const agent = createAgent(db, userId, {
+			name: `${CANARY} agent`,
+			description: CANARY,
+			systemPrompt: CANARY,
+			triggerType: 'manual',
+			private: true,
+			...fx.trusted
+		});
+		for (const [ctx, note] of [
+			[turn('untrusted').ctx, hiddenNote()],
+			[gatewayCtx(), undefined]
+		] as const) {
+			const listed = await call(createAgentsServer, ctx, 'list_agents', {});
+			expect(listed.text).not.toContain(CANARY);
+			const [json, shownNote] = listed.text.split('\n');
+			expect(JSON.parse(json).some((a: { id: string }) => a.id === agent.id)).toBe(false);
+			expect(shownNote).toBe(note);
+			// Answered like an unknown agent, so its existence doesn't show either.
+			for (const [name, args] of [
+				['get_agent', { agentId: agent.id }],
+				['update_agent', { agentId: agent.id, name: 'renamed' }]
+			] as const) {
+				expect(await call(createAgentsServer, ctx, name, args)).toEqual({
+					isError: true,
+					text: 'error: agent not found'
+				});
+			}
+		}
+		expect(getAgent(db, agent.id)?.name).toBe(`${CANARY} agent`);
+	});
+
+	it('reaches a trusted caller, tainting it, and only the user makes it public', async () => {
+		const agent = createAgent(db, userId, {
+			name: 'tainting agent',
+			systemPrompt: CANARY,
+			triggerType: 'manual',
+			private: true,
+			...fx.trusted
+		});
+		for (const [name, args] of [
+			['list_agents', {}],
+			['get_agent', { agentId: agent.id }],
+			['update_agent', { agentId: agent.id, description: 'edited' }]
+		] as const) {
+			const { ctx, conversationId } = turn('trusted');
+			const res = await call(createAgentsServer, ctx, name, args);
+			expect(res.isError).toBe(false);
+			expect(isConversationPrivate(db, conversationId)).toBe(true);
+		}
+		const { ctx } = turn('trusted');
+		const unprivate = await call(createAgentsServer, ctx, 'update_agent', {
+			agentId: agent.id,
+			private: false
+		});
+		expect(unprivate.isError).toBe(true);
+		expect(unprivate.text).toContain('Agents page');
+		expect(getAgent(db, agent.id)?.private).toBe(1);
+	});
+
+	it('a private chat cannot write its data into a public agent', async () => {
+		const { ctx } = turn('trusted', { private: true });
+		const created = await call(createAgentsServer, ctx, 'create_agent', {
+			name: 'from private',
+			systemPrompt: CANARY,
+			triggerType: 'manual',
+			...fx.trusted
+		});
+		expect(created.isError).toBe(false);
+		const { id } = JSON.parse(created.text) as { id: string };
+		expect(getAgent(db, id)?.private).toBe(1);
+		// Without a trusted model it can't become private, so it isn't created.
+		const refused = await call(createAgentsServer, ctx, 'create_agent', {
+			name: 'from private',
+			systemPrompt: CANARY,
+			triggerType: 'manual',
+			...fx.untrusted
+		});
+		expect(refused).toEqual({ isError: true, text: `error: ${PRIVATE_AGENT_MODEL_ERROR}` });
+
+		const pub = createAgent(db, userId, {
+			name: 'public',
+			systemPrompt: 'x',
+			triggerType: 'manual',
+			...fx.trusted
+		});
+		// A change without text keeps it public; a new prompt makes it private.
+		await call(createAgentsServer, ctx, 'update_agent', { agentId: pub.id, enabled: false });
+		expect(getAgent(db, pub.id)?.private).toBe(0);
+		const edited = await call(createAgentsServer, ctx, 'update_agent', {
+			agentId: pub.id,
+			systemPrompt: CANARY
+		});
+		expect(edited.isError).toBe(false);
+		expect(getAgent(db, pub.id)?.private).toBe(1);
+	});
+
+	it('answers start, delete and run reads of a private agent like an unknown one', async () => {
+		const agent = createAgent(db, userId, {
+			name: 'hidden',
+			systemPrompt: 'x',
+			triggerType: 'manual',
+			private: true,
+			...fx.trusted
+		});
+		const run = createAgentRun(db, { agentId: agent.id, userId, trigger: 'manual' });
+		for (const ctx of [turn('untrusted').ctx, gatewayCtx()]) {
+			for (const [name, args, error] of [
+				['start_agent', { agentId: agent.id }, 'agent not found'],
+				['delete_agent', { agentId: agent.id }, 'agent not found'],
+				['get_agent_run', { runId: run.id }, 'agent run not found']
+			] as const) {
+				expect(await call(createAgentsServer, ctx, name, args)).toEqual({
+					isError: true,
+					text: `error: ${error}`
+				});
+			}
+		}
+		expect(getAgent(db, agent.id)).toBeDefined();
+	});
+
 	it('without a model, needs a trusted default chat model', () => {
 		const input = { name: 'p', systemPrompt: 'x', triggerType: 'manual' as const, private: true };
 		setRole(db, 'chat', fx.untrusted);
@@ -416,12 +570,13 @@ describe('private agents', () => {
 	});
 
 	describe('a private run', () => {
+		// A public agent's run started from a private chat: the agent is visible,
+		// its run is private. (A private agent's runs are hidden like the agent.)
 		function privateRun() {
 			const agent = createAgent(db, userId, {
-				name: 'secret agent',
+				name: 'helper agent',
 				systemPrompt: 'x',
 				triggerType: 'manual',
-				private: true,
 				...fx.trusted
 			});
 			const conversation = createConversation(db, userId, {

@@ -49,7 +49,7 @@
 	import { invalidateWhenIdle, scheduleInvalidate } from '$lib/state/invalidate-when-idle.js';
 	import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
 	import { shortcutLabel } from '$lib/state/shortcuts.js';
-	import { formatAge, formatCount } from '$lib/formats.js';
+	import { formatAge } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { CodingTaskStatus } from '$lib/coding-environments.js';
@@ -58,6 +58,7 @@
 	import WaitingMark from './WaitingMark.svelte';
 	import PullRequestIcon from './PullRequestIcon.svelte';
 	import SidebarPlanLimits from './usage/SidebarPlanLimits.svelte';
+	import AnimatedNumber from './AnimatedNumber.svelte';
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
 	import { markedUnread, setConversationRead } from './marked-unread.svelte.js';
 	import SnoozeDialog from './SnoozeDialog.svelte';
@@ -938,7 +939,7 @@
 								{status.label}
 								{#if runStartedAt}
 									<span aria-hidden="true">
-										<CodingRunTimer startedAt={runStartedAt} dot={false} />
+										<CodingRunTimer startedAt={runStartedAt} dot={false} coarse />
 									</span>
 								{/if}
 							</span>
@@ -1244,7 +1245,7 @@
 			<Input
 				bind:ref={searchInput}
 				placeholder="Search conversations…"
-				title="Search conversations ({shortcutLabel('search')})"
+				title="Search conversations"
 				bind:value={query}
 				oninput={search}
 				onkeydown={onSearchKeydown}
@@ -1438,7 +1439,9 @@
 							aria-hidden="true"
 						></span>
 						<span aria-hidden="true"
-							>{agentStats.running}<span class="ml-1 max-md:hidden">running</span></span
+							><AnimatedNumber value={agentStats.running} /><span class="ml-1 max-md:hidden"
+								>running</span
+							></span
 						>
 					</span>
 				{/if}
@@ -1459,7 +1462,7 @@
 					<span
 						class="ml-auto text-xs text-muted-foreground tabular-nums {tileBadge}"
 						title="{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}"
-						>{memoryCount}<span class="sr-only">
+						><AnimatedNumber value={memoryCount} /><span class="sr-only">
 							{memoryCount === 1 ? 'memory' : 'memories'}</span
 						></span
 					>
@@ -1482,7 +1485,9 @@
 							? 'max-md:hidden'
 							: ''}"
 						title="{skillCount} {skillCount === 1 ? 'skill' : 'skills'}"
-						>{skillCount}<span class="sr-only"> {skillCount === 1 ? 'skill' : 'skills'}</span></span
+						><AnimatedNumber value={skillCount} /><span class="sr-only">
+							{skillCount === 1 ? 'skill' : 'skills'}</span
+						></span
 					>
 				{/if}
 			</span>
@@ -1512,9 +1517,11 @@
 							{#if requestStats.running > 0}
 								<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
 							{/if}
-							<span class="max-md:hidden pointer-coarse:hidden"
-								>{formatCount(requestStats.total)}</span
-							>
+							<AnimatedNumber
+								class="max-md:hidden pointer-coarse:hidden"
+								value={requestStats.total}
+								format="count"
+							/>
 						</span>
 					{/if}
 				</span>
@@ -1560,7 +1567,7 @@
 				href={resolve('/settings')}
 				aria-label="Settings"
 				aria-current={isCurrent('/settings') ? 'page' : undefined}
-				title="Settings ({shortcutLabel('open-settings')})"
+				title="Settings"
 				class="pointer-coarse:size-11 {isCurrent('/settings') ? 'bg-accent text-foreground' : ''}"
 				onclick={handleNavigate}
 			>

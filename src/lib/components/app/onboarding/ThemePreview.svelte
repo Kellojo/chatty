@@ -23,17 +23,21 @@
 {/snippet}
 
 <div
-	class="relative aspect-[16/9] overflow-hidden rounded-xl border border-border/60"
+	class="relative aspect-[16/9] overflow-hidden rounded-xl border border-black/10 dark:border-white/10"
 	aria-hidden="true"
 >
 	{#if theme === 'system'}
 		<div class="absolute inset-0">{@render window('light')}</div>
-		<div class="absolute inset-0 border-l border-white/10 [clip-path:inset(0_0_0_50%)]">
+		<div class="absolute inset-0 [clip-path:inset(0_0_0_50%)]">
 			{@render window('dark')}
 		</div>
+		<span class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-neutral-500/50"></span>
 	{:else}
 		{@render window(theme)}
 	{/if}
+	<!-- Keeps a near-white preview from melting into a white card. -->
+	<span class="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-black/5 ring-inset"
+	></span>
 </div>
 
 <style>

@@ -21,7 +21,7 @@ import {
 import { subscribeAllServerEvents } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { isPrivateContext } from '../privacy/policy.js';
-import { MEMORY_CLEANUP_AGENT, MEMORY_EXTRACTION_AGENT } from './builtin.js';
+import { isBuiltinMemoryAgent, MEMORY_CLEANUP_AGENT, MEMORY_EXTRACTION_AGENT } from './builtin.js';
 import { settleCodingAgentRun } from './coding-runs.js';
 
 const log = createLogger('agents');
@@ -136,15 +136,28 @@ function fromRunConversation(db: Db, payload: Record<string, unknown>): boolean 
 }
 
 /**
- * The event comes from a private conversation or a private agent's run. Only
- * private agents (which only use trusted models) react to it: the event
- * itself carries ids only, but the agent may read the chat it points at.
+ * The event comes from a private conversation or a private agent's run, or is
+ * about a private memory note (`private: true`). Only private agents (which
+ * only use trusted models) react to it: the event itself carries ids or a
+ * note path only, but the agent may read what it points at.
  */
 function fromPrivateContext(db: Db, payload: Record<string, unknown>): boolean {
+	// A private memory note's change: its path alone can say what it is about.
+	if (payload.private === true) return true;
 	const conversationId = typeof payload.conversationId === 'string' ? payload.conversationId : null;
 	const agentRunId = typeof payload.agentRunId === 'string' ? payload.agentRunId : null;
 	if (!conversationId && !agentRunId) return false;
 	return isPrivateContext(db, { tainted: false, conversationId, agentRunId });
+}
+
+/**
+ * What a built-in memory agent (not private, but with a private pass on a
+ * trusted model) gets of a private memory change: that one happened, so its
+ * "every Nth change" trigger still counts it, but not which note or run.
+ */
+function redactedMemoryChange(payload: Record<string, unknown>): Record<string, unknown> {
+	const { scope, action } = payload;
+	return { scope, action, private: true };
 }
 
 export function buildEventInstructions(
@@ -280,7 +293,14 @@ export async function emitAgentEvent(
 		for (const agent of listEventAgents(db, event)) {
 			try {
 				if (!enabledFor(db, agent, userId)) continue;
-				if (isPrivate && agent.private !== 1) continue;
+				// Private events reach private agents only; built-in memory agents get
+				// private memory changes with their note and run left out.
+				const redact =
+					isPrivate &&
+					agent.private !== 1 &&
+					event === 'memory.changed' &&
+					isBuiltinMemoryAgent(agent);
+				if (isPrivate && agent.private !== 1 && !redact) continue;
 				if (agent.coding_target && fromAgentRun(db, payload)) continue;
 				if (fromOwnRun(db, agent.id, payload)) continue;
 				const count = incrementAgentEventCounter(db, agent.id, userId, event);
@@ -301,8 +321,8 @@ export async function emitAgentEvent(
 				const occurrence: Occurrence = {
 					event,
 					count,
-					payloadJson: JSON.stringify(payload),
-					private: isPrivate
+					payloadJson: JSON.stringify(redact ? redactedMemoryChange(payload) : payload),
+					private: isPrivate && !redact
 				};
 				const queued = pending.get(agent.id)?.get(userId);
 				if (isBusy(db, agent.id) || queued || waitingOnOther(db, agent, userId)) {

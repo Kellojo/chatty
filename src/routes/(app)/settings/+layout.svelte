@@ -2,23 +2,8 @@
 	import { page } from '$app/state';
 	import PageHeader from '$lib/components/app/PageHeader.svelte';
 	import { resolve } from '$app/paths';
-	import BellIcon from '@lucide/svelte/icons/bell';
-	import BlocksIcon from '@lucide/svelte/icons/blocks';
-	import BoxesIcon from '@lucide/svelte/icons/boxes';
-	import BrainIcon from '@lucide/svelte/icons/brain';
-	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-	import LockIcon from '@lucide/svelte/icons/lock';
-	import KeyboardIcon from '@lucide/svelte/icons/keyboard';
-	import Link2Icon from '@lucide/svelte/icons/link-2';
-	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
-	import PlugIcon from '@lucide/svelte/icons/plug';
-	import PlugZapIcon from '@lucide/svelte/icons/plug-zap';
-	import RouteIcon from '@lucide/svelte/icons/route';
-	import ServerIcon from '@lucide/svelte/icons/server';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
-	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
-	import UserRoundIcon from '@lucide/svelte/icons/user-round';
-	import UsersIcon from '@lucide/svelte/icons/users';
+	import { SETTINGS_GROUPS, visibleSettingsSections } from '$lib/settings-sections.js';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -33,121 +18,15 @@
 		tabStrip.scrollTo({ left: Math.max(0, left) });
 	});
 
-	const sections = [
-		{
-			href: '/settings/account',
-			label: 'Account',
-			icon: UserRoundIcon,
-			adminOnly: false,
-			group: 'You'
-		},
-		{
-			href: '/settings/conversation',
-			label: 'Conversation',
-			icon: MessageCircleIcon,
-			adminOnly: false,
-			group: 'You'
-		},
-		{
-			href: '/settings/notifications',
-			label: 'Notifications',
-			icon: BellIcon,
-			adminOnly: false,
-			group: 'You'
-		},
-		{
-			href: '/settings/shortcuts',
-			label: 'Keyboard shortcuts',
-			icon: KeyboardIcon,
-			adminOnly: false,
-			group: 'You'
-		},
-		{ href: '/settings/memory', label: 'Memory', icon: BrainIcon, adminOnly: false, group: 'You' },
-		{
-			href: '/settings/providers',
-			label: 'Providers',
-			icon: PlugIcon,
-			adminOnly: true,
-			group: 'Models'
-		},
-		{
-			href: '/settings/models',
-			label: 'Models',
-			icon: BoxesIcon,
-			adminOnly: true,
-			group: 'Models'
-		},
-		{
-			href: '/settings/mappings',
-			label: 'Mappings',
-			icon: RouteIcon,
-			adminOnly: true,
-			group: 'Models'
-		},
-		{
-			href: '/settings/defaults',
-			label: 'Defaults',
-			icon: SlidersHorizontalIcon,
-			adminOnly: true,
-			group: 'Models'
-		},
-		{
-			href: '/settings/environments',
-			label: 'Coding environments',
-			icon: ServerIcon,
-			adminOnly: false,
-			group: 'Integrations'
-		},
-		{
-			href: '/settings/connections',
-			label: 'Connected apps',
-			icon: Link2Icon,
-			adminOnly: false,
-			group: 'Integrations'
-		},
-		{
-			href: '/settings/mcp',
-			label: 'MCP servers',
-			icon: BlocksIcon,
-			adminOnly: true,
-			group: 'Integrations'
-		},
-		{
-			href: '/settings/services',
-			label: 'Services',
-			icon: PlugZapIcon,
-			adminOnly: true,
-			group: 'Integrations'
-		},
-		{
-			href: '/settings/api',
-			label: 'API',
-			icon: KeyRoundIcon,
-			adminOnly: false,
-			group: 'Integrations'
-		},
-		{
-			href: '/settings/private-data',
-			label: 'Private data',
-			icon: LockIcon,
-			adminOnly: true,
-			group: 'Admin'
-		},
-		{
-			href: '/settings/users',
-			label: 'Users',
-			icon: UsersIcon,
-			adminOnly: true,
-			group: 'Admin'
-		}
-	] as const;
-
 	const isAdmin = $derived(data.user.role === 'admin');
-	const visibleSections = $derived(sections.filter((section) => !section.adminOnly || isAdmin));
+	const visibleSections = $derived(
+		visibleSettingsSections(isAdmin, data.privateData?.enabled ?? false)
+	);
 	const visibleGroups = $derived(
-		(['You', 'Models', 'Integrations', 'Admin'] as const)
-			.map((name) => ({ name, items: visibleSections.filter((section) => section.group === name) }))
-			.filter((group) => group.items.length > 0)
+		SETTINGS_GROUPS.map((name) => ({
+			name,
+			items: visibleSections.filter((section) => section.group === name)
+		})).filter((group) => group.items.length > 0)
 	);
 	const isActive = (href: string) => page.url.pathname.startsWith(href);
 </script>

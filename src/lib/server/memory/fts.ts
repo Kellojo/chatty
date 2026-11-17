@@ -6,6 +6,14 @@ import type { Db } from '../db/index.js';
 import { memoryRoot } from './paths.js';
 import { conceptIsPrivate } from './private.js';
 
+/**
+ * Keys (see rowKey) written while a reconcile reads the disk: that read may
+ * be older than the write, so the reconcile leaves these rows alone.
+ */
+const reconcileTrackers = new Set<Set<string>>();
+
+const rowKey = (scope: string, path: string) => `${scope}|${path}`;
+
 export function upsertMemoryFts(
 	db: Db,
 	scope: string,
@@ -28,6 +36,7 @@ export function upsertMemoryFts(
 }
 
 export function deleteMemoryFts(db: Db, scope: string, path: string): void {
+	for (const touched of reconcileTrackers) touched.add(rowKey(scope, path));
 	db.prepare('DELETE FROM memory_fts WHERE scope = ? AND path = ?').run(scope, path);
 }
 
@@ -93,7 +102,7 @@ function renderSnippet(raw: string, html: boolean): string {
  * with `html`, the rest of the snippet is HTML-escaped so it's safe to render
  * as markup (concept text is often model-written and can contain anything).
  * Without `includePrivate`, private concepts are dropped before ranking and
- * LIMIT (see countPrivateMemoryHits for how many).
+ * LIMIT.
  */
 export function searchMemoryFts(
 	db: Db,
@@ -126,18 +135,19 @@ export function searchMemoryFts(
 	}));
 }
 
-/** How many private concepts match `query`: the "N private results hidden" count. */
-export function countPrivateMemoryHits(db: Db, scopes: string[], query: string): number {
-	const match = sanitizeQuery(query);
-	if (!match || scopes.length === 0) return 0;
+/**
+ * Whether any indexed concept in `scopes` is private. Deliberately ignores
+ * queries and prefixes, so the "private results hidden" note it gates can't be
+ * used to probe private notes' content or paths.
+ */
+export function hasPrivateMemory(db: Db, scopes: string[]): boolean {
+	if (scopes.length === 0) return false;
 	const placeholders = scopes.map(() => '?').join(', ');
-	const row = db
-		.prepare(
-			`SELECT count(*) AS n FROM memory_fts
-			WHERE memory_fts MATCH ? AND scope IN (${placeholders}) AND private = 1`
-		)
-		.get(match, ...scopes) as { n: number };
-	return row.n;
+	return (
+		db
+			.prepare(`SELECT 1 FROM memory_fts WHERE scope IN (${placeholders}) AND private = 1 LIMIT 1`)
+			.get(...scopes) !== undefined
+	);
 }
 
 export interface MemorySummary {
@@ -218,15 +228,24 @@ interface DiskConcept {
 	body: string;
 }
 
-async function readFromDisk(entry: DiskEntry): Promise<DiskConcept> {
+/**
+ * A concept file as the index stores it, or null when the file can't be read
+ * (e.g. a transient EBUSY): its row is then kept as it is, never replaced by
+ * a guess that could drop its private flag.
+ */
+async function readFromDisk(entry: DiskEntry): Promise<DiskConcept | null> {
+	let raw: string;
+	try {
+		raw = await fs.readFile(entry.abs, 'utf8');
+	} catch {
+		return null;
+	}
 	let title = path.basename(entry.abs, '.md');
 	let description = '';
 	let tags: string[] = [];
-	let isPrivate = false;
+	let isPrivate = conceptIsPrivate(null, raw);
 	let body = '';
 	try {
-		const raw = await fs.readFile(entry.abs, 'utf8');
-		isPrivate = conceptIsPrivate(null, raw);
 		const parsed = parseFrontmatter(raw);
 		const d = parsed.data as Record<string, unknown>;
 		if (typeof d.title === 'string' && d.title.trim()) title = d.title;
@@ -235,7 +254,8 @@ async function readFromDisk(entry: DiskEntry): Promise<DiskConcept> {
 		isPrivate = conceptIsPrivate(d, raw);
 		body = parsed.content;
 	} catch {
-		// unreadable file or invalid frontmatter: index with filename as title
+		// invalid frontmatter: index with the filename as title; the private
+		// line check above still applies, so a broken private file stays private
 	}
 	return { entry, fm: { title, description, tags, private: isPrivate }, body };
 }
@@ -243,22 +263,43 @@ async function readFromDisk(entry: DiskEntry): Promise<DiskConcept> {
 // Files read concurrently while rebuilding, to stay well clear of fd limits.
 const READ_BATCH = 32;
 
-/** Reads every concept file in the memory bundle (all scopes). */
-async function readDiskConcepts(): Promise<DiskConcept[]> {
+/** Every concept file in the memory bundle (all scopes), and which ones couldn't be read. */
+async function readDiskConcepts(): Promise<{ concepts: DiskConcept[]; unreadable: Set<string> }> {
 	const entries = await listDiskEntries();
-	const out: DiskConcept[] = [];
+	const concepts: DiskConcept[] = [];
+	const unreadable = new Set<string>();
 	for (let i = 0; i < entries.length; i += READ_BATCH) {
-		out.push(...(await Promise.all(entries.slice(i, i + READ_BATCH).map(readFromDisk))));
+		const batch = entries.slice(i, i + READ_BATCH);
+		const read = await Promise.all(batch.map(readFromDisk));
+		read.forEach((c, j) => {
+			if (c) concepts.push(c);
+			else unreadable.add(rowKey(batch[j].scope, batch[j].path));
+		});
 	}
-	return out;
+	return { concepts, unreadable };
 }
 
+/**
+ * Syncs the index with the files on disk: rewrites every row from its file and
+ * drops rows whose file is gone. Rows written while the disk is read are newer
+ * than the read, and rows of unreadable files may hold a private flag the read
+ * missed: both are left as they are.
+ */
 export async function reconcileMemoryFts(db: Db): Promise<{ upserted: number; removed: number }> {
-	const disk = await readDiskConcepts();
-	const diskKeys = new Set(disk.map((c) => `${c.entry.scope}${c.entry.path}`));
+	const touched = new Set<string>();
+	reconcileTrackers.add(touched);
+	let disk: Awaited<ReturnType<typeof readDiskConcepts>>;
+	try {
+		disk = await readDiskConcepts();
+	} finally {
+		reconcileTrackers.delete(touched);
+	}
+	const { concepts, unreadable } = disk;
+	const diskKeys = new Set(concepts.map((c) => rowKey(c.entry.scope, c.entry.path)));
 	return db.transaction(() => {
 		let upserted = 0;
-		for (const { entry, fm, body } of disk) {
+		for (const { entry, fm, body } of concepts) {
+			if (touched.has(rowKey(entry.scope, entry.path))) continue;
 			upsertMemoryFts(db, entry.scope, entry.path, fm, body);
 			upserted++;
 		}
@@ -268,7 +309,8 @@ export async function reconcileMemoryFts(db: Db): Promise<{ upserted: number; re
 		}>;
 		let removed = 0;
 		for (const row of rows) {
-			if (!diskKeys.has(`${row.scope}${row.path}`)) {
+			const key = rowKey(row.scope, row.path);
+			if (!diskKeys.has(key) && !touched.has(key) && !unreadable.has(key)) {
 				deleteMemoryFts(db, row.scope, row.path);
 				removed++;
 			}
@@ -277,13 +319,12 @@ export async function reconcileMemoryFts(db: Db): Promise<{ upserted: number; re
 	})();
 }
 
+/**
+ * Rebuilds the index from the files on disk (the admin "reindex" action). The
+ * same sync as the startup reconcile, so it is just as safe against writes
+ * made while it runs.
+ */
 export async function reindexMemoryFts(db: Db): Promise<{ indexed: number }> {
-	const disk = await readDiskConcepts();
-	db.transaction(() => {
-		db.prepare('DELETE FROM memory_fts').run();
-		for (const { entry, fm, body } of disk) {
-			upsertMemoryFts(db, entry.scope, entry.path, fm, body);
-		}
-	})();
-	return { indexed: disk.length };
+	const { upserted } = await reconcileMemoryFts(db);
+	return { indexed: upserted };
 }

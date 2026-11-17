@@ -27,7 +27,7 @@ import { createLogger } from '../../logger.js';
 import { callerPrivacy, isAgentRunPrivate, isPrivateContext } from '../../privacy/policy.js';
 import { MAX_LAUNCH_PROMPT } from '../../t3/tasks.js';
 import type { CallerContext } from '../types.js';
-import { reportPrivate, seesPrivate } from './private-items.js';
+import { hiddenNote, reportPrivate, seesPrivate, showsHiddenNote } from './private-items.js';
 import { err, text } from './shared.js';
 
 const log = createLogger('mcp:agents');
@@ -103,6 +103,18 @@ function agentResult(db: Db, row: AgentRow) {
 	return text(JSON.stringify({ ...agent, modelName: model?.display_name ?? null }));
 }
 
+/** Agent fields that carry text a chat wrote (and so may carry its private data). */
+const CONTENT_FIELDS = ['name', 'description', 'systemPrompt', 'triggerConfig'] as const;
+
+/**
+ * A private agent's name, description, prompt and instructions are private
+ * data (its name can say what it is about): a caller that may not see private
+ * items doesn't learn the agent exists, as for private chats and notes.
+ */
+function hiddenFrom(ctx: CallerContext, agent: AgentRow): boolean {
+	return agent.private === 1 && !seesPrivate(ctx);
+}
+
 export function createAgentsServer(ctx: CallerContext): McpServer {
 	const server = new McpServer({ name: 'ai-chat-agents', version: '0.1.0' });
 
@@ -113,29 +125,35 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		},
 		async () => {
 			const db = getDb();
-			const rows = listAgents(db, ctx.userId);
+			const all = listAgents(db, ctx.userId);
+			const rows = all.filter((r) => !hiddenFrom(ctx, r));
+			if (rows.some((r) => r.private === 1)) reportPrivate(ctx, 'a private agent');
 			// Built-in agents can be switched off per user; report what the user sees.
 			const overrides = listAgentOverrides(db, ctx.userId);
 			log.info('list_agents', { userId: ctx.userId, count: rows.length });
+			const json = JSON.stringify(
+				rows.map((r) => {
+					const pub = toPublicWithOverrides(r, overrides);
+					return {
+						id: pub.id,
+						name: pub.name,
+						description: pub.description,
+						triggerType: pub.triggerType,
+						triggerConfig: pub.triggerConfig,
+						enabled: pub.enabled,
+						private: pub.private,
+						builtin: r.user_id === null,
+						coding: r.coding_target !== null,
+						lastRunAt: pub.lastRunAt,
+						nextRunAt: pub.nextRunAt
+					};
+				})
+			);
 			return text(
-				JSON.stringify(
-					rows.map((r) => {
-						const pub = toPublicWithOverrides(r, overrides);
-						return {
-							id: pub.id,
-							name: pub.name,
-							description: pub.description,
-							triggerType: pub.triggerType,
-							triggerConfig: pub.triggerConfig,
-							enabled: pub.enabled,
-							private: pub.private,
-							builtin: r.user_id === null,
-							coding: r.coding_target !== null,
-							lastRunAt: pub.lastRunAt,
-							nextRunAt: pub.nextRunAt
-						};
-					})
-				)
+				showsHiddenNote(ctx, () => all.length > rows.length)
+					? `${json}
+${hiddenNote()}`
+					: json
 			);
 		}
 	);
@@ -149,10 +167,15 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		async ({ agentId }) => {
 			const db = getDb();
 			const agent = getAgent(db, agentId);
-			if (!agent || (agent.user_id !== ctx.userId && agent.user_id !== null)) {
+			if (
+				!agent ||
+				(agent.user_id !== ctx.userId && agent.user_id !== null) ||
+				hiddenFrom(ctx, agent)
+			) {
 				log.warn('get_agent not found', { userId: ctx.userId, agentId });
 				return err('agent not found');
 			}
+			if (agent.private === 1) reportPrivate(ctx, 'a private agent');
 			log.info('get_agent', { userId: ctx.userId, agentId });
 			return agentResult(db, agent);
 		}
@@ -184,7 +207,9 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		},
 		async (input) => {
 			const db = getDb();
-			const prepared = prepareAgentCreate(db, input);
+			// What a private chat writes into an agent is its data: the agent is private too.
+			const fromPrivate = isPrivateContext(db, callerPrivacy(ctx));
+			const prepared = prepareAgentCreate(db, fromPrivate ? { ...input, private: true } : input);
 			if (!prepared.ok) return err(prepared.error);
 			const agent = createAgent(db, ctx.userId, prepared.value);
 			log.info('create_agent', {
@@ -220,7 +245,11 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		async ({ agentId, ...patch }) => {
 			const db = getDb();
 			const existing = getAgent(db, agentId);
-			if (!existing || (existing.user_id !== ctx.userId && existing.user_id !== null)) {
+			if (
+				!existing ||
+				(existing.user_id !== ctx.userId && existing.user_id !== null) ||
+				hiddenFrom(ctx, existing)
+			) {
 				log.warn('update_agent not found', { userId: ctx.userId, agentId });
 				return err('agent not found');
 			}
@@ -234,8 +263,24 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 				log.warn('update_agent coding agent attempt', { userId: ctx.userId, agentId });
 				return err('coding agents can only be changed by the user on the Agents page');
 			}
-			const prepared = prepareAgentUpdate(db, existing, patch, { mergeTriggerConfig: true });
+			// Making it public would hand its prompt and future runs to any model:
+			// only the user decides that, on the Agents page.
+			if (existing.private === 1 && patch.private === false) {
+				log.warn('update_agent unprivate attempt', { userId: ctx.userId, agentId });
+				return err('a private agent can only be made public by the user on the Agents page');
+			}
+			// Text a private chat writes into a public agent is its data: the agent
+			// becomes private, as memory notes written there do.
+			const carriesText = CONTENT_FIELDS.some((f) => patch[f] !== undefined);
+			const effective =
+				existing.private === 0 && carriesText && isPrivateContext(db, callerPrivacy(ctx))
+					? { ...patch, private: true }
+					: patch;
+			const prepared = prepareAgentUpdate(db, existing, effective, { mergeTriggerConfig: true });
 			if (!prepared.ok) return err(prepared.error);
+			// The result holds its (private) prompt and instructions: taint first.
+			// hiddenFrom let only a caller that sees private items get here.
+			if (existing.private === 1) reportPrivate(ctx, 'a private agent');
 			const updated = updateAgent(db, agentId, prepared.value);
 			log.info('update_agent', { userId: ctx.userId, agentId, fields: Object.keys(patch) });
 			return agentResult(db, updated!);
@@ -251,7 +296,11 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		async ({ agentId }) => {
 			const db = getDb();
 			const existing = getAgent(db, agentId);
-			if (!existing || (existing.user_id !== ctx.userId && existing.user_id !== null)) {
+			if (
+				!existing ||
+				(existing.user_id !== ctx.userId && existing.user_id !== null) ||
+				hiddenFrom(ctx, existing)
+			) {
 				log.warn('delete_agent not found', { userId: ctx.userId, agentId });
 				return err('agent not found');
 			}
@@ -288,7 +337,11 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 		async ({ agentId, instructions, wait }, extra) => {
 			const db = getDb();
 			const agent = getAgent(db, agentId);
-			if (!agent || (agent.user_id !== ctx.userId && agent.user_id !== null)) {
+			if (
+				!agent ||
+				(agent.user_id !== ctx.userId && agent.user_id !== null) ||
+				hiddenFrom(ctx, agent)
+			) {
 				log.warn('start_agent not found', { userId: ctx.userId, agentId });
 				return err('agent not found');
 			}
@@ -358,7 +411,7 @@ export function createAgentsServer(ctx: CallerContext): McpServer {
 			const db = getDb();
 			const run = getAgentRun(db, runId);
 			const agent = run ? getAgent(db, run.agent_id) : undefined;
-			if (!run || !agent || run.user_id !== ctx.userId) {
+			if (!run || !agent || run.user_id !== ctx.userId || hiddenFrom(ctx, agent)) {
 				log.warn('get_agent_run not found', { userId: ctx.userId, runId });
 				return err('agent run not found');
 			}

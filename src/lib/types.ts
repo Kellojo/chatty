@@ -288,6 +288,11 @@ export type ServerEvent =
 			author: string;
 			/** Set when an agent run made the change (lets that agent ignore its own writes). */
 			agentRunId?: string;
+			/**
+			 * The note is private (after a write or move; before a delete). Only
+			 * private agents get the event: the path alone can be sensitive.
+			 */
+			private?: boolean;
 	  }
 	| { type: 'agent.run.started'; agentId: string; runId: string; conversationId?: string }
 	| { type: 'agent.run.progress'; agentId: string; runId: string }

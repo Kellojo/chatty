@@ -22,7 +22,8 @@ export function normalizeConceptPath(relPath: string): string | null {
 	if (segments.some((s) => s.length === 0 || s === '.' || s === '..')) return null;
 	const last = segments.length - 1;
 	if (!segments[last].endsWith('.md')) segments[last] = `${segments[last]}.md`;
-	if (segments.some((s) => s === 'index.md')) return null;
+	// Case-insensitively: on a case-insensitive file system Index.md is the generated index.
+	if (segments.some((s) => s.toLowerCase() === 'index.md')) return null;
 	return segments.join('/');
 }
 

@@ -41,6 +41,8 @@ describe('ActivityGroup', () => {
 		];
 		const screen = render(ActivityGroup, { items: liveItems, live: true, active: true });
 		await expect.element(screen.getByText('Thought for 12s')).toBeInTheDocument();
-		await expect.element(screen.getByText(/^Thinking\s*\d+s$/)).toBeInTheDocument();
+		await expect.element(screen.getByText('Thinking', { exact: true })).toBeInTheDocument();
+		// The animated timer's plain-text copy (its rolling digits live in a shadow root).
+		await expect.element(screen.getByText(/^\d+s$/)).toBeInTheDocument();
 	});
 });

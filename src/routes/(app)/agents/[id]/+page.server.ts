@@ -13,6 +13,7 @@ import {
 import { listModelsGrouped } from '$lib/server/llm/registry.js';
 import { listToolInfo } from '$lib/server/tools/registry.js';
 import { getTimeFormat } from '$lib/server/db/repo/user-settings.js';
+import { config } from '$lib/server/config.js';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -30,6 +31,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		codingEnvironments: listCodingEnvironments(db, user.id)
 			.filter((row) => row.enabled === 1)
 			.map(environmentToPublic),
-		timeFormat: getTimeFormat(db, user.id)
+		timeFormat: getTimeFormat(db, user.id),
+		/** Schedules run in the server time zone. */
+		timeZone: config.TZ
 	};
 };

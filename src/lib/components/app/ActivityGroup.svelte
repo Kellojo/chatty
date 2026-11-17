@@ -86,7 +86,10 @@
 					<!-- Matches ThinkingIndicator, which this row replaces, so the handoff doesn't jump. -->
 					<span class="shrink-0">
 						<span class="text-shimmer font-medium">Thinking</span>
-						{#if since !== null}<LiveElapsed {since} class="ml-2.5 text-xs" />{/if}
+						{#if since !== null}<LiveElapsed
+								{since}
+								class="ml-2.5 text-xs text-muted-foreground"
+							/>{/if}
 					</span>
 				{:else}
 					<span class="shrink-0 font-medium">{thoughtLabel(item)}</span>

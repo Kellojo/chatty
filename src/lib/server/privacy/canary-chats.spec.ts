@@ -17,7 +17,7 @@ const { createAgentRun, finishAgentRun } = await import('../db/repo/agent-runs.j
 const { createApiKey } = await import('../db/repo/api-keys.js');
 const { listMcpServers } = await import('../db/repo/mcp-servers.js');
 const { runSubagent } = await import('../agents/subagents.js');
-const { createAgentsServer, PRIVATE_RUN_NOTE } = await import('../mcp/servers/agents.js');
+const { createAgentsServer } = await import('../mcp/servers/agents.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
 const { createMCPClient } = await import('@ai-sdk/mcp');
 const { isConversationPrivate } = await import('./policy.js');
@@ -132,7 +132,8 @@ describe('egress canary: agent runs and subagents (PR 4)', () => {
 			{ runId }
 		);
 		expect(text).not.toContain(CANARY);
-		expect(JSON.parse(text).note).toBe(PRIVATE_RUN_NOTE);
+		// A private agent's runs are hidden like the agent itself.
+		expect(text).toBe('error: agent run not found');
 		expect(isConversationPrivate(getDb(), conversation.id)).toBe(false);
 		expectNoLeak();
 	});
@@ -230,7 +231,8 @@ describe('egress canary: MCP gateway (PR 4)', () => {
 			const searchText = JSON.stringify(search.content);
 			expect(searchText).not.toContain(chat.id);
 			expect(searchText).not.toContain(CANARY);
-			expect(searchText).toContain('1 private result hidden');
+			// The gateway isn't even told that private chats exist.
+			expect(searchText).not.toContain('Private results');
 
 			const listing = await client.callTool({ name: 'search_chats', arguments: { since: '0' } });
 			expect(JSON.stringify(listing.content)).not.toContain(chat.id);

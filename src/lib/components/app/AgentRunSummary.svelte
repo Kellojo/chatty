@@ -1,14 +1,16 @@
 <script lang="ts">
 	import * as Card from '$lib/components/ui/card/index.js';
 	import AgentRunStatus from '$lib/components/app/AgentRunStatus.svelte';
-	import { formatDurationMs, isStoppedRun } from '$lib/agent-labels.js';
+	import AnimatedNumber, { type NumberFormatKind } from '$lib/components/app/AnimatedNumber.svelte';
+	import { isStoppedRun } from '$lib/agent-labels.js';
+	import AnimatedElapsed from '$lib/components/app/AnimatedElapsed.svelte';
 	import {
 		matchesFilter,
 		runStatusWord,
 		summarizeRuns,
 		type RunFilter
 	} from '$lib/agent-run-summary.js';
-	import { formatDateTime, formatTimeAgo } from '$lib/datetime.js';
+	import { formatDateTime, formatTimeAgo, timeAgoParts } from '$lib/datetime.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import type { AgentRun } from '$lib/types.js';
 
@@ -37,6 +39,7 @@
 	const last = $derived(
 		runs.find((run) => run.status !== 'running' && run.status !== 'awaiting_input')
 	);
+	const lastAgo = $derived(last ? timeAgoParts(last.startedAt) : null);
 	// Only recent failures turn the count red; an old one isn't news.
 	const recentFailure = $derived(runs.slice(0, 5).some((run) => matchesFilter(run, 'failed')));
 	// Oldest first, so the strip reads left to right like a timeline.
@@ -52,10 +55,17 @@
 	}
 </script>
 
-{#snippet stat(label: string, value: string, hint?: string)}
+{#snippet stat(
+	label: string,
+	value: number | string | null,
+	hint?: string,
+	format?: NumberFormatKind
+)}
 	<div class="flex min-w-0 flex-col gap-1">
 		<dt class="text-xs font-medium text-muted-foreground">{label}</dt>
-		<dd class="truncate text-xl font-semibold tabular-nums">{value}</dd>
+		<dd class="truncate text-xl font-semibold tabular-nums">
+			<AnimatedNumber {value} {format} />
+		</dd>
 		{#if hint}<dd class="truncate text-xs text-muted-foreground">{hint}</dd>{/if}
 	</div>
 {/snippet}
@@ -65,16 +75,23 @@
 		<dl class="grid grid-cols-2 gap-x-6 gap-y-5 md:grid-cols-4">
 			{@render stat(
 				'Success rate',
-				summary.successRate === null ? '—' : `${Math.round(summary.successRate * 100)}%`,
+				summary.successRate === null ? null : Math.round(summary.successRate * 100) / 100,
 				summary.finished > 0
 					? `${summary.succeeded} of ${summary.finished} finished runs`
-					: 'No finished runs yet'
+					: 'No finished runs yet',
+				'percent'
 			)}
-			{@render stat(
-				'Typical run',
-				summary.medianMs === null ? '—' : formatDurationMs(summary.medianMs),
-				summary.medianMs === null ? 'No finished runs yet' : `Median of ${summary.finished} runs`
-			)}
+			<div class="flex min-w-0 flex-col gap-1">
+				<dt class="text-xs font-medium text-muted-foreground">Typical run</dt>
+				<dd class="truncate text-xl font-semibold tabular-nums">
+					{#if summary.medianMs === null}—{:else}<AnimatedElapsed ms={summary.medianMs} />{/if}
+				</dd>
+				<dd class="truncate text-xs text-muted-foreground">
+					{summary.medianMs === null
+						? 'No finished runs yet'
+						: `Median of ${summary.finished} runs`}
+				</dd>
+			</div>
 			<div class="flex min-w-0 flex-col gap-1">
 				<dt class="text-xs font-medium text-muted-foreground">Failed</dt>
 				<dd
@@ -82,7 +99,7 @@
 						? 'text-destructive'
 						: ''}"
 				>
-					{summary.counts.failed}
+					<AnimatedNumber value={summary.counts.failed} />
 				</dd>
 				<dd class="truncate text-xs text-muted-foreground">
 					{#if summary.counts.failed > 0}
@@ -105,7 +122,10 @@
 					class="truncate text-xl font-semibold"
 					title={last ? formatDateTime(last.startedAt, timeFormat) : undefined}
 				>
-					{last ? formatTimeAgo(last.startedAt) : '—'}
+					{#if !lastAgo}—{:else if 'text' in lastAgo}{lastAgo.text}{:else}<AnimatedNumber
+							value={lastAgo.value}
+							suffix="{lastAgo.unit} ago"
+						/>{/if}
 				</dd>
 				{#if !last}
 					<dd class="truncate text-xs text-muted-foreground">Still running</dd>

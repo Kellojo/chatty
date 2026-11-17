@@ -15,7 +15,7 @@ import {
 	type MemoryAuditInfo
 } from '../../memory/bundle.js';
 import {
-	countPrivateMemoryHits,
+	hasPrivateMemory,
 	memorySummaries,
 	searchMemoryFts,
 	type MemoryReadOptions
@@ -25,7 +25,7 @@ import { classifySensitive, reviewUpdate, type PrivacyUpdate } from '../../priva
 import { recordPrivacyCheck } from '../../privacy/sweep.js';
 import { callerPrivacy, isPrivateContext } from '../../privacy/policy.js';
 import type { CallerContext } from '../types.js';
-import { hiddenNote, reportPrivate, seesPrivate } from './private-items.js';
+import { hiddenNote, reportPrivate, seesPrivate, showsHiddenNote } from './private-items.js';
 import { err, text } from './shared.js';
 
 const log = createLogger('memory');
@@ -40,7 +40,8 @@ const SNIPPET_MAX = 160;
  * Which concepts a caller's memory tools can see. Private concepts only reach
  * trusted turns; for everyone else they don't exist, for reads and writes alike.
  * - all: a trusted turn;
- * - public: an untrusted one (the gateway too), told how many were hidden;
+ * - public: an untrusted one (the gateway too); a chat turn is told that
+ *   private notes are never shown (see showsHiddenNote);
  * - private: memory agents' private pass, which only sees private concepts;
  * - none: an untrusted turn under strict memory privacy, which sees nothing.
  */
@@ -69,20 +70,25 @@ function readOptions(view: MemoryView): MemoryReadOptions {
 	return { includePrivate: view === 'all' || view === 'private', privateOnly: view === 'private' };
 }
 
-/** Results, plus the hidden-count note when private ones were left out. */
-function withHidden(json: string, hidden: number): CallToolResult {
-	if (hidden === 0) return text(json);
+/**
+ * Results, plus the private-results note for an untrusted chat turn whose user
+ * has private notes in `scopes`. The note never depends on the query or prefix.
+ */
+function withHidden(ctx: CallerContext, json: string, scopes: string[]): CallToolResult {
+	if (!showsHiddenNote(ctx, () => hasPrivateMemory(getDb(), scopes))) return text(json);
 	return {
 		content: [
 			{ type: 'text', text: json },
-			{ type: 'text', text: hiddenNote(hidden) }
+			{ type: 'text', text: hiddenNote() }
 		]
 	};
 }
 
-// What a caller that may not see a concept gets: the same as for a missing one
-// (reads, updates, deletes) or an invalid path (creates), so probes learn nothing.
+// A concept the caller may not see answers like a missing one for reads,
+// updates and deletes; a create answers like for any occupied path. Either
+// way, probes learn nothing about private concepts.
 const NOT_FOUND = 'concept not found';
+const ALREADY_EXISTS = 'concept already exists';
 const INVALID_PATH = 'invalid concept path';
 
 /** A one-line plain-text preview of a concept for the ```memory widget. */
@@ -219,9 +225,8 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				hits.map((h) => ({ scope: h.scope === 'shared' ? 'shared' : 'user', path: h.path }))
 			);
 			if (hits.some((h) => h.private)) taint('a private note');
-			const hidden = view === 'public' ? countPrivateMemoryHits(db, scopes, query) : 0;
 			const out = hits.map(({ private: p, ...h }) => (p ? { ...h, private: true } : h));
-			return withHidden(JSON.stringify(out), hidden);
+			return withHidden(ctx, JSON.stringify(out), scopes);
 		}
 	);
 
@@ -267,16 +272,14 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			if (view === 'none') return text('[]');
 			const bundleScope = scope ?? 'user';
 			const paths = await listConceptPaths(bundleScope, ctx.userId, prefix);
-			const summaries = memorySummaries(
-				getDb(),
-				ftsScope(bundleScope, ctx.userId),
-				readOptions(view)
-			);
+			const fts = ftsScope(bundleScope, ctx.userId);
+			const summaries = memorySummaries(getDb(), fts, readOptions(view));
 			// A filtered view lists only concepts the index knows to be visible, so
 			// one it hasn't indexed yet is left out rather than shown unchecked.
 			const listed = view === 'all' ? paths : paths.filter((p) => summaries.has(p));
 			if (listed.some((p) => summaries.get(p)?.private)) taint('a private note');
 			return withHidden(
+				ctx,
 				JSON.stringify(
 					listed.map((p) => {
 						const s = summaries.get(p);
@@ -288,7 +291,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 						};
 					})
 				),
-				view === 'public' ? paths.length - listed.length : 0
+				[fts]
 			);
 		}
 	);
@@ -314,10 +317,9 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
 			const view = memoryView(ctx);
-			// An existing concept the caller may not see answers like an invalid
-			// path, and is never overwritten.
-			const guard: ConceptWriteGuard = (current) =>
-				current ? (canSee(view, current) ? 'concept already exists' : INVALID_PATH) : null;
+			// Any occupied path answers the same, whether or not the caller may see
+			// the concept there, and is never overwritten.
+			const guard: ConceptWriteGuard = (current) => (current ? ALREADY_EXISTS : null);
 			const refused = guard(await readConcept(s, ctx.userId, normalized));
 			if (refused) return err(refused);
 			const { update: privacy, checked } = await privacyFor(view, null, {
@@ -394,9 +396,20 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				body: nextBody
 			});
 			const next = { frontmatter: { ...fields, ...privacy }, body: nextBody };
+			// The privacy above was worked out for the note as read: if a person
+			// changed its privacy meanwhile, their decision stands.
+			const writeGuard: ConceptWriteGuard = (current) => {
+				const hidden = guard(current);
+				if (hidden || !current) return hidden ?? NOT_FOUND;
+				const [was, now] = [existing.frontmatter, current.frontmatter];
+				return Boolean(was.private) !== Boolean(now.private) ||
+					was.privateReason !== now.privateReason
+					? "the concept's privacy changed meanwhile; read it again"
+					: null;
+			};
 			let saved: Concept;
 			try {
-				saved = await writeConcept(getDb(), s, ctx.userId, normalized, next, audit(), guard);
+				saved = await writeConcept(getDb(), s, ctx.userId, normalized, next, audit(), writeGuard);
 				if (checked) recordPrivacyCheck(getDb(), saved, ctx.userId);
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));

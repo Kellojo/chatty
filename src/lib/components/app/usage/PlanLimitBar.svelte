@@ -1,6 +1,7 @@
 <script lang="ts">
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import type { CodingUsageLimitWindow } from '$lib/coding-environments.js';
+	import AnimatedNumber from '../AnimatedNumber.svelte';
 	import { isExpiredWindow, remainingPercent, resetLabel } from './usage.js';
 
 	let {
@@ -43,12 +44,20 @@
 				<span class={tone}>{level === 'critical' ? 'Almost out' : 'Running low'} ·</span>
 			{/if}
 			{#if expired}
-				<span class="line-through decoration-muted-foreground/60">{left}% left</span> ·
+				<AnimatedNumber
+					class="line-through decoration-muted-foreground/60"
+					value={left / 100}
+					format="percent"
+					suffix=" left"
+				/> ·
 				{reset}
 			{:else}
-				<span class="font-medium text-foreground {tone}">{left}% left</span>{reset
-					? ` · ${reset}`
-					: ''}
+				<AnimatedNumber
+					class="font-medium text-foreground {tone}"
+					value={left / 100}
+					format="percent"
+					suffix=" left"
+				/>{reset ? ` · ${reset}` : ''}
 			{/if}
 		</span>
 	</div>

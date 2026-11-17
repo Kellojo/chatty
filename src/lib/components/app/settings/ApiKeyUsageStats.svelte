@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import { resolve } from '$app/paths';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
@@ -88,10 +89,15 @@
 		whole === 0 || part === 0 ? '0%' : `${Math.max(1, Math.round((part / whole) * 100))}%`;
 
 	const tiles = $derived([
-		{ label: 'Requests', value: totals.requests.toLocaleString() },
-		{ label: 'Agent runs', value: totals.runs.toLocaleString() },
-		{ label: 'Tokens', value: formatCount(totals.tokens) },
-		{ label: 'Cost', value: cost(totals.costUsd, totals.priced, totals.requests) }
+		{ label: 'Requests', value: totals.requests },
+		{ label: 'Agent runs', value: totals.runs },
+		{ label: 'Tokens', value: totals.tokens, format: 'count' as const },
+		{
+			label: 'Cost',
+			value: totals.priced === 0 ? null : totals.costUsd,
+			format: 'usd' as const,
+			suffix: totals.priced < totals.requests ? '+' : ''
+		}
 	]);
 
 	const METRICS = [
@@ -126,7 +132,9 @@
 			<Card.Root class="rounded-2xl border-border/40 py-4">
 				<Card.Content class="flex flex-col gap-1 px-4">
 					<dt class="text-sm text-muted-foreground">{tile.label}</dt>
-					<dd class="text-2xl font-semibold tabular-nums">{tile.value}</dd>
+					<dd class="text-2xl font-semibold tabular-nums">
+						<AnimatedNumber value={tile.value} format={tile.format} suffix={tile.suffix} />
+					</dd>
 				</Card.Content>
 			</Card.Root>
 		{/each}

@@ -871,7 +871,13 @@
 					{/if}
 				</div>
 				{#if shownGraph && shownGraph.nodes.length > 0}
-					<MemoryGraphView graph={shownGraph} selected={openId} insetTop={44} onselect={openNode} />
+					<MemoryGraphView
+						graph={shownGraph}
+						selected={openId}
+						insetTop={44}
+						onselect={openNode}
+						ondeselect={() => canLeaveEditor() && clearSelection()}
+					/>
 				{:else if graph && graph.nodes.length > 0 && privateFilter}
 					<div class="flex size-full items-center justify-center">
 						<EmptyState

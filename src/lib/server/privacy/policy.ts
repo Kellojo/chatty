@@ -62,11 +62,15 @@ export function callerPrivacy(ctx: {
 	);
 }
 
-/** Whether an admin allowed this provider to process private data. Unknown providers aren't. */
+/**
+ * Whether an admin allowed this provider to process private data. Unknown and
+ * disabled providers aren't (as in hasTrustedProvider).
+ */
 export function providerTrust(db: Db, providerId: string): Trust {
-	const row = db.prepare('SELECT allow_private FROM providers WHERE id = ?').get(providerId) as
-		{ allow_private: number } | undefined;
-	return row?.allow_private === 1 ? 'trusted' : 'untrusted';
+	const row = db
+		.prepare('SELECT allow_private, enabled FROM providers WHERE id = ?')
+		.get(providerId) as { allow_private: number; enabled: number } | undefined;
+	return row?.allow_private === 1 && row.enabled === 1 ? 'trusted' : 'untrusted';
 }
 
 /** Whether any enabled provider may process private data (the private toggles need one). */

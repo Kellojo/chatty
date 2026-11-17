@@ -17,7 +17,8 @@
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import { resolve } from '$app/paths';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
-	import { THEMES, TIME_FORMATS, type Theme, type TimeFormat } from '$lib/user-settings.js';
+	import ThemePicker from '$lib/components/app/ThemePicker.svelte';
+	import { TIME_FORMATS, type Theme, type TimeFormat } from '$lib/user-settings.js';
 	import { haptic, hapticsPref } from '$lib/haptics.svelte.js';
 	import type { PageData } from './$types';
 
@@ -30,12 +31,6 @@
 		if (enabled) haptic('medium');
 	}
 
-	const themeLabels: Record<Theme, string> = {
-		light: 'Light',
-		dark: 'Dark',
-		system: 'System'
-	};
-
 	const timeFormatLabels: Record<TimeFormat, string> = {
 		auto: 'Automatic',
 		'12h': '12-hour',
@@ -43,7 +38,9 @@
 	};
 
 	let theme = $state<Theme>(data.settings.theme);
-	let themeBusy = $state(false);
+	/** Last theme the server confirmed, to roll back to if a save fails (set on first change). */
+	let savedTheme: Theme | null = null;
+	let themeRequest = 0;
 
 	let timeFormat = $state<TimeFormat>(data.settings.timeFormat);
 	let timeFormatBusy = $state(false);
@@ -61,19 +58,20 @@
 	}
 
 	async function changeTheme(value: Theme) {
-		if (themeBusy || value === theme) return;
-		const previous = theme;
+		if (value === theme) return;
+		savedTheme ??= theme;
+		// Applied at once; clicking through the tiles quickly keeps only the last choice.
 		theme = value;
 		setMode(value);
-		themeBusy = true;
+		const request = ++themeRequest;
 		try {
 			await putSettings({ theme: value });
+			savedTheme = value;
 		} catch (e) {
-			theme = previous;
-			setMode(previous);
+			if (request !== themeRequest) return;
+			theme = savedTheme!;
+			setMode(theme);
 			toast.error(e instanceof Error ? e.message : 'Failed to update theme');
-		} finally {
-			themeBusy = false;
 		}
 	}
 
@@ -194,20 +192,18 @@
 <SettingsSection title="Appearance" description="Choose how the app looks.">
 	<SettingsRow
 		label="Theme"
-		for="pref-theme"
-		description="Light, dark, or follow your system setting."
+		labelId="pref-theme-label"
+		description="System follows your device's light or dark setting."
+		descriptionId="pref-theme-description"
 		stack
 	>
-		<Select.Root type="single" value={theme} onValueChange={(value) => changeTheme(value as Theme)}>
-			<Select.Trigger id="pref-theme" class="w-full sm:w-48" disabled={themeBusy}>
-				{themeLabels[theme]}
-			</Select.Trigger>
-			<Select.Content>
-				{#each THEMES as option (option)}
-					<Select.Item value={option}>{themeLabels[option]}</Select.Item>
-				{/each}
-			</Select.Content>
-		</Select.Root>
+		<ThemePicker
+			value={theme}
+			onchange={changeTheme}
+			labelledby="pref-theme-label"
+			describedby="pref-theme-description"
+			class="w-full sm:w-96"
+		/>
 	</SettingsRow>
 	<SettingsRow
 		label="Time format"

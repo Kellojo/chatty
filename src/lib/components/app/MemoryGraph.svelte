@@ -10,7 +10,8 @@
 		graph,
 		selected = null,
 		insetTop = 0,
-		onselect
+		onselect,
+		ondeselect
 	}: {
 		graph: MemoryGraph;
 		/** Node id (`<scope>:<path>`) of the open memory. */
@@ -18,6 +19,8 @@
 		/** Space reserved at the top for an overlaid header, kept clear when fitting. */
 		insetTop?: number;
 		onselect?: (node: MemoryGraphNode) => void;
+		/** A click on empty canvas (not a pan) while a memory is selected. */
+		ondeselect?: () => void;
 	} = $props();
 
 	type SimNode = {
@@ -665,6 +668,8 @@
 		if (drag.node) {
 			drag.node.fixed = false;
 			if (!drag.moved) onselect?.(drag.node.node);
+		} else if (!drag.moved && selected) {
+			ondeselect?.();
 		}
 		drag = null;
 		canvas!.style.cursor = hovered ? 'pointer' : 'grab';

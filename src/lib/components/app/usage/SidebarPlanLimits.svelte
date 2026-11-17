@@ -4,6 +4,7 @@
 	import { providerLabel } from '$lib/coding-environments.js';
 	import { resolveBrand } from '$lib/provider-brand.js';
 	import ProviderIcon from '../ProviderIcon.svelte';
+	import AnimatedNumber from '../AnimatedNumber.svelte';
 	import { onServerEventResync } from '$lib/state/events.svelte.js';
 	import {
 		constrainingWindow,
@@ -122,8 +123,8 @@
 					: tightest.level === 'stale'
 						? 'line-through decoration-muted-foreground/60'
 						: ''}
-			><span class="max-md:hidden">{tightest.left}%</span><span class="md:hidden"
-				>{100 - tightest.left}%<span class="sr-only"> of plan used</span></span
+			><AnimatedNumber class="max-md:hidden" value={tightest.left / 100} format="percent" /><span
+				class="md:hidden">{100 - tightest.left}%<span class="sr-only"> of plan used</span></span
 			></span
 		>
 	</span>
