@@ -1,0 +1,280 @@
+/*
+ * New-chat launch (src/lib/launch-transition.ts): a View Transition from the
+ * start screen into the chat. `html[data-launch]` names the page move for the length
+ * of the transition, with data-launch-dir (fwd/back) and data-launch-axis (h/v) for
+ * its direction, and --launch-speed as the duration factor.
+ *
+ * Captured parts: the page (`launch-stage` = <main>); the composer, which glides
+ * from the middle of the start screen down to the chat's input; the typed text,
+ * which flies up into the first message bubble (`launch-message`); and the start
+ * screen's heading and suggestions, which step out of the way first.
+ *
+ * Everything is motion only (opacity, a short slide, a soft blur, a feathered
+ * wipe) on one smooth ease-out curve; no glows or colour.
+ */
+
+@property --launch-p {
+	syntax: '<percentage>';
+	inherits: false;
+	initial-value: 0%;
+}
+
+html[data-launch] {
+	--launch-ease: cubic-bezier(0.22, 1, 0.36, 1);
+	--launch-dx: 1;
+}
+html[data-launch][data-launch-dir='back'] {
+	--launch-dx: -1;
+}
+
+html[data-launch] main {
+	view-transition-name: launch-stage;
+}
+html[data-launch] .launch-composer {
+	view-transition-name: launch-composer;
+}
+html[data-launch] .launch-title {
+	view-transition-name: launch-title;
+}
+html[data-launch] .launch-chips {
+	view-transition-name: launch-chips;
+}
+html[data-launch] .launch-files {
+	view-transition-name: launch-files;
+}
+.launch-message-ghost,
+html[data-launch] [data-message-bubble] {
+	view-transition-name: launch-message;
+}
+
+/* The chat's composer lands already streaming. Its placeholder and Stop button
+   ease in once the page has mostly arrived, so they don't pop mid-move. */
+html[data-launch] main .launch-composer textarea,
+html[data-launch] main .launch-composer [aria-label='Stop'] {
+	animation: launch-settle-in calc(320ms * var(--launch-speed, 1)) ease-out both;
+	animation-delay: calc(480ms * var(--launch-speed, 1));
+}
+/* The assistant's first words wait for the page to settle instead of moving with it. */
+html[data-launch] main [data-message-role='assistant'] {
+	animation: launch-settle-in calc(300ms * var(--launch-speed, 1)) ease-out both;
+	animation-delay: calc(560ms * var(--launch-speed, 1));
+}
+@keyframes launch-settle-in {
+	from {
+		opacity: 0;
+	}
+}
+
+html[data-launch]::view-transition-group(*) {
+	animation-duration: calc(420ms * var(--launch-speed, 1));
+}
+html[data-launch]::view-transition-old(*),
+html[data-launch]::view-transition-new(*) {
+	mix-blend-mode: normal;
+}
+html[data-launch]::view-transition-group(launch-stage) {
+	animation: none;
+}
+html[data-launch]::view-transition-old(launch-stage) {
+	animation: launch-fade-out calc(280ms * var(--launch-speed, 1)) ease-in both;
+}
+html[data-launch]::view-transition-new(launch-stage) {
+	animation-duration: calc(760ms * var(--launch-speed, 1));
+	animation-delay: calc(80ms * var(--launch-speed, 1));
+	animation-timing-function: var(--launch-ease);
+	animation-fill-mode: both;
+}
+
+/* ── composer: glides down to the chat's input ── */
+html[data-launch]::view-transition-group(launch-composer) {
+	animation-duration: calc(760ms * var(--launch-speed, 1));
+	animation-timing-function: cubic-bezier(0.3, 1.1, 0.4, 1);
+}
+/* A clean swap, not a long crossfade: the old composer is gone before the new one shows. */
+html[data-launch]::view-transition-old(launch-composer) {
+	animation: launch-fade-out calc(120ms * var(--launch-speed, 1)) ease-in both;
+}
+html[data-launch]::view-transition-new(launch-composer) {
+	animation: launch-fade-in calc(200ms * var(--launch-speed, 1)) ease-out both;
+	animation-delay: calc(100ms * var(--launch-speed, 1));
+}
+
+/* ── the typed text, already a bubble, flies up into the chat's first message ──
+   It waits for the heading to clear so the two never cross. */
+html[data-launch]::view-transition-group(launch-message) {
+	animation-duration: calc(700ms * var(--launch-speed, 1));
+	animation-timing-function: cubic-bezier(0.3, 1.1, 0.4, 1);
+	animation-delay: calc(140ms * var(--launch-speed, 1));
+	animation-fill-mode: both;
+}
+/* A quick swap to the real bubble as it lifts off, so the text is never doubled in flight. */
+html[data-launch]::view-transition-old(launch-message) {
+	animation: launch-fade-out calc(120ms * var(--launch-speed, 1)) linear both;
+	animation-delay: calc(140ms * var(--launch-speed, 1));
+}
+html[data-launch]::view-transition-new(launch-message) {
+	animation: launch-fade-in calc(120ms * var(--launch-speed, 1)) linear both;
+	animation-delay: calc(140ms * var(--launch-speed, 1));
+}
+/* No bubble to land in (an upload took too long, or files only): lift away instead
+   of stopping in place; the message then arrives with the page. */
+html[data-launch]::view-transition-old(launch-message):only-child {
+	animation: launch-lift-out calc(420ms * var(--launch-speed, 1)) var(--launch-ease) both;
+}
+
+/* ── attachments: lift off upwards, towards where the message appears ── */
+html[data-launch]::view-transition-old(launch-files) {
+	animation: launch-lift-out calc(420ms * var(--launch-speed, 1)) var(--launch-ease) both;
+}
+@keyframes launch-lift-out {
+	to {
+		transform: translateY(-48px);
+		opacity: 0;
+	}
+}
+
+/* ── heading and suggestions: step out of the way ── */
+html[data-launch]::view-transition-old(launch-title) {
+	animation: launch-title-out calc(160ms * var(--launch-speed, 1)) ease-in both;
+}
+html[data-launch]::view-transition-old(launch-chips) {
+	animation: launch-chips-out calc(160ms * var(--launch-speed, 1)) ease-in both;
+}
+@keyframes launch-title-out {
+	to {
+		transform: translateY(-8px);
+		opacity: 0;
+	}
+}
+@keyframes launch-chips-out {
+	to {
+		transform: translateY(8px);
+		opacity: 0;
+	}
+}
+
+@keyframes launch-fade-out {
+	to {
+		opacity: 0;
+	}
+}
+@keyframes launch-fade-in {
+	from {
+		opacity: 0;
+	}
+}
+
+/* ── rise: the chat floats up into place ── */
+html[data-launch='rise']::view-transition-new(launch-stage) {
+	animation-name: launch-rise;
+}
+@keyframes launch-rise {
+	from {
+		transform: translateY(28px);
+		opacity: 0;
+	}
+}
+
+/* ── drift: the chat slides in from one side ── */
+html[data-launch='drift']::view-transition-new(launch-stage) {
+	animation-name: launch-drift;
+}
+@keyframes launch-drift {
+	from {
+		transform: translateX(calc(var(--launch-dx) * 36px));
+		opacity: 0;
+	}
+}
+
+/* ── focus: the chat comes into focus ── */
+html[data-launch='focus']::view-transition-new(launch-stage) {
+	animation-name: launch-focus;
+}
+@keyframes launch-focus {
+	from {
+		transform: scale(1.015);
+		filter: blur(6px);
+		opacity: 0;
+	}
+}
+
+/* ── sweep: a soft, feathered wipe across or down ── */
+html[data-launch='sweep']::view-transition-old(launch-stage) {
+	animation-duration: calc(520ms * var(--launch-speed, 1));
+	animation-delay: calc(160ms * var(--launch-speed, 1));
+}
+html[data-launch='sweep']::view-transition-new(launch-stage) {
+	animation-name: launch-sweep;
+	animation-delay: 0ms;
+	mask-image: linear-gradient(
+		var(--launch-sweep-to, to right),
+		#000 calc(var(--launch-p) - 45%),
+		transparent var(--launch-p)
+	);
+}
+html[data-launch='sweep'][data-launch-dir='back'] {
+	--launch-sweep-to: to left;
+}
+html[data-launch='sweep'][data-launch-axis='v'] {
+	--launch-sweep-to: to bottom;
+}
+html[data-launch='sweep'][data-launch-axis='v'][data-launch-dir='back'] {
+	--launch-sweep-to: to top;
+}
+@keyframes launch-sweep {
+	from {
+		--launch-p: 0%;
+	}
+	to {
+		--launch-p: 145%;
+	}
+}
+
+/* ── unfold: the chat tips up gently from just below ── */
+html[data-launch='unfold']::view-transition-image-pair(launch-stage) {
+	perspective: 1400px;
+}
+html[data-launch='unfold']::view-transition-new(launch-stage) {
+	animation-name: launch-unfold;
+	transform-origin: 50% 0;
+}
+@keyframes launch-unfold {
+	from {
+		transform: rotateX(7deg) translateY(18px) scale(0.985);
+		opacity: 0;
+	}
+}
+
+/* ── print (coding): the chat writes itself in from the top, line by line ── */
+html[data-launch='print']::view-transition-old(launch-stage) {
+	animation-duration: calc(520ms * var(--launch-speed, 1));
+	animation-delay: calc(160ms * var(--launch-speed, 1));
+}
+html[data-launch='print']::view-transition-new(launch-stage) {
+	animation-name: launch-print;
+	animation-delay: 0ms;
+	mask-image: linear-gradient(
+		to bottom,
+		#000 calc(var(--launch-p) - 30%),
+		transparent var(--launch-p)
+	);
+}
+@keyframes launch-print {
+	from {
+		--launch-p: 0%;
+		transform: translateY(10px);
+	}
+	to {
+		--launch-p: 130%;
+		transform: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html[data-launch]::view-transition-group(*),
+	html[data-launch]::view-transition-old(*),
+	html[data-launch]::view-transition-new(*),
+	html[data-launch]::view-transition-image-pair(*) {
+		animation: none !important;
+	}
+}

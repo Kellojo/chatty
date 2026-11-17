@@ -63,9 +63,16 @@
 	</div>
 	<ul class="flex flex-col">
 		{#each items as item (item.id)}
-			<li class="group flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-muted">
+			<li
+				class="group flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-muted"
+				data-queued-message
+			>
 				<CornerDownRightIcon class="size-3.5 shrink-0 text-muted-foreground" />
-				<span class="min-w-0 flex-1 truncate text-sm" title={item.text || undefined}>
+				<span
+					class="min-w-0 flex-1 truncate text-sm"
+					title={item.text || undefined}
+					data-queued-text
+				>
 					{preview(item)}
 				</span>
 				{#if item.files.length > 0 && item.text.trim()}

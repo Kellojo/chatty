@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import { PRIVATE_CHAT_HINT } from '$lib/private-data.js';
-	import { afterNavigate, beforeNavigate, goto } from '$app/navigation';
+	import { afterNavigate, beforeNavigate, goto, onNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
@@ -52,6 +52,7 @@
 	import { sharedDraft, takeSharedFiles } from '$lib/share-target.js';
 	import { MAX_PREFILL_PROMPT_LENGTH } from '$lib/onboarding.js';
 	import { onLaunchFiles } from '$lib/launch-files.js';
+	import { launch, launchTransition } from '$lib/launch-transition.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { PageData } from './$types';
 
@@ -251,6 +252,15 @@
 		latestNavigation = to?.url.pathname;
 	});
 
+	// The launch into a just-created chat (armed in startChat).
+	onNavigate((navigation) => {
+		if (navigation.to?.route.id !== '/(app)/chat/[id]') {
+			launch.disarm();
+			return;
+		}
+		return launchTransition(navigation.complete);
+	});
+
 	async function createChatConversation(): Promise<Conversation> {
 		const body: Record<string, string | boolean> = {};
 		if (selectedValue) {
@@ -367,6 +377,7 @@
 		try {
 			const conversation = draft ? await createCodingTask(draft) : await createChatConversation();
 			pendingMessage.set(conversation.id, trimmed, selectedFiles);
+			launch.arm(draft ? 'coding' : 'chat', trimmed);
 			const target = resolve(`/chat/${conversation.id}`);
 			await goto(target);
 			// goto() also resolves when the navigation was cancelled. Unless the user
@@ -376,6 +387,7 @@
 			}
 		} catch (e) {
 			pendingMessage.clear();
+			launch.disarm();
 			toast.error(e instanceof Error ? e.message : 'Failed to start chat');
 			busy = false;
 		}
@@ -415,9 +427,11 @@
 			</Tabs.Root>
 		{/if}
 		{#if coding}
-			<h1 class="text-center text-2xl font-semibold">What are we working on?</h1>
+			<h1 class="launch-title text-center text-2xl font-semibold">What are we working on?</h1>
 		{:else if data.personas.length > 0}
-			<h1 class="flex flex-wrap items-center justify-center gap-x-2 text-2xl font-semibold">
+			<h1
+				class="launch-title flex flex-wrap items-center justify-center gap-x-2 text-2xl font-semibold"
+			>
 				What can
 				<Select.Root type="single" bind:value={personaId} disabled={busy}>
 					<Select.Trigger
@@ -435,19 +449,25 @@
 				help you with?
 			</h1>
 		{:else}
-			<h1 class="text-2xl font-semibold">What can I help you with?</h1>
+			<h1 class="launch-title text-2xl font-semibold">What can I help you with?</h1>
 		{/if}
 	</div>
 	<div class="w-full max-w-2xl">
 		<PromptInput
+			class="launch-composer"
 			value={displayInput}
 			onValueChange={(v) => (input = v)}
 			onSubmit={() => startChat(displayInput)}
 		>
-			<PendingAttachments
-				files={selectedFiles}
-				onremove={(file) => (selectedFiles = selectedFiles.filter((f) => f !== file))}
-			/>
+			{#if selectedFiles.length > 0}
+				<!-- Lifts off with the message when a chat starts (launch.css). -->
+				<div class="launch-files">
+					<PendingAttachments
+						files={selectedFiles}
+						onremove={(file) => (selectedFiles = selectedFiles.filter((f) => f !== file))}
+					/>
+				</div>
+			{/if}
 			<PromptInputTextarea
 				placeholder={coding
 					? `Describe a task for ${codingTask.project?.title ?? 'the coding agent'}…`
@@ -570,7 +590,7 @@
 	</div>
 	{#if coding}
 		{#if codingTask.project}
-			<div class="mt-2 flex max-w-2xl flex-wrap justify-center gap-2">
+			<div class="launch-chips mt-2 flex max-w-2xl flex-wrap justify-center gap-2">
 				{#each codingSuggestions as suggestion (suggestion)}
 					<PromptSuggestion onclick={() => useSuggestion(suggestion)}>{suggestion}</PromptSuggestion
 					>
@@ -578,7 +598,7 @@
 			</div>
 		{/if}
 	{:else}
-		<div class="flex max-w-2xl flex-wrap justify-center gap-2">
+		<div class="launch-chips flex max-w-2xl flex-wrap justify-center gap-2">
 			{#each suggestions as suggestion (suggestion)}
 				<PromptSuggestion onclick={() => startChat(suggestion)}>{suggestion}</PromptSuggestion>
 			{/each}
