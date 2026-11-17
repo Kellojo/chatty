@@ -20,7 +20,8 @@ import {
 } from '../db/repo/agents.js';
 import { subscribeAllServerEvents } from '../events/bus.js';
 import { createLogger } from '../logger.js';
-import { MEMORY_CLEANUP_AGENT, MEMORY_EXTRACTION_AGENT } from './builtin.js';
+import { isPrivateContext } from '../privacy/policy.js';
+import { isBuiltinMemoryAgent, MEMORY_CLEANUP_AGENT, MEMORY_EXTRACTION_AGENT } from './builtin.js';
 import { settleCodingAgentRun } from './coding-runs.js';
 
 const log = createLogger('agents');
@@ -31,6 +32,8 @@ interface Occurrence {
 	event: AgentEventName;
 	count: number;
 	payloadJson: string;
+	/** From a private conversation or run: only private agents may get it. */
+	private: boolean;
 }
 
 interface Pending {
@@ -132,6 +135,31 @@ function fromRunConversation(db: Db, payload: Record<string, unknown>): boolean 
 	);
 }
 
+/**
+ * The event comes from a private conversation or a private agent's run, or is
+ * about a private memory note (`private: true`). Only private agents (which
+ * only use trusted models) react to it: the event itself carries ids or a
+ * note path only, but the agent may read what it points at.
+ */
+function fromPrivateContext(db: Db, payload: Record<string, unknown>): boolean {
+	// A private memory note's change: its path alone can say what it is about.
+	if (payload.private === true) return true;
+	const conversationId = typeof payload.conversationId === 'string' ? payload.conversationId : null;
+	const agentRunId = typeof payload.agentRunId === 'string' ? payload.agentRunId : null;
+	if (!conversationId && !agentRunId) return false;
+	return isPrivateContext(db, { tainted: false, conversationId, agentRunId });
+}
+
+/**
+ * What a built-in memory agent (not private, but with a private pass on a
+ * trusted model) gets of a private memory change: that one happened, so its
+ * "every Nth change" trigger still counts it, but not which note or run.
+ */
+function redactedMemoryChange(payload: Record<string, unknown>): Record<string, unknown> {
+	const { scope, action } = payload;
+	return { scope, action, private: true };
+}
+
 export function buildEventInstructions(
 	triggerConfig: AgentTriggerConfig,
 	occurrences: Occurrence[],
@@ -230,9 +258,16 @@ export function drainAgent(agentId: string, db: Db = getDb(), run: RunFn = defau
 			drainAgent(agentId, db, run);
 			return;
 		}
+		// …or made public: private events queued for it are dropped.
+		const occurrences =
+			agent.private === 1 ? entry.occurrences : entry.occurrences.filter((o) => !o.private);
+		if (occurrences.length === 0) {
+			drainAgent(agentId, db, run);
+			return;
+		}
 		const instructions = buildEventInstructions(
 			parseTriggerConfig(agent),
-			entry.occurrences,
+			occurrences,
 			entry.dropped
 		);
 		dispatch(db, agentId, userId, instructions, run);
@@ -254,9 +289,18 @@ export async function emitAgentEvent(
 	try {
 		const run = runFn ?? defaultRun;
 		if (fromRunConversation(db, payload)) return;
+		const isPrivate = fromPrivateContext(db, payload);
 		for (const agent of listEventAgents(db, event)) {
 			try {
 				if (!enabledFor(db, agent, userId)) continue;
+				// Private events reach private agents only; built-in memory agents get
+				// private memory changes with their note and run left out.
+				const redact =
+					isPrivate &&
+					agent.private !== 1 &&
+					event === 'memory.changed' &&
+					isBuiltinMemoryAgent(agent);
+				if (isPrivate && agent.private !== 1 && !redact) continue;
 				if (agent.coding_target && fromAgentRun(db, payload)) continue;
 				if (fromOwnRun(db, agent.id, payload)) continue;
 				const count = incrementAgentEventCounter(db, agent.id, userId, event);
@@ -274,7 +318,12 @@ export async function emitAgentEvent(
 					});
 					continue;
 				}
-				const occurrence: Occurrence = { event, count, payloadJson: JSON.stringify(payload) };
+				const occurrence: Occurrence = {
+					event,
+					count,
+					payloadJson: JSON.stringify(redact ? redactedMemoryChange(payload) : payload),
+					private: isPrivate && !redact
+				};
 				const queued = pending.get(agent.id)?.get(userId);
 				if (isBusy(db, agent.id) || queued || waitingOnOther(db, agent, userId)) {
 					// Keep order: anything already queued for this user goes first.

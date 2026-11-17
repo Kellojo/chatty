@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Chat } from '@ai-sdk/svelte';
+	import { PRIVATE_CHAT_HINT } from '$lib/private-data.js';
 	import { DefaultChatTransport } from 'ai';
 	import { onMount, tick, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
@@ -26,6 +27,7 @@
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import ChatTopbar from './ChatTopbar.svelte';
 	import { setChatViewContext } from './chat-view-context.js';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
@@ -47,6 +49,8 @@
 	import { askUserInput, askUserRequest, isAskUserPart, type AskUserPart } from '$lib/ask-user.js';
 	import { drafts } from '$lib/state/drafts.js';
 	import { registerChatShortcuts, shortcutLabel } from '$lib/state/shortcuts.js';
+	import { registerCommands } from '$lib/state/commands.js';
+	import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
 	import {
 		messageFiles,
 		messageText,
@@ -68,6 +72,7 @@
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import { createVoiceMode, voiceModeSupported } from '$lib/state/voice-mode.svelte.js';
+	import { localVoiceCount } from '$lib/state/local-voices.svelte.js';
 	import VoiceBar from './VoiceBar.svelte';
 	import VoiceModeButton from './VoiceModeButton.svelte';
 	import {
@@ -78,6 +83,7 @@
 		type DispatchInfo,
 		type ModelMapping,
 		type PickerModelGroup,
+		type PrivateDataStatus,
 		type UIMessage,
 		type UIMessageMetadata
 	} from '$lib/types.js';
@@ -88,6 +94,14 @@
 		type CodingEnvironment
 	} from '$lib/coding-environments.js';
 	import { browserActivity } from '$lib/coding-preview.js';
+	import { PRIVATE_DATA_OFF } from '$lib/private-data.js';
+	import { setPrivateChat } from '$lib/private-context.js';
+	import {
+		micAvailable,
+		PRIVATE_MIC_HINT,
+		voiceModeAvailable,
+		type SpeechPrivacy
+	} from '$lib/private-speech.js';
 
 	let {
 		conversation: initialConversation,
@@ -104,7 +118,8 @@
 		coding: initialCoding = null,
 		codingEnvironments = [],
 		codingAgents = [],
-		dispatch = null
+		dispatch = null,
+		privateData = PRIVATE_DATA_OFF
 	}: {
 		conversation: Conversation;
 		/** The newest page of messages; earlier ones load on scroll. */
@@ -127,6 +142,8 @@
 		codingAgents?: Agent[];
 		/** Set when Chatty started this chat for an agent run. */
 		dispatch?: DispatchInfo | null;
+		/** The app shell's private-data switches (layout data `privateData`). */
+		privateData?: PrivateDataStatus;
 	} = $props();
 
 	// Local edits apply immediately; reloaded page data (e.g. a task settled or
@@ -138,11 +155,56 @@
 		codingEnvironments,
 		codingAgents
 	}));
+	// ── privacy ──────────────────────────────────────────────────────────────
+	// Private chats only run on trusted models. A chat turns private on its own
+	// (for good) when a turn reads private data: the server says so with an event.
+	const isPrivate = $derived(privateData.enabled && conversation.private);
+	$effect(() => {
+		const id = conversation.id;
+		return onServerEvent((event) => {
+			if (event.type !== 'conversation.privacy' || event.conversationId !== id) return;
+			// The reply itself shows where it became private (a notice part).
+			conversation = { ...conversation, private: event.private };
+		});
+	});
+
+	// Widgets (the map) hold back third-party requests in a private chat.
+	// Speech and widgets follow the stored flag itself (safe side, even with the feature off).
+	setPrivateChat(() => conversation.private);
+
+	// Speech in a private chat stays with trusted server models or on the device:
+	// no browser recognition (Chrome sends the audio to Google), server read-aloud
+	// only when the Text to speech model is trusted (else on-device voices only).
+	const speechPrivacy = (): SpeechPrivacy => ({
+		conversationId: conversation.id,
+		private: conversation.private
+	});
+	const serverTtsUsable = () => serverTts && (!conversation.private || privateData.ttsTrusted);
+	/** Why the mic is off here, when the chat is private and no trusted speech to text is set. */
+	const micBlocked = $derived(
+		isPrivate &&
+			!micAvailable({
+				isPrivate,
+				sttTrusted: privateData.sttTrusted,
+				sttConfigured: sttModel !== null
+			})
+			? PRIVATE_MIC_HINT
+			: undefined
+	);
+
 	// The unsent text survives switching chats (this view remounts per chat).
 	let input = $state(drafts.get(untrack(() => initialConversation.id)));
-	const speech = sttModel ? createServerSpeechRecognition(sttModel) : createSpeechRecognition();
+	const initialSttModel = untrack(() => sttModel);
+	const speech = initialSttModel
+		? createServerSpeechRecognition(initialSttModel, { privacy: speechPrivacy })
+		: createSpeechRecognition({ private: () => conversation.private });
+	// Turned private mid-dictation: stop listening rather than keep sending audio out.
+	$effect(() => {
+		if (micBlocked && (speech.recording || speech.busy)) untrack(() => speech.stop());
+	});
 	const playback = createSpeechPlayback({
-		serverTts: () => serverTts,
+		serverTts: serverTtsUsable,
+		privacy: speechPrivacy,
 		onerror: (message) => toast.error(message),
 		oninfo: (message) => toast.info(message),
 		volume: () => page.data.settings?.speechVolume ?? 1
@@ -152,10 +214,22 @@
 	// ── voice mode ───────────────────────────────────────────────────────────
 	// A spoken conversation in this chat: each turn is sent as a regular
 	// message and the reply is read aloud as it streams in.
-	const voiceSupported = $derived(voiceModeSupported(sttModel, serverTts));
+	const voiceSupported = $derived(
+		voiceModeSupported(sttModel, serverTtsUsable(), conversation.private) &&
+			voiceModeAvailable({
+				isPrivate,
+				sttTrusted: privateData.sttTrusted,
+				sttConfigured: sttModel !== null,
+				// It must also answer out loud without the reply leaving the device.
+				ttsTrusted: privateData.ttsTrusted,
+				ttsConfigured: serverTts,
+				localVoiceCount: localVoiceCount()
+			})
+	);
 	const voice = createVoiceMode({
 		sttModel: untrack(() => sttModel),
-		serverTts: () => serverTts,
+		serverTts: serverTtsUsable,
+		privacy: speechPrivacy,
 		volume: () => page.data.settings?.speechVolume ?? 1,
 		send: (text) => submit(text, []),
 		// The user went on talking before the reply was heard: their message is
@@ -540,6 +614,13 @@
 			});
 	}
 
+	/** A reply shown as still being generated ('partial') although none is being received. */
+	function showsUnsettledReply(): boolean {
+		return chat.messages.some(
+			(m) => (m.metadata as UIMessageMetadata | undefined)?.status === 'partial'
+		);
+	}
+
 	/** Shows the persisted newest messages, unless a new reply has started meanwhile. */
 	async function reloadLatest(id: string) {
 		const latest = await fetchLatest(id);
@@ -653,19 +734,36 @@
 	// "finished" notice in a chat); reload them while idle. Only the newest page
 	// is fetched: these updates can arrive every second, and reloading the whole
 	// page data would also re-send the layout and model list.
+	//
+	// A reload can also catch a reply the server hasn't settled yet: Stop aborts
+	// the server's side without waiting, so the messages reloaded right after can
+	// still hold it as 'partial' ("Still generating…") with nothing attached to
+	// end it. The server announces `chat.stream.finished` once it has saved the
+	// final state, so reload then too whenever such a stale reply is shown.
 	$effect(() => {
 		const id = conversation.id;
 		let timer: ReturnType<typeof setTimeout> | null = null;
-		const reload = async () => {
+		const reload = async (onlyIfStale = false) => {
 			timer = null;
 			if (streaming || conversation.id !== id) return;
+			if (onlyIfStale && !showsUnsettledReply()) return;
 			const latest = await fetchLatest(id);
 			if (!latest || streaming || sending || conversation.id !== id) return;
 			showLatest(latest.messages, latest.hasOlder);
 		};
 		const off = onServerEvent((event) => {
-			if (event.type !== 'chat.messages.updated' || event.conversationId !== id) return;
-			timer ??= setTimeout(() => void reload(), 300);
+			if (event.type === 'chat.messages.updated' && event.conversationId === id) {
+				timer ??= setTimeout(() => void reload(), 300);
+			} else if (
+				event.type === 'chat.stream.finished' &&
+				event.conversationId === id &&
+				!remoteGenerating
+			) {
+				// Following a remote reply settles it itself (see `finish` above).
+				// Checked after the delay: a reload already in flight may only now
+				// bring in the stale reply.
+				timer ??= setTimeout(() => void reload(true), 300);
+			}
 		});
 		return () => {
 			off();
@@ -1269,6 +1367,48 @@
 		})
 	);
 
+	// The command palette's entries for what this view owns (the ⋯ menu adds the rest).
+	onMount(() =>
+		registerCommands(() => [
+			...(streaming
+				? [
+						{
+							id: 'chat:stop',
+							label: 'Stop the reply',
+							group: 'This chat' as const,
+							icon: SquareIcon,
+							keywords: ['cancel', 'abort'],
+							shortcut: 'escape' as const,
+							run: stop
+						}
+					]
+				: []),
+			...(voice.active
+				? [
+						{
+							id: 'chat:voice',
+							label: 'End voice mode',
+							group: 'This chat' as const,
+							icon: AudioLinesIcon,
+							shortcut: 'escape' as const,
+							run: () => voice.stop()
+						}
+					]
+				: voiceSupported && !isCoding && !editing && !sending && !dictating
+					? [
+							{
+								id: 'chat:voice',
+								label: 'Start voice mode',
+								group: 'This chat' as const,
+								icon: AudioLinesIcon,
+								keywords: ['talk', 'speak', 'microphone'],
+								run: startVoice
+							}
+						]
+					: [])
+		])
+	);
+
 	// ── earlier messages ─────────────────────────────────────────────────────
 	// The page loads only the newest messages; earlier pages are fetched when
 	// the user scrolls near the top (or clicks the button there).
@@ -1430,7 +1570,10 @@
 		{codingAgents}
 		handoffDisabled={streaming || chat.messages.length === 0}
 		messageCount={chat.messages.length}
-		onupdated={(updated) => (conversation = updated)}
+		{privateData}
+		onupdated={(updated) => {
+			conversation = updated;
+		}}
 	/>
 
 	<!-- Reserve the scrollbar on both sides so messages stay centred over the composer. -->
@@ -1603,7 +1746,7 @@
 						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 							<PaperclipIcon class="size-4" />
 						</Button>
-						<MicButton {speech} />
+						<MicButton {speech} blockedReason={micBlocked} />
 					</div>
 					{#if streaming && !canSend}
 						<Button
@@ -1653,6 +1796,18 @@
 					{/if}
 				</PromptInputActions>
 			</PromptInput>
+			{#if isPrivate}
+				<!-- Stays in view under the composer, like the new-chat page's note. -->
+				<p
+					class="mx-auto mt-1.5 flex max-w-full items-start justify-center gap-1.5 text-xs text-muted-foreground"
+				>
+					<LockIcon
+						class="mt-0.5 size-3 shrink-0 text-emerald-600 dark:text-emerald-400"
+						aria-hidden="true"
+					/>
+					<span>{PRIVATE_CHAT_HINT}</span>
+				</p>
+			{/if}
 		{/if}
 		<input
 			bind:this={fileInput}

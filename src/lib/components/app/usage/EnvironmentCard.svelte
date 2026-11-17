@@ -7,7 +7,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { formatTimeAgo } from '$lib/datetime.js';
-	import type { CodingEnvironment } from '$lib/coding-environments.js';
+	import { environmentFailed, type CodingEnvironment } from '$lib/coding-environments.js';
 	import { syncEnvironment } from './usage.js';
 
 	let {
@@ -39,7 +39,7 @@
 		try {
 			const updated = await syncEnvironment(env.id);
 			if (!updated) toast.error(`${env.name}: sync failed`);
-			else if (updated.status === 'error')
+			else if (environmentFailed(updated.status))
 				toast.error(`${env.name}: ${updated.lastError ?? 'unreachable'}`);
 			await invalidateAll();
 		} finally {
@@ -93,7 +93,7 @@
 			</div>
 			<span class="text-xs text-muted-foreground">{meta}</span>
 		{/if}
-		{#if env.enabled && env.status === 'error' && env.lastError}
+		{#if env.enabled && environmentFailed(env.status) && env.lastError}
 			<p class="text-xs wrap-break-word text-destructive">{env.lastError}</p>
 		{/if}
 	</Card.Content>

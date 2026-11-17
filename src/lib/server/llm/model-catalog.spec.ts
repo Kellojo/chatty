@@ -22,7 +22,7 @@ describe('model catalog', () => {
 		const { groups } = catalog.getModelCatalog();
 		expect(groups).toEqual([
 			{
-				provider: { id: p.id, name: 'A', type: 'anthropic', baseUrl: null },
+				provider: { id: p.id, name: 'A', type: 'anthropic', baseUrl: null, allowPrivate: false },
 				models: [
 					{
 						providerId: p.id,

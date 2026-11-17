@@ -125,7 +125,7 @@ describe('maybeCompactConversation', () => {
 	it('does nothing below the threshold', async () => {
 		const { convId, providerId, modelId } = seedConversation(3, 50);
 		const conv = getConversation(getDb(), 'u1', convId)!;
-		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId }, { tainted: false });
 		expect(generateTextMock).not.toHaveBeenCalled();
 		expect(latestSummary(getDb(), convId)).toBeUndefined();
 	});
@@ -137,7 +137,7 @@ describe('maybeCompactConversation', () => {
 		const { convId, providerId, modelId } = seedConversation(30, 200);
 		// 30 * 200 chars = 6000 chars = 1500 tokens > 1000 threshold.
 		const conv = getConversation(getDb(), 'u1', convId)!;
-		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId }, { tainted: false });
 		expect(generateTextMock).toHaveBeenCalledOnce();
 		const summary = latestSummary(getDb(), convId)!;
 		expect(summary.summary_text).toBe('Condensed summary of the discussion.');
@@ -152,7 +152,7 @@ describe('maybeCompactConversation', () => {
 		const { convId, providerId, modelId } = seedConversation(30, 200);
 		const db = getDb();
 		const conv = getConversation(db, 'u1', convId)!;
-		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId }, { tainted: false });
 		const first = latestSummary(db, convId)!;
 		generateTextMock.mockResolvedValue({
 			text: 'Extended summary.',
@@ -168,7 +168,7 @@ describe('maybeCompactConversation', () => {
 				parts: textParts('y'.repeat(200))
 			});
 		}
-		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId }, { tainted: false });
 		expect(generateTextMock).toHaveBeenCalledTimes(2);
 		const second = latestSummary(db, convId)!;
 		expect(second.summary_text).toBe('Extended summary.');
@@ -183,7 +183,7 @@ describe('maybeCompactConversation', () => {
 		const { convId, providerId, modelId } = seedConversation(30, 200);
 		generateTextMock.mockRejectedValue(new Error('model exploded'));
 		const conv = getConversation(getDb(), 'u1', convId)!;
-		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId }, { tainted: false });
 		expect(latestSummary(getDb(), convId)).toBeUndefined();
 		const failed = getDb()
 			.prepare("SELECT status FROM proxy_requests WHERE purpose = 'compaction'")
@@ -212,7 +212,7 @@ describe('maybeCompactConversation', () => {
 		toolMessage(convId, 'z'.repeat(8000)); // ~2000 tokens, no text at all
 		seedMessages(convId, 4);
 		const conv = getConversation(getDb(), 'u1', convId)!;
-		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId }, { tainted: false });
 		expect(generateTextMock).toHaveBeenCalledOnce();
 		const prompt = generateTextMock.mock.calls[0][0].prompt as string;
 		expect(prompt).toContain('[tool call webfetch] {"url":"https://example.com"}');
@@ -226,7 +226,7 @@ describe('maybeCompactConversation', () => {
 		seedMessages(convId, 1);
 		const big = toolMessage(convId, 'z'.repeat(8000));
 		const conv = getConversation(getDb(), 'u1', convId)!;
-		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId }, { tainted: false });
 		expect(generateTextMock).toHaveBeenCalledOnce();
 		const rows = getDb()
 			.prepare('SELECT id FROM messages WHERE conversation_id = ? ORDER BY rowid')
@@ -239,7 +239,7 @@ describe('maybeCompactConversation', () => {
 	it('records the compaction request with the compaction purpose', async () => {
 		const { convId, providerId, modelId } = seedConversation(30, 200);
 		const conv = getConversation(getDb(), 'u1', convId)!;
-		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId });
+		await compact.maybeCompactConversation(conv, 'u1', { providerId, modelId }, { tainted: false });
 		const row = getDb()
 			.prepare("SELECT purpose, status FROM proxy_requests WHERE purpose = 'compaction'")
 			.get() as { purpose: string; status: string };

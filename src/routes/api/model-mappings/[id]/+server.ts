@@ -28,7 +28,9 @@ const nameSchema = z
 const patchSchema = z.object({
 	name: nameSchema.optional(),
 	targets: z.array(targetSchema).min(1).max(10).optional(),
-	enabled: z.boolean().optional()
+	enabled: z.boolean().optional(),
+	/** Only route to providers trusted with private data (API callers' payloads too). */
+	trustedOnly: z.boolean().optional()
 });
 
 function validateTargets(db: Db, targets: ModelMappingTarget[]): void {

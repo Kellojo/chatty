@@ -440,3 +440,105 @@ describe('agent run conversations', () => {
 		expect(runFn).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe('private conversations', () => {
+	const makePrivate = (table: 'agents' | 'conversations', id: string) =>
+		db.prepare(`UPDATE ${table} SET private = 1 WHERE id = ?`).run(id);
+
+	it('only reach private agents', async () => {
+		const publicAgent = seedEventAgent('u1', { event: 'chat.message_completed' });
+		const privateAgent = seedEventAgent('u1', { event: 'chat.message_completed' });
+		makePrivate('agents', privateAgent.id);
+		const chat = createConversation(db, 'u1', { private: true });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('chat.message_completed', 'u1', { conversationId: chat.id }, db, runFn);
+		expect(runFn.mock.calls.map((c) => c[0])).toEqual([privateAgent.id]);
+		expect(publicAgent.id).not.toBe(privateAgent.id);
+	});
+
+	it("treat a private agent run's events as private", async () => {
+		const publicAgent = seedEventAgent('u1', { event: 'memory.changed' });
+		const runner = createAgent(db, 'u1', {
+			name: 'private runner',
+			systemPrompt: 'x',
+			triggerType: 'manual'
+		});
+		makePrivate('agents', runner.id);
+		const run = createAgentRun(db, { agentId: runner.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md', agentRunId: run.id }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+		await emitAgentEvent('memory.changed', 'u1', { path: 'b.md' }, db, runFn);
+		expect(runFn).toHaveBeenCalledWith(publicAgent.id, 'u1', expect.any(String));
+	});
+
+	it("keep a private note's path from public agents", async () => {
+		const publicAgent = seedEventAgent('u1', { event: 'memory.changed' });
+		const privateAgent = seedEventAgent('u1', { event: 'memory.changed' });
+		makePrivate('agents', privateAgent.id);
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		const SECRET = 'people/alice-diagnosis.md';
+		handleServerEvent(
+			'u1',
+			{
+				type: 'memory.changed',
+				scope: 'user',
+				path: SECRET,
+				action: 'update',
+				author: 'user:u1',
+				private: true
+			},
+			db,
+			runFn
+		);
+		await vi.waitFor(() => expect(runFn).toHaveBeenCalledTimes(1));
+		expect(runFn).toHaveBeenCalledWith(privateAgent.id, 'u1', expect.stringContaining(SECRET));
+		expect(publicAgent.id).not.toBe(privateAgent.id);
+	});
+
+	it('give built-in memory agents a private note change without its path or run', async () => {
+		const cleanup = createAgent(db, null, {
+			name: 'memory-cleanup',
+			systemPrompt: 'x',
+			triggerType: 'event',
+			triggerConfig: { event: 'memory.changed', every: 2 }
+		});
+		const runner = createAgent(db, 'u1', { name: 'r', systemPrompt: 'x', triggerType: 'manual' });
+		const run = createAgentRun(db, { agentId: runner.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		const payload = {
+			scope: 'user',
+			path: 'people/alice-diagnosis.md',
+			action: 'update',
+			author: 'agent:x',
+			agentRunId: run.id,
+			private: true
+		};
+		await emitAgentEvent('memory.changed', 'u1', payload, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+		// It still counts toward "every Nth change".
+		await emitAgentEvent('memory.changed', 'u1', payload, db, runFn);
+		expect(runFn).toHaveBeenCalledTimes(1);
+		const [agentId, , instructions] = runFn.mock.calls[0];
+		expect(agentId).toBe(cleanup.id);
+		expect(instructions).not.toContain('alice');
+		expect(instructions).not.toContain(run.id);
+		expect(instructions).toContain('{"scope":"user","action":"update","private":true}');
+	});
+
+	it('pins chat event payloads to ids: no titles or content reach the agent', async () => {
+		const SECRET = 'SECRET-TITLE-41b2';
+		seedEventAgent('u1', { event: 'chat.created' });
+		seedEventAgent('u1', { event: 'chat.message_completed' });
+		const chat = createConversation(db, 'u1', { title: SECRET });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		handleServerEvent('u1', { type: 'chat.created', conversationId: chat.id }, db, runFn);
+		handleServerEvent('u1', { type: 'chat.message_completed', conversationId: chat.id }, db, runFn);
+		await vi.waitFor(() => expect(runFn).toHaveBeenCalledTimes(2));
+		for (const [, , instructions] of runFn.mock.calls as [string, string, string][]) {
+			expect(instructions).not.toContain(SECRET);
+			const payload = JSON.parse(instructions.match(/Payload: (\{.*?\})\./)![1]);
+			expect(Object.keys(payload)).toEqual(['conversationId']);
+		}
+	});
+});

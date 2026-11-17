@@ -12,6 +12,7 @@ import { createProxyRequest, finalizeProxyRequest } from '../db/repo/proxy-reque
 import { resolveModel } from '../llm/registry.js';
 import { resolveRefTargets } from '../llm/mapped.js';
 import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
+import { filterTargets, PrivateDataBlockedError, type Privacy } from '../privacy/policy.js';
 
 /** How much of the chat (newest first) goes into the drafting prompt. */
 const TRANSCRIPT_BUDGET = 24_000;
@@ -58,8 +59,17 @@ function draftTarget(db: Db, conversation: ConversationRow) {
 					return role ? { providerId: role.provider_id, modelId: role.model_id } : null;
 				})();
 	if (!ref) throw new Error('No chat model is configured');
-	return resolveRefTargets(ref, db).targets[0];
+	// A private chat's draft is written by a model trusted with private data.
+	const target = filterTargets(db, resolveRefTargets(ref, db).targets, privacyOf(conversation))[0];
+	if (!target) throw new PrivateDataBlockedError();
+	return target;
 }
+
+/** The chat's privacy, as the choke points read it (its flag, as it is now). */
+const privacyOf = (conversation: ConversationRow): Privacy => ({
+	tainted: false,
+	conversationId: conversation.id
+});
 
 /** Drafts a task prompt for `conversation`. The caller checks ownership. */
 export async function draftHandoffPrompt(
@@ -81,7 +91,7 @@ export async function draftHandoffPrompt(
 	});
 	try {
 		const result = await generateText({
-			model: resolveModel(target),
+			model: resolveModel(target, privacyOf(conversation)),
 			system: INSTRUCTIONS,
 			prompt: `<transcript>\n${transcript}\n</transcript>`,
 			maxOutputTokens: 2_000

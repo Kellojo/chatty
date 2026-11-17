@@ -18,6 +18,7 @@
 
 <script lang="ts">
 	import { cn } from '$lib/utils.js';
+	import AnimatedNumber from '../AnimatedNumber.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 
 	/** One stacked bar: how a list's servers split the tool context between them. */
@@ -62,7 +63,12 @@
 <div class="flex flex-col gap-2 px-(--card-spacing) pb-4">
 	<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs">
 		<p class="text-muted-foreground">
-			<span class="font-medium text-foreground tabular-nums">≈ {formatTokens(total)}</span>
+			<AnimatedNumber
+				class="font-medium text-foreground tabular-nums"
+				value={total}
+				format="count"
+				prefix="≈ "
+			/>
 			tokens of tool definitions · {modeNote}
 		</p>
 		{#if mixed}

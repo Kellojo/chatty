@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -80,10 +81,10 @@
 		`animate-pulse rounded bg-foreground/8 motion-reduce:animate-none ${size}`;
 
 	const stats = $derived([
-		{ label: 'Uses', value: total.toLocaleString(), hint: undefined },
+		{ label: 'Uses', value: total, hint: undefined },
 		...SKILL_TRIGGERS.map((t) => ({
 			label: TRIGGER_INFO[t].label,
-			value: (detail?.uses[t] ?? 0).toLocaleString(),
+			value: detail?.uses[t] ?? 0,
 			hint: `${TRIGGER_INFO[t].description} · ${percent(detail?.uses[t] ?? 0, total)} of uses`
 		}))
 	]);
@@ -159,7 +160,7 @@
 					{#each stats as s, i (s.label)}
 						<div class="flex flex-col gap-0.5 px-4 py-3 {cellBorders(i)}" title={s.hint}>
 							<dt class="truncate text-xs text-muted-foreground">{s.label}</dt>
-							<dd class="text-xl font-semibold tabular-nums">{s.value}</dd>
+							<dd class="text-xl font-semibold tabular-nums"><AnimatedNumber value={s.value} /></dd>
 						</div>
 					{/each}
 				</dl>

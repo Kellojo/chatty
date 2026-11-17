@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
@@ -6,7 +7,7 @@
 	import SegmentedToggle from '$lib/components/app/SegmentedToggle.svelte';
 	import { modelColors, USAGE_PERIODS, type UsagePeriod } from '$lib/components/app/usage/usage.js';
 	import { formatTimeAgo } from '$lib/datetime.js';
-	import { formatLatency, formatWholeCountTick } from '$lib/formats.js';
+	import { formatLatency, formatWholeCountTick, shareOf } from '$lib/formats.js';
 	import type { McpServerInfo, McpServerUsage, McpUsageStats } from '$lib/types.js';
 
 	let {
@@ -73,10 +74,10 @@
 		whole === 0 || part === 0 ? '0%' : `${Math.max(1, Math.round((part / whole) * 100))}%`;
 
 	const tiles = $derived([
-		{ label: 'Calls', value: totals.calls.toLocaleString() },
-		{ label: 'Failed', value: percent(totals.errors, totals.calls) },
-		{ label: 'Users', value: stats.users.toLocaleString() },
-		{ label: 'Servers used', value: `${usedEnabled} of ${enabledServers.length}` }
+		{ label: 'Calls', value: totals.calls },
+		{ label: 'Failed', value: shareOf(totals.errors, totals.calls), format: 'percent' as const },
+		{ label: 'Users', value: stats.users },
+		{ label: 'Servers used', value: usedEnabled, suffix: ` of ${enabledServers.length}` }
 	]);
 </script>
 
@@ -98,7 +99,9 @@
 			<Card.Root class="rounded-2xl border-border/40 py-4">
 				<Card.Content class="flex flex-col gap-1 px-4">
 					<dt class="text-sm text-muted-foreground">{tile.label}</dt>
-					<dd class="text-2xl font-semibold tabular-nums">{tile.value}</dd>
+					<dd class="text-2xl font-semibold tabular-nums">
+						<AnimatedNumber value={tile.value} format={tile.format} suffix={tile.suffix} />
+					</dd>
 				</Card.Content>
 			</Card.Root>
 		{/each}

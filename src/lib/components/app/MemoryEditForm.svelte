@@ -7,6 +7,12 @@
 		/** Comma-separated, as stored in the page's editor state. */
 		tags: string;
 		body: string;
+		/** Only models trusted with private data may see it. */
+		private: boolean;
+		/** Why Chatty marked it private on its own (automatic classification). */
+		privateReason?: string;
+		/** Chatty suggests reviewing the flag: it no longer finds personal details. */
+		privateReview?: string;
 	};
 </script>
 
@@ -14,8 +20,11 @@
 	import { untrack } from 'svelte';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import FolderIcon from '@lucide/svelte/icons/folder';
+	import SearchCheckIcon from '@lucide/svelte/icons/search-check';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
+	import { Switch } from '$lib/components/ui/switch/index.js';
 	import MarkdownEditor, { type LinkTarget } from './MarkdownEditor.svelte';
 	import TagInput from './TagInput.svelte';
 	import SuggestInput from './SuggestInput.svelte';
@@ -36,6 +45,8 @@
 		typeSuggestions = [],
 		folders = [],
 		linkTargets = [],
+		showPrivate = false,
+		canChangePrivate = true,
 		onsubmit,
 		oncancel,
 		onfilenameedit
@@ -56,6 +67,10 @@
 		/** Existing folders, offered for the path. */
 		folders?: string[];
 		linkTargets?: LinkTarget[];
+		/** Offer the private switch (private data is turned on for this server). */
+		showPrivate?: boolean;
+		/** False where only admins may change it (shared memories). */
+		canChangePrivate?: boolean;
 		onsubmit: (event: SubmitEvent) => void;
 		oncancel: () => void;
 		/** The file name was typed by hand, so it stops following the title. */
@@ -75,8 +90,14 @@
 	// Phones only: the details card starts open for new memories, folded otherwise.
 	let metaOpen = $state(untrack(() => mode === 'new'));
 	const metaSummary = $derived(
-		[tags.map((t) => `#${t}`).join(' '), draft.type, draft.path].filter(Boolean).join(' · ') ||
-			'Tags, type and location'
+		[
+			showPrivate && draft.private ? 'Private' : '',
+			tags.map((t) => `#${t}`).join(' '),
+			draft.type,
+			draft.path
+		]
+			.filter(Boolean)
+			.join(' · ') || 'Tags, type and location'
 	);
 	const folder = $derived(
 		draft.path.includes('/') ? draft.path.slice(0, draft.path.lastIndexOf('/')) : ''
@@ -223,6 +244,41 @@
 					</p>
 				{/if}
 			</div>
+
+			{#if showPrivate}
+				<Label for="mem-private" class="mt-2 self-start text-muted-foreground sm:mt-0 sm:pt-0.5"
+					>Private</Label
+				>
+				<div class="flex items-start gap-2.5">
+					<Switch
+						id="mem-private"
+						size="sm"
+						class="mt-0.5"
+						bind:checked={draft.private}
+						disabled={!canChangePrivate}
+						aria-describedby="{uid}-private-hint"
+					/>
+					<div id="{uid}-private-hint" class="flex flex-col gap-1 text-xs text-muted-foreground">
+						<p>
+							Only models trusted with private data can see this note.{#if !canChangePrivate}
+								Only admins can change this for shared memories.{/if}
+						</p>
+						{#if draft.private && draft.privateReview}
+							<p class="flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+								<SearchCheckIcon class="size-3 shrink-0" aria-hidden="true" />
+								Chatty no longer finds personal details here. Turn Private off if it doesn't need to be
+								private; saving with it on keeps it private.
+							</p>
+						{:else if draft.private && draft.privateReason}
+							<!-- Classification only adds the flag; a person decides whether it stays. -->
+							<p class="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+								<SparklesIcon class="size-3 shrink-0" aria-hidden="true" />
+								{draft.privateReason}. Turn it off if it isn't.
+							</p>
+						{/if}
+					</div>
+				</div>
+			{/if}
 		</div>
 	</div>
 

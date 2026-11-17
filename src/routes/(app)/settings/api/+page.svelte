@@ -9,6 +9,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
@@ -21,7 +22,7 @@
 	import ApiKeyDialog from '$lib/components/app/settings/ApiKeyDialog.svelte';
 	import ApiGuides, { GUIDES, type Guide } from '$lib/components/app/settings/api/ApiGuides.svelte';
 	import type { ApiScope } from '$lib/components/app/settings/api/scopes.js';
-	import { defaultAccess, describeAccess } from '$lib/mcp-access.js';
+	import { defaultAccess, describeAccess, personalDataServers } from '$lib/mcp-access.js';
 	import { DEFAULT_USAGE_PERIOD, type UsagePeriod } from '$lib/components/app/usage/usage.js';
 	import type { ApiKey } from '$lib/types.js';
 	import type { PageData } from './$types';
@@ -62,6 +63,20 @@
 		const servers = data.gateway.servers;
 		return `MCP: ${describeAccess(key.mcpAccess ?? defaultAccess(servers), servers)}${key.mcpAccess ? '' : ' (defaults)'}`;
 	}
+
+	/** Gateway keys that let another app read past chats or memory, with what they grant. */
+	const personalDataKeys = $derived(
+		data.apiKeys
+			.filter((key) => key.scopes.includes('mcp:use'))
+			.map((key) => ({
+				key,
+				servers: personalDataServers(
+					key.mcpAccess ?? defaultAccess(data.gateway.servers),
+					data.gateway.servers
+				)
+			}))
+			.filter((entry) => entry.servers.length > 0)
+	);
 
 	/** The usage line under a key: its recent requests and spend, or that it sat idle. */
 	function usageLabel(key: ApiKey): string {
@@ -186,6 +201,23 @@
 					</div>
 				</div>
 			{:else}
+				{#if personalDataKeys.length > 0}
+					<div
+						role="note"
+						class="mx-4 mb-3 flex items-start gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
+					>
+						<ShieldAlertIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+						<p>
+							{personalDataKeys.length === 1
+								? 'One key lets'
+								: `${personalDataKeys.length} keys let`}
+							another app read your past chats or memory ({personalDataKeys
+								.map((e) => `${e.key.label}: ${e.servers.join(', ')}`)
+								.join('; ')}). New keys leave these out unless you pick them. Private chats and
+							notes are never shared through a key.
+						</p>
+					</div>
+				{/if}
 				<ul class="divide-y divide-border/60 border-t border-border/60" aria-label="API keys">
 					{#each data.apiKeys as key (key.id)}
 						<SettingsListItem title={key.label} onclick={() => openKeyDialog('llm:invoke', key)}>

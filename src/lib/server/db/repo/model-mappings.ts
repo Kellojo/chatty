@@ -7,6 +7,8 @@ export interface ModelMappingRow {
 	name: string;
 	targets: string;
 	enabled: number;
+	/** 1: may only route to providers trusted with private data. */
+	trusted_only: number;
 	created_at: number;
 }
 
@@ -16,6 +18,7 @@ export function toPublic(row: ModelMappingRow): ModelMapping {
 		name: row.name,
 		targets: JSON.parse(row.targets) as ModelMappingTarget[],
 		enabled: row.enabled === 1,
+		trustedOnly: row.trusted_only === 1,
 		createdAt: row.created_at
 	};
 }
@@ -28,13 +31,21 @@ export interface CreateModelMappingInput {
 	name: string;
 	targets: ModelMappingTarget[];
 	enabled?: boolean;
+	trustedOnly?: boolean;
 }
 
 export function createModelMapping(db: Db, input: CreateModelMappingInput): ModelMappingRow {
 	const id = randomUUID();
 	db.prepare(
-		'INSERT INTO model_mappings (id, name, targets, enabled, created_at) VALUES (?, ?, ?, ?, ?)'
-	).run(id, input.name, JSON.stringify(input.targets), input.enabled === false ? 0 : 1, Date.now());
+		'INSERT INTO model_mappings (id, name, targets, enabled, trusted_only, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+	).run(
+		id,
+		input.name,
+		JSON.stringify(input.targets),
+		input.enabled === false ? 0 : 1,
+		input.trustedOnly === true ? 1 : 0,
+		Date.now()
+	);
 	return getModelMapping(db, id)!;
 }
 
@@ -42,6 +53,7 @@ export interface UpdateModelMappingInput {
 	name?: string;
 	targets?: ModelMappingTarget[];
 	enabled?: boolean;
+	trustedOnly?: boolean;
 }
 
 export function updateModelMapping(
@@ -51,10 +63,13 @@ export function updateModelMapping(
 ): ModelMappingRow | undefined {
 	const existing = getModelMapping(db, id);
 	if (!existing) return undefined;
-	db.prepare('UPDATE model_mappings SET name = ?, targets = ?, enabled = ? WHERE id = ?').run(
+	db.prepare(
+		'UPDATE model_mappings SET name = ?, targets = ?, enabled = ?, trusted_only = ? WHERE id = ?'
+	).run(
 		patch.name ?? existing.name,
 		patch.targets !== undefined ? JSON.stringify(patch.targets) : existing.targets,
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
+		patch.trustedOnly !== undefined ? (patch.trustedOnly ? 1 : 0) : existing.trusted_only,
 		id
 	);
 	return getModelMapping(db, id);

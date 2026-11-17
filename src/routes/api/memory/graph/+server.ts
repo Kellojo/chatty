@@ -7,5 +7,10 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = async ({ locals }) => {
 	const user = requireUser(locals);
 	const isAdmin = (user as { role?: string }).role === 'admin';
-	return json(await buildMemoryGraph(isAdmin ? ['user', 'shared'] : ['user'], user.id));
+	// The owner's own browser may see private concepts; nodes carry the flag for the lock badge.
+	return json(
+		await buildMemoryGraph(isAdmin ? ['user', 'shared'] : ['user'], user.id, {
+			includePrivate: true
+		})
+	);
 };

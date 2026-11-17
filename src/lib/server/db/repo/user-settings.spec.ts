@@ -44,7 +44,9 @@ describe('user-settings repo', () => {
 				failures: true,
 				agentRuns: false
 			},
-			speechVolume: 1
+			speechVolume: 1,
+			strictMemoryPrivacy: false,
+			privateByDefault: false
 		});
 		expect(repo.getTheme(db, 'u1')).toBe('system');
 		expect(repo.getTimeFormat(db, 'u1')).toBe('auto');
@@ -63,6 +65,8 @@ describe('user-settings repo', () => {
 		repo.setUserSetting(db, 'u1', 'notificationTriggers', { replies: false, agentRuns: true });
 		repo.setUserSetting(db, 'u1', 'pushTriggers', { needsYou: false });
 		repo.setUserSetting(db, 'u1', 'speechVolume', 0.4);
+		repo.setUserSetting(db, 'u1', 'strictMemoryPrivacy', true);
+		repo.setUserSetting(db, 'u1', 'privateByDefault', true);
 		seedUser(db, 'u2');
 		repo.setUserSetting(db, 'u2', 'theme', 'light');
 
@@ -77,8 +81,12 @@ describe('user-settings repo', () => {
 			favoriteModels: repo.getFavoriteModels(db, 'u1'),
 			notificationTriggers: repo.getNotificationTriggers(db, 'u1'),
 			pushTriggers: repo.getPushTriggers(db, 'u1'),
-			speechVolume: 0.4
+			speechVolume: 0.4,
+			strictMemoryPrivacy: repo.getStrictMemoryPrivacy(db, 'u1'),
+			privateByDefault: repo.getPrivateByDefault(db, 'u1')
 		});
+		expect(settings.strictMemoryPrivacy).toBe(true);
+		expect(settings.privateByDefault).toBe(true);
 		expect(settings).toMatchObject({
 			theme: 'dark',
 			suggestions: ['a'],

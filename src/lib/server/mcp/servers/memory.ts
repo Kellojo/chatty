@@ -3,17 +3,29 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import { recordMemoryViews, type MemoryViewInput } from '../../db/repo/memory-views.js';
+import { getStrictMemoryPrivacy } from '../../db/repo/user-settings.js';
 import { createLogger } from '../../logger.js';
 import {
 	deleteConcept,
 	listConceptPaths,
 	readConcept,
 	writeConcept,
+	type Concept,
+	type ConceptWriteGuard,
 	type MemoryAuditInfo
 } from '../../memory/bundle.js';
-import { memorySummaries, searchMemoryFts } from '../../memory/fts.js';
+import {
+	hasPrivateMemory,
+	memorySummaries,
+	searchMemoryFts,
+	type MemoryReadOptions
+} from '../../memory/fts.js';
 import { ftsScope, normalizeConceptPath, type MemoryScope } from '../../memory/paths.js';
+import { classifySensitive, reviewUpdate, type PrivacyUpdate } from '../../privacy/classify.js';
+import { recordPrivacyCheck } from '../../privacy/sweep.js';
+import { callerPrivacy, isPrivateContext } from '../../privacy/policy.js';
 import type { CallerContext } from '../types.js';
+import { hiddenNote, reportPrivate, seesPrivate, showsHiddenNote } from './private-items.js';
 import { err, text } from './shared.js';
 
 const log = createLogger('memory');
@@ -23,6 +35,61 @@ const scopeSchema = z
 	.describe("user (default): this user's memory; shared: the bundle all users see");
 
 const SNIPPET_MAX = 160;
+
+/**
+ * Which concepts a caller's memory tools can see. Private concepts only reach
+ * trusted turns; for everyone else they don't exist, for reads and writes alike.
+ * - all: a trusted turn;
+ * - public: an untrusted one (the gateway too); a chat turn is told that
+ *   private notes are never shown (see showsHiddenNote);
+ * - private: memory agents' private pass, which only sees private concepts;
+ * - none: an untrusted turn under strict memory privacy, which sees nothing.
+ */
+export type MemoryView = 'all' | 'public' | 'private' | 'none';
+
+/** The caller's view (trust as decided by seesPrivate, plus strict mode and the pass). */
+export function memoryView(ctx: CallerContext): MemoryView {
+	const trusted = seesPrivate(ctx);
+	// Set by memory agents' private pass (agents/builtin.ts, memoryPassLimits).
+	const privateOnly = ctx.privateOnly === true;
+	if (trusted) return privateOnly ? 'private' : 'all';
+	if (privateOnly || getStrictMemoryPrivacy(getDb(), ctx.userId)) return 'none';
+	return 'public';
+}
+
+const isPrivate = (c: Concept) => c.frontmatter.private === true;
+
+function canSee(view: MemoryView, concept: Concept): boolean {
+	if (view === 'all') return true;
+	if (view === 'public') return !isPrivate(concept);
+	if (view === 'private') return isPrivate(concept);
+	return false;
+}
+
+function readOptions(view: MemoryView): MemoryReadOptions {
+	return { includePrivate: view === 'all' || view === 'private', privateOnly: view === 'private' };
+}
+
+/**
+ * Results, plus the private-results note for an untrusted chat turn whose user
+ * has private notes in `scopes`. The note never depends on the query or prefix.
+ */
+function withHidden(ctx: CallerContext, json: string, scopes: string[]): CallToolResult {
+	if (!showsHiddenNote(ctx, () => hasPrivateMemory(getDb(), scopes))) return text(json);
+	return {
+		content: [
+			{ type: 'text', text: json },
+			{ type: 'text', text: hiddenNote() }
+		]
+	};
+}
+
+// A concept the caller may not see answers like a missing one for reads,
+// updates and deletes; a create answers like for any occupied path. Either
+// way, probes learn nothing about private concepts.
+const NOT_FOUND = 'concept not found';
+const ALREADY_EXISTS = 'concept already exists';
+const INVALID_PATH = 'invalid concept path';
 
 /** A one-line plain-text preview of a concept for the ```memory widget. */
 export function memorySnippet(description: string | undefined, body: string): string {
@@ -49,12 +116,16 @@ function written(
 	path: string,
 	scope: MemoryScope,
 	title: string | undefined,
-	snippet: string
+	snippet: string,
+	isPrivate = false,
+	/** Set when the note was marked private automatically: why. */
+	privateReason?: string
 ): CallToolResult {
 	const item = { action, path, scope, title: title || undefined, snippet: snippet || undefined };
+	const flag = privateReason ? ` (${privateReason.toLowerCase()})` : isPrivate ? ' (private)' : '';
 	return {
 		content: [
-			{ type: 'text', text: `${action} ${path}` },
+			{ type: 'text', text: `${action} ${path}${flag}` },
 			{ type: 'text', text: JSON.stringify(item) }
 		]
 	};
@@ -99,6 +170,42 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	const guardSharedWrite = (scope: MemoryScope): string | null =>
 		scope === 'shared' && ctx.role !== 'admin' ? 'shared bundle requires admin role' : null;
 
+	/**
+	 * Called before a result carrying private data goes back: the turn becomes
+	 * tainted (its chat private) first. Only trusted views ever get here.
+	 */
+	const taint = (reason: string) => reportPrivate(ctx, reason);
+
+	/** Whether this context holds private data: everything it writes is private. */
+	const writesPrivate = (view: MemoryView) =>
+		view === 'private' || isPrivateContext(getDb(), callerPrivacy(ctx));
+
+	/**
+	 * The privacy of a note about to be written: private when the context is
+	 * (forced), otherwise whatever the automatic check finds (see reviewUpdate):
+	 * it marks notes with personal details private and flags automatically
+	 * marked ones that no longer have any, but never makes a note public.
+	 */
+	const privacyFor = async (
+		view: MemoryView,
+		current: Concept | null,
+		fields: { title: string; description?: string; tags?: string[]; body: string }
+	): Promise<{ update: PrivacyUpdate; checked: boolean }> => {
+		if (writesPrivate(view)) return { update: { private: true }, checked: false };
+		const fm = current?.frontmatter ?? null;
+		// Made private by a person or a private chat: not second-guessed.
+		if (fm?.private && !fm.privateReason) return { update: {}, checked: false };
+		const text = [
+			fields.title,
+			fields.description ?? '',
+			(fields.tags ?? []).join(', '),
+			fields.body
+		].join('\n');
+		const labels = await classifySensitive(getDb(), text);
+		if (labels === null) return { update: {}, checked: false };
+		return { update: reviewUpdate(fm, labels) ?? {}, checked: true };
+	};
+
 	server.registerTool(
 		'search_memory',
 		{
@@ -108,12 +215,18 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		},
 		async ({ query, limit }) => {
 			if (!query.trim()) return err('query must not be empty');
-			const hits = searchMemoryFts(getDb(), [`user:${ctx.userId}`, 'shared'], query, limit);
+			const view = memoryView(ctx);
+			if (view === 'none') return text('[]');
+			const db = getDb();
+			const scopes = [`user:${ctx.userId}`, 'shared'];
+			const hits = searchMemoryFts(db, scopes, query, limit ?? 10, readOptions(view));
 			trackViews(
 				'search',
 				hits.map((h) => ({ scope: h.scope === 'shared' ? 'shared' : 'user', path: h.path }))
 			);
-			return text(JSON.stringify(hits));
+			if (hits.some((h) => h.private)) taint('a private note');
+			const out = hits.map(({ private: p, ...h }) => (p ? { ...h, private: true } : h));
+			return withHidden(ctx, JSON.stringify(out), scopes);
 		}
 	);
 
@@ -125,10 +238,11 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		},
 		async ({ path, scope }) => {
 			const normalized = guardPath(path);
-			if (!normalized) return err('invalid concept path');
+			if (!normalized) return err(INVALID_PATH);
 			const concept = await readConcept(scope ?? 'user', ctx.userId, normalized);
-			if (!concept) return err('concept not found');
+			if (!concept || !canSee(memoryView(ctx), concept)) return err(NOT_FOUND);
 			trackViews('read', [{ scope: concept.scope, path: concept.path }]);
+			if (isPrivate(concept)) taint('a private note');
 			return text(
 				JSON.stringify({
 					path: concept.path,
@@ -154,20 +268,30 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 					return err('invalid prefix');
 				}
 			}
+			const view = memoryView(ctx);
+			if (view === 'none') return text('[]');
 			const bundleScope = scope ?? 'user';
 			const paths = await listConceptPaths(bundleScope, ctx.userId, prefix);
-			const summaries = memorySummaries(getDb(), ftsScope(bundleScope, ctx.userId));
-			return text(
+			const fts = ftsScope(bundleScope, ctx.userId);
+			const summaries = memorySummaries(getDb(), fts, readOptions(view));
+			// A filtered view lists only concepts the index knows to be visible, so
+			// one it hasn't indexed yet is left out rather than shown unchecked.
+			const listed = view === 'all' ? paths : paths.filter((p) => summaries.has(p));
+			if (listed.some((p) => summaries.get(p)?.private)) taint('a private note');
+			return withHidden(
+				ctx,
 				JSON.stringify(
-					paths.map((p) => {
+					listed.map((p) => {
 						const s = summaries.get(p);
 						return {
 							path: p,
 							...(s?.title ? { title: s.title } : {}),
-							...(s?.description ? { description: s.description } : {})
+							...(s?.description ? { description: s.description } : {}),
+							...(s?.private ? { private: true } : {})
 						};
 					})
-				)
+				),
+				[fts]
 			);
 		}
 	);
@@ -188,24 +312,49 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		},
 		async ({ path, title, type, description, tags, body, scope }) => {
 			const normalized = guardPath(path);
-			if (!normalized) return err('invalid concept path');
+			if (!normalized) return err(INVALID_PATH);
 			const s = scope ?? 'user';
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
-			if (await readConcept(s, ctx.userId, normalized)) return err('concept already exists');
+			const view = memoryView(ctx);
+			// Any occupied path answers the same, whether or not the caller may see
+			// the concept there, and is never overwritten.
+			const guard: ConceptWriteGuard = (current) => (current ? ALREADY_EXISTS : null);
+			const refused = guard(await readConcept(s, ctx.userId, normalized));
+			if (refused) return err(refused);
+			const { update: privacy, checked } = await privacyFor(view, null, {
+				title,
+				description,
+				tags,
+				body
+			});
 			try {
-				await writeConcept(
+				const saved = await writeConcept(
 					getDb(),
 					s,
 					ctx.userId,
 					normalized,
-					{ frontmatter: { title, type, description, tags }, body },
-					audit()
+					{
+						frontmatter: { title, type, description, tags, ...privacy },
+						body
+					},
+					audit(),
+					guard
 				);
+				// Checked just now: the cleanup sweep needn't check it again.
+				if (checked) recordPrivacyCheck(getDb(), saved, ctx.userId);
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
-			return written('created', normalized, s, title, memorySnippet(description, body));
+			return written(
+				'created',
+				normalized,
+				s,
+				title,
+				memorySnippet(description, body),
+				privacy.private === true,
+				privacy.privateReason
+			);
 		}
 	);
 
@@ -225,32 +374,58 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		},
 		async ({ path, title, type, description, tags, body, scope }) => {
 			const normalized = guardPath(path);
-			if (!normalized) return err('invalid concept path');
+			if (!normalized) return err(INVALID_PATH);
 			const s = scope ?? 'user';
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
+			const view = memoryView(ctx);
+			const guard: ConceptWriteGuard = (current) =>
+				current && canSee(view, current) ? null : NOT_FOUND;
 			const existing = await readConcept(s, ctx.userId, normalized);
-			if (!existing) return err('concept not found');
-			const next = {
-				frontmatter: {
-					title: title ?? existing.frontmatter.title,
-					type: type ?? existing.frontmatter.type,
-					description: description ?? existing.frontmatter.description,
-					tags: tags ?? existing.frontmatter.tags
-				},
-				body: body ?? existing.body
+			if (!existing || guard(existing)) return err(NOT_FOUND);
+			// Never clears the flag: a turn can't make a private concept public.
+			const fields = {
+				title: title ?? existing.frontmatter.title,
+				type: type ?? existing.frontmatter.type,
+				description: description ?? existing.frontmatter.description,
+				tags: tags ?? existing.frontmatter.tags
 			};
+			const nextBody = body ?? existing.body;
+			const { update: privacy, checked } = await privacyFor(view, existing, {
+				...fields,
+				body: nextBody
+			});
+			const next = { frontmatter: { ...fields, ...privacy }, body: nextBody };
+			// The privacy above was worked out for the note as read: if a person
+			// changed its privacy meanwhile, their decision stands.
+			const writeGuard: ConceptWriteGuard = (current) => {
+				const hidden = guard(current);
+				if (hidden || !current) return hidden ?? NOT_FOUND;
+				const [was, now] = [existing.frontmatter, current.frontmatter];
+				return Boolean(was.private) !== Boolean(now.private) ||
+					was.privateReason !== now.privateReason
+					? "the concept's privacy changed meanwhile; read it again"
+					: null;
+			};
+			let saved: Concept;
 			try {
-				await writeConcept(getDb(), s, ctx.userId, normalized, next, audit());
+				saved = await writeConcept(getDb(), s, ctx.userId, normalized, next, audit(), writeGuard);
+				if (checked) recordPrivacyCheck(getDb(), saved, ctx.userId);
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
+			if (isPrivate(existing)) taint('a private note');
 			return written(
 				'updated',
 				normalized,
 				s,
 				next.frontmatter.title,
-				memorySnippet(next.frontmatter.description, next.body)
+				memorySnippet(next.frontmatter.description, next.body),
+				isPrivate(saved),
+				privacy.privateReason ??
+					(privacy.privateReview
+						? 'Private, flagged for review: no personal details found'
+						: undefined)
 			);
 		}
 	);
@@ -263,23 +438,28 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 		},
 		async ({ path, scope }) => {
 			const normalized = guardPath(path);
-			if (!normalized) return err('invalid concept path');
+			if (!normalized) return err(INVALID_PATH);
 			const s = scope ?? 'user';
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
+			const view = memoryView(ctx);
+			const guard: ConceptWriteGuard = (current) =>
+				current && canSee(view, current) ? null : NOT_FOUND;
 			const existing = await readConcept(s, ctx.userId, normalized);
-			if (!existing) return err('concept not found');
+			if (!existing || guard(existing)) return err(NOT_FOUND);
 			try {
-				await deleteConcept(getDb(), s, ctx.userId, normalized, audit());
+				await deleteConcept(getDb(), s, ctx.userId, normalized, audit(), guard);
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
+			if (isPrivate(existing)) taint('a private note');
 			return written(
 				'deleted',
 				normalized,
 				s,
 				existing.frontmatter.title,
-				memorySnippet(existing.frontmatter.description, existing.body)
+				memorySnippet(existing.frontmatter.description, existing.body),
+				isPrivate(existing)
 			);
 		}
 	);

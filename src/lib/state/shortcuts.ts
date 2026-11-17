@@ -1,19 +1,21 @@
 // App-wide keyboard shortcuts: the key matching (pure), the list the settings
 // page and the shortcuts dialog render, and slots for the views that own an
 // action (the open chat stops and copies replies, the model picker opens).
+//
+// Kept deliberately short: everything else is one Mod+K away in the command
+// palette. Each shortcut here either can't wait for the palette (Esc, Mod+S) or
+// is pressed so often that a dedicated key pays off.
 
 export type ShortcutAction =
 	| 'escape'
+	| 'command-palette'
 	| 'new-chat'
 	| 'focus-composer'
-	| 'copy-last-reply'
 	| 'toggle-sidebar'
 	| 'previous-chat'
 	| 'next-chat'
-	| 'open-settings'
 	| 'show-shortcuts'
-	| 'model-picker'
-	| 'search';
+	| 'model-picker';
 
 export const isMac =
 	typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.userAgent ?? '');
@@ -24,7 +26,7 @@ type KeyInput = Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' |
 
 /**
  * The shortcut a key press triggers, if any. `typing` is whether focus is in a
- * text field, where plain keys (`/`, `?`) belong to the field — and on a Mac so
+ * text field, where plain keys (`/`) belong to the field — and on a Mac so
  * does ⌥↑/⌥↓, which moves the caret by paragraph.
  */
 export function matchShortcut(
@@ -44,22 +46,16 @@ export function matchShortcut(
 	}
 	// Layouts that need Shift for "/" report "/" with Shift held; US reports "?".
 	if (mod && (key === '/' || key === '?')) return 'show-shortcuts';
-	if (mod && event.shiftKey) {
-		if (key === 'o') return 'new-chat';
-		if (key === 'c') return 'copy-last-reply';
-		return null;
-	}
+	if (mod && event.shiftKey) return key === 'o' ? 'new-chat' : null;
 	if (mod) {
+		if (key === 'k') return 'command-palette';
 		if (key === 'b') return 'toggle-sidebar';
-		if (key === 'k') return 'search';
-		if (key === ',') return 'open-settings';
 		if (key === '.') return 'model-picker';
 		return null;
 	}
-	if (event.key === 'Escape') return event.shiftKey ? 'focus-composer' : 'escape';
-	if (typing) return null;
+	if (event.key === 'Escape' && !event.shiftKey) return 'escape';
+	if (typing || event.shiftKey) return null;
 	if (event.key === '/') return 'focus-composer';
-	if (event.key === '?') return 'show-shortcuts';
 	return null;
 }
 
@@ -94,16 +90,14 @@ type Combo = string;
 /** Key combinations by action, for tooltips and the documented list. */
 export const COMBOS = {
 	escape: 'Esc',
+	'command-palette': 'Mod+K',
 	'new-chat': 'Mod+Shift+O',
 	'focus-composer': '/',
-	'copy-last-reply': 'Mod+Shift+C',
 	'toggle-sidebar': 'Mod+B',
 	'previous-chat': 'Alt+↑',
 	'next-chat': 'Alt+↓',
-	'open-settings': 'Mod+,',
 	'show-shortcuts': 'Mod+/',
 	'model-picker': 'Mod+.',
-	search: 'Mod+K',
 	save: 'Mod+S'
 } as const satisfies Record<ShortcutAction | 'save', Combo>;
 
@@ -141,7 +135,11 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 		title: 'General',
 		description: 'Work from anywhere in the app.',
 		entries: [
-			{ label: 'Search conversations', combos: [COMBOS.search] },
+			{
+				label: 'Command palette',
+				description: 'Search chats, agents and skills, go anywhere, run any action.',
+				combos: [COMBOS['command-palette']]
+			},
 			{ label: 'New chat', combos: [COMBOS['new-chat']] },
 			{ label: 'Toggle sidebar', combos: [COMBOS['toggle-sidebar']] },
 			{
@@ -150,13 +148,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 				combos: [COMBOS['previous-chat'], COMBOS['next-chat']],
 				separator: '/'
 			},
-			{ label: 'Open settings', combos: [COMBOS['open-settings']] },
-			{
-				label: 'Show keyboard shortcuts',
-				description: "? works when you're not typing.",
-				combos: [COMBOS['show-shortcuts'], '?'],
-				separator: 'or'
-			}
+			{ label: 'Show keyboard shortcuts', combos: [COMBOS['show-shortcuts']] }
 		]
 	},
 	{
@@ -167,7 +159,6 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 				label: 'Stop the reply, cancel editing or end voice mode',
 				combos: [COMBOS.escape]
 			},
-			{ label: 'Copy the last reply', combos: [COMBOS['copy-last-reply']] },
 			{ label: 'Choose a model', combos: [COMBOS['model-picker']] }
 		]
 	},
@@ -177,8 +168,8 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 		entries: [
 			{
 				label: 'Focus the composer',
-				combos: [COMBOS['focus-composer'], 'Shift+Esc'],
-				separator: 'or'
+				description: "When you're not typing elsewhere.",
+				combos: [COMBOS['focus-composer']]
 			},
 			{ label: 'Send', combos: ['Enter'] },
 			{ label: 'New line', combos: ['Shift+Enter'] },
@@ -190,14 +181,14 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 		]
 	},
 	{
-		title: 'Search and editors',
-		description: 'Sidebar search, agents, skills and memory.',
+		title: 'Lists and editors',
+		description: 'Command palette, sidebar search, agents, skills and memory.',
 		entries: [
 			{ label: 'Move through results', combos: ['↑', '↓'], separator: '/' },
 			{ label: 'Open the selected result', combos: ['Enter'] },
 			{
-				label: 'Clear the search',
-				description: 'Press again to go back to the chat.',
+				label: 'Close the palette or clear the search',
+				description: 'In an empty sidebar search, goes back to the chat.',
 				combos: ['Esc']
 			},
 			{

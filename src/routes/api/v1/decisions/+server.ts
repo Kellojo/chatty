@@ -1,3 +1,4 @@
+import { NON_PRIVATE, PrivateDataBlockedError } from '$lib/server/privacy/policy.js';
 import { resolveApiKeyIdentity } from '$lib/server/auth/apiKey.js';
 import { getDb } from '$lib/server/db/index.js';
 import { createProxyRequest, finalizeProxyRequest } from '$lib/server/db/repo/proxy-requests.js';
@@ -53,7 +54,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	const startedAt = Date.now();
 
 	try {
-		const response = await forwardDecisions(input);
+		// The API caller owns the payload; only a trusted-only mapping makes it private.
+		const response = await forwardDecisions(input, NON_PRIVATE);
 
 		finalizeProxyRequest(db, log.id, {
 			status: 'complete',
@@ -66,7 +68,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	} catch (e) {
 		const message = e instanceof Error ? e.message : 'Decisions request failed';
 		const isModelError = e instanceof ModelUnavailableError;
-		const status = e instanceof DecisionsError ? e.status : isModelError ? 404 : 502;
+		const status =
+			e instanceof DecisionsError
+				? e.status
+				: isModelError
+					? 404
+					: e instanceof PrivateDataBlockedError
+						? 403
+						: 502;
 		const type = isModelError ? 'not_found_error' : 'server_error';
 		finalizeProxyRequest(db, log.id, {
 			status: 'failed',

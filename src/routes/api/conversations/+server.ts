@@ -1,8 +1,11 @@
+import { isPrivateDataEnabled } from '$lib/server/privacy/feature.js';
+import { hasTrustedProvider } from '$lib/server/privacy/policy.js';
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { requireUser } from '$lib/server/auth/guards.js';
 import { getDb } from '$lib/server/db/index.js';
 import { getAgent } from '$lib/server/db/repo/agents.js';
+import { getPrivateByDefault } from '$lib/server/db/repo/user-settings.js';
 import {
 	CONVERSATIONS_PAGE_SIZE,
 	createConversation,
@@ -30,7 +33,13 @@ export const GET: RequestHandler = ({ locals, url }) => {
 const createSchema = z.object({
 	providerId: z.string().nullish(),
 	modelId: z.string().nullish(),
-	agentId: z.string().nullable().optional()
+	agentId: z.string().nullable().optional(),
+	/**
+	 * Start private: only providers trusted with private data may see it. Left
+	 * out, the user's `privateByDefault` setting decides; an explicit `false`
+	 * (the new-chat lock turned off) wins over it.
+	 */
+	private: z.boolean().optional()
 });
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -46,7 +55,16 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			error(404, { message: 'Agent not found' });
 		}
 	}
-	const conversation = createConversation(db, user.id, parsed.data);
+	// A private agent's chats are private; otherwise the user's choice, which
+	// defaults to their setting while a provider may process private data.
+	const asked =
+		parsed.data.private ??
+		(isPrivateDataEnabled(db) && getPrivateByDefault(db, user.id) && hasTrustedProvider(db));
+	const isPrivate = agent?.private === 1 || (isPrivateDataEnabled(db) && asked);
+	if (isPrivate && !hasTrustedProvider(db)) {
+		error(409, { message: 'No provider may process private data yet' });
+	}
+	const conversation = createConversation(db, user.id, { ...parsed.data, private: isPrivate });
 	if (conversation.kind === 'chat') {
 		publishServerEvent(user.id, { type: 'chat.created', conversationId: conversation.id });
 	}

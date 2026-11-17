@@ -9,10 +9,11 @@
 	import AgentHeader from '$lib/components/app/AgentHeader.svelte';
 	import AgentRunStatus from '$lib/components/app/AgentRunStatus.svelte';
 	import AgentRunSummary from '$lib/components/app/AgentRunSummary.svelte';
+	import AnimatedElapsed from '$lib/components/app/AnimatedElapsed.svelte';
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import EmptyState from '$lib/components/app/EmptyState.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import {
-		formatDurationMs,
 		formatRunDuration,
 		formatRunError,
 		isStoppedRun,
@@ -186,7 +187,7 @@
 					onclick={() => (filter = f.key)}
 				>
 					{f.label}
-					<span class="tabular-nums opacity-70">{counts[f.key]}</span>
+					<AnimatedNumber class="tabular-nums opacity-70" value={counts[f.key]} />
 				</Button>
 			{/if}
 		{/each}
@@ -293,7 +294,7 @@
 											{/if}
 											{#if run.status === 'running'}
 												<p class="text-xs text-info-foreground tabular-nums">
-													Running · {formatDurationMs(now - run.startedAt)}
+													Running · <AnimatedElapsed ms={now - run.startedAt} />
 												</p>
 											{/if}
 											{#if run.status === 'awaiting_input'}

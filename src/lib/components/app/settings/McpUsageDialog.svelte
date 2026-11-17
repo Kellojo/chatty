@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -6,7 +7,7 @@
 	import { formatTimeAgo } from '$lib/datetime.js';
 	import { formatDayLong } from '$lib/components/app/usage/usage.js';
 	import { fadeWhenScrollable } from '$lib/fade-when-scrollable.js';
-	import { formatLatency, formatWholeCountTick } from '$lib/formats.js';
+	import { formatLatency, formatWholeCountTick, shareOf } from '$lib/formats.js';
 	import type { McpServerUsageDetail } from '$lib/types.js';
 
 	let {
@@ -94,14 +95,15 @@
 	const nameParts = (name: string) => name.split(/(?<=_)/);
 
 	const stats = $derived([
-		{ label: 'Calls', value: totals.calls.toLocaleString(), tone: '' },
+		{ label: 'Calls', value: totals.calls as number | string, tone: '' },
 		{
 			label: 'Failed',
-			value: totals.errors ? percent(totals.errors, totals.calls) : 'None',
+			value: totals.errors ? shareOf(totals.errors, totals.calls) : 'None',
+			format: 'percent' as const,
 			tone: totals.errors ? 'text-destructive' : ''
 		},
 		{ label: 'Avg time', value: formatLatency(totals.avgMs), tone: '' },
-		{ label: 'Users', value: (detail?.users ?? 0).toLocaleString(), tone: '' }
+		{ label: 'Users', value: detail?.users ?? 0, tone: '' }
 	]);
 </script>
 
@@ -192,7 +194,9 @@
 					{#each stats as s, i (s.label)}
 						<div class="flex flex-col gap-0.5 px-4 py-3 {cellBorders(i)}">
 							<dt class="text-xs text-muted-foreground">{s.label}</dt>
-							<dd class="text-xl font-semibold tabular-nums {s.tone}">{s.value}</dd>
+							<dd class="text-xl font-semibold tabular-nums {s.tone}">
+								<AnimatedNumber value={s.value} format={s.format} />
+							</dd>
 						</div>
 					{/each}
 				</dl>

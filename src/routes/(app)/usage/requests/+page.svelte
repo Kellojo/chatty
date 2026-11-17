@@ -33,6 +33,7 @@
 	import { PROXY_REQUESTS_KEY } from '$lib/load-keys.js';
 	import type { ProxyRequestStatus } from '$lib/types.js';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import { resolveBrand } from '$lib/provider-brand.js';
 	import type { PageData } from './$types';
 
@@ -131,7 +132,7 @@
 	);
 
 	const successRate = $derived(
-		data.stats.total > 0 ? `${Math.round((data.stats.completed / data.stats.total) * 100)}%` : '—'
+		data.stats.total > 0 ? Math.round((data.stats.completed / data.stats.total) * 100) / 100 : null
 	);
 
 	const activeFilters = $derived.by(() => {
@@ -558,7 +559,7 @@
 					Requests
 					<ZapIcon class="size-4 shrink-0" aria-hidden="true" />
 				</span>
-				<span class="text-2xl font-semibold tabular-nums">{data.stats.total.toLocaleString()}</span>
+				<AnimatedNumber class="text-2xl font-semibold tabular-nums" value={data.stats.total} />
 			</Card.Content>
 		</Card.Root>
 		<Card.Root class="rounded-2xl border-border/40">
@@ -567,13 +568,17 @@
 					Success rate
 					<CheckCircle2Icon class="size-4 shrink-0" aria-hidden="true" />
 				</span>
-				<span class="text-2xl font-semibold tabular-nums">{successRate}</span>
+				<AnimatedNumber
+					class="text-2xl font-semibold tabular-nums"
+					value={successRate}
+					format="percent"
+				/>
 				{#if data.stats.failed > 0}
 					<a
 						href={filterUrl({ status: 'failed' })}
 						class="text-xs text-destructive tabular-nums underline-offset-4 hover:underline"
 					>
-						{data.stats.failed.toLocaleString()} failed
+						<AnimatedNumber value={data.stats.failed} /> failed
 					</a>
 				{/if}
 			</Card.Content>
@@ -584,15 +589,17 @@
 					Tokens
 					<TrendingUpIcon class="size-4 shrink-0" aria-hidden="true" />
 				</span>
-				<span class="text-2xl font-semibold tabular-nums">
-					{formatCount(data.stats.inputTokens + data.stats.outputTokens)}
-				</span>
+				<AnimatedNumber
+					class="text-2xl font-semibold tabular-nums"
+					value={data.stats.inputTokens + data.stats.outputTokens}
+					format="count"
+				/>
 				{#if data.stats.cacheReadTokens > 0}
 					<span
 						class="text-xs text-muted-foreground tabular-nums"
 						title="Input tokens served from the provider's prompt cache"
 					>
-						{formatCount(data.stats.cacheReadTokens)} input from cache
+						<AnimatedNumber value={data.stats.cacheReadTokens} format="count" /> input from cache
 					</span>
 				{/if}
 			</Card.Content>
@@ -603,9 +610,11 @@
 					Billed
 					<DollarSignIcon class="size-4 shrink-0" aria-hidden="true" />
 				</span>
-				<span class="text-2xl font-semibold tabular-nums">
-					{formatBilled(data.stats.costUsd, { pricedRequests: data.stats.pricedRequests })}
-				</span>
+				<AnimatedNumber
+					class="text-2xl font-semibold tabular-nums"
+					value={data.stats.pricedRequests === 0 ? null : data.stats.costUsd}
+					format="usd"
+				/>
 				{#if data.stats.total > 0 && data.stats.pricedRequests === 0}
 					<span class="text-sm font-medium text-muted-foreground">No cost reported</span>
 				{/if}

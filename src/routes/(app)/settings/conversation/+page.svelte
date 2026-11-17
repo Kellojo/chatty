@@ -13,6 +13,7 @@
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { onMount, untrack } from 'svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import SpeechPreviewButton from '$lib/components/app/settings/SpeechPreviewButton.svelte';
 	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { PageData } from './$types';
@@ -62,7 +63,9 @@
 	const playback = createSpeechPlayback({
 		serverTts: () => data.serverTts,
 		onerror: (message) => toast.error(message),
-		volume: () => volume / 100
+		volume: () => volume / 100,
+		// A sample text, not chat content.
+		privacy: () => ({ private: false })
 	});
 	onMount(() => playback.stop);
 
@@ -102,9 +105,11 @@
 		/>
 		<div class="flex justify-between gap-4 text-xs text-muted-foreground">
 			<span>Leave empty for no global instructions.</span>
-			<span class="shrink-0 tabular-nums"
-				>{instructions.length.toLocaleString()} / {MAX_GLOBAL_INSTRUCTIONS_LENGTH.toLocaleString()}</span
-			>
+			<AnimatedNumber
+				class="shrink-0 tabular-nums"
+				value={instructions.length}
+				suffix=" / {MAX_GLOBAL_INSTRUCTIONS_LENGTH.toLocaleString('en-US')}"
+			/>
 		</div>
 	</div>
 	<div class="flex items-center justify-end gap-2">
@@ -143,9 +148,11 @@
 				aria-valuetext={`${volume}%`}
 				class="h-2 w-full cursor-pointer accent-primary sm:w-48"
 			/>
-			<span class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
-				>{volume}%</span
-			>
+			<AnimatedNumber
+				class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
+				value={volume / 100}
+				format="percent"
+			/>
 			<SpeechPreviewButton
 				{playback}
 				label="Test"

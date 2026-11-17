@@ -21,15 +21,27 @@ export function formatDateTime(timestamp: number, format: TimeFormat): string {
 }
 
 export function formatTimeAgo(timestamp: number, now = Date.now()): string {
+	const ago = timeAgoParts(timestamp, now);
+	return 'text' in ago ? ago.text : `${ago.value}${ago.unit} ago`;
+}
+
+/**
+ * `formatTimeAgo` as a number and unit (`5` + `m`) so it can be animated, or plain text
+ * ("just now", a date) when there is no number to show.
+ */
+export function timeAgoParts(
+	timestamp: number,
+	now = Date.now()
+): { text: string } | { value: number; unit: 'm' | 'h' | 'd' } {
 	const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
-	if (seconds < 60) return 'just now';
+	if (seconds < 60) return { text: 'just now' };
 	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ago`;
+	if (minutes < 60) return { value: minutes, unit: 'm' };
 	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
+	if (hours < 24) return { value: hours, unit: 'h' };
 	const days = Math.floor(hours / 24);
-	if (days < 30) return `${days}d ago`;
-	return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(timestamp);
+	if (days < 30) return { value: days, unit: 'd' };
+	return { text: new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(timestamp) };
 }
 
 /** How long until `timestamp`, e.g. "in 5m", "in 18h", "in 3d" ("soon" when it's due). */

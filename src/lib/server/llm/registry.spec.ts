@@ -33,7 +33,10 @@ describe('llm registry', () => {
 		const { db, providers, models, registry } = await loadModules();
 		const p = providers.createProvider(db, { name: 'A', type: 'anthropic', apiKey: 'sk' });
 		models.createModel(db, { providerId: p.id, modelId: 'claude-test' });
-		const model = registry.resolveModel({ providerId: p.id, modelId: 'claude-test' });
+		const model = registry.resolveModel(
+			{ providerId: p.id, modelId: 'claude-test' },
+			{ tainted: false }
+		);
 		expect((model as { modelId: string }).modelId).toBe('claude-test');
 	});
 
@@ -42,22 +45,26 @@ describe('llm registry', () => {
 		const p = providers.createProvider(db, { name: 'A', type: 'anthropic' });
 		models.createModel(db, { providerId: p.id, modelId: 'x' });
 		providers.updateProvider(db, p.id, { enabled: false });
-		expect(() => registry.resolveModel({ providerId: p.id, modelId: 'x' })).toThrow(
-			registry.ModelUnavailableError
-		);
+		expect(() =>
+			registry.resolveModel({ providerId: p.id, modelId: 'x' }, { tainted: false })
+		).toThrow(registry.ModelUnavailableError);
 		providers.updateProvider(db, p.id, { enabled: true });
-		expect(() => registry.resolveModel({ providerId: p.id, modelId: 'nope' })).toThrow(
-			registry.ModelUnavailableError
-		);
+		expect(() =>
+			registry.resolveModel({ providerId: p.id, modelId: 'nope' }, { tainted: false })
+		).toThrow(registry.ModelUnavailableError);
 	});
 
 	it('roleModel resolves the enabled default for a role', async () => {
 		const { db, providers, models, registry } = await loadModules();
-		expect(() => registry.roleModel('chat')).toThrow(registry.ModelUnavailableError);
+		expect(() => registry.roleModel('chat', { tainted: false })).toThrow(
+			registry.ModelUnavailableError
+		);
 		const p = providers.createProvider(db, { name: 'A', type: 'anthropic' });
 		const m = models.createModel(db, { providerId: p.id, modelId: 'chatty' });
 		models.setRoleDefault(db, 'chat', m.id);
-		expect((registry.roleModel('chat') as { modelId: string }).modelId).toBe('chatty');
+		expect((registry.roleModel('chat', { tainted: false }) as { modelId: string }).modelId).toBe(
+			'chatty'
+		);
 	});
 
 	it('listModelsGrouped groups enabled models under enabled providers', async () => {

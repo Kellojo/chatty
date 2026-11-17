@@ -213,7 +213,9 @@ export function reconcileThreadState(
 		if (merge === 'push') push = true;
 	}
 
-	if (remote.title !== null) {
+	// A private chat's title never syncs with T3 (coding chats can't be private;
+	// this is a safety net).
+	if (remote.title !== null && conversation.private !== 1) {
 		// Compared capped like T3's value, so a long local title isn't "changed" by
 		// T3 holding its first MAX_THREAD_TITLE_CHARS.
 		const localTitle = threadTitle(conversation.title) ?? '';
@@ -300,8 +302,9 @@ function pendingCommands(
 	}
 
 	// A title nobody compared yet is left to the first reconcile (T3's wins).
-	// Sent and recorded capped, the same way T3's title is read back.
-	const title = threadTitle(conversation.title);
+	// Sent and recorded capped, the same way T3's title is read back. A private
+	// chat's title is never sent.
+	const title = conversation.private === 1 ? null : threadTitle(conversation.title);
 	if (title && row.remote_title !== null && row.remote_title !== title) {
 		commands.push({
 			command: { type: 'thread.metadata.update', ...base(), title },

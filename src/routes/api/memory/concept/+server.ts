@@ -1,3 +1,4 @@
+import { recordPrivacyCheck } from '$lib/server/privacy/sweep.js';
 import { error, json } from '@sveltejs/kit';
 import { z } from 'zod';
 import { requireAdmin, requireUser } from '$lib/server/auth/guards.js';
@@ -29,7 +30,10 @@ const putSchema = z.object({
 		title: z.string().min(1),
 		type: z.string().optional(),
 		description: z.string().optional(),
-		tags: z.array(z.string()).optional()
+		tags: z.array(z.string()).optional(),
+		// Omitted keeps the current flag. Only a person can clear it, here; the
+		// shared bundle is admin-only, so its flag is too.
+		private: z.boolean().optional()
 	}),
 	body: z.string()
 });
@@ -55,6 +59,8 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 						{ frontmatter: data.frontmatter, body: data.body },
 						audit
 					);
+		// A person set the flag: the cleanup sweep leaves it until the text changes.
+		if (data.frontmatter.private !== undefined) recordPrivacyCheck(db, concept, user.id);
 		return json({ concept });
 	} catch (e) {
 		error(400, { message: e instanceof Error ? e.message : 'Invalid concept' });

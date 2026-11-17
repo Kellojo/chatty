@@ -3,7 +3,7 @@ import type { PickerModelGroup } from '$lib/types.js';
 import { pickerModelGroups, resetModelCatalog, syncModelCatalog } from './model-catalog.svelte.js';
 
 const group = (modelId: string): PickerModelGroup => ({
-	provider: { id: 'p', name: 'Provider', type: 'anthropic', baseUrl: null },
+	provider: { id: 'p', name: 'Provider', type: 'anthropic', baseUrl: null, allowPrivate: false },
 	models: [{ providerId: 'p', modelId, displayName: modelId, capabilities: ['chat'] }]
 });
 

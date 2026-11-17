@@ -28,7 +28,10 @@ import {
 	getCodingRequestAnswers,
 	updateCodingConversation
 } from '../db/repo/coding-conversations.js';
-import type { CodingEnvironmentRow } from '../db/repo/coding-environments.js';
+import {
+	markEnvironmentUnauthorized,
+	type CodingEnvironmentRow
+} from '../db/repo/coding-environments.js';
 import { getConversation, touchConversation } from '../db/repo/conversations.js';
 import {
 	compareMessageParts,
@@ -348,7 +351,7 @@ export class CodingFollower {
 						this.clearSnapshotTimer();
 						if (error) this.recordError(error);
 						// A rejected token won't start working on its own: don't retry.
-						if (isUnauthorized(error)) this.stop(error.message);
+						if (isUnauthorized(error)) this.stopUnauthorized(error);
 						else this.scheduleReconnect();
 					}
 				}
@@ -373,9 +376,15 @@ export class CodingFollower {
 			// Stopped while connecting: deliberate, not a connection problem.
 			if (this.stopped) return;
 			this.recordError(e);
-			if (isUnauthorized(e)) this.stop(e.message);
+			if (isUnauthorized(e)) this.stopUnauthorized(e);
 			else this.scheduleReconnect();
 		}
+	}
+
+	/** Stops for good on a rejected token, marking the environment as such. */
+	private stopUnauthorized(e: T3ClientError): void {
+		markEnvironmentUnauthorized(this.db, this.env, e.message);
+		this.stop(e.message);
 	}
 
 	private clearSnapshotTimer(): void {

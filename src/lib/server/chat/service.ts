@@ -1,3 +1,13 @@
+import { TurnPrivacy } from '../privacy/taint.js';
+import { PRIVACY_NOTICE_PART } from '$lib/private-data.js';
+import {
+	assertModelAllowed,
+	filterTargets,
+	PrivateDataBlockedError,
+	turnTrust,
+	type Privacy,
+	type Trust
+} from '../privacy/policy.js';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {
@@ -670,6 +680,27 @@ async function prepareTurn(
 		throw new ChatRequestError(400, `The selected model is not available: ${detail}`);
 	}
 
+	// Choke points re-read the conversation's and run's flags; the turn's own
+	// privacy also tracks taint from its tools (TurnPrivacy).
+	const snapshot: Privacy = {
+		tainted: limits.tainted === true,
+		conversationId: conversation.id,
+		agentRunId: run?.runId ?? null
+	};
+	// Before the retry loop: a private chat never falls back to an untrusted provider.
+	const allowed = filterTargets(db, available, snapshot);
+	if (allowed.length === 0) {
+		throw new ChatRequestError(409, new PrivateDataBlockedError().message);
+	}
+	// Only a turn whose every target is trusted may be handed private items.
+	const trust: Trust = limits.trust === 'untrusted' ? 'untrusted' : turnTrust(db, allowed);
+	const privacy = new TurnPrivacy(db, userId, {
+		conversationId: conversation.id,
+		agentRunId: run?.runId ?? null,
+		trust,
+		tainted: limits.tainted
+	});
+
 	const catalog = await buildTools({
 		userId,
 		memoryEnabled: conversation.memory_enabled === 1,
@@ -683,7 +714,10 @@ async function prepareTurn(
 		author: run?.author,
 		conversationId: conversation.id,
 		agentRunId: run?.runId ?? null,
-		messageId: lastUserMessage.id
+		messageId: lastUserMessage.id,
+		privacy,
+		trust,
+		privateOnly: limits.privateOnly
 	});
 	// A run turn knows whether it may ask; in a chat the user talks to, an agent
 	// that is allowed to ask can always do so.
@@ -694,7 +728,16 @@ async function prepareTurn(
 		catalog.tools[ASK_USER_TOOL] = askUserTool();
 		catalog.toolToServer[ASK_USER_TOOL] = 'chatty';
 	}
-	return { conversation, agent, lastUserMessage, ref, targets: available, catalog };
+	return {
+		conversation,
+		agent,
+		lastUserMessage,
+		ref,
+		targets: allowed,
+		catalog,
+		privacy,
+		trust
+	};
 }
 
 export interface ChatTurnRequest {
@@ -715,6 +758,15 @@ export interface TurnToolLimits {
 	allowlist?: string[];
 	/** Never these, whatever the allowlist says. */
 	exclude?: readonly string[];
+	/** The turn starts tainted (a subagent of a parent holding private data). */
+	tainted?: boolean;
+	/**
+	 * Caps the turn's trust: 'untrusted' gives it the non-private view even on a
+	 * trusted model (a memory run's public pass, or a subagent of one).
+	 */
+	trust?: Trust;
+	/** Data tools return private items only (a memory run's private pass). */
+	privateOnly?: boolean;
 }
 
 export interface ChatTurn {
@@ -799,7 +851,7 @@ export async function runChatTurn(
 		settleEarly({ status: 'failed', error: describe(e), abortReason: null, openAskUser: null });
 		throw e;
 	}
-	const { agent, lastUserMessage, ref, targets, catalog } = turn;
+	const { agent, lastUserMessage, ref, targets, catalog, privacy } = turn;
 	const { tools, close } = catalog;
 	conversation = turn.conversation;
 	if (controller.signal.aborted) {
@@ -955,6 +1007,10 @@ export async function runChatTurn(
 			return errorText ?? 'An error occurred while generating the response';
 		},
 		execute: async ({ writer }) => {
+			// A tool that hands this turn private data makes the chat private; the
+			// reply says so right there, after the call that read it.
+			privacy.onPromoted = (reason) =>
+				writer.write({ type: PRIVACY_NOTICE_PART, data: { reason } } as UIMessageChunk);
 			let lastError: unknown = null;
 			let totalTokensUsed: import('ai').LanguageModelUsage | undefined;
 			for (let i = 0; i < targets.length; i++) {
@@ -965,7 +1021,7 @@ export async function runChatTurn(
 				// A failed earlier target must not mark a successful fallback as failed.
 				errorText = null;
 				try {
-					const model = resolveModel(target);
+					const model = resolveModel(target, privacy);
 					const startedAt = Date.now();
 					let stepIndex = 0;
 					let lastStepAt = startedAt;
@@ -1042,6 +1098,7 @@ export async function runChatTurn(
 						messageId: assistantMessageId,
 						runId: run?.runId,
 						target,
+						privacy,
 						contextLength: () => effectiveContextLength(target),
 						overheadTokens:
 							estimateTokens(system) + Math.ceil(estimateToolChars(toolSearch.tools) / 4),
@@ -1059,6 +1116,10 @@ export async function runChatTurn(
 						stopWhen,
 						experimental_repairToolCall: toolSearch.repairToolCall,
 						prepareStep: async (options) => {
+							// Re-checked every step: the chat may have turned private (or the
+							// provider lost its trust) since the model was resolved. Throws
+							// PrivateDataBlockedError, which never falls back.
+							assertModelAllowed(db, target, privacy);
 							const activeTools = toolSearch.activeTools();
 							const base = lastStep(options);
 							const messages = compactSteps ? await compactSteps.prepare(options) : undefined;
@@ -1219,13 +1280,18 @@ export async function runChatTurn(
 				if (conversation.title === '') {
 					const assistantText = extractText(responseMessage.parts);
 					const userText = extractText(lastUserMessage.parts);
-					generateConversationTitle(conversation.id, userId, ref, userText, assistantText).catch(
-						() => undefined
-					);
+					generateConversationTitle(
+						conversation.id,
+						userId,
+						ref,
+						userText,
+						assistantText,
+						privacy
+					).catch(() => undefined);
 				}
 				// Hidden runs are single turns: compacting them only costs a call.
 				if (status === 'complete' && visibleChat) {
-					maybeCompactConversation(conversation, userId, ref).catch(() => undefined);
+					maybeCompactConversation(conversation, userId, ref, privacy).catch(() => undefined);
 				}
 			} catch (e) {
 				log.error('Failed to persist assistant message', {
@@ -1315,6 +1381,7 @@ function stepCompactor(input: {
 	/** Absent for plain chats. */
 	runId?: string;
 	target: { providerId: string; modelId: string };
+	privacy: Privacy;
 	/** Asked per step: an LM Studio model's loaded context can change mid-run. */
 	contextLength: () => Promise<number | null>;
 	overheadTokens: number;
@@ -1328,6 +1395,7 @@ function stepCompactor(input: {
 		messageId: input.messageId,
 		runId: input.runId,
 		fallback: input.target,
+		privacy: input.privacy,
 		abortSignal: input.abortSignal
 	});
 	const prepare = async ({

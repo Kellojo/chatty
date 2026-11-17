@@ -14,6 +14,7 @@
 	import { page } from '$app/state';
 	import { createSpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { ModelRole } from '$lib/types.js';
+	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import { MODEL_ROLE_LABEL } from '$lib/model-roles.js';
 	import type { PageData } from './$types';
 
@@ -64,6 +65,21 @@
 				'Used by the Decisions API. Pick a model with the decisions capability. Until one is set, Decisions API calls fail.'
 		}
 	];
+
+	/** What a private chat does instead when this role's model may not see private data. */
+	const PRIVATE_ROLE_NOTE: Partial<Record<ModelRole, string>> = {
+		title:
+			'This model may not process private data, so private chats use their own model or a placeholder title.',
+		compaction:
+			'This model may not process private data, so private chats summarize with their own model or not at all.',
+		memory:
+			'This model may not process private data, so memory runs skip private chats and private notes.',
+		image: 'This model may not process private data, so private chats cannot create images.',
+		'speech-to-text':
+			'This model may not process private data, so dictation is off in private chats.',
+		'text-to-speech':
+			'This model may not process private data, so private chats only read aloud with on-device voices.'
+	};
 
 	const roleCapability: Partial<Record<ModelRole, string>> = {
 		image: 'image',
@@ -127,7 +143,9 @@
 	const preview = createSpeechPlayback({
 		serverTts: () => true,
 		onerror: (message) => toast.error(message),
-		volume: () => page.data.settings?.speechVolume ?? 1
+		volume: () => page.data.settings?.speechVolume ?? 1,
+		// A sample text, not chat content.
+		privacy: () => ({ private: false })
 	});
 	onMount(() => preview.stop);
 	const sampleText = (name: string) => `Hi, I'm ${name}. This is how replies will sound.`;
@@ -220,6 +238,15 @@
 					capability={roleCapability[role]}
 					class="w-full sm:w-72 max-md:[&_[data-model-source]]:hidden"
 				/>
+				{#if data.untrustedRoles.includes(role)}
+					<p
+						class="mt-1.5 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400"
+						role="note"
+					>
+						<ShieldAlertIcon class="mt-px size-3.5 shrink-0" aria-hidden="true" />
+						<span>{PRIVATE_ROLE_NOTE[role]}</span>
+					</p>
+				{/if}
 			</SettingsRow>
 			{#if role === 'text-to-speech' && data.roles['text-to-speech']}
 				<!-- A setting of the Text to speech model above, so it hangs off that row. -->

@@ -87,10 +87,10 @@ export function createCodingServer(ctx: CallerContext): McpServer {
 		async ({ title, environmentId, projectId }) => {
 			// The card needs the user's chat to start from; agent runs have none.
 			if (ctx.agentRunId) return err('coding tasks can only be proposed in a chat with the user');
+			const db = getDb();
 			if (!!environmentId !== !!projectId) {
 				return err('give environmentId and projectId together, or neither');
 			}
-			const db = getDb();
 			const hasTarget =
 				countCodingEnvironments(db, ctx.userId) > 0 ||
 				listAgents(db, ctx.userId).some((a) => a.user_id === ctx.userId && a.coding_target);

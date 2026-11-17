@@ -1,4 +1,10 @@
 import { browser } from '$app/environment';
+import {
+	pickLocalVoice,
+	PRIVATE_SPEECH,
+	speechPrivacyBody,
+	type SpeechPrivacy
+} from '$lib/private-speech.js';
 import { serverChunks, speakableText, speechChunks } from '$lib/speakable-text.js';
 
 /** Max time to wait for one chunk of server audio. */
@@ -9,18 +15,20 @@ export const SILENT_WAV =
 
 /**
  * Synthesizes `text` with the Text to speech default (or `voice`) and returns
- * an object URL for the audio, which the caller revokes.
+ * an object URL for the audio, which the caller revokes. `privacy` says which
+ * chat the text is from; without it the server treats it as private.
  */
 export async function fetchSpeech(
 	text: string,
 	signal: AbortSignal,
-	voice?: string
+	voice?: string,
+	privacy: SpeechPrivacy = PRIVATE_SPEECH
 ): Promise<string> {
 	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT);
 	const res = await fetch('/api/speech/synthesize', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(voice ? { text, voice } : { text }),
+		body: JSON.stringify({ text, ...(voice ? { voice } : {}), ...speechPrivacyBody(privacy) }),
 		signal: AbortSignal.any([signal, timeout])
 	}).catch((e: unknown) => {
 		throw timeout.aborted ? new Error('Speech timed out') : e;
@@ -35,13 +43,35 @@ export async function fetchSpeech(
 export type SpeechPlayback = ReturnType<typeof createSpeechPlayback>;
 
 /**
+ * The browser voice for a private chat's text: one that runs on the device,
+ * or null when there is none (then it isn't read aloud by the browser).
+ */
+export function privateBrowserVoice(lang: string): SpeechSynthesisVoice | null {
+	if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+	return pickLocalVoice(window.speechSynthesis.getVoices(), lang);
+}
+
+/** The language utterances are read in. */
+export function utteranceLang(): string {
+	return document.documentElement.lang || navigator.language;
+}
+
+/** Shown when a private chat has neither trusted server speech nor an on-device voice. */
+export const NO_PRIVATE_VOICE = 'No on-device voice is available to read this private chat aloud';
+
+/**
  * Reads messages aloud, one at a time. While `serverTts()` is true the Text to
  * speech default synthesizes the audio, sentence chunks fetched one ahead of
  * playback; otherwise the browser's built-in voice is used. `onerror` reports
  * failures (e.g. as a toast).
+ *
+ * `privacy` is the chat being read (default: private). The server only reads
+ * a private chat with trusted models, and the browser only with on-device
+ * voices (`localService`).
  */
 export function createSpeechPlayback(options: {
 	serverTts: () => boolean;
+	privacy?: () => SpeechPrivacy;
 	onerror?: (message: string) => void;
 	/** Non-error notes, e.g. that only the start of a very long reply is read. */
 	oninfo?: (message: string) => void;
@@ -49,6 +79,7 @@ export function createSpeechPlayback(options: {
 	volume?: () => number;
 }) {
 	const volume = () => Math.min(1, Math.max(0, options.volume?.() ?? 1));
+	const privacy = () => options.privacy?.() ?? PRIVATE_SPEECH;
 	/** The message being read aloud (or fetched), else null. */
 	let activeId = $state<string | null>(null);
 	/** True while waiting on server audio before (or between) chunks. */
@@ -71,6 +102,8 @@ export function createSpeechPlayback(options: {
 	let generation = 0;
 	/** The voice the current playback asked for; unset reads with the configured default. */
 	let voiceOverride: string | undefined;
+	/** The chat the current playback reads, as it was when it started. */
+	let playPrivacy: SpeechPrivacy = PRIVATE_SPEECH;
 
 	function cleanup() {
 		controller?.abort();
@@ -104,7 +137,7 @@ export function createSpeechPlayback(options: {
 	 * which is why it is kept short (see serverChunks).
 	 */
 	async function fetchChunk(text: string, signal: AbortSignal): Promise<string> {
-		const url = await fetchSpeech(text, signal, voiceOverride);
+		const url = await fetchSpeech(text, signal, voiceOverride, playPrivacy);
 		objectUrls.push(url);
 		return url;
 	}
@@ -179,11 +212,12 @@ export function createSpeechPlayback(options: {
 		}
 	}
 
-	function playBrowser(chunks: string[], gen: number) {
+	function playBrowser(chunks: string[], gen: number, voice: SpeechSynthesisVoice | null) {
 		const synth = window.speechSynthesis;
 		chunks.forEach((chunk, i) => {
 			const utterance = new SpeechSynthesisUtterance(chunk);
-			utterance.lang = document.documentElement.lang || navigator.language;
+			utterance.lang = utteranceLang();
+			if (voice) utterance.voice = voice;
 			utterance.volume = volume();
 			if (i === chunks.length - 1) {
 				utterance.onend = () => {
@@ -212,9 +246,16 @@ export function createSpeechPlayback(options: {
 	function play(id: string, markdown: string, voice?: string) {
 		stop();
 		voiceOverride = voice || undefined;
+		playPrivacy = privacy();
 		const server = options.serverTts();
 		if (!server && !browserVoice) {
 			options.onerror?.('Reading aloud is not available in this browser');
+			return;
+		}
+		// A private chat is only read by a voice on this device.
+		const localVoice = !server && playPrivacy.private ? privateBrowserVoice(utteranceLang()) : null;
+		if (!server && playPrivacy.private && !localVoice) {
+			options.onerror?.(NO_PRIVATE_VOICE);
 			return;
 		}
 		const text = speakableText(markdown);
@@ -238,7 +279,7 @@ export function createSpeechPlayback(options: {
 			}
 			void playServer(players, chunks, gen);
 		} else {
-			playBrowser(chunks, gen);
+			playBrowser(chunks, gen, localVoice);
 		}
 	}
 
@@ -249,9 +290,15 @@ export function createSpeechPlayback(options: {
 		get loading() {
 			return loading;
 		},
-		/** Reading aloud is possible: a server voice is set or the browser has one. */
+		/**
+		 * Reading aloud is possible: a server voice is set or the browser has one
+		 * (on the device, for a private chat).
+		 */
 		get supported() {
-			return browser && (options.serverTts() || browserVoice);
+			if (!browser) return false;
+			if (options.serverTts()) return true;
+			if (!browserVoice) return false;
+			return !privacy().private || privateBrowserVoice(utteranceLang()) !== null;
 		},
 		toggle,
 		play,

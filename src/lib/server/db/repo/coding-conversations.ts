@@ -523,7 +523,9 @@ export function importCodingConversation(
 		if (linked) return null;
 		const conversation = createConversation(db, input.userId, {
 			kind: 'chat',
-			title: input.title
+			title: input.title,
+			// Coding chats run on a T3 machine and are never private.
+			private: false
 		});
 		db.prepare(
 			`UPDATE conversations

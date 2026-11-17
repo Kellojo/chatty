@@ -10,6 +10,8 @@ export interface Provider {
 	baseUrl: string | null;
 	hasApiKey: boolean;
 	enabled: boolean;
+	/** An admin trusts this provider with private data ("Can process private data"). */
+	allowPrivate: boolean;
 	createdAt: number;
 }
 
@@ -48,7 +50,7 @@ export interface ModelsByProvider {
  * ModelsByProvider (which also fits), sent once per change (see model-catalog).
  */
 export interface PickerModelGroup {
-	provider: Pick<Provider, 'id' | 'name' | 'type' | 'baseUrl'>;
+	provider: Pick<Provider, 'id' | 'name' | 'type' | 'baseUrl' | 'allowPrivate'>;
 	models: Pick<ChatModel, 'providerId' | 'modelId' | 'displayName' | 'capabilities'>[];
 }
 
@@ -191,6 +193,8 @@ export interface Conversation {
 	temperature: number | null;
 	maxTokens: number | null;
 	pinned: boolean;
+	/** Private: may only use providers trusted with private data. */
+	private: boolean;
 	agentId: string | null;
 	/** 'dispatch': started by Chatty as an agent run the user can reply to. */
 	origin: ConversationOrigin;
@@ -222,6 +226,18 @@ export const AGENT_EVENT_NAMES = [
 
 export type AgentEventName = (typeof AGENT_EVENT_NAMES)[number];
 
+/** Private-data switches for the app shell (layout data `privateData`). */
+export interface PrivateDataStatus {
+	/** Settings → Private data → Allow private data: the private toggles are shown at all. */
+	enabled: boolean;
+	/** At least one enabled provider may process private data (else the toggles are disabled). */
+	available: boolean;
+	/** The speech-to-text role only reaches trusted providers (dictation in private chats). */
+	sttTrusted: boolean;
+	/** The text-to-speech role only reaches trusted providers (server read-aloud in private chats). */
+	ttsTrusted: boolean;
+}
+
 export type ServerEvent =
 	| { type: 'chat.created'; conversationId: string }
 	/** `agentRunId` is set when an agent run's turn produced the message (its run event notifies instead). */
@@ -243,6 +259,11 @@ export type ServerEvent =
 	 */
 	| { type: 'conversation.branch_changed'; conversationId: string }
 	| { type: 'conversation.compacted'; conversationId: string }
+	/**
+	 * The conversation became private (or public again). `reason` is set when a
+	 * turn read private data and made it private on its own (sticky taint).
+	 */
+	| { type: 'conversation.privacy'; conversationId: string; private: boolean; reason?: string }
 	| { type: 'conversation.settle_changed'; conversationIds: string[]; settled: boolean }
 	| { type: 'conversation.snooze_changed'; conversationIds: string[]; snoozed: boolean }
 	/** The conversation was moved to trash; lists should drop it. */
@@ -267,6 +288,11 @@ export type ServerEvent =
 			author: string;
 			/** Set when an agent run made the change (lets that agent ignore its own writes). */
 			agentRunId?: string;
+			/**
+			 * The note is private (after a write or move; before a delete). Only
+			 * private agents get the event: the path alone can be sensitive.
+			 */
+			private?: boolean;
 	  }
 	| { type: 'agent.run.started'; agentId: string; runId: string; conversationId?: string }
 	| { type: 'agent.run.progress'; agentId: string; runId: string }
@@ -321,6 +347,8 @@ export interface Agent {
 	/** Set for coding agents: each run is a T3 coding task with this target. */
 	codingTarget: AgentCodingTarget | null;
 	enabled: boolean;
+	/** Private: runs may only use providers trusted with private data. */
+	private: boolean;
 	lastRunAt: number | null;
 	nextRunAt: number | null;
 	createdAt: number;
@@ -420,6 +448,8 @@ export interface ModelMapping {
 	name: string;
 	targets: ModelMappingTarget[];
 	enabled: boolean;
+	/** May only route to providers trusted with private data. */
+	trustedOnly: boolean;
 	createdAt: number;
 	capabilities?: string[];
 }

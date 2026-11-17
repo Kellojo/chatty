@@ -37,6 +37,7 @@ describe('model-mappings repo', () => {
 			id: created.id,
 			name: 'fast',
 			enabled: true,
+			trustedOnly: false,
 			createdAt: created.created_at,
 			targets: [
 				{ providerId: 'p1', modelId: 'm1' },
@@ -66,6 +67,22 @@ describe('model-mappings repo', () => {
 		expect(parseTargets(updated)).toEqual([{ providerId: 'p2', modelId: 'm2' }]);
 		expect(listEnabledModelMappings(db)).toHaveLength(0);
 		expect(updateModelMapping(db, 'missing', { name: 'x' })).toBeUndefined();
+	});
+
+	it('stores trustedOnly, off by default', () => {
+		const created = createModelMapping(db, {
+			name: 'fast',
+			targets: [{ providerId: 'p1', modelId: 'm1' }]
+		});
+		expect(created.trusted_only).toBe(0);
+		expect(updateModelMapping(db, created.id, { trustedOnly: true })!.trusted_only).toBe(1);
+		expect(toPublic(updateModelMapping(db, created.id, { name: 'x' })!).trustedOnly).toBe(true);
+		const trusted = createModelMapping(db, {
+			name: 'private',
+			targets: [{ providerId: 'p1', modelId: 'm1' }],
+			trustedOnly: true
+		});
+		expect(trusted.trusted_only).toBe(1);
 	});
 
 	it('deletes mappings', () => {

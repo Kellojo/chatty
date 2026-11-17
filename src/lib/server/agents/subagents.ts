@@ -5,6 +5,8 @@
 // fewer, its model, memory setting and workspace, and can't start subagents
 // or ask the user anything.
 
+import { isConversationPrivate, isPrivateContext, type Privacy } from '../privacy/policy.js';
+import { isTurnPrivacy } from '../privacy/taint.js';
 import { randomUUID } from 'node:crypto';
 import type { UIMessage } from 'ai';
 import { getDb, type Db } from '../db/index.js';
@@ -54,7 +56,18 @@ export interface SubagentInput {
 	/** The parent's `run_subagent` call, so its row can find the subagent while it works. */
 	toolCallId?: string;
 	signal?: AbortSignal;
+	/**
+	 * The parent turn's privacy: a parent holding private data starts a private,
+	 * tainted subagent, and a subagent that read private data taints the parent.
+	 */
+	parentPrivacy?: Privacy;
+	/** The parent only reads private items (a memory run's private pass). */
+	parentPrivateOnly?: boolean;
 }
+
+/** What a parent that may not see private data gets instead of a private subagent's report. */
+export const PRIVATE_REPORT_WITHHELD =
+	"The subagent's report is private: it read private data this chat's model may not see. Open it in Chatty.";
 
 /** The report the tool returns; `result` is shortened to SUBAGENT_RESULT_MAX_CHARS. */
 export type SubagentResult = SubagentToolResult;
@@ -241,6 +254,10 @@ export async function runSubagent(input: SubagentInput, db: Db = getDb()): Promi
 	}
 	running.set(parent.id, busy + 1);
 
+	// The subagent runs the parent's model, so it is as trusted as the parent.
+	const parentTainted =
+		parent.private === 1 ||
+		(input.parentPrivacy !== undefined && isPrivateContext(db, input.parentPrivacy));
 	let conversation: ConversationRow | undefined;
 	const onAbort = () => {
 		if (conversation) abortStream(conversation.id, 'stopped');
@@ -256,7 +273,8 @@ export async function runSubagent(input: SubagentInput, db: Db = getDb()): Promi
 			maxSteps: parent.max_steps,
 			memoryEnabled: parent.memory_enabled === 1,
 			subagentOf: parent.id,
-			subagentToolCallId: input.toolCallId ?? null
+			subagentToolCallId: input.toolCallId ?? null,
+			private: parentTainted
 		});
 		const { id, created_at: startedAt } = conversation;
 		inFlight.add(id);
@@ -289,7 +307,18 @@ export async function runSubagent(input: SubagentInput, db: Db = getDb()): Promi
 				input.userId,
 				conversation,
 				{ message },
-				{ tools: { allowlist, exclude: [RUN_SUBAGENT_TOOL, ASK_USER_TOOL] } }
+				{
+					tools: {
+						allowlist,
+						exclude: [RUN_SUBAGENT_TOOL, ASK_USER_TOOL],
+						tainted: parentTainted,
+						// A subagent never sees more than its parent (e.g. a memory run's public pass).
+						...(isTurnPrivacy(input.parentPrivacy) && input.parentPrivacy.trust === 'untrusted'
+							? { trust: 'untrusted' as const }
+							: {}),
+						privateOnly: input.parentPrivateOnly
+					}
+				}
 			);
 		} catch (e) {
 			// Documented never to throw; if it does, the ending is still recorded.
@@ -300,7 +329,16 @@ export async function runSubagent(input: SubagentInput, db: Db = getDb()): Promi
 		}
 		const last = listLatestMessages(db, id, 1).find((m) => m.role === 'assistant');
 		const reply = last ? extractText(JSON.parse(last.parts) as unknown[]).trim() : '';
-		const report = cutReport(reply, SUBAGENT_RESULT_MAX_CHARS);
+		let report = cutReport(reply, SUBAGENT_RESULT_MAX_CHARS);
+		// A subagent that read private data (its chat was promoted) taints the
+		// parent before the report reaches the parent's model.
+		if (isConversationPrivate(db, id) && !parentTainted) {
+			if (isTurnPrivacy(input.parentPrivacy) && input.parentPrivacy.trusted) {
+				input.parentPrivacy.markTainted("a subagent's private report");
+			} else {
+				report = { text: PRIVATE_REPORT_WITHHELD, truncated: false };
+			}
+		}
 		const status: SubagentResult['status'] =
 			outcome.status === 'complete'
 				? 'completed'

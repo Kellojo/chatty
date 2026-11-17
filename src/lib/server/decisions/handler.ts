@@ -3,9 +3,17 @@ import { getDb } from '../db/index.js';
 import { findModel } from '../db/repo/models.js';
 import { getProvider } from '../db/repo/providers.js';
 import { decryptSecret } from '../crypto.js';
-import { ModelUnavailableError } from '../llm/mapped.js';
+import { ModelUnavailableError, resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
 import { resolveTargets } from '../proxy/handler.js';
+import {
+	assertModelAllowed,
+	filterTargets,
+	NON_PRIVATE,
+	PrivateDataBlockedError,
+	type Privacy
+} from '../privacy/policy.js';
+import type { ModelRef } from '$lib/model-ref.js';
 
 const log = createLogger('decisions');
 
@@ -89,18 +97,34 @@ export type DecisionsRequest = z.infer<typeof decisionsRequestSchema>;
  * checks the decisions capability, and proxies the request body to the
  * provider's /decisions endpoint.
  */
-export async function forwardDecisions(request: DecisionsRequest): Promise<Response> {
+export async function forwardDecisions(
+	request: DecisionsRequest,
+	privacy: Privacy,
+	/**
+	 * The exact provider model (or `mapping:` ref) to use, for internal callers
+	 * with a configured model; `request.model` is then only a label. Without
+	 * it, `request.model` is resolved by name like the proxy does.
+	 */
+	ref?: ModelRef
+): Promise<Response> {
 	const db = getDb();
 
-	const resolved = resolveTargets(db, request.model);
+	const resolved = ref
+		? { targets: resolveRefTargets(ref, db).targets, privacy: NON_PRIVATE }
+		: resolveTargets(db, request.model);
 	if (!resolved) {
 		throw new ModelUnavailableError(`No model found for decisions request "${request.model}"`);
 	}
+	// A trusted-only mapping makes the request private on its own.
+	const effective: Privacy = resolved.privacy.tainted ? resolved.privacy : privacy;
+	// Any error falls back, so untrusted targets go before the loop for private input.
+	const targets = filterTargets(db, resolved.targets, effective);
+	if (targets.length === 0) throw new PrivateDataBlockedError();
 
 	let lastError: unknown = null;
 
-	for (let i = 0; i < resolved.targets.length; i++) {
-		const target = resolved.targets[i];
+	for (let i = 0; i < targets.length; i++) {
+		const target = targets[i];
 		const provider = getProvider(db, target.providerId);
 		if (!provider || provider.enabled !== 1) {
 			lastError = new ModelUnavailableError(`Provider ${target.providerId} is not available`);
@@ -131,6 +155,8 @@ export async function forwardDecisions(request: DecisionsRequest): Promise<Respo
 			continue;
 		}
 
+		// Checked at the call, against the flags as they are now.
+		assertModelAllowed(db, target, effective);
 		const apiKey = provider.api_key_enc ? decryptSecret(provider.api_key_enc) : undefined;
 		const baseUrl = provider.base_url.replace(/\/$/, '');
 
@@ -176,7 +202,7 @@ export async function forwardDecisions(request: DecisionsRequest): Promise<Respo
 			});
 		} catch (e) {
 			lastError = e;
-			if (i < resolved.targets.length - 1) continue;
+			if (i < targets.length - 1) continue;
 		}
 	}
 

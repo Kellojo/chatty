@@ -23,7 +23,6 @@
 	import { groupParts, hasVisibleContent } from './timeline.js';
 	import { messageText } from '$lib/chat-history.js';
 	import { readableErrorText } from '$lib/error-text.js';
-	import { shortcutLabel } from '$lib/state/shortcuts.js';
 	import { canShare, shareText } from '$lib/web-share.js';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import ShareIcon from '@lucide/svelte/icons/share';
@@ -41,6 +40,8 @@
 	import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
 	import type { SpeechPlayback } from '$lib/state/speech-playback.svelte.js';
 	import type { DispatchInfo, MessageUsage, UIMessage, UIMessageMetadata } from '$lib/types.js';
+	import PrivacyNoticeRow from './PrivacyNoticeRow.svelte';
+	import { readPrivacyNotice } from '$lib/private-data.js';
 
 	let {
 		messages,
@@ -189,6 +190,8 @@
 						<CodingTaskProposalCard part={part as never} active={messageActive} />
 					{:else if part && readCodingTaskNotice(part)}
 						<CodingTaskNoticeRow notice={readCodingTaskNotice(part)!} />
+					{:else if part && readPrivacyNotice(part)}
+						<PrivacyNoticeRow notice={readPrivacyNotice(part)!} />
 					{:else if part && conversationId && readHtmlRender(part)}
 						<HtmlRenderFrame {conversationId} {part} />
 					{:else if part?.type === 'file'}
@@ -326,9 +329,7 @@
 						{/if}
 						{#if visible}
 							<button
-								title={index === lastAssistantIndex
-									? `Copy (${shortcutLabel('copy-last-reply')})`
-									: 'Copy'}
+								title="Copy"
 								aria-label="Copy message"
 								class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:-my-1 pointer-coarse:p-2.5"
 								onclick={() => copyMessage(message)}

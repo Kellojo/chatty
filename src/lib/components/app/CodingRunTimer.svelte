@@ -1,20 +1,28 @@
 <script lang="ts">
 	import { formatElapsed } from '$lib/formats.js';
 	import { now } from '$lib/state/now.svelte.js';
+	import AnimatedElapsed from './AnimatedElapsed.svelte';
 
 	/** Live "running for" timer for an agent run (coding task or chat reply). */
 	let {
 		startedAt,
 		dot = true,
+		coarse = false,
 		class: className = ''
-	}: { startedAt: number; dot?: boolean; class?: string } = $props();
+	}: {
+		startedAt: number;
+		dot?: boolean;
+		/** Whole minutes after the first minute, without ticking seconds. */
+		coarse?: boolean;
+		class?: string;
+	} = $props();
 
-	const elapsed = $derived(formatElapsed(now() - startedAt));
+	const ms = $derived(now() - startedAt);
 </script>
 
 <span
 	class="inline-flex shrink-0 items-center gap-1.5 text-xs tabular-nums {className}"
-	title="Running for {elapsed}"
+	title="Running for {formatElapsed(ms)}"
 >
 	{#if dot}
 		<span
@@ -23,5 +31,5 @@
 		></span>
 	{/if}
 	<span class="sr-only">Running for</span>
-	{elapsed}
+	<AnimatedElapsed {ms} {coarse} />
 </span>

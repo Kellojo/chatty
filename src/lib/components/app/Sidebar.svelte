@@ -3,7 +3,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { MediaQuery } from 'svelte/reactivity';
+	import { MediaQuery, SvelteMap } from 'svelte/reactivity';
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { fade } from 'svelte/transition';
@@ -25,6 +25,8 @@
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
+	import LockIcon from '@lucide/svelte/icons/lock';
+	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
@@ -47,7 +49,7 @@
 	import { invalidateWhenIdle, scheduleInvalidate } from '$lib/state/invalidate-when-idle.js';
 	import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
 	import { shortcutLabel } from '$lib/state/shortcuts.js';
-	import { formatAge, formatCount } from '$lib/formats.js';
+	import { formatAge } from '$lib/formats.js';
 	import { version } from '$lib/version.js';
 	import type { Conversation } from '$lib/types.js';
 	import type { CodingTaskStatus } from '$lib/coding-environments.js';
@@ -56,9 +58,11 @@
 	import WaitingMark from './WaitingMark.svelte';
 	import PullRequestIcon from './PullRequestIcon.svelte';
 	import SidebarPlanLimits from './usage/SidebarPlanLimits.svelte';
+	import AnimatedNumber from './AnimatedNumber.svelte';
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
 	import { markedUnread, setConversationRead } from './marked-unread.svelte.js';
 	import SnoozeDialog from './SnoozeDialog.svelte';
+	import MakePrivateDialog from './MakePrivateDialog.svelte';
 	import AlarmClockIcon from '@lucide/svelte/icons/alarm-clock';
 	import { formatSnoozeTime, isSnoozed } from '$lib/snooze.js';
 
@@ -96,6 +100,68 @@
 	} = $props();
 
 	const isMobile = new MediaQuery('(max-width: 767px)');
+	// Private chats get a lock, only while the private-data feature is on.
+	const showPrivate = $derived(
+		(page.data?.privateData as { enabled?: boolean } | undefined)?.enabled === true
+	);
+	// Chats can be made private once a provider is trusted with private data.
+	const canMakePrivate = $derived(
+		showPrivate &&
+			(page.data?.privateData as { available?: boolean } | undefined)?.available === true
+	);
+
+	// ── multi-select (bulk "Make private") ──────────────────────────────────
+	/** Picking chats: rows show checkboxes, and a click picks rather than opens. */
+	let selecting = $state(false);
+	const selected = new SvelteMap<string, Pick<Conversation, 'id' | 'title'>>();
+	/** The chats the Make private dialog is open for. */
+	let makePrivateTargets = $state<Pick<Conversation, 'id' | 'title'>[] | null>(null);
+
+	/** Why a chat can't be picked, or null when it can. */
+	function unselectableReason(c: Conversation): string | null {
+		if (c.coding) return 'Coding tasks run on a T3 machine and cannot be private';
+		if (c.private) return 'Already private';
+		return null;
+	}
+
+	function startSelecting(c?: Conversation) {
+		selected.clear();
+		selecting = true;
+		if (c && !unselectableReason(c)) selected.set(c.id, { id: c.id, title: c.title });
+	}
+
+	function stopSelecting() {
+		selecting = false;
+		selected.clear();
+	}
+
+	function toggleSelected(c: Conversation) {
+		if (unselectableReason(c)) return;
+		if (selected.has(c.id)) selected.delete(c.id);
+		else selected.set(c.id, { id: c.id, title: c.title });
+	}
+
+	/** A row's link: opens the chat, or picks it while selecting. */
+	function onRowClick(event: MouseEvent, c: Conversation) {
+		if (!selecting) {
+			handleNavigate();
+			return;
+		}
+		event.preventDefault();
+		toggleSelected(c);
+	}
+
+	async function madePrivate() {
+		makePrivateTargets = null;
+		stopSelecting();
+		await invalidateAll();
+		await refreshSettled();
+	}
+
+	// Leaving private data (or losing the trusted provider) ends the selection.
+	$effect(() => {
+		if (!canMakePrivate && untrack(() => selecting)) stopSelecting();
+	});
 
 	function handleNavigate() {
 		if (isMobile.current) onclose();
@@ -395,6 +461,7 @@
 					refresh(false);
 					break;
 				case 'conversation.updated':
+				case 'conversation.privacy':
 				case 'coding.task.updated':
 					refresh(affectsOpenPage([event.conversationId]));
 					break;
@@ -768,6 +835,13 @@
 	}
 </script>
 
+{#snippet privateMark()}
+	<span class="inline-flex shrink-0 text-muted-foreground" title="Private chat">
+		<LockIcon class="size-3" aria-hidden="true" />
+		<span class="sr-only">, Private chat</span>
+	</span>
+{/snippet}
+
 {#snippet row(c: Conversation)}
 	{@const snoozedUntil = isSnoozed(c) ? c.snoozedUntil : null}
 	<!-- Snoozed rows are put away for now, like settled ones: quiet until they wake. -->
@@ -798,12 +872,15 @@
 			? 'text-muted-foreground'
 			: ''} {searchResults && c.id === activeResultId ? 'ring-2 ring-ring/50' : ''}"
 	>
+		{#if selecting}
+			{@render selectBox(c, 'mt-1.5')}
+		{/if}
 		<a
 			href={resolve(`/chat/${c.id}`)}
 			data-conversation-id={c.id}
 			class="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
 			title={rowTitle(c, state)}
-			onclick={handleNavigate}
+			onclick={(e) => onRowClick(e, c)}
 		>
 			{#if c.coding}
 				<CodeIcon class="mt-[3px] size-3.5 shrink-0 {iconTone}" aria-hidden="true" />
@@ -820,13 +897,18 @@
 			     (project or model) and the PR. While something is happening or new, its
 			     status leads the second line with a mark; settled facts trail it quietly. -->
 			<span class="flex min-w-0 flex-1 flex-col">
-				<span
-					class="min-w-0 truncate leading-5 {attention
-						? 'font-semibold'
-						: state === 'idle' && !settled && c.id !== currentId
-							? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground dark:text-foreground/60'
-							: ''}">{displayTitle(c)}</span
-				>
+				<span class="flex min-w-0 items-center gap-1">
+					<span
+						class="min-w-0 truncate leading-5 {attention
+							? 'font-semibold'
+							: state === 'idle' && !settled && c.id !== currentId
+								? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground dark:text-foreground/60'
+								: ''}">{displayTitle(c)}</span
+					>
+					{#if showPrivate && c.private}
+						{@render privateMark()}
+					{/if}
+				</span>
 				<!-- Nothing to say (a chat with no model on record and no status): one line. -->
 				{#if source || status || snoozedUntil || c.coding?.pullRequest}
 					<span class="flex min-w-0 items-center gap-1 text-xs leading-4 text-muted-foreground">
@@ -857,7 +939,7 @@
 								{status.label}
 								{#if runStartedAt}
 									<span aria-hidden="true">
-										<CodingRunTimer startedAt={runStartedAt} dot={false} />
+										<CodingRunTimer startedAt={runStartedAt} dot={false} coarse />
 									</span>
 								{/if}
 							</span>
@@ -899,7 +981,9 @@
 				>{snoozedUntil !== null ? 'Snoozed' : 'Settled'}</span
 			>
 		{/if}
-		{@render rowActions(c, state, 'mt-1.5 pointer-coarse:mt-0.5')}
+		{#if !selecting}
+			{@render rowActions(c, state, 'mt-1.5 pointer-coarse:mt-0.5')}
+		{/if}
 	</div>
 {/snippet}
 
@@ -913,12 +997,15 @@
 			? 'bg-accent text-accent-foreground'
 			: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground/85'}"
 	>
+		{#if selecting}
+			{@render selectBox(c, '')}
+		{/if}
 		<a
 			href={resolve(`/chat/${c.id}`)}
 			data-conversation-id={c.id}
 			class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:py-2.5"
 			title={rowTitle(c, state)}
-			onclick={handleNavigate}
+			onclick={(e) => onRowClick(e, c)}
 		>
 			{#if c.coding}
 				<CodeIcon class="size-3.5 shrink-0" aria-hidden="true" />
@@ -930,7 +1017,12 @@
 				<MessageCircleIcon class="size-3.5 shrink-0" aria-hidden="true" />
 				<span class="sr-only">Chat:</span>
 			{/if}
-			<span class="min-w-0 flex-1 truncate leading-5">{displayTitle(c)}</span>
+			<span class="flex min-w-0 flex-1 items-center gap-1">
+				<span class="min-w-0 truncate leading-5">{displayTitle(c)}</span>
+				{#if showPrivate && c.private}
+					{@render privateMark()}
+				{/if}
+			</span>
 			<!-- Put away, but still worth a look: a small mark in the status's tone. -->
 			{#if status}
 				<span class="flex size-3 shrink-0 items-center justify-center {status.tone}">
@@ -956,8 +1048,24 @@
 				</span>
 			{/if}
 		</a>
-		{@render rowActions(c, state, '')}
+		{#if !selecting}
+			{@render rowActions(c, state, '')}
+		{/if}
 	</div>
+{/snippet}
+
+<!-- A row's checkbox while picking chats; coding and private chats can't be picked. -->
+{#snippet selectBox(c: Conversation, offset: string)}
+	{@const reason = unselectableReason(c)}
+	<input
+		type="checkbox"
+		class="{offset} ml-2 size-4 shrink-0 accent-primary disabled:opacity-40"
+		aria-label="Select {displayTitle(c)}"
+		title={reason ?? undefined}
+		checked={selected.has(c.id)}
+		disabled={reason !== null}
+		onchange={() => toggleSelected(c)}
+	/>
 {/snippet}
 
 <!-- A shelf below the dated groups: a hairline, then a header that reads like theirs. -->
@@ -1061,6 +1169,13 @@
 					<PencilIcon class="size-4" />
 					Rename
 				</DropdownMenu.Item>
+				{#if canMakePrivate}
+					<!-- Picks several chats to make private at once. -->
+					<DropdownMenu.Item onSelect={() => startSelecting(c)}>
+						<ListChecksIcon class="size-4" />
+						Select…
+					</DropdownMenu.Item>
+				{/if}
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item variant="destructive" onSelect={() => (deleteTarget = c)}>
 					<Trash2Icon class="size-4" />
@@ -1130,7 +1245,7 @@
 			<Input
 				bind:ref={searchInput}
 				placeholder="Search conversations…"
-				title="Search conversations ({shortcutLabel('search')})"
+				title="Search conversations"
 				bind:value={query}
 				oninput={search}
 				onkeydown={onSearchKeydown}
@@ -1156,6 +1271,26 @@
 			</button>
 		</div>
 	</div>
+	{#if selecting}
+		<div
+			class="mx-3 mb-2 flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-sm"
+			role="toolbar"
+			aria-label="Selected chats"
+		>
+			<span class="min-w-0 flex-1 truncate text-muted-foreground" aria-live="polite">
+				{selected.size === 0 ? 'Select chats' : `${selected.size} selected`}
+			</span>
+			<Button
+				size="sm"
+				disabled={selected.size === 0}
+				onclick={() => (makePrivateTargets = [...selected.values()])}
+			>
+				<LockIcon class="size-3.5" />
+				Make private…
+			</Button>
+			<Button variant="ghost" size="sm" onclick={stopSelecting}>Cancel</Button>
+		</div>
+	{/if}
 	<nav
 		bind:this={listEl}
 		class="flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)] px-2 pb-2"
@@ -1304,7 +1439,9 @@
 							aria-hidden="true"
 						></span>
 						<span aria-hidden="true"
-							>{agentStats.running}<span class="ml-1 max-md:hidden">running</span></span
+							><AnimatedNumber value={agentStats.running} /><span class="ml-1 max-md:hidden"
+								>running</span
+							></span
 						>
 					</span>
 				{/if}
@@ -1325,7 +1462,7 @@
 					<span
 						class="ml-auto text-xs text-muted-foreground tabular-nums {tileBadge}"
 						title="{memoryCount} {memoryCount === 1 ? 'memory' : 'memories'}"
-						>{memoryCount}<span class="sr-only">
+						><AnimatedNumber value={memoryCount} /><span class="sr-only">
 							{memoryCount === 1 ? 'memory' : 'memories'}</span
 						></span
 					>
@@ -1348,7 +1485,9 @@
 							? 'max-md:hidden'
 							: ''}"
 						title="{skillCount} {skillCount === 1 ? 'skill' : 'skills'}"
-						>{skillCount}<span class="sr-only"> {skillCount === 1 ? 'skill' : 'skills'}</span></span
+						><AnimatedNumber value={skillCount} /><span class="sr-only">
+							{skillCount === 1 ? 'skill' : 'skills'}</span
+						></span
 					>
 				{/if}
 			</span>
@@ -1378,9 +1517,11 @@
 							{#if requestStats.running > 0}
 								<span class="size-1.5 animate-pulse rounded-full bg-info"></span>
 							{/if}
-							<span class="max-md:hidden pointer-coarse:hidden"
-								>{formatCount(requestStats.total)}</span
-							>
+							<AnimatedNumber
+								class="max-md:hidden pointer-coarse:hidden"
+								value={requestStats.total}
+								format="count"
+							/>
 						</span>
 					{/if}
 				</span>
@@ -1426,7 +1567,7 @@
 				href={resolve('/settings')}
 				aria-label="Settings"
 				aria-current={isCurrent('/settings') ? 'page' : undefined}
-				title="Settings ({shortcutLabel('open-settings')})"
+				title="Settings"
 				class="pointer-coarse:size-11 {isCurrent('/settings') ? 'bg-accent text-foreground' : ''}"
 				onclick={handleNavigate}
 			>
@@ -1470,6 +1611,13 @@
 		</form>
 	</Dialog.Content>
 </Dialog.Root>
+
+<MakePrivateDialog
+	targets={makePrivateTargets}
+	admin={user.role === 'admin'}
+	onclose={() => (makePrivateTargets = null)}
+	ondone={madePrivate}
+/>
 
 <SnoozeDialog
 	conversation={snoozeTarget}

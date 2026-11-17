@@ -12,9 +12,10 @@ afterEach(() => {
 	globalThis.fetch = realFetch;
 });
 
-function call() {
+function call(fields: Record<string, string> = { private: 'false' }) {
 	const form = new FormData();
 	form.append('audio', new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/webm' }), 'a.webm');
+	for (const [key, value] of Object.entries(fields)) form.append(key, value);
 	const request = new Request('http://localhost/api/speech/transcribe', {
 		method: 'POST',
 		body: form
@@ -72,5 +73,38 @@ describe('POST /api/speech/transcribe', () => {
 				error: 'bad audio'
 			}
 		]);
+	});
+
+	it('fails closed: a recording without a chat or private flag only reaches trusted models', async () => {
+		const db = getDb();
+		const provider = createProvider(db, {
+			name: 'untrusted stt',
+			type: 'openai-compatible',
+			baseUrl: 'http://untrusted.local/v1'
+		});
+		const model = createModel(db, {
+			providerId: provider.id,
+			modelId: 'whisper-2',
+			capabilities: ['transcription']
+		});
+		setRoleDefault(db, 'speech-to-text', model.id);
+		const fetchMock = vi.fn(async () => Response.json({ text: 'leak' }));
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		const res = await call({});
+		expect(res.status).toBe(403);
+		expect(await res.json()).toEqual({
+			error: 'This chat is private and no speech-to-text model may process private data',
+			code: 'private_data_blocked'
+		});
+		// A client-chosen untrusted model is refused the same way.
+		const explicit = await call({ private: 'true', providerId: provider.id, modelId: 'whisper-2' });
+		expect(explicit.status).toBe(403);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("refuses another user's conversation", async () => {
+		const res = await call({ conversationId: 'not-mine' });
+		expect(res.status).toBe(404);
 	});
 });

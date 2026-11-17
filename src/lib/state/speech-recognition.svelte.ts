@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { canUseBrowserRecognition } from '$lib/private-speech.js';
 
 interface SpeechRecognitionAlternative {
 	transcript: string;
@@ -27,29 +28,32 @@ type SpeechRecognitionInstance = {
 	abort: () => void;
 } | null;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const _w = browser ? (window as any) : null;
-type SpeechRecognitionCtor = new () => {
-	continuous: boolean;
-	interimResults: boolean;
-	lang: string;
-	onerror: ((event: SpeechRecognitionEvent) => void) | null;
-	onend: (() => void) | null;
-	onresult: ((event: SpeechRecognitionEvent) => void) | null;
-	start: () => void;
-	stop: () => void;
-	abort: () => void;
-};
-const SpeechRecognitionImpl =
-	((_w?.SpeechRecognition ?? _w?.webkitSpeechRecognition) as unknown as SpeechRecognitionCtor) ??
-	((() => null) as unknown as SpeechRecognitionCtor);
-const supported = !!SpeechRecognitionImpl;
+type SpeechRecognitionCtor = new () => NonNullable<SpeechRecognitionInstance>;
 
-if (browser && !supported) {
+/** The browser's recognition, looked up when needed (tests stub it). */
+function recognitionCtor(): SpeechRecognitionCtor | null {
+	if (!browser) return null;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const w = window as any;
+	return (w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null) as SpeechRecognitionCtor | null;
+}
+
+if (browser && !recognitionCtor()) {
 	console.warn('Speech recognition is not supported in this browser');
 }
 
-export function createSpeechRecognition() {
+/**
+ * Dictation with the browser's own speech recognition. Never in a private
+ * chat (`options.private`): Chrome sends the audio to Google, so a private
+ * chat's recognition is reported unsupported and never constructed.
+ */
+export function createSpeechRecognition(
+	options: {
+		/** The chat is private (read on each start). Unset counts as private. */
+		private?: () => boolean;
+	} = {}
+) {
+	const allowed = () => canUseBrowserRecognition(options.private?.() ?? true);
 	let recording = $state(false);
 	let busy = $state(false);
 	let finalTranscript = $state('');
@@ -122,8 +126,9 @@ export function createSpeechRecognition() {
 	}
 
 	async function start(options?: { onError?: (message: string) => void }) {
-		if (!supported || recording) return;
-		const r = new SpeechRecognitionImpl()!;
+		const Ctor = recognitionCtor();
+		if (!Ctor || !allowed() || recording) return;
+		const r = new Ctor();
 		r.continuous = true;
 		r.interimResults = true;
 		r.lang = navigator.language ?? 'en';
@@ -193,7 +198,9 @@ export function createSpeechRecognition() {
 	}
 
 	return {
-		supported,
+		get supported() {
+			return recognitionCtor() !== null && allowed();
+		},
 		get recording() {
 			return recording;
 		},

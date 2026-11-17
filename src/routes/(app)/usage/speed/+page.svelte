@@ -1,5 +1,6 @@
 <script lang="ts">
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
+	import AnimatedNumber, { type NumberFormatKind } from '$lib/components/app/AnimatedNumber.svelte';
 	import EmptyState from '$lib/components/app/EmptyState.svelte';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import SpeedBars, {
@@ -12,13 +13,7 @@
 	import SpeedByContext, { type ContextRow } from '$lib/components/app/usage/SpeedByContext.svelte';
 	import { paygColor } from '$lib/components/app/usage/usage.js';
 	import { formatCount } from '$lib/formats.js';
-	import {
-		formatMs,
-		formatTokensShort,
-		formatTps,
-		MIN_DECODE_TOKENS,
-		MIN_PREFILL_TOKENS
-	} from '$lib/inference-speed.js';
+	import { MIN_DECODE_TOKENS, MIN_PREFILL_TOKENS } from '$lib/inference-speed.js';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -107,31 +102,52 @@
 			providerFilter = '';
 	});
 
+	// Numbers for the animated tiles, rounded like formatTps / formatMs.
+	const tpsNumber = (tps: number | null | undefined) => ({
+		value: tps ?? null,
+		format: (tps != null && tps >= 1000
+			? 'count'
+			: tps != null && tps >= 100
+				? 'integer'
+				: 'decimal') as NumberFormatKind,
+		suffix: ''
+	});
+	const msNumber = (ms: number | null | undefined) =>
+		ms != null && ms >= 1000
+			? {
+					value: ms / 1000,
+					format: (ms < 10_000 ? 'decimal' : 'integer') as NumberFormatKind,
+					suffix: ' s',
+					unit: ''
+				}
+			: { value: ms ?? null, format: 'integer' as NumberFormatKind, suffix: ' ms', unit: '' };
+
 	const tiles = $derived([
 		{
 			label: 'Output speed',
-			value: formatTps(overall.outputTps),
+			...tpsNumber(overall.outputTps),
 			unit: overall.outputTps == null ? '' : 'tok/s',
 			caption: `median of ${formatCount(overall.outputSamples)} replies`,
 			title: `${METRICS[0].description} Replies under ${MIN_DECODE_TOKENS} tokens are left out.`
 		},
 		{
 			label: 'Input speed',
-			value: formatTps(overall.inputTps),
+			...tpsNumber(overall.inputTps),
 			unit: overall.inputTps == null ? '' : 'tok/s',
 			caption: `median of ${formatCount(overall.inputSamples)} prompts`,
 			title: `${METRICS[1].description} Prompts under ${MIN_PREFILL_TOKENS} uncached tokens are left out.`
 		},
 		{
 			label: 'First token',
-			value: formatMs(overall.ttftMs),
-			unit: '',
+			...msNumber(overall.ttftMs),
 			caption: `median of ${formatCount(overall.samples)} calls`,
 			title: METRICS[2].description
 		},
 		{
 			label: 'Typical context',
-			value: formatTokensShort(overall.contextTokens),
+			value: overall.contextTokens,
+			format: 'count' as const,
+			suffix: '',
 			unit: overall.contextTokens == null ? '' : 'tokens',
 			caption: 'median prompt size per call',
 			title:
@@ -179,7 +195,11 @@
 							>{tile.label}</span
 						>
 						<span class="text-2xl font-semibold whitespace-nowrap tabular-nums sm:text-3xl">
-							{tile.value}{#if tile.unit}<span
+							<AnimatedNumber
+								value={tile.value}
+								format={tile.format}
+								suffix={tile.suffix}
+							/>{#if tile.unit}<span
 									class="ml-1 text-xs font-normal text-muted-foreground sm:text-base"
 									>{tile.unit}</span
 								>{/if}

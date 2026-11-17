@@ -17,6 +17,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import EyeIcon from '@lucide/svelte/icons/eye';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import { toast } from 'svelte-sonner';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -265,6 +266,15 @@
 									{/snippet}
 									{#snippet badges()}
 										{@const display = agentDisplayName(agent.name)}
+										{#if data.privateData.enabled && agent.private}
+											<Badge
+												variant="outline"
+												class="text-muted-foreground"
+												title="Private agent: its runs only use trusted models"
+											>
+												<LockIcon class="size-3" aria-hidden="true" />Private
+											</Badge>
+										{/if}
 										{#if running}
 											{@const chat =
 												last?.status === 'running' && last.conversationId

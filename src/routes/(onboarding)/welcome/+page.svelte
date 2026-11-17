@@ -160,6 +160,7 @@
 						isAdmin={data.isAdmin}
 						{hasModel}
 						stepCount={data.steps.length}
+						privateDataEnabled={data.privateDataEnabled}
 						onnext={() => go(1)}
 					/>
 				{:else if flow.step === 'model'}
@@ -169,6 +170,7 @@
 				{:else if flow.step === 'concepts'}
 					<StepConcepts
 						isAdmin={data.isAdmin}
+						privateDataEnabled={data.privateDataEnabled}
 						{hasModel}
 						onback={() => go(-1)}
 						onnext={() => go(1)}

@@ -1,6 +1,7 @@
 import { isAskUserPart } from '$lib/ask-user.js';
 import { CODING_TASK_NOTICE_PART, isCodingTaskProposalPart } from '$lib/coding-task-proposal.js';
 import { readHtmlRender } from '$lib/html-render.js';
+import { PRIVACY_NOTICE_PART } from '$lib/private-data.js';
 import { describeTool, toolFailed, type ToolKind } from '$lib/tool-meta.js';
 
 /** Minimal shape of a UIMessage part, enough to group and summarise it. */
@@ -54,7 +55,12 @@ export function hasVisibleContent(parts: PartLike[]): boolean {
 		if (part.type === 'text' || part.type === 'reasoning') {
 			return ((part as { text?: string }).text ?? '').trim() !== '';
 		}
-		return part.type === 'file' || part.type === CODING_TASK_NOTICE_PART || isToolPart(part);
+		return (
+			part.type === 'file' ||
+			part.type === CODING_TASK_NOTICE_PART ||
+			part.type === PRIVACY_NOTICE_PART ||
+			isToolPart(part)
+		);
 	});
 }
 

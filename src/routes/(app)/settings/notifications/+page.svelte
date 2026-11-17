@@ -7,6 +7,7 @@
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import PushNotificationsSection from '$lib/components/app/settings/PushNotificationsSection.svelte';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
@@ -391,9 +392,11 @@
 						oninput={(e) => update({ volume: Number(e.currentTarget.value) / 100 })}
 						onchange={() => playTone(prefs.tone, prefs.volume)}
 					/>
-					<span class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
-						>{Math.round(prefs.volume * 100)}%</span
-					>
+					<AnimatedNumber
+						class="w-10 shrink-0 text-right text-sm text-muted-foreground tabular-nums"
+						value={Math.round(prefs.volume * 100) / 100}
+						format="percent"
+					/>
 				</div>
 			</SettingsRow>
 			<SettingsRow

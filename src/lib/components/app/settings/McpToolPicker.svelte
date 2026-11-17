@@ -7,6 +7,7 @@
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import ToolAllowlist from '$lib/components/app/ToolAllowlist.svelte';
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import { accessToToolNames, defaultAccess } from '$lib/mcp-access.js';
 	import type { McpGatewayServer, McpKeyAccess, ToolInfo } from '$lib/types.js';
 
@@ -96,9 +97,11 @@
 			<h3 id="mcp-tools-heading" class="text-sm font-medium">
 				MCP tools
 				{#if tools}
-					<span class="ml-1 font-normal text-muted-foreground tabular-nums">
-						{selected.length} of {tools.length}
-					</span>
+					<AnimatedNumber
+						class="ml-1 font-normal text-muted-foreground tabular-nums"
+						value={selected.length}
+						suffix=" of {tools.length}"
+					/>
 				{/if}
 			</h3>
 			<p class="text-xs text-muted-foreground">

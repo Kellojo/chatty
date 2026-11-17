@@ -21,6 +21,8 @@ export interface AgentRow {
 	/** JSON AgentCodingTarget; set for coding agents. */
 	coding_target: string | null;
 	enabled: number;
+	/** 1: private; its runs may only use providers trusted with private data. */
+	private: number;
 	last_run_at: number | null;
 	next_run_at: number | null;
 	created_at: number;
@@ -44,6 +46,7 @@ export function toPublic(row: AgentRow): Agent {
 		canAsk: parseCanAsk(row),
 		codingTarget: parseCodingTarget(row),
 		enabled: row.enabled === 1,
+		private: row.private === 1,
 		lastRunAt: row.last_run_at,
 		nextRunAt: row.next_run_at,
 		createdAt: row.created_at,
@@ -80,6 +83,8 @@ export interface CreateAgentInput {
 	canAsk?: AgentCanAsk;
 	codingTarget?: AgentCodingTarget | null;
 	enabled?: boolean;
+	/** Private agent: its runs and their chats are private data. Callers check its model is trusted. */
+	private?: boolean;
 	nextRunAt?: number | null;
 }
 
@@ -89,8 +94,8 @@ export function createAgent(db: Db, userId: string | null, input: CreateAgentInp
 	db.prepare(
 		`INSERT INTO agents (id, user_id, name, description, system_prompt, provider_id, model_id,
 		 skill_names, tool_allowlist, trigger_type, trigger_config, max_steps, can_ask, coding_target,
-		 enabled, next_run_at, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 enabled, private, next_run_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
@@ -107,6 +112,7 @@ export function createAgent(db: Db, userId: string | null, input: CreateAgentInp
 		input.canAsk ?? (userId === null ? 'never' : 'any'),
 		input.codingTarget ? JSON.stringify(input.codingTarget) : null,
 		input.enabled === false ? 0 : 1,
+		input.private ? 1 : 0,
 		input.nextRunAt ?? null,
 		now,
 		now
@@ -255,6 +261,7 @@ export interface UpdateAgentInput {
 	canAsk?: AgentCanAsk;
 	codingTarget?: AgentCodingTarget | null;
 	enabled?: boolean;
+	private?: boolean;
 	nextRunAt?: number | null;
 	lastRunAt?: number | null;
 }
@@ -265,7 +272,8 @@ export function updateAgent(db: Db, id: string, patch: UpdateAgentInput): AgentR
 	db.prepare(
 		`UPDATE agents SET name = ?, description = ?, system_prompt = ?, provider_id = ?, model_id = ?,
 		 skill_names = ?, tool_allowlist = ?, trigger_type = ?, trigger_config = ?, max_steps = ?,
-		 can_ask = ?, coding_target = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
+		 can_ask = ?, coding_target = ?, enabled = ?, private = ?, next_run_at = ?, last_run_at = ?,
+		 updated_at = ?
 		 WHERE id = ?`
 	).run(
 		patch.name ?? existing.name,
@@ -291,6 +299,7 @@ export function updateAgent(db: Db, id: string, patch: UpdateAgentInput): AgentR
 				: null
 			: existing.coding_target,
 		patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : existing.enabled,
+		patch.private !== undefined ? (patch.private ? 1 : 0) : existing.private,
 		patch.nextRunAt !== undefined ? patch.nextRunAt : existing.next_run_at,
 		patch.lastRunAt !== undefined ? patch.lastRunAt : existing.last_run_at,
 		Date.now(),

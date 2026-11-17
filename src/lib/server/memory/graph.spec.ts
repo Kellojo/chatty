@@ -42,7 +42,7 @@ describe('buildMemoryGraph', () => {
 		write('u1/b/z.md', 'title: Z\ntags: [rare]', 'No links.');
 		write('u1/c/w.md', 'title: W\ntags: [space]', 'Unlinked.');
 		write('u1/a/index.md', '', '- [X](x.md)');
-		const graph = await buildMemoryGraph(['user'], 'u1');
+		const graph = await buildMemoryGraph(['user'], 'u1', { includePrivate: true });
 		expect(graph.nodes.map((n) => n.id)).toEqual([
 			'user:a/x.md',
 			'user:a/y.md',
@@ -68,7 +68,7 @@ describe('buildMemoryGraph', () => {
 	it('groups shared memories and connects them to the user by tag', async () => {
 		write('u2/mine.md', 'title: Mine\ntags: [cats]', 'Body.');
 		write('shared/team/cats.md', 'title: Cats\ntags: [cats]', 'Body.');
-		const graph = await buildMemoryGraph(['user', 'shared'], 'u2');
+		const graph = await buildMemoryGraph(['user', 'shared'], 'u2', { includePrivate: true });
 		expect(graph.nodes.map((n) => [n.id, n.folder])).toEqual([
 			['user:mine.md', ''],
 			['shared:team/cats.md', 'Shared']
@@ -79,6 +79,9 @@ describe('buildMemoryGraph', () => {
 	});
 
 	it('returns an empty graph for a missing bundle', async () => {
-		expect(await buildMemoryGraph(['user'], 'nobody')).toEqual({ nodes: [], edges: [] });
+		expect(await buildMemoryGraph(['user'], 'nobody', { includePrivate: true })).toEqual({
+			nodes: [],
+			edges: []
+		});
 	});
 });

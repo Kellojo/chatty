@@ -22,6 +22,7 @@ import {
 	type ProviderRow
 } from '../db/repo/providers.js';
 import { voiceNames } from '../speech/voices.js';
+import { assertModelAllowed, type Privacy } from '../privacy/policy.js';
 
 type LanguageModelFactory = (modelId: string) => LanguageModel;
 
@@ -102,8 +103,16 @@ function buildImageFactory(provider: ProviderRow): (modelId: string) => ImageMod
 	return (modelId) => p.imageModel(modelId);
 }
 
-export function resolveImageModel(ref: { providerId: string; modelId: string }): ImageModel {
+/**
+ * The image model for `ref`. `privacy` is the context the prompt comes from:
+ * a private one may only use a provider trusted with private data.
+ */
+export function resolveImageModel(
+	ref: { providerId: string; modelId: string },
+	privacy: Privacy
+): ImageModel {
 	const db = getDb();
+	assertModelAllowed(db, ref, privacy);
 	const provider = getProvider(db, ref.providerId);
 	if (!provider || provider.enabled !== 1) {
 		throw new ModelUnavailableError(`Provider ${ref.providerId} is not available`);
@@ -118,8 +127,17 @@ export function resolveImageModel(ref: { providerId: string; modelId: string }):
 export { ModelUnavailableError } from './mapped.js';
 import { ModelUnavailableError, resolveRefTargets } from './mapped.js';
 
-export function resolveModel(ref: { providerId: string; modelId: string }): LanguageModel {
+/**
+ * The language model for `ref`. `privacy` is the context the prompt comes
+ * from: a private one may only use a provider trusted with private data
+ * (throws PrivateDataBlockedError otherwise, before any request).
+ */
+export function resolveModel(
+	ref: { providerId: string; modelId: string },
+	privacy: Privacy
+): LanguageModel {
 	const db = getDb();
+	assertModelAllowed(db, ref, privacy);
 	const provider = getProvider(db, ref.providerId);
 	if (!provider || provider.enabled !== 1) {
 		throw new ModelUnavailableError(`Provider ${ref.providerId} is not available`);
@@ -131,14 +149,15 @@ export function resolveModel(ref: { providerId: string; modelId: string }): Lang
 	return factoryFor(provider)(ref.modelId);
 }
 
-export function roleModel(role: ModelRole): LanguageModel {
+export function roleModel(role: ModelRole, privacy: Privacy): LanguageModel {
 	const db = getDb();
 	const model = findRoleModel(db, role);
 	if (!model) {
 		throw new ModelUnavailableError(`No enabled default model configured for role "${role}"`);
 	}
 	return resolveModel(
-		resolveRefTargets({ providerId: model.provider_id, modelId: model.model_id }, db).targets[0]
+		resolveRefTargets({ providerId: model.provider_id, modelId: model.model_id }, db).targets[0],
+		privacy
 	);
 }
 

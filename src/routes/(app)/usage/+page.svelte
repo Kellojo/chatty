@@ -14,6 +14,7 @@
 	import PlanLimitBar from '$lib/components/app/usage/PlanLimitBar.svelte';
 	import ProviderBillingBadge from '$lib/components/app/usage/ProviderBillingBadge.svelte';
 	import UsageTile from '$lib/components/app/usage/UsageTile.svelte';
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import {
 		formatApiValue,
 		mostUsedWindow,
@@ -151,17 +152,16 @@
 		<UsageTile
 			billing="payg"
 			label="Billed"
-			value={payg.totalRequests === 0
-				? formatBilled(0)
-				: formatBilled(payg.totalCostUsd, { pricedRequests: payg.pricedRequests })}
+			value={payg.totalRequests === 0 ? 0 : payg.pricedRequests === 0 ? null : payg.totalCostUsd}
 			caption={payg.totalRequests > 0 && payg.pricedRequests === 0 ? 'No cost reported' : undefined}
 			subtitle="Billed per token by the providers configured in Chatty."
 		>
 			<!-- With no requests, the empty state below already says so. -->
 			{#if payg.totalRequests > 0}
 				<span class="text-sm text-foreground/80 tabular-nums">
-					Your {formatCount(payg.totalRequests)}
-					{payg.totalRequests === 1 ? 'request' : 'requests'} · {formatCount(payg.totalTokens)} tokens
+					Your <AnimatedNumber value={payg.totalRequests} format="count" />
+					{payg.totalRequests === 1 ? 'request' : 'requests'} ·
+					<AnimatedNumber value={payg.totalTokens} format="count" /> tokens
 				</span>
 			{/if}
 			{#if delta}
@@ -191,15 +191,20 @@
 			<UsageTile
 				billing="subscription"
 				label="API value"
-				value={formatApiValue(subs.totalValueUsd, subs.anyUnpriced)}
+				value={subs.totalValueUsd === 0 && subs.anyUnpriced
+					? formatApiValue(0, true)
+					: subs.totalValueUsd}
+				prefix="≈ "
+				suffix={subs.anyUnpriced ? '+' : ''}
 				subtitle="Included in your plans, shown at API prices — not billed."
 			>
 				<span class="text-sm text-foreground/80 tabular-nums">
 					{#if subs.totalSessions === 0}
 						No sessions in this period
 					{:else}
-						Your {formatCount(subs.totalSessions)}
-						{subs.totalSessions === 1 ? 'session' : 'sessions'} · {formatCount(subs.totalTokens)} tokens
+						Your <AnimatedNumber value={subs.totalSessions} format="count" />
+						{subs.totalSessions === 1 ? 'session' : 'sessions'} ·
+						<AnimatedNumber value={subs.totalTokens} format="count" /> tokens
 					{/if}
 				</span>
 				{#if topWindow}
@@ -324,13 +329,17 @@
 											>no cost reported</span
 										>
 									{:else if payg.totalCostUsd > 0}
-										<span class="text-xs text-muted-foreground tabular-nums">
-											{Math.round((p.costUsd / payg.totalCostUsd) * 100)}%
-										</span>
+										<AnimatedNumber
+											class="text-xs text-muted-foreground tabular-nums"
+											value={Math.round((p.costUsd / payg.totalCostUsd) * 100) / 100}
+											format="percent"
+										/>
 									{/if}
-									<span class="w-24 text-right font-medium tabular-nums"
-										>{formatBilled(p.costUsd, { pricedRequests: p.pricedRequests })}</span
-									>
+									<AnimatedNumber
+										class="w-24 text-right font-medium tabular-nums"
+										value={noCost(p) ? null : p.costUsd}
+										format="usd"
+									/>
 								</li>
 							{/each}
 						</ul>
@@ -379,11 +388,15 @@
 									></span>
 									<span class="min-w-0 flex-1 truncate">{providerLabel(p.provider)}</span>
 									<span class="text-xs text-muted-foreground tabular-nums">
-										{formatCount(p.tokens)} tokens
+										<AnimatedNumber value={p.tokens} format="count" /> tokens
 									</span>
-									<span class="w-24 text-right text-muted-foreground tabular-nums">
-										{formatApiValue(p.costUsd, !p.priced)}
-									</span>
+									<AnimatedNumber
+										class="w-24 text-right text-muted-foreground tabular-nums"
+										value={p.costUsd === 0 && !p.priced ? formatApiValue(0, true) : p.costUsd}
+										format="usd"
+										prefix="≈ "
+										suffix={p.priced ? '' : '+'}
+									/>
 								</li>
 							{/each}
 						</ul>

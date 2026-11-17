@@ -12,6 +12,7 @@ import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { deleteMemoryFts, upsertMemoryFts } from './fts.js';
 import { ftsScope, bundleDir, normalizeConceptPath, resolveConceptAbs } from './paths.js';
+import { conceptIsPrivate, rawConceptIsPrivate } from './private.js';
 import type { MemoryScope } from './paths.js';
 
 export interface ConceptFrontmatter {
@@ -20,6 +21,18 @@ export interface ConceptFrontmatter {
 	description: string;
 	tags: string[];
 	timestamp: string;
+	/**
+	 * Only trusted models may see it (frontmatter `private: true`). Absent
+	 * means public; files never carry `private: false`.
+	 */
+	private?: boolean;
+	/** Why Chatty marked it private on its own (automatic classification); only on private concepts. */
+	privateReason?: string;
+	/**
+	 * Set when an automatically marked note no longer looks like it has personal
+	 * details: it stays private until a person decides. Only on private concepts.
+	 */
+	privateReview?: string;
 }
 
 export interface Concept {
@@ -27,6 +40,21 @@ export interface Concept {
 	path: string;
 	frontmatter: ConceptFrontmatter;
 	body: string;
+}
+
+/**
+ * Checked against the concept as it is on disk, under the bundle lock, right
+ * before a write or delete: a message refuses it (ConceptWriteRefused), so no
+ * other write can slip in between the check and the change.
+ */
+export type ConceptWriteGuard = (current: Concept | null) => string | null;
+
+/** A write or delete its guard refused; the message is the guard's. */
+export class ConceptWriteRefused extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'ConceptWriteRefused';
+	}
 }
 
 export interface MemoryAuditInfo {
@@ -41,7 +69,10 @@ const frontmatterSchema = z.object({
 	type: z.string().trim().min(1).max(50).default('concept'),
 	description: z.string().trim().max(500).default(''),
 	tags: z.array(z.string().trim().min(1).max(50)).max(20).default([]),
-	timestamp: z.string().default(() => new Date().toISOString())
+	timestamp: z.string().default(() => new Date().toISOString()),
+	private: z.boolean().optional(),
+	privateReason: z.string().trim().min(1).max(200).optional(),
+	privateReview: z.string().trim().min(1).max(200).nullish()
 });
 
 function parseFrontmatterInput(input: unknown): ConceptFrontmatter {
@@ -50,7 +81,16 @@ function parseFrontmatterInput(input: unknown): ConceptFrontmatter {
 		const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 		throw new Error(`Invalid concept frontmatter: ${issues}`);
 	}
-	return parsed.data;
+	const { private: isPrivate, privateReason, privateReview, ...rest } = parsed.data;
+	// Written only when set, so public concepts keep their files unchanged; a
+	// reason or review only means something on a private concept.
+	if (!isPrivate) return rest;
+	return {
+		...rest,
+		private: true,
+		...(privateReason ? { privateReason } : {}),
+		...(privateReview ? { privateReview } : {})
+	};
 }
 
 function requireConcept(
@@ -67,12 +107,15 @@ function requireConcept(
 function parseConceptFile(scope: MemoryScope, relPath: string, raw: string): Concept {
 	let data: Record<string, unknown> = {};
 	let body = raw;
+	let isPrivate: boolean;
 	try {
 		const parsed = parseFrontmatter(raw);
 		data = parsed.data as Record<string, unknown>;
 		body = parsed.content;
+		isPrivate = conceptIsPrivate(data, raw);
 	} catch {
 		// invalid frontmatter: treat whole file as body
+		isPrivate = conceptIsPrivate(null, raw);
 	}
 	return {
 		scope,
@@ -87,7 +130,14 @@ function parseConceptFile(scope: MemoryScope, relPath: string, raw: string): Con
 			tags: Array.isArray(data.tags)
 				? data.tags.filter((t): t is string => typeof t === 'string')
 				: [],
-			timestamp: typeof data.timestamp === 'string' ? data.timestamp : ''
+			timestamp: typeof data.timestamp === 'string' ? data.timestamp : '',
+			...(isPrivate ? { private: true } : {}),
+			...(isPrivate && typeof data.privateReason === 'string' && data.privateReason.trim()
+				? { privateReason: data.privateReason }
+				: {}),
+			...(isPrivate && typeof data.privateReview === 'string' && data.privateReview.trim()
+				? { privateReview: data.privateReview }
+				: {})
 		},
 		body
 	};
@@ -285,19 +335,54 @@ export async function writeConcept(
 			description?: string;
 			tags?: string[];
 			timestamp?: string;
+			/** true/false sets the flag; omitted keeps the existing file's, so no save drops it. */
+			private?: boolean;
+			/** Why it was marked private automatically; kept while it stays private. */
+			privateReason?: string;
+			/**
+			 * A review suggestion: a string sets it, null clears it. Omitted keeps the
+			 * existing one, unless `private` is given (a person decided).
+			 */
+			privateReview?: string | null;
 		};
 		body: string;
 	},
-	audit: MemoryAuditInfo
+	audit: MemoryAuditInfo,
+	guard?: ConceptWriteGuard
 ): Promise<Concept> {
 	const target = requireConcept(scope, userId, relPath);
-	const fm = parseFrontmatterInput(input.frontmatter);
-	const newRaw = matter.stringify(input.body, fm);
-	const oldRaw = await withBundleLock(bundleDir(scope, userId), async () => {
+	const given = parseFrontmatterInput(input.frontmatter);
+	let fm = given;
+	const { oldRaw, newRaw } = await withBundleLock(bundleDir(scope, userId), async () => {
 		const old = await readIfExists(target.abs);
+		const current = old === null ? null : parseConceptFile(scope, target.relPath, old);
+		const refused = guard?.(current);
+		if (refused) throw new ConceptWriteRefused(refused);
+		if (input.frontmatter.private === undefined && current?.frontmatter.private) {
+			fm = { ...given, private: true };
+		}
+		// A save that keeps it private keeps the reason it was marked with.
+		if (fm.private && !fm.privateReason && current?.frontmatter.privateReason) {
+			fm = { ...fm, privateReason: current.frontmatter.privateReason };
+		}
+		// A review suggestion given with this save applies to the (kept) private
+		// note; without one, it stays unless a person just set the flag either way.
+		if (fm.private) {
+			const review = input.frontmatter.privateReview;
+			if (typeof review === 'string') {
+				fm = { ...fm, privateReview: review };
+			} else if (
+				review === undefined &&
+				input.frontmatter.private === undefined &&
+				current?.frontmatter.privateReview
+			) {
+				fm = { ...fm, privateReview: current.frontmatter.privateReview };
+			}
+		}
+		const raw = matter.stringify(input.body, fm);
 		await fsp.mkdir(path.dirname(target.abs), { recursive: true });
-		await fsp.writeFile(target.abs, newRaw);
-		return old;
+		await fsp.writeFile(target.abs, raw);
+		return { oldRaw: old, newRaw: raw };
 	});
 	const diff = createTwoFilesPatch(
 		`a/${target.relPath}`,
@@ -322,7 +407,8 @@ export async function writeConcept(
 		path: target.relPath,
 		action,
 		author: audit.author,
-		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {}),
+		...(fm.private ? { private: true } : {})
 	});
 	scheduleIndex(path.dirname(target.abs));
 	upsertMemoryFts(db, ftsScope(scope, userId), target.relPath, fm, input.body);
@@ -334,12 +420,15 @@ export async function deleteConcept(
 	scope: MemoryScope,
 	userId: string,
 	relPath: string,
-	audit: MemoryAuditInfo
+	audit: MemoryAuditInfo,
+	guard?: ConceptWriteGuard
 ): Promise<boolean> {
 	const target = requireConcept(scope, userId, relPath);
 	const rootAbs = bundleDir(scope, userId);
 	const oldRaw = await withBundleLock(rootAbs, async () => {
 		const old = await readIfExists(target.abs);
+		const refused = guard?.(old === null ? null : parseConceptFile(scope, target.relPath, old));
+		if (refused) throw new ConceptWriteRefused(refused);
 		if (old === null) return null;
 		await fsp.unlink(target.abs);
 		await settleDirAfterRemoval(path.dirname(target.abs), rootAbs);
@@ -363,7 +452,8 @@ export async function deleteConcept(
 		path: target.relPath,
 		action: 'delete',
 		author: audit.author,
-		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {}),
+		...(rawConceptIsPrivate(oldRaw) ? { private: true } : {})
 	});
 	deleteMemoryFts(db, ftsScope(scope, userId), target.relPath);
 	return true;
@@ -420,7 +510,8 @@ export async function moveConcept(
 		path: to.relPath,
 		action: 'update',
 		author: audit.author,
-		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {})
+		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {}),
+		...(rawConceptIsPrivate(raw) ? { private: true } : {})
 	});
 	return concept;
 }
@@ -431,6 +522,8 @@ export interface MemoryTreeNode {
 	kind: 'dir' | 'concept';
 	title?: string;
 	description?: string;
+	/** A private concept (frontmatter `private: true`). */
+	private?: boolean;
 	children?: MemoryTreeNode[];
 }
 
@@ -444,6 +537,10 @@ async function readDirIfExists(dir: string): Promise<Dirent[]> {
 	}
 }
 
+/**
+ * The bundle as a tree, private concepts flagged. Callers must be allowed to
+ * see private concepts (the owner's own browser): it doesn't filter them.
+ */
 export async function listTree(scope: MemoryScope, userId: string): Promise<MemoryTreeNode[]> {
 	const build = async (dir: string, rel: string): Promise<MemoryTreeNode[]> => {
 		const entries = (await readDirIfExists(dir))
@@ -458,15 +555,29 @@ export async function listTree(scope: MemoryScope, userId: string): Promise<Memo
 				}
 				let title = e.name.slice(0, -'.md'.length);
 				let description = '';
+				let isPrivate = false;
+				let review = false;
 				try {
-					const parsed = parseFrontmatter(await fsp.readFile(abs, 'utf8'));
+					const raw = await fsp.readFile(abs, 'utf8');
+					isPrivate = conceptIsPrivate(null, raw);
+					const parsed = parseFrontmatter(raw);
 					const d = parsed.data as Record<string, unknown>;
 					if (typeof d.title === 'string' && d.title.trim()) title = d.title;
 					if (typeof d.description === 'string') description = d.description;
+					isPrivate = conceptIsPrivate(d, raw);
+					review = isPrivate && typeof d.privateReview === 'string' && d.privateReview !== '';
 				} catch {
 					// fall back to filename title
 				}
-				return { name: e.name, path: nodeRel, kind: 'concept', title, description };
+				return {
+					name: e.name,
+					path: nodeRel,
+					kind: 'concept',
+					title,
+					description,
+					...(isPrivate ? { private: true } : {}),
+					...(review ? { privateReview: true } : {})
+				};
 			})
 		);
 	};
@@ -522,4 +633,62 @@ export async function listConceptPaths(
 	};
 	await recurse(base, baseRel);
 	return out.sort();
+}
+
+/**
+ * Sets the private flag on every concept under `prefix` (a folder, or '' for
+ * the whole bundle) that doesn't have it yet. A person's action from the
+ * memory browser; returns how many concepts changed.
+ */
+export async function setConceptsPrivate(
+	db: Db,
+	scope: MemoryScope,
+	userId: string,
+	prefix: string,
+	value: boolean,
+	audit: MemoryAuditInfo
+): Promise<number> {
+	const paths = await listConceptPaths(scope, userId, prefix || undefined);
+	return setConceptPathsPrivate(db, scope, userId, paths, value, audit);
+}
+
+/**
+ * Sets the private flag on the given concepts (paths in the bundle); missing
+ * ones and those already flagged are skipped. Returns how many changed. A
+ * person decided their privacy, so each changed one is recorded as checked:
+ * the privacy sweep doesn't mark a note made public private again.
+ */
+export async function setConceptPathsPrivate(
+	db: Db,
+	scope: MemoryScope,
+	userId: string,
+	relPaths: readonly string[],
+	value: boolean,
+	audit: MemoryAuditInfo
+): Promise<number> {
+	// Loaded here: the sweep imports this module (and the classifier with it).
+	const { recordPrivacyCheck } = await import('../privacy/sweep.js');
+	let updated = 0;
+	for (const relPath of relPaths) {
+		const concept = await readConcept(scope, userId, relPath);
+		if (!concept || (concept.frontmatter.private === true) === value) continue;
+		const saved = await writeConcept(
+			db,
+			scope,
+			userId,
+			concept.path,
+			{
+				frontmatter: {
+					...concept.frontmatter,
+					timestamp: concept.frontmatter.timestamp || undefined,
+					private: value
+				},
+				body: concept.body
+			},
+			audit
+		);
+		recordPrivacyCheck(db, saved, userId);
+		updated++;
+	}
+	return updated;
 }

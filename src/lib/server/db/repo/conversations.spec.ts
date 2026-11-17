@@ -199,9 +199,11 @@ describe('conversations repo', () => {
 			say(c.id, 'which PWA capabilities matter?');
 			say(c.id, 'besides notifications, file sharing');
 			expect(searchConversations(db, 'u1', 'PWA notifications')).toEqual([]);
-			expect(searchConversationsRanked(db, 'u1', 'PWA notifications').map((h) => h.id)).toEqual([
-				c.id
-			]);
+			expect(
+				searchConversationsRanked(db, 'u1', 'PWA notifications', { includePrivate: true }).map(
+					(h) => h.id
+				)
+			).toEqual([c.id]);
 		});
 
 		it('ranks chats covering more words above more recent partial matches', () => {
@@ -211,10 +213,11 @@ describe('conversations repo', () => {
 			const partial = createConversation(db, 'u1', { title: 'b' });
 			say(partial.id, 'press the keyboard key');
 			age(partial.id, 2000);
-			expect(searchConversationsRanked(db, 'u1', 'keyboard shortcuts').map((h) => h.id)).toEqual([
-				full.id,
-				partial.id
-			]);
+			expect(
+				searchConversationsRanked(db, 'u1', 'keyboard shortcuts', { includePrivate: true }).map(
+					(h) => h.id
+				)
+			).toEqual([full.id, partial.id]);
 		});
 
 		it('boosts title matches and breaks ties by recency', () => {
@@ -226,19 +229,19 @@ describe('conversations repo', () => {
 			const older = createConversation(db, 'u1', { title: 'misc older' });
 			say(older.id, 'haptics again');
 			age(older.id, 2000);
-			expect(searchConversationsRanked(db, 'u1', 'haptics').map((h) => h.id)).toEqual([
-				inTitle.id,
-				inBody.id,
-				older.id
-			]);
+			expect(
+				searchConversationsRanked(db, 'u1', 'haptics', { includePrivate: true }).map((h) => h.id)
+			).toEqual([inTitle.id, inBody.id, older.id]);
 		});
 
 		it('stems words', () => {
 			const c = createConversation(db, 'u1', { title: 'x' });
 			say(c.id, 'the request was stuck pending');
-			expect(searchConversationsRanked(db, 'u1', 'requests stuck').map((h) => h.id)).toEqual([
-				c.id
-			]);
+			expect(
+				searchConversationsRanked(db, 'u1', 'requests stuck', { includePrivate: true }).map(
+					(h) => h.id
+				)
+			).toEqual([c.id]);
 			expect(searchConversations(db, 'u1', 'requests').map((h) => h.id)).toEqual([c.id]);
 		});
 
@@ -252,16 +255,24 @@ describe('conversations repo', () => {
 				parts: [{ type: 'text', text: 'edited giraffe' }],
 				parentId: null
 			});
-			expect(searchConversationsRanked(db, 'u1', 'okapi')).toEqual([]);
-			expect(searchConversationsRanked(db, 'u1', 'giraffe okapi').map((h) => h.id)).toEqual([c.id]);
+			expect(searchConversationsRanked(db, 'u1', 'okapi', { includePrivate: true })).toEqual([]);
+			expect(
+				searchConversationsRanked(db, 'u1', 'giraffe okapi', { includePrivate: true }).map(
+					(h) => h.id
+				)
+			).toEqual([c.id]);
 		});
 
 		it('never throws on FTS syntax and honours the limit', () => {
 			for (let i = 0; i < 3; i++) say(createConversation(db, 'u1', { title: 't' }).id, 'zebra');
 			for (const q of ['"', 'OR', 'NEAR(', 'content:', '*', '-', '{x y}: z', '']) {
-				expect(() => searchConversationsRanked(db, 'u1', q)).not.toThrow();
+				expect(() =>
+					searchConversationsRanked(db, 'u1', q, { includePrivate: true })
+				).not.toThrow();
 			}
-			expect(searchConversationsRanked(db, 'u1', 'zebra', { limit: 2 })).toHaveLength(2);
+			expect(
+				searchConversationsRanked(db, 'u1', 'zebra', { limit: 2, includePrivate: true })
+			).toHaveLength(2);
 		});
 	});
 
@@ -315,7 +326,9 @@ describe('settling conversations', () => {
 		expect(countSettledConversations(db, 'u1')).toBe(1);
 		// Still directly accessible and visible to time-based lookups.
 		expect(getConversation(db, 'u1', a.id)).toBeDefined();
-		expect(listConversationsSince(db, 'u1', 0).map((c) => c.id)).toContain(a.id);
+		expect(
+			listConversationsSince(db, 'u1', 0, { includePrivate: true }).map((c) => c.id)
+		).toContain(a.id);
 	});
 
 	it("does not settle another user's conversation", () => {

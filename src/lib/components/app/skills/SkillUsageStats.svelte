@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AnimatedNumber from '$lib/components/app/AnimatedNumber.svelte';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
@@ -6,7 +7,7 @@
 	import SegmentedToggle from '$lib/components/app/SegmentedToggle.svelte';
 	import { modelColors, USAGE_PERIODS, type UsagePeriod } from '$lib/components/app/usage/usage.js';
 	import { formatTimeAgo } from '$lib/datetime.js';
-	import { formatWholeCountTick } from '$lib/formats.js';
+	import { formatWholeCountTick, shareOf } from '$lib/formats.js';
 	import {
 		skillUsageKey,
 		type SkillSummary,
@@ -75,16 +76,20 @@
 	const usedEnabled = $derived(enabledSkills.filter((s) => usedKeys.has(skillUsageKey(s))).length);
 
 	const tiles = $derived([
-		{ label: 'Uses', value: totals.uses.toLocaleString() },
+		{ label: 'Uses', value: totals.uses },
 		// Uses the model chose itself, in a chat or an agent run, rather than a person picking it.
-		{ label: 'Loaded automatically', value: percent(totals.auto, totals.uses) },
+		{
+			label: 'Loaded automatically',
+			value: shareOf(totals.auto, totals.uses),
+			format: 'percent' as const
+		},
 		everyone
-			? { label: 'Users', value: stats.users.toLocaleString() }
+			? { label: 'Users', value: stats.users }
 			: {
 					label: 'Picked by hand',
-					value: stats.skills.reduce((n, s) => n + s.manual, 0).toLocaleString()
+					value: stats.skills.reduce((n, s) => n + s.manual, 0)
 				},
-		{ label: 'Skills used', value: `${usedEnabled} of ${enabledSkills.length}` }
+		{ label: 'Skills used', value: usedEnabled, suffix: ` of ${enabledSkills.length}` }
 	]);
 </script>
 
@@ -108,7 +113,9 @@
 			<Card.Root class="rounded-2xl border-border/40 py-4">
 				<Card.Content class="flex flex-col gap-1 px-4">
 					<dt class="truncate text-sm text-muted-foreground">{tile.label}</dt>
-					<dd class="text-2xl font-semibold tabular-nums">{tile.value}</dd>
+					<dd class="text-2xl font-semibold tabular-nums">
+						<AnimatedNumber value={tile.value} format={tile.format} suffix={tile.suffix} />
+					</dd>
 				</Card.Content>
 			</Card.Root>
 		{/each}

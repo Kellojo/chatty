@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import BoxIcon from '@lucide/svelte/icons/box';
+	import LockIcon from '@lucide/svelte/icons/lock';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { mappingModelRef, encodeModelRef } from '$lib/model-ref.js';
@@ -14,6 +16,7 @@
 		type Brand
 	} from '$lib/provider-brand.js';
 	import { getFavoriteModels } from '$lib/state/favorite-models.svelte.js';
+	import { mappingTrusted, trustedProviderIds } from '$lib/private-data.js';
 	import type { ModelMapping, PickerModelGroup } from '$lib/types.js';
 
 	let {
@@ -31,6 +34,8 @@
 		capability,
 		align = 'start',
 		standalone = false,
+		privateOnly = false,
+		privateNote = 'Private chat: trusted models only',
 		class: className = 'w-64'
 	}: {
 		groups: PickerModelGroup[];
@@ -52,6 +57,13 @@
 		align?: 'start' | 'end';
 		/** No visible label beside it (the chat pickers): name it "Model: …" for screen readers. */
 		standalone?: boolean;
+		/**
+		 * For a private chat or agent: only models on providers trusted with private
+		 * data (and mappings whose every target is) can be picked; the rest are greyed out.
+		 */
+		privateOnly?: boolean;
+		/** The note above the list while `privateOnly` is on. */
+		privateNote?: string;
 		class?: string;
 	} = $props();
 
@@ -72,7 +84,13 @@
 		/** Where the model comes from; shown next to favourites, which leave their group. */
 		source: string;
 		brand: Brand | null;
+		/** May run a private chat (its provider, or every mapping target's, is trusted). */
+		trusted: boolean;
+		/** Why an untrusted option can't run a private chat, shown on its greyed row. */
+		untrustedReason?: string;
 	}
+
+	const trustedIds = $derived(trustedProviderIds(groups));
 
 	const mappingOption = (mapping: ModelMapping): Option => ({
 		value: encodeModelRef(mappingModelRef(mapping)),
@@ -80,7 +98,12 @@
 		source: 'Mapping',
 		brand:
 			resolveBrand(mapping.name) ??
-			(mapping.targets[0] ? resolveModelBrand(mapping.targets[0]) : null)
+			(mapping.targets[0] ? resolveModelBrand(mapping.targets[0]) : null),
+		trusted: mappingTrusted(mapping, trustedIds),
+		// A mapping that may fall back to an untrusted provider counts as untrusted.
+		untrustedReason: mapping.targets.some((t) => trustedIds.has(t.providerId))
+			? 'Can fall back to an untrusted provider'
+			: 'Not trusted with private data'
 	});
 
 	const modelOption = (
@@ -90,7 +113,8 @@
 		value: `${model.providerId}/${model.modelId}`,
 		name: model.displayName,
 		source: provider.name,
-		brand: resolveModelBrand(model, provider)
+		brand: resolveModelBrand(model, provider),
+		trusted: trustedIds.has(provider.id)
 	});
 
 	const selected = $derived.by(() => {
@@ -113,7 +137,13 @@
 			: placeholder;
 		return { label: fallback, brand: null };
 	});
-	const label = $derived(selected.label);
+	/** The chat is private but its model isn't trusted: its next turn would be refused. */
+	const selectedUntrusted = $derived(
+		privateOnly && !!selectedValue && !('trusted' in selected && selected.trusted)
+	);
+	const label = $derived(
+		selectedUntrusted ? `${selected.label} (not trusted with private data)` : selected.label
+	);
 
 	const capabilityGroups = $derived.by(() => {
 		if (!capability) return groups;
@@ -201,6 +231,9 @@
 		name={option.name}
 		brand={option.brand}
 		source={showSource ? option.source : undefined}
+		disabled={privateOnly && !option.trusted}
+		disabledReason={option.untrustedReason ?? 'Not trusted with private data'}
+		disabledShort={option.untrustedReason?.startsWith('Can fall back') ? 'Mixed' : 'Untrusted'}
 	/>
 {/snippet}
 
@@ -224,6 +257,12 @@
 					<BoxIcon class="size-3.5 shrink-0 text-muted-foreground" />
 				{/if}
 			</span>
+			{#if selectedUntrusted}
+				<TriangleAlertIcon
+					class="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+					aria-hidden="true"
+				/>
+			{/if}
 			{#if 'name' in selected}
 				<span class="truncate"
 					>{selected.name}{#if !('mapping' in selected)}<span data-model-source
@@ -254,6 +293,15 @@
 					onkeydown={(e) => e.stopPropagation()}
 				/>
 			</div>
+			{#if privateOnly}
+				<p
+					class="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 text-xs font-medium text-foreground/70"
+					data-private-note
+				>
+					<LockIcon class="size-3 shrink-0" aria-hidden="true" />
+					{privateNote}
+				</p>
+			{/if}
 		</div>
 		{#if showNone}
 			<Select.Item value={noneValue ?? ''}>{noneLabel}</Select.Item>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
+	import { PRIVATE_CHAT_HINT } from '$lib/private-data.js';
 	import { afterNavigate, beforeNavigate, goto, onNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -15,6 +16,8 @@
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import CodeIcon from '@lucide/svelte/icons/code';
 	import InfoIcon from '@lucide/svelte/icons/info';
+	import LockIcon from '@lucide/svelte/icons/lock';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
@@ -25,12 +28,21 @@
 	import CodingContextBar from '$lib/components/app/CodingContextBar.svelte';
 	import { CodingTaskState, type CodingTaskDraft } from '$lib/state/coding-task.svelte.js';
 	import MicButton from '$lib/components/app/MicButton.svelte';
+	import PrivateChatToggle from '$lib/components/app/PrivateChatToggle.svelte';
+	import { modelValueTrusted, trustedProviderIds } from '$lib/private-data.js';
+	import {
+		micAvailable,
+		PRIVATE_MIC_HINT,
+		voiceModeAvailable,
+		type SpeechPrivacy
+	} from '$lib/private-speech.js';
 	import { createSpeechRecognition } from '$lib/state/speech-recognition.svelte.js';
 	import { createServerSpeechRecognition } from '$lib/state/server-speech-recognition.svelte.js';
 	import { decodeModelRef } from '$lib/model-ref.js';
 	import { pickerModelGroups, syncModelCatalog } from '$lib/state/model-catalog.svelte.js';
 	import { pendingMessage, pendingVoice } from '$lib/state/pending-message.svelte.js';
 	import { voiceModeSupported } from '$lib/state/voice-mode.svelte.js';
+	import { localVoiceCount } from '$lib/state/local-voices.svelte.js';
 	import { unlockVoiceAudio } from '$lib/state/voice-audio.js';
 	import VoiceModeButton from '$lib/components/app/VoiceModeButton.svelte';
 	import { createFileDrop } from '$lib/state/file-drop.svelte.js';
@@ -47,9 +59,11 @@
 	let { data }: { data: PageData } = $props();
 
 	let input = $state('');
+	// Read when dictation is sent: an unsaved chat says whether it will be private.
+	const speechPrivacy = (): SpeechPrivacy => ({ private: isPrivate });
 	const speech = data.sttModel
-		? createServerSpeechRecognition(data.sttModel)
-		: createSpeechRecognition();
+		? createServerSpeechRecognition(data.sttModel, { privacy: speechPrivacy })
+		: createSpeechRecognition({ private: () => isPrivate });
 	const displayInput = $derived(speech.recording ? (input + ' ' + speech.display).trim() : input);
 
 	$effect(() => {
@@ -206,10 +220,25 @@
 	$effect.pre(() => syncModelCatalog(data.modelCatalog));
 	const hasModels = $derived(data.modelCatalog.count > 0);
 	const modelMissing = $derived(!hasModels || selectedValue === '');
+
+	// A private chat (the composer's lock): only trusted models may run it.
+	// Coding tasks can never be private. Starts on with "New chats are private".
+	let makePrivate = $state(untrack(() => data.settings.privateByDefault));
+	const isPrivate = $derived(
+		makePrivate && !coding && data.privateData.enabled && data.privateData.available
+	);
+	const untrustedModel = $derived(
+		isPrivate &&
+			!modelMissing &&
+			!modelValueTrusted(selectedValue, trustedProviderIds(modelGroups), data.mappings)
+	);
 	const canSend = $derived(
 		coding
 			? displayInput.trim().length > 0 && !busy && codingDraft !== null
-			: (displayInput.trim().length > 0 || selectedFiles.length > 0) && !busy && !modelMissing
+			: (displayInput.trim().length > 0 || selectedFiles.length > 0) &&
+					!busy &&
+					!modelMissing &&
+					!untrustedModel
 	);
 	const suggestions = $derived(
 		data.suggestions.length > 0 ? data.suggestions : DEFAULT_SUGGESTIONS
@@ -233,19 +262,25 @@
 	});
 
 	async function createChatConversation(): Promise<Conversation> {
-		const body: Record<string, string> = {};
+		const body: Record<string, string | boolean> = {};
 		if (selectedValue) {
 			const { providerId, modelId } = decodeModelRef(selectedValue);
 			body.providerId = providerId;
 			body.modelId = modelId;
 		}
 		if (personaId) body.agentId = personaId;
+		// Said either way while the lock shows, so turning it off beats the
+		// "New chats are private" setting the server would apply otherwise.
+		if (data.privateData.enabled && data.privateData.available) body.private = isPrivate;
 		const res = await fetch('/api/conversations', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(body)
 		});
-		if (!res.ok) throw new Error('Failed to create conversation');
+		if (!res.ok) {
+			const data = (await res.json().catch(() => null)) as { message?: string } | null;
+			throw new Error(data?.message ?? 'Failed to create conversation');
+		}
 		const { conversation } = (await res.json()) as { conversation: Conversation };
 		return conversation;
 	}
@@ -265,11 +300,38 @@
 		return conversation;
 	}
 
-	const voiceSupported = $derived(voiceModeSupported(data.sttModel, data.serverTts));
+	// A private chat only dictates and talks with trusted speech to text (never the browser's).
+	const sttConfigured = $derived(data.sttModel !== null);
+	const micBlocked = $derived(
+		isPrivate &&
+			!micAvailable({ isPrivate, sttTrusted: data.privateData.sttTrusted, sttConfigured })
+			? PRIVATE_MIC_HINT
+			: undefined
+	);
+	// Turned private mid-dictation: stop listening rather than keep sending audio out.
+	$effect(() => {
+		if (micBlocked && (speech.recording || speech.busy)) untrack(() => speech.stop());
+	});
+	const voiceSupported = $derived(
+		voiceModeSupported(
+			data.sttModel,
+			data.serverTts && (!isPrivate || data.privateData.ttsTrusted),
+			isPrivate
+		) &&
+			voiceModeAvailable({
+				isPrivate,
+				sttTrusted: data.privateData.sttTrusted,
+				sttConfigured,
+				ttsTrusted: data.privateData.ttsTrusted,
+				ttsConfigured: data.serverTts,
+				localVoiceCount: localVoiceCount()
+			})
+	);
 	const offerVoice = $derived(
 		voiceSupported &&
 			!coding &&
 			!modelMissing &&
+			!untrustedModel &&
 			displayInput.trim() === '' &&
 			selectedFiles.length === 0 &&
 			!speech.recording &&
@@ -278,7 +340,7 @@
 
 	/** Opens a new chat in voice mode. */
 	async function startVoiceChat() {
-		if (busy || modelMissing) return;
+		if (busy || modelMissing || untrustedModel) return;
 		speech.stop();
 		speech.reset();
 		// Unlocked by this click, for the chat page that voice mode runs on.
@@ -304,7 +366,11 @@
 		speech.reset();
 		const trimmed = text.trim();
 		const draft = coding ? codingDraft : null;
-		if (coding ? !trimmed || !draft : (!trimmed && selectedFiles.length === 0) || modelMissing)
+		if (
+			coding
+				? !trimmed || !draft
+				: (!trimmed && selectedFiles.length === 0) || modelMissing || untrustedModel
+		)
 			return;
 		if (busy) return;
 		busy = true;
@@ -422,13 +488,20 @@
 							value={selectedValue}
 							onselect={(v) => (picked = v)}
 							disabled={busy}
+							privateOnly={isPrivate}
 							class="w-40 min-w-0 shrink max-sm:w-auto max-sm:max-w-40 sm:w-64 max-sm:[&_[data-model-source]]:hidden"
 						/>
 						<Button variant="ghost" size="icon" aria-label="Attach files" onclick={pickFiles}>
 							<PaperclipIcon class="size-4" />
 						</Button>
+						<PrivateChatToggle
+							bind:checked={makePrivate}
+							status={data.privateData}
+							admin={data.user.role === 'admin'}
+							disabled={busy}
+						/>
 					{/if}
-					<MicButton {speech} />
+					<MicButton {speech} blockedReason={micBlocked} />
 				</div>
 				{#if offerVoice}
 					<VoiceModeButton disabled={busy} onclick={startVoiceChat} />
@@ -446,7 +519,9 @@
 							? (codingTask.blocker ?? 'Start coding task')
 							: modelMissing
 								? 'Select a model first'
-								: 'Send'}
+								: untrustedModel
+									? 'Pick a trusted model for a private chat'
+									: 'Send'}
 						onclick={() => startChat(displayInput)}
 					>
 						<ArrowUpIcon class="size-4" />
@@ -475,6 +550,19 @@
 				{:else}
 					No models available. Ask an admin to configure one.
 				{/if}
+			</p>
+		{:else if untrustedModel}
+			<p class="mt-2 flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400">
+				<TriangleAlertIcon class="size-4 shrink-0" />
+				This model isn't trusted with private data. Pick a trusted model for a private chat.
+			</p>
+		{:else if isPrivate}
+			<p class="mt-2 flex items-start gap-1.5 text-sm text-muted-foreground">
+				<LockIcon
+					class="mt-0.5 size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+					aria-hidden="true"
+				/>
+				<span>{PRIVATE_CHAT_HINT}</span>
 			</p>
 		{/if}
 		{#if coding}

@@ -49,4 +49,22 @@ describe('providers repo', () => {
 		db.prepare('DELETE FROM providers WHERE id = ?').run(p.id);
 		expect(db.prepare("SELECT * FROM models WHERE id = 'm-c'").get()).toBeUndefined();
 	});
+	it('is untrusted with private data unless allowPrivate is set, and update toggles it', () => {
+		const plain = createProvider(db, { name: 'Plain', type: 'anthropic' });
+		expect(plain.allow_private).toBe(0);
+		expect(toPublic(plain).allowPrivate).toBe(false);
+
+		const trusted = createProvider(db, {
+			name: 'Local',
+			type: 'openai-compatible',
+			baseUrl: 'http://localhost:1234/v1',
+			allowPrivate: true
+		});
+		expect(trusted.allow_private).toBe(1);
+		expect(toPublic(trusted).allowPrivate).toBe(true);
+
+		expect(updateProvider(db, plain.id, { allowPrivate: true })!.allow_private).toBe(1);
+		expect(updateProvider(db, plain.id, { name: 'Renamed' })!.allow_private).toBe(1);
+		expect(updateProvider(db, plain.id, { allowPrivate: false })!.allow_private).toBe(0);
+	});
 });

@@ -10,20 +10,25 @@
 		isAdmin,
 		hasModel,
 		stepCount,
+		privateDataEnabled = false,
 		onnext
 	}: {
 		firstName: string;
 		isAdmin: boolean;
 		hasModel: boolean;
 		stepCount: number;
+		/** Private data is on: chats and notes can be kept to trusted models. */
+		privateDataEnabled?: boolean;
 		onnext: () => void;
 	} = $props();
 
-	const promises = [
+	const promises = $derived([
 		{
 			icon: ShieldCheckIcon,
 			title: 'Private by design',
-			text: 'Runs on your own server. Your chats stay yours.'
+			text: privateDataEnabled
+				? 'Runs on your own server. Private chats and notes only reach models you trust.'
+				: 'Runs on your own server. Your chats stay yours.'
 		},
 		{
 			icon: ShuffleIcon,
@@ -35,7 +40,7 @@
 			title: 'Remembers what matters',
 			text: 'Learns your preferences so you don’t repeat yourself.'
 		}
-	];
+	]);
 </script>
 
 <div class="my-auto flex flex-col items-center text-center">

@@ -20,6 +20,8 @@ export interface ConversationRow {
 	temperature: number | null;
 	max_tokens: number | null;
 	pinned: number;
+	/** 1: private; its data may only reach providers trusted with private data. */
+	private: number;
 	agent_id: string | null;
 	origin: string;
 	last_read_at: number | null;
@@ -64,6 +66,8 @@ export interface Conversation {
 	temperature: number | null;
 	maxTokens: number | null;
 	pinned: boolean;
+	/** Private: may only use providers trusted with private data. */
+	private: boolean;
 	agentId: string | null;
 	origin: ConversationOrigin;
 	agentRun: { id: string; status: AgentRunStatus } | null;
@@ -96,6 +100,7 @@ export function toPublic(row: ConversationRow): Conversation {
 		temperature: row.temperature,
 		maxTokens: row.max_tokens,
 		pinned: row.pinned === 1,
+		private: row.private === 1,
 		agentId: row.agent_id,
 		origin: row.origin === 'dispatch' ? 'dispatch' : 'user',
 		agentRun:
@@ -220,25 +225,54 @@ export function countSettledConversations(db: Db, userId: string): number {
 }
 
 /**
+ * Which conversations a search may see by their private flag: callers that
+ * hand results to a model pick `public` unless the turn may see private data.
+ */
+export type PrivateScope = 'all' | 'public' | 'private';
+
+function privateClause(scope: PrivateScope): string {
+	return scope === 'all' ? '' : `AND c.private = ${scope === 'private' ? 1 : 0}`;
+}
+
+/**
  * Chats updated since `since`. `excludeDispatched` leaves out chats Chatty
  * started for agent runs: their content is the agent's, not the user's (memory
- * extraction lists recent chats this way).
+ * extraction lists recent chats this way). `includePrivate: false` leaves out
+ * private chats.
  */
 export function listConversationsSince(
 	db: Db,
 	userId: string,
 	since: number,
-	opts: { excludeDispatched?: boolean } = {}
+	opts: { excludeDispatched?: boolean; includePrivate: boolean; privateOnly?: boolean }
 ): ConversationRow[] {
 	const dispatched = opts.excludeDispatched ? `AND c.origin != 'dispatch'` : '';
+	const scope: PrivateScope = opts.privateOnly ? 'private' : opts.includePrivate ? 'all' : 'public';
 	return db
 		.prepare(
 			`${SIDEBAR_SELECT}
 			 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL AND c.updated_at >= ?
-			   ${dispatched}
+			   ${dispatched} ${privateClause(scope)}
 			 ORDER BY c.updated_at DESC`
 		)
 		.all(userId, since) as ConversationRow[];
+}
+
+/**
+ * Whether the user has any private chat. Deliberately ignores what was
+ * searched for, so the "private results hidden" note it gates can't be used
+ * to probe private chats' content.
+ */
+export function hasPrivateConversations(db: Db, userId: string): boolean {
+	return (
+		db
+			.prepare(
+				`SELECT 1 FROM conversations
+				 WHERE user_id = ? AND kind = 'chat' AND deleted_at IS NULL AND private = 1
+				 LIMIT 1`
+			)
+			.get(userId) !== undefined
+	);
 }
 
 /** One conversation with the coding-task and agent-run summary the sidebar shows. */
@@ -273,6 +307,11 @@ export interface CreateConversationInput {
 	/** For a subagent's conversation: the conversation that started it. */
 	subagentOf?: string | null;
 	subagentToolCallId?: string | null;
+	/**
+	 * Private (only trusted providers may see it). Every production caller sets
+	 * this on purpose; a test checks that (privacy/static-guard.spec.ts).
+	 */
+	private?: boolean;
 }
 
 export function createConversation(
@@ -285,8 +324,8 @@ export function createConversation(
 	db.prepare(
 		`INSERT INTO conversations (id, user_id, kind, title, provider_id, model_id, agent_id,
 		 system_prompt, max_steps, origin, memory_enabled, subagent_of, subagent_tool_call_id,
-		 created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 private, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		userId,
@@ -301,6 +340,7 @@ export function createConversation(
 		input.memoryEnabled === false ? 0 : 1,
 		input.subagentOf ?? null,
 		input.subagentToolCallId ?? null,
+		input.private ? 1 : 0,
 		now,
 		now
 	);
@@ -353,6 +393,18 @@ export function touchConversation(db: Db, id: string): void {
 /** Sets the title without counting as activity, so a generated title doesn't reorder the sidebar. */
 export function setConversationTitle(db: Db, id: string, title: string): void {
 	db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, id);
+}
+
+/**
+ * Marks a conversation private or public. Without the activity bump, like a
+ * title. Returns whether the flag changed.
+ */
+export function setConversationPrivate(db: Db, id: string, value: boolean): boolean {
+	return (
+		db
+			.prepare('UPDATE conversations SET private = ? WHERE id = ? AND private != ?')
+			.run(value ? 1 : 0, id, value ? 1 : 0).changes > 0
+	);
 }
 
 export function softDeleteConversation(db: Db, userId: string, id: string): boolean {
@@ -599,7 +651,7 @@ export function searchConversations(
 	db: Db,
 	userId: string,
 	query: string,
-	options: { limit?: number; offset?: number } = {}
+	options: { limit?: number; offset?: number; scope?: PrivateScope } = {}
 ): ConversationRow[] {
 	const trimmed = query.trim();
 	if (!trimmed) return [];
@@ -614,7 +666,9 @@ export function searchConversations(
 		? [ftsQuery, userId, userId, like, like]
 		: [userId, like, like];
 	params.push(limit, offset);
-	return db.prepare(searchConversationsSql(ftsQuery !== null)).all(...params) as ConversationRow[];
+	return db
+		.prepare(searchConversationsSql(ftsQuery !== null, options.scope))
+		.all(...params) as ConversationRow[];
 }
 
 /** How many matching conversations relevance ranking considers before it sorts. */
@@ -635,28 +689,14 @@ function titleWordMatches(word: string, term: string): boolean {
 	return word.startsWith(term) || (word.length >= 4 && term.startsWith(word));
 }
 
-/**
- * Searches conversations by relevance, for callers that rank rather than
- * filter (the model's chat search). Any word may match, and words may sit in
- * different messages of a chat. A chat scores the summed rarity (IDF) of the
- * words it covers in its messages or title, plus a bonus for words in its
- * title; pin and recency only break ties. Coverage counts every message, not
- * only the shown version: membership still comes from the version-aware
- * search, so this only shifts the order.
- */
-export function searchConversationsRanked(
+/** The conversations a ranked search considers, before scoring. */
+function rankedCandidates(
 	db: Db,
 	userId: string,
 	query: string,
-	options: { limit?: number } = {}
-): ConversationRow[] {
-	const terms = searchTerms(query);
-	if (terms.length === 0) return searchConversations(db, userId, query, options);
-	const limit = Math.min(
-		MAX_SEARCH_PAGE_SIZE,
-		Math.max(1, Math.floor(options.limit ?? SEARCH_PAGE_SIZE))
-	);
-
+	terms: string[],
+	scope: PrivateScope
+): Map<string, ConversationRow> {
 	const ftsAny = terms.map((t) => `"${t}"*`).join(' OR ');
 	const like = `%${escapeLike(query.trim())}%`;
 	const byId = new Map<string, ConversationRow>();
@@ -665,17 +705,53 @@ export function searchConversationsRanked(
 	};
 	add(
 		db
-			.prepare(searchConversationsSql(true))
+			.prepare(searchConversationsSql(true, scope))
 			.all(ftsAny, userId, userId, like, like, RANKED_CANDIDATES, 0) as ConversationRow[]
 	);
 	for (const term of terms) {
 		const termLike = `%${escapeLike(term)}%`;
 		add(
 			db
-				.prepare(searchConversationsSql(false))
+				.prepare(searchConversationsSql(false, scope))
 				.all(userId, termLike, termLike, RANKED_CANDIDATES, 0) as ConversationRow[]
 		);
 	}
+	return byId;
+}
+
+/**
+ * Searches conversations by relevance, for callers that rank rather than
+ * filter (the model's chat search). Any word may match, and words may sit in
+ * different messages of a chat. A chat scores the summed rarity (IDF) of the
+ * words it covers in its messages or title, plus a bonus for words in its
+ * title; pin and recency only break ties. Coverage counts every message, not
+ * only the shown version: membership still comes from the version-aware
+ * search, so this only shifts the order.
+ *
+ * `includePrivate: false` leaves private chats out in SQL, before any limit.
+ */
+export function searchConversationsRanked(
+	db: Db,
+	userId: string,
+	query: string,
+	/** `privateOnly`: only private chats (a memory run's private pass). */
+	options: { limit?: number; includePrivate: boolean; privateOnly?: boolean }
+): ConversationRow[] {
+	const scope: PrivateScope = options.privateOnly
+		? 'private'
+		: options.includePrivate
+			? 'all'
+			: 'public';
+	const terms = searchTerms(query);
+	if (terms.length === 0) {
+		return searchConversations(db, userId, query, { limit: options.limit, scope });
+	}
+	const limit = Math.min(
+		MAX_SEARCH_PAGE_SIZE,
+		Math.max(1, Math.floor(options.limit ?? SEARCH_PAGE_SIZE))
+	);
+
+	const byId = rankedCandidates(db, userId, query, terms, scope);
 	if (byId.size === 0) return [];
 
 	const total = Math.max(1, countConversations(db));
@@ -713,7 +789,7 @@ export function searchConversationsRanked(
  * Parameters: with FTS `[ftsQuery, userId, userId, like, like, limit, offset]`,
  * without `[userId, like, like, limit, offset]`. Exported for query-plan tests.
  */
-export function searchConversationsSql(withFts: boolean): string {
+export function searchConversationsSql(withFts: boolean, scope: PrivateScope = 'all'): string {
 	const cte = withFts
 		? `WITH RECURSIVE
 			 hits(id, conversation_id) AS MATERIALIZED (
@@ -747,6 +823,7 @@ export function searchConversationsSql(withFts: boolean): string {
 		 LEFT JOIN coding_conversations cc ON cc.conversation_id = c.id
 		 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
 		   AND (c.title LIKE ? ESCAPE '!' OR cc.project_title LIKE ? ESCAPE '!' ${ftsClause})
+		   ${privateClause(scope)}
 		 ORDER BY c.pinned DESC, ${ACTIVITY_ORDER}
 		 LIMIT ? OFFSET ?`;
 }

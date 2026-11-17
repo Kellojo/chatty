@@ -10,5 +10,9 @@ export const GET: RequestHandler = ({ locals, url }) => {
 	if (!q) return json({ results: [] });
 	const scopes = [`user:${user.id}`];
 	if ((user as { role?: string }).role === 'admin') scopes.push('shared');
-	return json({ results: searchMemoryFts(getDb(), scopes, q, 10, { html: true }) });
+	// The owner's own browser may see their private concepts (and admins the
+	// shared ones); only model-facing readers filter them.
+	return json({
+		results: searchMemoryFts(getDb(), scopes, q, 10, { html: true, includePrivate: true })
+	});
 };

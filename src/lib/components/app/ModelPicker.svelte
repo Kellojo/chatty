@@ -12,6 +12,7 @@
 		disabled = false,
 		placeholder = 'Select model',
 		align = 'start',
+		privateOnly = false,
 		class: className = 'w-40 min-w-0 shrink sm:w-64'
 	}: {
 		groups: PickerModelGroup[];
@@ -21,6 +22,8 @@
 		disabled?: boolean;
 		placeholder?: string;
 		align?: 'start' | 'end';
+		/** A private chat: only trusted models can be picked. */
+		privateOnly?: boolean;
 		class?: string;
 	} = $props();
 
@@ -49,6 +52,7 @@
 	{disabled}
 	{placeholder}
 	{align}
+	{privateOnly}
 	standalone
 	class={className}
 />

@@ -120,10 +120,51 @@ describe('push dispatcher', () => {
 		});
 		expect(payloads()[0]).toMatchObject({
 			title: 'Inbox triage',
-			body: 'Needs you: Archive these 12 newsletters?',
+			body: 'An agent needs your input',
 			kind: 'needs-you'
 		});
 		expect((sender.mock.calls[0][2] as { urgency: string }).urgency).toBe('high');
+	});
+
+	it('says nothing about a private chat: fixed title and body', async () => {
+		subscribe(db, 'u1', 1);
+		const c = createConversation(db, 'u1', { title: 'Trip ideas', private: true });
+		await dispatcher.handle('u1', { type: 'chat.message_completed', conversationId: c.id });
+		expect(payloads()[0]).toEqual({
+			title: 'Private chat',
+			body: 'New reply',
+			tag: `chat:${c.id}`,
+			url: `/chat/${c.id}`,
+			kind: 'reply',
+			createdAt: now
+		});
+	});
+
+	it('does not name a private agent, nor an agent asking in a private chat', async () => {
+		subscribe(db, 'u1', 1);
+		const agent = createAgent(db, 'u1', {
+			name: 'Inbox triage',
+			systemPrompt: 'x',
+			triggerType: 'manual'
+		});
+		const publicChat = createConversation(db, 'u1', { agentId: agent.id });
+		const privateChat = createConversation(db, 'u1', { agentId: agent.id, private: true });
+		const ask = (conversationId: string, runId: string) =>
+			dispatcher.handle('u1', {
+				type: 'agent.run.awaiting_input',
+				agentId: agent.id,
+				runId,
+				conversationId,
+				question: 'Archive these 12 newsletters?'
+			});
+		await ask(privateChat.id, 'r1');
+		db.prepare('UPDATE agents SET private = 1 WHERE id = ?').run(agent.id);
+		await ask(publicChat.id, 'r2');
+		expect(payloads().map((p) => [p.title, p.body])).toEqual([
+			['Private chat', 'Waiting for your input'],
+			['Private chat', 'Waiting for your input']
+		]);
+		expect(JSON.stringify(payloads())).not.toMatch(/Inbox triage|newsletters/);
 	});
 
 	it('pushes when a coding task starts waiting for the user', async () => {

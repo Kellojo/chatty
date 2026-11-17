@@ -8,7 +8,7 @@
 	import Settings2Icon from '@lucide/svelte/icons/settings-2';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { formatTimeAgo } from '$lib/datetime.js';
-	import type { CodingEnvironment } from '$lib/coding-environments.js';
+	import { environmentFailed, type CodingEnvironment } from '$lib/coding-environments.js';
 	import { syncEnvironment } from './usage.js';
 
 	let { environments, now }: { environments: CodingEnvironment[]; now: number } = $props();
@@ -18,6 +18,8 @@
 
 	function chipState(env: CodingEnvironment): { dot: string; text: string; error: boolean } {
 		if (!env.enabled) return { dot: 'bg-muted-foreground/40', text: 'disabled', error: false };
+		if (env.status === 'unauthorized')
+			return { dot: 'bg-destructive', text: 'token rejected', error: true };
 		if (env.status === 'error') return { dot: 'bg-destructive', text: 'unreachable', error: true };
 		if (env.lastSyncedAt)
 			return {
@@ -32,7 +34,7 @@
 		syncing = true;
 		try {
 			const results = await Promise.all(enabled.map((e) => syncEnvironment(e.id)));
-			const failed = results.filter((r) => !r || r.status === 'error').length;
+			const failed = results.filter((r) => !r || environmentFailed(r.status)).length;
 			if (failed > 0)
 				toast.error(`${failed} environment${failed === 1 ? '' : 's'} could not be synced`);
 			await invalidateAll();

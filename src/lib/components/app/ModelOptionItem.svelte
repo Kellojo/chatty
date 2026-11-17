@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import StarIcon from '@lucide/svelte/icons/star';
 	import BoxIcon from '@lucide/svelte/icons/box';
+	import ShieldOffIcon from '@lucide/svelte/icons/shield-off';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import ProviderIcon from './ProviderIcon.svelte';
 	import { getFavoriteModels } from '$lib/state/favorite-models.svelte.js';
@@ -18,6 +19,9 @@
 		source,
 		favoriteKey = value,
 		lockedFavorite,
+		disabled = false,
+		disabledReason = 'Not trusted with private data',
+		disabledShort = 'Untrusted',
 		badges
 	}: {
 		value: string;
@@ -29,6 +33,12 @@
 		favoriteKey?: string;
 		/** Starred elsewhere (e.g. in T3) and not editable here; the tooltip says why. */
 		lockedFavorite?: string;
+		/** Greyed out and unselectable, e.g. an untrusted model in a private chat. */
+		disabled?: boolean;
+		/** Shown on the greyed row, so it says why it can't be picked. */
+		disabledReason?: string;
+		/** One or two words on the row itself (the full reason is in its title). */
+		disabledShort?: string;
 		badges?: Snippet;
 	} = $props();
 
@@ -38,7 +48,16 @@
 	const locked = $derived(!own && !!lockedFavorite);
 </script>
 
-<Select.Item {value} label={name} class="group/model">
+<!-- Untrusted rows stay readable (muted, not faded) so the reason can be read. -->
+<Select.Item
+	{value}
+	label={name}
+	{disabled}
+	class={[
+		'group/model',
+		disabled && 'data-[disabled]:text-muted-foreground data-[disabled]:opacity-100'
+	]}
+>
 	{#if brand}
 		<ProviderIcon {brand} class="size-3.5 shrink-0" />
 	{:else}
@@ -50,7 +69,17 @@
 		<span class="shrink-0 truncate text-xs font-normal text-muted-foreground">{source}</span>
 	{/if}
 	{@render badges?.()}
-	{#if locked}
+	{#if disabled}
+		<!-- Disabled items dim themselves; this says why. -->
+		<span
+			class="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] font-normal text-muted-foreground/80"
+			title={disabledReason}
+		>
+			<ShieldOffIcon class="size-3" aria-hidden="true" />
+			<span class="max-sm:sr-only">{disabledShort}</span>
+			<span class="sr-only">: {disabledReason}</span>
+		</span>
+	{:else if locked}
 		<span class="ml-auto flex size-5 shrink-0 items-center justify-center" title={lockedFavorite}>
 			<StarIcon class="size-3.5 fill-amber-400 text-amber-400" aria-label={lockedFavorite} />
 		</span>

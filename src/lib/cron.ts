@@ -154,3 +154,60 @@ export function parseCron(cron: string): ScheduleSpec | null {
 	}
 	return null;
 }
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** "08:30" in 24h, "8:30 AM" otherwise ("auto" follows cronstrue's 12h default). */
+export function formatClock(time: string, timeFormat: TimeFormat): string {
+	const [h, m] = splitTime(time);
+	if (timeFormat === '24h') return `${pad(h)}:${pad(m)}`;
+	return `${h % 12 || 12}:${pad(m)} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+export function ordinal(n: number): string {
+	const tens = n % 100;
+	if (tens >= 11 && tens <= 13) return `${n}th`;
+	return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+}
+
+function listJoin(items: string[]): string {
+	return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+}
+
+function describeDays(days: number[]): string {
+	const set = new Set(days.map((d) => d % 7));
+	const has = (list: number[]) => list.length === set.size && list.every((d) => set.has(d));
+	if (set.size === 7) return 'every day';
+	if (has([1, 2, 3, 4, 5])) return 'every weekday';
+	if (has([0, 6])) return 'on weekends';
+	// Monday-first, matching the picker.
+	const ordered = [1, 2, 3, 4, 5, 6, 0].filter((d) => set.has(d));
+	if (ordered.length === 1) return `every ${DAY_NAMES[ordered[0]]}`;
+	return `on ${listJoin(ordered.map((d) => `${DAY_NAMES[d]}s`))}`;
+}
+
+/** Plain-language phrase for a picker schedule, to follow "Runs …". */
+export function describeSchedule(spec: ScheduleSpec, timeFormat: TimeFormat): string {
+	switch (spec.kind) {
+		case 'minutes':
+			return spec.every === 1 ? 'every minute' : `every ${spec.every} minutes`;
+		case 'hourly': {
+			const at = spec.minute === 0 ? 'on the hour' : `${spec.minute} min past the hour`;
+			if (spec.every === 1) return `every hour, ${at}`;
+			const base = `every ${spec.every} hours, ${at}`;
+			if (spec.every < 6) return base;
+			const times: string[] = [];
+			for (let h = 0; h < 24; h += spec.every)
+				times.push(formatClock(`${pad(h)}:${pad(spec.minute)}`, timeFormat));
+			return `${base} (${listJoin(times)})`;
+		}
+		case 'daily':
+			return `every day at ${formatClock(spec.time, timeFormat)}`;
+		case 'weekly':
+			return `${describeDays(spec.days)} at ${formatClock(spec.time, timeFormat)}`;
+		case 'monthly': {
+			const base = `on the ${ordinal(spec.day)} of every month at ${formatClock(spec.time, timeFormat)}`;
+			return spec.day > 28 ? `${base}, skipping months without one` : base;
+		}
+	}
+}

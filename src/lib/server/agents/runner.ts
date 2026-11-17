@@ -8,17 +8,29 @@ import {
 	createAgentRun,
 	finishAgentRun,
 	getAgentRun,
-	lastSuccessfulAgentRunStartedAt,
 	type AgentRunRow
 } from '../db/repo/agent-runs.js';
 import { createConversation } from '../db/repo/conversations.js';
 import { findRoleModel } from '../db/repo/models.js';
 import { publishServerEvent } from '../events/bus.js';
+import { resolveRefTargets } from '../llm/mapped.js';
 import { createLogger } from '../logger.js';
+import type { MemoryScope } from '../memory/paths.js';
+import { turnTrust } from '../privacy/policy.js';
+import { sweepMemoryPrivacy } from '../privacy/sweep.js';
 import { runChatTurnHeadless } from '../chat/service.js';
 import { abortStream } from '../chat/streams.js';
 import { ensureAgentWorkspace } from '../workspaces.js';
-import { extractionWindowNote, MEMORY_EXTRACTION_AGENT } from './builtin.js';
+import {
+	extractionWindowNote,
+	isBuiltinMemoryAgent,
+	lastSuccessfulMemoryPassAt,
+	MEMORY_CLEANUP_AGENT,
+	MEMORY_EXTRACTION_AGENT,
+	memoryPassLimits,
+	PRIVATE_PASS_NOTE,
+	type MemoryPass
+} from './builtin.js';
 import {
 	activeRunTurn,
 	dismissRun,
@@ -37,6 +49,11 @@ export interface StartAgentRunInput {
 	instructions?: string;
 	/** The API key that started an HTTP run, for its usage statistics. */
 	apiKeyId?: string;
+	/**
+	 * Started from a context holding private data (a private chat's start_agent):
+	 * the run is private too, so its instructions only reach trusted models.
+	 */
+	private?: boolean;
 }
 
 export interface StartedAgentRun {
@@ -106,18 +123,107 @@ export async function startAgentRun(
 		ref = { providerId: roleDefault.provider_id, modelId: roleDefault.model_id };
 	}
 
+	const passes = memoryPasses(db, agent, ref);
+	const started = await startPasses(db, agent, input, ref, passes);
+	if (!(agent.user_id === null && agent.name === MEMORY_CLEANUP_AGENT)) return started;
+	// Cleanup also catches notes with personal information that were saved
+	// public (before automatic marking, or in the memory editor). Afterwards,
+	// so a run never waits on it.
+	return {
+		run: started.run,
+		done: started.done.then((row) => sweepAfterCleanup(db, input.userId, row))
+	};
+}
+
+/** Marks private the user's (and, for an admin, shared) public notes with personal information. */
+async function sweepAfterCleanup<T>(db: Db, userId: string, row: T): Promise<T> {
+	const user = db.prepare('SELECT role FROM "user" WHERE id = ?').get(userId) as
+		{ role: string } | undefined;
+	const scopes: MemoryScope[] = user?.role === 'admin' ? ['user', 'shared'] : ['user'];
+	for (const scope of scopes) {
+		try {
+			await sweepMemoryPrivacy(db, scope, userId);
+		} catch (e) {
+			log.warn('Memory privacy sweep failed', {
+				scope,
+				error: e instanceof Error ? e.message : String(e)
+			});
+		}
+	}
+	return row;
+}
+
+/** Starts a run's passes: one, or a memory agent's public then private pass. */
+async function startPasses(
+	db: Db,
+	agent: AgentRow,
+	input: StartAgentRunInput,
+	ref: { providerId: string; modelId: string },
+	passes: (MemoryPass | undefined)[]
+): Promise<StartedAgentRun> {
+	if (passes.length < 2) return startPass(db, agent, input, ref, passes[0]);
+	// One after the other: the passes share the memory bundle and the model.
+	const first = await startPass(db, agent, input, ref, passes[0]);
+	const done = first.done.then(async (row) => {
+		try {
+			await (
+				await startPass(db, agent, input, ref, passes[1])
+			).done;
+		} catch (e) {
+			log.error('Private memory pass could not start', {
+				agentId: agent.id,
+				error: e instanceof Error ? e.message : String(e)
+			});
+		}
+		return getAgentRun(db, row.id) ?? row;
+	});
+	return { run: first.run, done };
+}
+
+/**
+ * The passes of a built-in memory agent's run (see MemoryPass): a public one,
+ * plus a private one when the memory model is trusted with private data.
+ * Other agents run once, without a pass.
+ */
+function memoryPasses(
+	db: Db,
+	agent: AgentRow,
+	ref: { providerId: string; modelId: string }
+): (MemoryPass | undefined)[] {
+	if (!isBuiltinMemoryAgent(agent)) return [undefined];
+	let trusted = false;
+	try {
+		trusted = turnTrust(db, resolveRefTargets(ref, db).targets) === 'trusted';
+	} catch {
+		// an unavailable model fails in the turn itself
+	}
+	return trusted ? ['public', 'private'] : ['public'];
+}
+
+/** Creates one run (its conversation and row) and starts its turn. */
+async function startPass(
+	db: Db,
+	agent: AgentRow,
+	input: StartAgentRunInput,
+	ref: { providerId: string; modelId: string },
+	pass: MemoryPass | undefined
+): Promise<StartedAgentRun> {
+	if (shuttingDown) throw new Error('Server is shutting down');
 	const visible = runsAsChats(agent);
 	const conversation = createConversation(db, input.userId, {
 		kind: visible ? 'chat' : 'agent-run',
 		origin: visible ? 'dispatch' : 'user',
-		title: `${agent.name} · ${input.trigger} run`,
+		title: `${agent.name} · ${input.trigger} run${pass === 'private' ? ' (private)' : ''}`,
 		providerId: ref.providerId,
 		modelId: ref.modelId,
 		agentId: agent.id,
 		// A snapshot, as for chats started with an agent: later prompt edits
 		// apply to new runs.
 		systemPrompt: agent.system_prompt,
-		maxSteps: agent.max_steps
+		maxSteps: agent.max_steps,
+		// Private agents, runs started from private data, and a memory agent's
+		// private pass are private, so they start tainted.
+		private: agent.private === 1 || input.private === true || pass === 'private'
 	});
 	const run = createAgentRun(db, {
 		agentId: agent.id,
@@ -138,7 +244,7 @@ export async function startAgentRun(
 	const message: UIMessage = {
 		id: randomUUID(),
 		role: 'user',
-		parts: [{ type: 'text', text: runInstructions(db, agent, input) }]
+		parts: [{ type: 'text', text: runInstructions(db, agent, input, pass) }]
 	};
 	// Inside the chain: a failure building the context must still settle the run.
 	const done = Promise.resolve()
@@ -147,7 +253,10 @@ export async function startAgentRun(
 				input.userId,
 				conversation,
 				{ message },
-				{ run: runTurnContext(db, agent, run, { resumed: false }) }
+				{
+					run: runTurnContext(db, agent, run, { resumed: false }),
+					...(pass ? { tools: memoryPassLimits(pass) } : {})
+				}
 			)
 		)
 		.then(() => getAgentRun(db, run.id)!)
@@ -169,7 +278,12 @@ export async function startAgentRun(
 }
 
 /** The run's first message: what to do now, from the request, trigger or role. */
-function runInstructions(db: Db, agent: AgentRow, input: StartAgentRunInput): string {
+function runInstructions(
+	db: Db,
+	agent: AgentRow,
+	input: StartAgentRunInput,
+	pass?: MemoryPass
+): string {
 	let triggerConfig: AgentTriggerConfig = {};
 	try {
 		triggerConfig = JSON.parse(agent.trigger_config) as AgentTriggerConfig;
@@ -182,7 +296,12 @@ function runInstructions(db: Db, agent: AgentRow, input: StartAgentRunInput): st
 		(agent.user_id === null
 			? `Review recent conversations and distill durable long-term memory from them. Use search_chats with the "since" parameter to list them, read_chat to review their contents, list_concepts/search_memory to check what already exists, then create_concept/update_concept to persist.`
 			: `Execute your task now. Trigger: ${input.trigger}.`);
-	return agent.user_id === null && agent.name === MEMORY_EXTRACTION_AGENT
-		? `${baseInstructions}\n\n${extractionWindowNote(lastSuccessfulAgentRunStartedAt(db, agent.id, input.userId))}`
-		: baseInstructions;
+	const parts = [baseInstructions];
+	if (agent.user_id === null && agent.name === MEMORY_EXTRACTION_AGENT) {
+		parts.push(
+			extractionWindowNote(lastSuccessfulMemoryPassAt(db, agent.id, input.userId, pass ?? 'public'))
+		);
+	}
+	if (pass === 'private') parts.push(PRIVATE_PASS_NOTE);
+	return parts.join('\n\n');
 }

@@ -6,6 +6,10 @@ export interface MemoryTreeNode {
 	kind: 'dir' | 'concept';
 	title?: string;
 	description?: string;
+	/** A private concept (frontmatter `private: true`): only trusted models may see it. */
+	private?: boolean;
+	/** Private, but Chatty suggests reviewing it: it no longer looks like it has personal details. */
+	privateReview?: boolean;
 	children?: MemoryTreeNode[];
 }
 
@@ -15,6 +19,12 @@ export interface ConceptFrontmatter {
 	description: string;
 	tags: string[];
 	timestamp: string;
+	/** Only trusted models may see it. Absent means public. */
+	private?: boolean;
+	/** Why Chatty marked it private on its own (automatic classification). */
+	privateReason?: string;
+	/** Chatty suggests reviewing the flag: it no longer looks like it has personal details. */
+	privateReview?: string;
 }
 
 export interface Concept {
@@ -43,6 +53,8 @@ export interface MemorySearchHit {
 	description: string;
 	tags: string[];
 	snippet: string;
+	/** A private concept (only returned where private items may be seen). */
+	private: boolean;
 }
 
 export interface MemoryWriteEntry {
@@ -67,6 +79,8 @@ export interface MemoryGraphNode {
 	tags: string[];
 	/** Top-level folder, '' for memories at the bundle root, `Shared` for shared memories. */
 	folder: string;
+	/** A private concept: only trusted models may see it. */
+	private?: boolean;
 }
 
 export interface MemoryGraphEdge {

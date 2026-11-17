@@ -1,3 +1,4 @@
+import { isPrivateDataEnabled } from '$lib/server/privacy/feature.js';
 import { redirect } from '@sveltejs/kit';
 import { getDb } from '$lib/server/db/index.js';
 import { listMcpServers } from '$lib/server/db/repo/mcp-servers.js';
@@ -40,7 +41,9 @@ export const load: PageServerLoad = ({ locals, url }) => {
 			: DEFAULT_SUGGESTIONS
 		).slice(0, 3),
 		defaultModel: chatModel ? describeModel(chatModel) : null,
-		setup: isAdmin ? instanceSetup() : null
+		setup: isAdmin ? instanceSetup() : null,
+		/** Whether chats, notes and agents can be marked private here (Settings → Private data). */
+		privateDataEnabled: isPrivateDataEnabled(db)
 	};
 
 	function describeModel(row: NonNullable<typeof chatModel>) {

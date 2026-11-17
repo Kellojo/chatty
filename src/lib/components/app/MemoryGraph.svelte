@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import LocateFixedIcon from '@lucide/svelte/icons/locate-fixed';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import type { MemoryGraph, MemoryGraphNode } from '$lib/memory-types.js';
@@ -9,7 +10,8 @@
 		graph,
 		selected = null,
 		insetTop = 0,
-		onselect
+		onselect,
+		ondeselect
 	}: {
 		graph: MemoryGraph;
 		/** Node id (`<scope>:<path>`) of the open memory. */
@@ -17,6 +19,8 @@
 		/** Space reserved at the top for an overlaid header, kept clear when fitting. */
 		insetTop?: number;
 		onselect?: (node: MemoryGraphNode) => void;
+		/** A click on empty canvas (not a pan) while a memory is selected. */
+		ondeselect?: () => void;
 	} = $props();
 
 	type SimNode = {
@@ -472,6 +476,9 @@
 				ctx.arc(x, y, r + 5, 0, Math.PI * 2);
 				ctx.stroke();
 			}
+
+			// Private memories wear a small padlock on their shoulder.
+			if (n.node.private && g > 0.6) drawLock(ctx, x + r * 0.8, y - r * 0.8, fade);
 		}
 
 		// Labels: hubs always, everything once zoomed in, and the focused neighbourhood.
@@ -544,6 +551,27 @@
 			ctx.fillStyle = rgba(n === focus ? fg : mix(fg, muted, 0.3), a);
 			ctx.fillText(label, lx, y + r + 5);
 		}
+	}
+
+	/** A tiny padlock centred on (cx, cy), on a background disc so it reads over nodes. */
+	function drawLock(ctx: CanvasRenderingContext2D, cx: number, cy: number, alpha: number) {
+		ctx.fillStyle = rgba(bg, 0.92 * alpha);
+		ctx.beginPath();
+		ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+		ctx.fill();
+		const ink = rgba(mix(fg, muted, 0.35), alpha);
+		ctx.strokeStyle = ink;
+		ctx.lineWidth = 1.2;
+		ctx.beginPath();
+		ctx.arc(cx, cy - 1, 1.9, Math.PI, 0);
+		ctx.lineTo(cx + 1.9, cy + 0.5);
+		ctx.moveTo(cx - 1.9, cy + 0.5);
+		ctx.lineTo(cx - 1.9, cy - 1);
+		ctx.stroke();
+		ctx.fillStyle = ink;
+		ctx.beginPath();
+		ctx.roundRect(cx - 3, cy, 6, 4, 1);
+		ctx.fill();
 	}
 
 	function mix(a: RGB, b: RGB, t: number): RGB {
@@ -640,6 +668,8 @@
 		if (drag.node) {
 			drag.node.fixed = false;
 			if (!drag.moved) onselect?.(drag.node.node);
+		} else if (!drag.moved && selected) {
+			ondeselect?.();
 		}
 		drag = null;
 		canvas!.style.cursor = hovered ? 'pointer' : 'grab';
@@ -736,7 +766,12 @@
 			bind:clientWidth={tooltipWidth}
 			style="left: {tooltipLeft}px; top: {tooltipTop}px"
 		>
-			<p class="line-clamp-2 text-sm font-medium break-words">{hovered.title}</p>
+			<p class="line-clamp-2 text-sm font-medium break-words">
+				{#if hovered.node.private}<LockIcon
+						class="mr-1 inline size-3 -translate-y-px text-muted-foreground"
+						aria-label="Private"
+					/>{/if}{hovered.title}
+			</p>
 			<p class="text-xs text-muted-foreground">
 				{hovered.folder || 'Top level'} ·
 				{links === 0 ? 'No links yet' : `${links} ${links === 1 ? 'connection' : 'connections'}`}

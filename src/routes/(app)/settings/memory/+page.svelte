@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { invalidateAll } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { Switch } from '$lib/components/ui/switch/index.js';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
@@ -14,6 +16,24 @@
 	const isAdmin = $derived(data.user.role === 'admin');
 
 	let extractBusy = $state(false);
+
+	// Shown while a change is saving, until the refreshed settings agree.
+	let strictPending = $state<boolean | null>(null);
+	const strict = $derived(strictPending ?? data.settings.strictMemoryPrivacy);
+
+	async function setStrict(value: boolean) {
+		strictPending = value;
+		const saved = await fetch('/api/memory/settings', {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ strictMemoryPrivacy: value })
+		})
+			.then((res) => res.ok)
+			.catch(() => false);
+		if (saved) await invalidateAll().catch(() => undefined);
+		else toast.error("Couldn't change strict memory privacy. Try again.");
+		if (strictPending === value) strictPending = null;
+	}
 	let reindexBusy = $state(false);
 
 	async function extractNow() {
@@ -79,6 +99,18 @@
 		</Button>
 	</SettingsRow>
 </SettingsSection>
+
+{#if data.privateData.enabled}
+	<SettingsSection title="Privacy">
+		<SettingsRow
+			label="Strict memory privacy"
+			for="pref-strict-memory"
+			description="Models that can't process private data get nothing from memory or past chats, not even a count of hidden items."
+		>
+			<Switch id="pref-strict-memory" checked={strict} onCheckedChange={setStrict} />
+		</SettingsRow>
+	</SettingsSection>
+{/if}
 
 {#if isAdmin}
 	<SettingsSection title="Search index">

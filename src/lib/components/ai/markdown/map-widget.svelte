@@ -7,6 +7,7 @@
 	import NavigationIcon from '@lucide/svelte/icons/navigation';
 	import WidgetCard from './widget-card.svelte';
 	import { cn } from '$lib/utils.js';
+	import { getPrivateChat } from '$lib/private-context.js';
 
 	type Marker = {
 		name?: string;
@@ -39,6 +40,12 @@
 	let map: L.Map | null = null;
 	let layer: L.LayerGroup | null = null;
 	let initialized = $state(false);
+
+	// In a private chat the map's tiles (which reveal the area to the tile
+	// server) only load once the user asks for them.
+	const isPrivateChat = getPrivateChat();
+	let tilesAllowed = $state(false);
+	const showMap = $derived(tilesAllowed || !isPrivateChat());
 
 	function tileUrl(): string {
 		return 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -193,7 +200,7 @@
 	// The map container only exists in the DOM once the fence is complete, so
 	// (re)initialize whenever it appears; the container may mount after onMount.
 	$effect(() => {
-		if (mapEl) initMap();
+		if (mapEl && showMap) initMap();
 		if (initialized && map) renderMarkers();
 	});
 
@@ -218,13 +225,33 @@
 >
 	{#if data}
 		<div class={cn('flex flex-col', sideList && 'md:flex-row')}>
-			<div
-				class={cn(
-					'isolate h-64 w-full shrink-0 bg-muted',
-					sideList ? 'md:h-auto md:min-h-80 md:flex-1' : 'md:h-72'
-				)}
-				bind:this={mapEl}
-			></div>
+			{#if showMap}
+				<div
+					class={cn(
+						'isolate h-64 w-full shrink-0 bg-muted',
+						sideList ? 'md:h-auto md:min-h-80 md:flex-1' : 'md:h-72'
+					)}
+					bind:this={mapEl}
+				></div>
+			{:else}
+				<div
+					class={cn(
+						'flex h-64 w-full shrink-0 flex-col items-center justify-center gap-2 bg-muted px-4 text-center',
+						sideList ? 'md:h-auto md:min-h-80 md:flex-1' : 'md:h-72'
+					)}
+				>
+					<p class="text-xs text-muted-foreground">
+						Private chat: the map loads from OpenStreetMap only when you ask.
+					</p>
+					<button
+						type="button"
+						class="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+						onclick={() => (tilesAllowed = true)}
+					>
+						Show map
+					</button>
+				</div>
+			{/if}
 			<div
 				class={cn(
 					'max-h-64 overflow-y-auto border-t border-border/60',

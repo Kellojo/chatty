@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildCron, defaultSchedule, describeCron, parseCron, type ScheduleSpec } from './cron.js';
+import {
+	buildCron,
+	defaultSchedule,
+	describeCron,
+	describeSchedule,
+	parseCron,
+	type ScheduleSpec
+} from './cron.js';
 
 describe('describeCron', () => {
 	it('returns null for missing cron', () => {
@@ -61,5 +68,41 @@ describe('buildCron / parseCron', () => {
 		for (const kind of ['minutes', 'hourly', 'daily', 'weekly', 'monthly'] as const) {
 			expect(parseCron(buildCron(defaultSchedule(kind)))?.kind).toBe(kind);
 		}
+	});
+});
+
+describe('describeSchedule', () => {
+	const cases: [ScheduleSpec, string][] = [
+		[{ kind: 'minutes', every: 1 }, 'every minute'],
+		[{ kind: 'minutes', every: 30 }, 'every 30 minutes'],
+		[{ kind: 'hourly', every: 1, minute: 0 }, 'every hour, on the hour'],
+		[{ kind: 'hourly', every: 2, minute: 15 }, 'every 2 hours, 15 min past the hour'],
+		[
+			{ kind: 'hourly', every: 6, minute: 15 },
+			'every 6 hours, 15 min past the hour (00:15, 06:15, 12:15 and 18:15)'
+		],
+		[{ kind: 'daily', time: '09:00' }, 'every day at 09:00'],
+		[{ kind: 'weekly', days: [1, 2, 3, 4, 5], time: '08:30' }, 'every weekday at 08:30'],
+		[{ kind: 'weekly', days: [6, 0], time: '10:00' }, 'on weekends at 10:00'],
+		[{ kind: 'weekly', days: [1], time: '09:00' }, 'every Monday at 09:00'],
+		[
+			{ kind: 'weekly', days: [5, 1, 3], time: '09:00' },
+			'on Mondays, Wednesdays and Fridays at 09:00'
+		],
+		[{ kind: 'monthly', day: 1, time: '09:00' }, 'on the 1st of every month at 09:00'],
+		[
+			{ kind: 'monthly', day: 31, time: '09:00' },
+			'on the 31st of every month at 09:00, skipping months without one'
+		]
+	];
+
+	it.each(cases)('describes %o', (spec, text) => {
+		expect(describeSchedule(spec, '24h')).toBe(text);
+	});
+
+	it('uses 12h clock times unless 24h is set', () => {
+		expect(describeSchedule({ kind: 'daily', time: '00:05' }, '12h')).toBe('every day at 12:05 AM');
+		expect(describeSchedule({ kind: 'daily', time: '13:30' }, 'auto')).toBe('every day at 1:30 PM');
+		expect(describeSchedule({ kind: 'monthly', day: 12, time: '09:00' }, '24h')).toContain('12th');
 	});
 });

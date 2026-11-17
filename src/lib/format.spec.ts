@@ -77,4 +77,10 @@ describe('formatElapsed', () => {
 		expect(formatElapsed(245_000)).toBe('4m 05s');
 		expect(formatElapsed(4_320_000)).toBe('1h 12m');
 	});
+
+	it('drops the seconds after the first minute when coarse', () => {
+		expect(formatElapsed(42_900, { coarse: true })).toBe('42s');
+		expect(formatElapsed(245_000, { coarse: true })).toBe('4m');
+		expect(formatElapsed(4_320_000, { coarse: true })).toBe('1h 12m');
+	});
 });

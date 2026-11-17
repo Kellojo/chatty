@@ -33,13 +33,56 @@ export const NOTICE_LABEL: Record<NoticeKind, string> = {
 	failed: 'Failed'
 };
 
+/** A private chat's notices say only this, never its title or agent name. */
+export const PRIVATE_NOTICE_TITLE = 'Private chat';
+
+/** The fixed body of a private chat's notice, per kind (nothing from the chat). */
+export const PRIVATE_NOTICE_BODY: Record<NoticeKind, string> = {
+	reply: 'New reply',
+	'needs-you': 'Waiting for your input',
+	finished: 'Finished',
+	failed: 'Something failed'
+};
+
+/**
+ * The notice with nothing from a private chat in it: a fixed title and body,
+ * and no agent to look a name up for. Tag and URL are ids only.
+ */
+export function privateNotice(notice: Notice): Notice {
+	return {
+		kind: notice.kind,
+		tag: notice.tag,
+		title: PRIVATE_NOTICE_TITLE,
+		body: PRIVATE_NOTICE_BODY[notice.kind],
+		url: notice.url,
+		conversationId: notice.conversationId
+	};
+}
+
 export function conversationTitle(c: Conversation | undefined, fallback = 'New chat'): string {
 	if (!c) return fallback;
 	return c.title || (c.coding ? 'New task' : 'New chat');
 }
 
-/** The notice a server event should raise, or null when it isn't worth one. */
+/**
+ * The notice a server event should raise, or null when it isn't worth one. A
+ * private chat's notice is {@link privateNotice}.
+ */
 export function noticeForEvent(event: ServerEvent, ctx: NoticeContext): Notice | null {
+	const notice = rawNoticeForEvent(event, ctx);
+	if (!notice) return null;
+	const id = eventConversationId(event);
+	return id && ctx.conversation(id)?.private ? privateNotice(notice) : notice;
+}
+
+/** The conversation an event is about, including an agent run's hidden one. */
+function eventConversationId(event: ServerEvent): string | null {
+	return 'conversationId' in event && typeof event.conversationId === 'string'
+		? event.conversationId
+		: null;
+}
+
+function rawNoticeForEvent(event: ServerEvent, ctx: NoticeContext): Notice | null {
 	const { triggers } = ctx;
 	switch (event.type) {
 		case 'chat.message_completed': {
@@ -84,7 +127,8 @@ export function noticeForEvent(event: ServerEvent, ctx: NoticeContext): Notice |
 				kind: 'needs-you',
 				tag: `chat:${event.conversationId}`,
 				title: 'Agent',
-				body: `Needs you: ${event.question}`,
+				// The question is model-written and may quote the chat; it only shows in the app.
+				body: 'An agent needs your input',
 				url: `/chat/${event.conversationId}`,
 				conversationId: event.conversationId,
 				agentId: event.agentId
@@ -145,7 +189,7 @@ export function codingStatusSnapshot(
 }
 
 export function needsYouNotice(c: Conversation): Notice {
-	return {
+	const notice: Notice = {
 		kind: 'needs-you',
 		tag: `chat:${c.id}`,
 		title: conversationTitle(c, 'Coding task'),
@@ -153,6 +197,7 @@ export function needsYouNotice(c: Conversation): Notice {
 		url: `/chat/${c.id}`,
 		conversationId: c.id
 	};
+	return c.private ? privateNotice(notice) : notice;
 }
 
 export type AttentionLevel = 'none' | 'unread' | 'needs-you';

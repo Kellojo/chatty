@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit';
+import { privateDataStatus } from '$lib/server/privacy/status.js';
 import { CONVERSATIONS_KEY } from '$lib/load-keys.js';
 import { config } from '$lib/server/config.js';
 import { getDb } from '$lib/server/db/index.js';
@@ -41,6 +42,7 @@ export const load: LayoutServerLoad = async ({ locals, depends, url }) => {
 		autoSettleDays: config.CONVERSATION_AUTO_SETTLE_DAYS,
 		unreadIds: listUnreadChatIds(db, locals.user.id),
 		sidebarOpen: settings.sidebarOpen,
-		settings
+		settings,
+		privateData: privateDataStatus(db)
 	};
 };

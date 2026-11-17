@@ -62,17 +62,22 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	try {
 		const buffer = await audioFile.arrayBuffer();
-		const { result, index, target } = await transcribeWithFallbacks(buffer, resolved.targets, {
-			language: typeof language === 'string' && language ? language : undefined,
-			prompt: typeof prompt === 'string' && prompt ? prompt : undefined,
-			responseFormat:
-				typeof responseFormat === 'string'
-					? (responseFormat as 'json' | 'text' | 'srt' | 'vtt' | 'verbose_json')
-					: 'json',
-			temperature: typeof temperatureRaw === 'string' ? parseFloat(temperatureRaw) : undefined,
-			fileName: audioFile.name || undefined,
-			mimeType: audioFile.type || undefined
-		});
+		const { result, index, target } = await transcribeWithFallbacks(
+			buffer,
+			resolved.targets,
+			resolved.privacy,
+			{
+				language: typeof language === 'string' && language ? language : undefined,
+				prompt: typeof prompt === 'string' && prompt ? prompt : undefined,
+				responseFormat:
+					typeof responseFormat === 'string'
+						? (responseFormat as 'json' | 'text' | 'srt' | 'vtt' | 'verbose_json')
+						: 'json',
+				temperature: typeof temperatureRaw === 'string' ? parseFloat(temperatureRaw) : undefined,
+				fileName: audioFile.name || undefined,
+				mimeType: audioFile.type || undefined
+			}
+		);
 
 		finalizeProxyRequest(db, log.id, {
 			status: 'complete',

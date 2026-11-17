@@ -274,7 +274,7 @@ describe('decisionsRequestSchema', () => {
 // --- handler: forwardDecisions ---
 describe('forwardDecisions', () => {
 	it('proxies a valid request and returns the upstream response', async () => {
-		const response = await realForward(decisionsBody('j1'));
+		const response = await realForward(decisionsBody('j1'), { tainted: false });
 		expect(response.status).toBe(200);
 
 		const body = (await response.json()) as DecisionsResponse;
@@ -293,7 +293,7 @@ describe('forwardDecisions', () => {
 	});
 
 	it('throws when the model does not exist', async () => {
-		await expect(realForward(decisionsBody('nonexistent'))).rejects.toThrow(
+		await expect(realForward(decisionsBody('nonexistent'), { tainted: false })).rejects.toThrow(
 			'No model found for decisions request'
 		);
 	});
@@ -304,25 +304,29 @@ describe('forwardDecisions', () => {
 			modelId: 'no-decisions',
 			capabilities: ['chat', 'streaming']
 		});
-		await expect(realForward(decisionsBody('no-decisions'))).rejects.toThrow(
+		await expect(realForward(decisionsBody('no-decisions'), { tainted: false })).rejects.toThrow(
 			'does not support decisions'
 		);
 	});
 
 	it('replaces the requested model id with the upstream model id', async () => {
 		// model_id in DB is 'j1', user requests with that name
-		await realForward(decisionsBody('j1'));
+		await realForward(decisionsBody('j1'), { tainted: false });
 		expect(upstreamRequests[0].body).toHaveProperty('model', 'j1');
 	});
 
 	it('passes upstream errors through as DecisionsError', async () => {
 		upstreamBehavior = 'not-found';
-		await expect(realForward(decisionsBody('j1'))).rejects.toThrow(DecisionsError);
+		await expect(realForward(decisionsBody('j1'), { tainted: false })).rejects.toThrow(
+			DecisionsError
+		);
 	});
 
 	it('maps upstream 503 as a DecisionsError', async () => {
 		upstreamBehavior = 'down';
-		await expect(realForward(decisionsBody('j1'))).rejects.toThrow(DecisionsError);
+		await expect(realForward(decisionsBody('j1'), { tainted: false })).rejects.toThrow(
+			DecisionsError
+		);
 	});
 });
 

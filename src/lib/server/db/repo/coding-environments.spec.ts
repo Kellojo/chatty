@@ -83,6 +83,30 @@ describe('coding environments repo', () => {
 		expect(repo.deleteCodingEnvironment(db, 'u1', row.id)).toBeDefined();
 	});
 
+	it('marks a rejected token only while the connection details are unchanged', () => {
+		const row = repo.createCodingEnvironment(db, 'u1', {
+			name: 'a',
+			baseUrl: 'http://a',
+			token: 't'
+		});
+		repo.recordEnvironmentCheck(db, row.id, { status: 'online' });
+		expect(repo.markEnvironmentUnauthorized(db, row, 'Token rejected')).toBe(true);
+		expect(repo.getCodingEnvironment(db, 'u1', row.id)).toMatchObject({
+			status: 'unauthorized',
+			last_error: 'Token rejected'
+		});
+		// Already marked: not news.
+		expect(repo.markEnvironmentUnauthorized(db, row, 'Token rejected')).toBe(false);
+
+		// A new token resets the status, and a failure seen with the old one doesn't stick.
+		repo.updateCodingEnvironment(db, 'u1', row.id, { token: 't2' });
+		expect(repo.markEnvironmentUnauthorized(db, row, 'Token rejected')).toBe(false);
+		expect(repo.getCodingEnvironment(db, 'u1', row.id)).toMatchObject({
+			status: 'unknown',
+			last_error: null
+		});
+	});
+
 	it('resets status when the connection details change', () => {
 		const row = repo.createCodingEnvironment(db, 'u1', {
 			name: 'a',

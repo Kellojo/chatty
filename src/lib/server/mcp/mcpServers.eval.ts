@@ -219,7 +219,8 @@ async function runScenario(
 	const created = createConversation(db, userId, {
 		title: `[eval] ${scenario.id}`,
 		providerId: model.providerId,
-		modelId: model.modelId
+		modelId: model.modelId,
+		private: false
 	});
 	const result: ScenarioResult = {
 		id: scenario.id,

@@ -24,9 +24,6 @@ describe('matchShortcut', () => {
 	it('matches the modifier shortcuts with Ctrl, or Cmd on a Mac', () => {
 		expect(matchShortcut(key('O', { ctrl: true, shift: true }), false, false)).toBe('new-chat');
 		expect(matchShortcut(key('o', { meta: true, shift: true }), true, true)).toBe('new-chat');
-		expect(matchShortcut(key('C', { ctrl: true, shift: true }), true, false)).toBe(
-			'copy-last-reply'
-		);
 		expect(matchShortcut(key('c', { ctrl: true }), false, false)).toBeNull();
 		expect(matchShortcut(key('o', { ctrl: true }), false, false)).toBeNull();
 	});
@@ -39,9 +36,22 @@ describe('matchShortcut', () => {
 		expect(matchShortcut(key('b', { ctrl: true, meta: true }), false, false)).toBeNull();
 	});
 
-	it('matches Escape and Shift+Escape', () => {
+	it('matches Escape, but not Shift+Escape', () => {
 		expect(matchShortcut(key('Escape'), true)).toBe('escape');
-		expect(matchShortcut(key('Escape', { shift: true }), true)).toBe('focus-composer');
+		expect(matchShortcut(key('Escape', { shift: true }), true)).toBeNull();
+	});
+
+	it('opens the command palette with Ctrl/Cmd+K, even while typing', () => {
+		expect(matchShortcut(key('k', { ctrl: true }), true, false)).toBe('command-palette');
+		expect(matchShortcut(key('K', { meta: true }), true, true)).toBe('command-palette');
+		expect(matchShortcut(key('k', { ctrl: true, shift: true }), false, false)).toBeNull();
+	});
+
+	it('leaves dropped shortcuts to the browser (now in the palette)', () => {
+		// Ctrl+Shift+C is the inspector in Chromium; Ctrl+, and ? are one Mod+K away.
+		expect(matchShortcut(key('C', { ctrl: true, shift: true }), false, false)).toBeNull();
+		expect(matchShortcut(key(',', { ctrl: true }), false, false)).toBeNull();
+		expect(matchShortcut(key('?', { shift: true }), false)).toBeNull();
 	});
 
 	it('only takes / when not typing', () => {
@@ -51,19 +61,12 @@ describe('matchShortcut', () => {
 
 	it('matches the Ctrl/Cmd navigation shortcuts, even while typing', () => {
 		expect(matchShortcut(key('b', { ctrl: true }), true)).toBe('toggle-sidebar');
-		expect(matchShortcut(key('K', { meta: true }), true, true)).toBe('search');
-		expect(matchShortcut(key(',', { meta: true }), true, true)).toBe('open-settings');
 		expect(matchShortcut(key('.', { ctrl: true }), true)).toBe('model-picker');
 		expect(matchShortcut(key('/', { ctrl: true }), true)).toBe('show-shortcuts');
 		// Layouts where "/" needs Shift.
 		expect(matchShortcut(key('/', { ctrl: true, shift: true }), true)).toBe('show-shortcuts');
 		expect(matchShortcut(key('?', { meta: true, shift: true }), true, true)).toBe('show-shortcuts');
 		expect(matchShortcut(key('b', { ctrl: true, shift: true }), false)).toBeNull();
-	});
-
-	it('only takes ? for the shortcuts list when not typing', () => {
-		expect(matchShortcut(key('?', { shift: true }), false)).toBe('show-shortcuts');
-		expect(matchShortcut(key('?', { shift: true }), true)).toBeNull();
 	});
 
 	it('steps through conversations with Alt+Up and Alt+Down only', () => {

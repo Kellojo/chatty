@@ -7,7 +7,9 @@ export const providerCreateSchema = z
 		type: z.enum(['anthropic', 'openai-compatible']),
 		baseUrl: z.url().nullish(),
 		apiKey: z.string().min(1).nullish(),
-		enabled: z.boolean().optional()
+		enabled: z.boolean().optional(),
+		/** Trusted with private data. Missing means untrusted (fail closed). */
+		allowPrivate: z.boolean().optional()
 	})
 	.refine((input) => input.type !== 'openai-compatible' || Boolean(input.baseUrl), {
 		message: 'baseUrl is required for openai-compatible providers'

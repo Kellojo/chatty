@@ -13,6 +13,8 @@ vi.mock('../llm/registry.js', async () => {
 				chunks: unknown[] | null;
 				lastPrompt?: unknown;
 				chunkDelayMs?: number;
+				/** Chunks per model call, overriding `chunks` when it returns some. */
+				next?: (() => unknown[] | undefined) | null;
 			};
 		}
 	).__chatChunksState ??= { chunks: null });
@@ -35,7 +37,7 @@ vi.mock('../llm/registry.js', async () => {
 			state.lastPrompt = opts.prompt;
 			return {
 				stream: simulateReadableStream({
-					chunks: (state.chunks ?? defaultChunks) as never[],
+					chunks: (state.next?.() ?? state.chunks ?? defaultChunks) as never[],
 					chunkDelayInMs: state.chunkDelayMs ?? 0
 				})
 			};
@@ -57,6 +59,9 @@ vi.mock('../llm/registry.js', async () => {
 		__getLastPrompt: () => state.lastPrompt,
 		__setChunkDelay: (ms: number) => {
 			state.chunkDelayMs = ms;
+		},
+		__setNext: (next: (() => unknown[] | undefined) | null) => {
+			state.next = next;
 		}
 	};
 });
@@ -116,6 +121,7 @@ const registry = (await import('../llm/registry.js')) as unknown as {
 	__setChunks: (chunks: unknown[] | null) => void;
 	__getLastPrompt: () => unknown;
 	__setChunkDelay: (ms: number) => void;
+	__setNext: (next: (() => unknown[] | undefined) | null) => void;
 };
 
 type Db = ReturnType<typeof getDb>;
@@ -946,6 +952,47 @@ describe('handleChatRequest', () => {
 			expect(assistant.parts).toContain('Hi there');
 		} finally {
 			flags.__chatFallback = false;
+			consoleError.mockRestore();
+			closeDb();
+		}
+	});
+
+	it('stops a turn whose chat turns private mid-turn on an untrusted provider', async () => {
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		try {
+			const db = getDb();
+			const conversation = seed(db);
+			let calls = 0;
+			// Step 1 calls a tool; meanwhile the chat is marked private. Step 2 must not run.
+			registry.__setNext(() => {
+				calls++;
+				if (calls > 1) return undefined;
+				db.prepare('UPDATE conversations SET private = 1 WHERE id = ?').run(conversation.id);
+				return [
+					{ type: 'tool-call', toolCallId: 'tc1', toolName: 'no_such_tool', input: '{}' },
+					{
+						type: 'finish',
+						finishReason: 'tool-calls',
+						usage: {
+							inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+							outputTokens: { total: 1, text: 1, reasoning: undefined }
+						}
+					}
+				];
+			});
+			const res = await handleChatRequest('u1', {
+				conversationId: conversation.id,
+				message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }
+			});
+			await res.text();
+			await new Promise((r) => setTimeout(r, 50));
+
+			expect(calls).toBe(1);
+			const assistant = listMessages(db, conversation.id).find((m) => m.role === 'assistant')!;
+			expect(assistant.status).toBe('failed');
+			expect(assistant.error).toMatch(/private/i);
+		} finally {
+			registry.__setNext(null);
 			consoleError.mockRestore();
 			closeDb();
 		}

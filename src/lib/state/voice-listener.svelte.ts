@@ -5,6 +5,12 @@ import {
 	TURN_DETECTION,
 	VoiceActivity
 } from '$lib/voice-activity.js';
+import {
+	canUseBrowserRecognition,
+	PRIVATE_MIC_HINT,
+	PRIVATE_SPEECH,
+	type SpeechPrivacy
+} from '$lib/private-speech.js';
 import { recordingMimeType, transcribeRecording } from './server-speech-recognition.svelte.js';
 import { voiceAudioContext } from './voice-audio.js';
 
@@ -47,10 +53,15 @@ function recognitionCtor(): (new () => Recognition) | null {
 	return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-/** Voice mode can hear the user: a microphone plus server or browser speech to text. */
-export function canListen(sttModel: unknown): boolean {
+/**
+ * Voice mode can hear the user: a microphone plus server or browser speech to
+ * text. A private chat never uses the browser's recognition (it sends the
+ * audio to Google); `isPrivate` defaults to true.
+ */
+export function canListen(sttModel: unknown, isPrivate = true): boolean {
 	if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return false;
-	return sttModel ? typeof MediaRecorder !== 'undefined' : recognitionCtor() !== null;
+	if (sttModel) return typeof MediaRecorder !== 'undefined';
+	return canUseBrowserRecognition(isPrivate) && recognitionCtor() !== null;
 }
 
 /** Dev builds log what voice mode hears, to tune detection by. */
@@ -69,6 +80,11 @@ export type VoiceListener = ReturnType<typeof createVoiceListener>;
  */
 export function createVoiceListener(options: {
 	sttModel: { providerId: string; modelId: string } | null;
+	/**
+	 * The chat voice mode talks in (default: private). Sent with each
+	 * transcription; a private chat never uses browser recognition.
+	 */
+	privacy?: () => SpeechPrivacy;
 	/** What the user said in one turn; empty when nothing was understood. */
 	onturn: (text: string) => void;
 	/** The user started talking while the assistant was busy. */
@@ -128,8 +144,15 @@ export function createVoiceListener(options: {
 	/** Recognition sessions in a row that ended right after starting. */
 	let quickEnds = 0;
 
+	const privacy = () => options.privacy?.() ?? PRIVATE_SPEECH;
+	const browserRecognitionAllowed = () => canUseBrowserRecognition(privacy().private);
+
 	async function open(): Promise<boolean> {
 		if (mode !== 'off') return true;
+		if (!options.sttModel && !browserRecognitionAllowed()) {
+			options.onerror(PRIVATE_MIC_HINT);
+			return false;
+		}
 		// The AudioContext first, while the click still counts (see voice-audio.ts).
 		const ctx = voiceAudioContext();
 		try {
@@ -440,7 +463,7 @@ export function createVoiceListener(options: {
 		const signal = transcription?.signal;
 		debug(`transcribing ${Math.round(blob.size / 1024)} KB of ${blob.type}`);
 		try {
-			const text = (await transcribeRecording(blob, options.sttModel, signal)).trim();
+			const text = (await transcribeRecording(blob, options.sttModel, signal, privacy())).trim();
 			debug(`transcript: "${text}"`);
 			return text;
 		} catch (e) {
@@ -452,6 +475,12 @@ export function createVoiceListener(options: {
 	}
 
 	function startRecognition() {
+		// The chat may have turned private since voice mode opened.
+		if (!browserRecognitionAllowed()) {
+			options.onerror(PRIVATE_MIC_HINT);
+			options.onfatal();
+			return;
+		}
 		const Ctor = recognitionCtor();
 		if (!Ctor) return;
 		const r = new Ctor();

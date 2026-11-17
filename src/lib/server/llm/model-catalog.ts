@@ -19,7 +19,9 @@ export function getModelCatalog(): ModelCatalog {
 			id: provider.id,
 			name: provider.name,
 			type: provider.type,
-			baseUrl: provider.baseUrl
+			baseUrl: provider.baseUrl,
+			// Private chats only offer models on providers trusted with private data.
+			allowPrivate: provider.allowPrivate
 		},
 		models: models.map((m) => ({
 			providerId: m.providerId,

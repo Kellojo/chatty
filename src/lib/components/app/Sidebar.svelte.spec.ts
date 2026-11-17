@@ -46,6 +46,7 @@ function conv(id: string, title: string, patch: Partial<Conversation> = {}): Con
 		temperature: null,
 		maxTokens: null,
 		pinned: false,
+		private: false,
 		agentId: null,
 		settledAt: null,
 		settledReason: null,

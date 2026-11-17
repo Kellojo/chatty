@@ -31,11 +31,11 @@ beforeAll(() => {
 
 const user = { id: 'u1' };
 
-function call(text: string, locals: object = { user }) {
+function call(text: string, locals: object = { user }, extra: object = { private: false }) {
 	const request = new Request('http://localhost/api/speech/synthesize', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ text })
+		body: JSON.stringify({ text, ...extra })
 	});
 	return Promise.resolve(POST({ request, locals } as never));
 }
@@ -99,7 +99,7 @@ describe('POST /api/speech/synthesize', () => {
 		const request = new Request('http://localhost/api/speech/synthesize', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ text: 'Hi', voice: 'af_bella' })
+			body: JSON.stringify({ text: 'Hi', voice: 'af_bella', private: false })
 		});
 		await POST({ request, locals: { user } } as never);
 		expect(sent).toEqual(['af_bella']);
@@ -151,7 +151,7 @@ describe('POST /api/speech/synthesize', () => {
 			const request = new Request('http://localhost/api/speech/synthesize', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: 'Hi' }),
+				body: JSON.stringify({ text: 'Hi', private: false }),
 				signal: c.signal
 			});
 			return statusOf(Promise.resolve(POST({ request, locals: { user } } as never)));
@@ -164,5 +164,26 @@ describe('POST /api/speech/synthesize', () => {
 		// All three slots are free again.
 		globalThis.fetch = vi.fn(async () => new Response(new Uint8Array([1]))) as typeof fetch;
 		expect((await statusOf(call('again'))).status).toBe(200);
+	});
+
+	it('fails closed: text without a chat or private flag never reaches an untrusted model', async () => {
+		setRoleDefault(getDb(), 'text-to-speech', modelRowId);
+		const fetchMock = vi.fn(async () => new Response(new Uint8Array([1])));
+		globalThis.fetch = fetchMock as typeof fetch;
+		const blocked = {
+			status: 403,
+			message: 'This chat is private and no text-to-speech model may process private data'
+		};
+		expect(await statusOf(call('Secret', { user }, {}))).toEqual(blocked);
+		expect(await statusOf(call('Secret', { user }, { private: true }))).toEqual(blocked);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("refuses another user's conversation", async () => {
+		setRoleDefault(getDb(), 'text-to-speech', modelRowId);
+		expect(await statusOf(call('Hi', { user }, { conversationId: 'not-mine' }))).toEqual({
+			status: 404,
+			message: 'Conversation not found'
+		});
 	});
 });
