@@ -139,6 +139,7 @@
 		{:else if visible || notice}
 			<Message
 				data-message-id={message.id}
+				data-message-role={message.role}
 				class={cn(
 					// Takes focus when the message rail jumps here; the bubble shows it to keyboard users.
 					'group/msg outline-none',
