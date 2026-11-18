@@ -1,3 +1,14 @@
+<script lang="ts" module>
+	/** How full the model's context is after the latest reply that measured it. */
+	export interface ContextUsage {
+		tokens: number;
+		/** The model's context window; null when it isn't known. */
+		length: number | null;
+		/** The model that produced the reply. */
+		modelId: string;
+	}
+</script>
+
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto, invalidateAll } from '$app/navigation';
@@ -39,6 +50,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import LockOpenIcon from '@lucide/svelte/icons/lock-open';
+	import { formatCount } from '$lib/formats.js';
 
 	/** The header's "⋯" menu: conversation actions, plus task details for coding tasks. */
 	let {
@@ -46,6 +58,7 @@
 		coding = null,
 		environmentName = null,
 		privateData = PRIVATE_DATA_OFF,
+		contextUsage = null,
 		onupdated,
 		onhandoff,
 		oncreatepr,
@@ -57,6 +70,8 @@
 		environmentName?: string | null;
 		/** The app shell's private-data switches: the privacy items follow them. */
 		privateData?: PrivateDataStatus;
+		/** Shown as a read-only meter at the foot of the menu. */
+		contextUsage?: ContextUsage | null;
 		onupdated: (c: Conversation) => void;
 		/** Shown on phones, where the header has no room for the Hand off button. */
 		onhandoff?: () => void;
@@ -112,6 +127,20 @@
 	}
 
 	const settled = $derived(conversation.settledAt !== null);
+
+	/** Share of the context window in use, 0–100; null when the window isn't known. */
+	const contextPercent = $derived(
+		contextUsage?.length
+			? Math.min(100, Math.round((contextUsage.tokens / contextUsage.length) * 100))
+			: null
+	);
+	const contextTone = $derived(
+		contextPercent === null || contextPercent < 75
+			? 'bg-foreground/60'
+			: contextPercent < 90
+				? 'bg-warning'
+				: 'bg-destructive'
+	);
 	const noun = $derived(coding ? 'task' : 'conversation');
 
 	async function request(path: string, init: RequestInit, failure: string): Promise<boolean> {
@@ -466,6 +495,38 @@
 			<Trash2Icon class="size-4" />
 			Delete
 		</DropdownMenu.Item>
+		{#if contextUsage}
+			<DropdownMenu.Separator />
+			<!-- Read-only: how much of the model's context the chat fills, as of the last reply. -->
+			<div
+				class="px-2 py-1.5 text-xs text-muted-foreground"
+				title="As of the latest reply from {contextUsage.modelId.split('/').pop()}"
+			>
+				<div class="flex items-baseline justify-between gap-2">
+					<span>Context</span>
+					<span class="text-foreground tabular-nums">
+						{formatCount(contextUsage.tokens)}{#if contextUsage.length}
+							<span class="text-muted-foreground"> / {formatCount(contextUsage.length)}</span>
+						{/if}
+						<span class="sr-only">tokens</span>
+					</span>
+				</div>
+				{#if contextPercent !== null}
+					<div
+						class="mt-1.5 h-1 overflow-hidden rounded-full bg-muted"
+						role="meter"
+						aria-label="Context used"
+						aria-valuemin={0}
+						aria-valuemax={100}
+						aria-valuenow={contextPercent}
+						aria-valuetext="{contextPercent}% of the context window"
+					>
+						<div class="h-full rounded-full {contextTone}" style:width="{contextPercent}%"></div>
+					</div>
+					<p class="mt-1 tabular-nums">{contextPercent}% used</p>
+				{/if}
+			</div>
+		{/if}
 	</DropdownMenu.Content>
 </DropdownMenu.DropdownMenu>
 

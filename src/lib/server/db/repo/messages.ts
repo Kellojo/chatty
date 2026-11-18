@@ -16,6 +16,10 @@ export interface MessageUsage {
 	totalTokens: number | null;
 	latencyMs: number | null;
 	costUsd: number | null;
+	/** Tokens the conversation holds after this reply: its final step's prompt plus output. */
+	contextTokens?: number | null;
+	/** The model's context window when the reply was generated. */
+	contextLength?: number | null;
 	promptChars?: PromptCharBreakdown;
 }
 

@@ -483,6 +483,26 @@
 		chat.status === 'streaming' || chat.status === 'submitted' || remoteGenerating
 	);
 	const lastAssistant = $derived(chat.messages.findLast((m) => m.role === 'assistant'));
+	/**
+	 * How full the model's context is, as of the latest reply that measured it.
+	 * Replies without usage (failed, stopped early) are skipped; one recorded
+	 * before context was measured ends the search, since older figures are stale.
+	 */
+	const contextUsage = $derived.by(() => {
+		for (let i = chat.messages.length - 1; i >= 0; i--) {
+			const message = chat.messages[i];
+			if (message.role !== 'assistant') continue;
+			const usage = (message.metadata as UIMessageMetadata | undefined)?.usage;
+			if (!usage) continue;
+			if (!usage.contextTokens) return null;
+			return {
+				tokens: usage.contextTokens,
+				length: usage.contextLength ?? null,
+				modelId: usage.modelId
+			};
+		}
+		return null;
+	});
 
 	$effect(() => {
 		const reply = lastAssistant ? { id: lastAssistant.id, text: messageText(lastAssistant) } : null;
@@ -1571,6 +1591,7 @@
 		handoffDisabled={streaming || chat.messages.length === 0}
 		messageCount={chat.messages.length}
 		{privateData}
+		contextUsage={isCoding ? null : contextUsage}
 		onupdated={(updated) => {
 			conversation = updated;
 		}}

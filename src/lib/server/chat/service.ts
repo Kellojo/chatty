@@ -1203,6 +1203,11 @@ export async function runChatTurn(
 						reportProgress();
 					}
 					totalTokensUsed = await result.usage;
+					// `usage` sums every step; the context in use is the last step's prompt plus its output.
+					const finalUsage = (await result.finalStep).usage;
+					const contextTokens =
+						(finalUsage.inputTokens ?? 0) + (finalUsage.outputTokens ?? 0) || null;
+					const contextLength = await effectiveContextLength(target).catch(() => null);
 					usageMeta = {
 						providerId: target.providerId,
 						modelId: target.modelId,
@@ -1212,6 +1217,8 @@ export async function runChatTurn(
 						latencyMs: Date.now() - startedAt,
 						costUsd: computeUsageCostUsd(priceRow, totalTokensUsed),
 						...turnTiming,
+						contextTokens,
+						contextLength,
 						promptChars: {
 							system:
 								promptParts.base.length + promptParts.widgets.length + promptParts.system.length,

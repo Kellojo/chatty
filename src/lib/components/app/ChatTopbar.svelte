@@ -2,7 +2,7 @@
 	import { toast } from 'svelte-sonner';
 	import ModelPicker from './ModelPicker.svelte';
 	import CodingTaskBar from './CodingTaskBar.svelte';
-	import ConversationMenu from './ConversationMenu.svelte';
+	import ConversationMenu, { type ContextUsage } from './ConversationMenu.svelte';
 	import HandoffDialog from './HandoffDialog.svelte';
 	import PrivateChatBadge from './PrivateChatBadge.svelte';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
@@ -38,6 +38,7 @@
 		handoffDisabled = false,
 		messageCount,
 		privateData = PRIVATE_DATA_OFF,
+		contextUsage = null,
 		onupdated
 	}: {
 		conversation: Conversation;
@@ -60,6 +61,8 @@
 		messageCount?: number;
 		/** The app shell's private-data switches (lock, privacy menu items). */
 		privateData?: PrivateDataStatus;
+		/** How full the model's context is after the latest reply; shown in the ⋯ menu. */
+		contextUsage?: ContextUsage | null;
 		onupdated: (c: Conversation) => void;
 	} = $props();
 
@@ -224,6 +227,7 @@
 			<ConversationMenu
 				{conversation}
 				{coding}
+				{contextUsage}
 				environmentName={codingEnvironmentName}
 				{privateData}
 				{onupdated}

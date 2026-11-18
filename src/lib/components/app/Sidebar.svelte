@@ -110,24 +110,33 @@
 			(page.data?.privateData as { available?: boolean } | undefined)?.available === true
 	);
 
-	// ── multi-select (bulk "Make private") ──────────────────────────────────
+	// ── multi-select (bulk mark read, settle, make private, delete) ─────────
 	/** Picking chats: rows show checkboxes, and a click picks rather than opens. */
 	let selecting = $state(false);
-	const selected = new SvelteMap<string, Pick<Conversation, 'id' | 'title'>>();
+	const selected = new SvelteMap<string, Conversation>();
 	/** The chats the Make private dialog is open for. */
 	let makePrivateTargets = $state<Pick<Conversation, 'id' | 'title'>[] | null>(null);
+	let bulkBusy = $state(false);
+	let bulkDeleting = $state(false);
 
-	/** Why a chat can't be picked, or null when it can. */
-	function unselectableReason(c: Conversation): string | null {
+	/** Why a chat can't be made private, or null when it can. */
+	function notPrivatableReason(c: Conversation): string | null {
 		if (c.coding) return 'Coding tasks run on a T3 machine and cannot be private';
 		if (c.private) return 'Already private';
 		return null;
 	}
 
+	/** The picked chats that can still be made private. */
+	const privatable = $derived(
+		[...selected.values()].filter((c) => notPrivatableReason(c) === null)
+	);
+	/** The picked chats that aren't settled yet. */
+	const unsettled = $derived([...selected.values()].filter((c) => c.settledAt === null));
+
 	function startSelecting(c?: Conversation) {
 		selected.clear();
 		selecting = true;
-		if (c && !unselectableReason(c)) selected.set(c.id, { id: c.id, title: c.title });
+		if (c) selected.set(c.id, c);
 	}
 
 	function stopSelecting() {
@@ -136,9 +145,8 @@
 	}
 
 	function toggleSelected(c: Conversation) {
-		if (unselectableReason(c)) return;
 		if (selected.has(c.id)) selected.delete(c.id);
-		else selected.set(c.id, { id: c.id, title: c.title });
+		else selected.set(c.id, c);
 	}
 
 	/** A row's link: opens the chat, or picks it while selecting. */
@@ -158,10 +166,71 @@
 		await refreshSettled();
 	}
 
-	// Leaving private data (or losing the trusted provider) ends the selection.
-	$effect(() => {
-		if (!canMakePrivate && untrack(() => selecting)) stopSelecting();
-	});
+	/** Runs one request per chat; returns the ones that succeeded. */
+	async function forEachChat(
+		rows: Conversation[],
+		run: (c: Conversation) => Promise<Response>
+	): Promise<{ done: Conversation[]; failed: number }> {
+		bulkBusy = true;
+		try {
+			const results = await Promise.all(rows.map((c) => run(c).catch(() => null)));
+			const done = rows.filter((_, i) => results[i]?.ok);
+			return { done, failed: rows.length - done.length };
+		} finally {
+			bulkBusy = false;
+		}
+	}
+
+	const plural = (n: number) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`;
+
+	/** Settles the picked chats; `undo` un-settles chats a bulk settle just put away. */
+	async function bulkSettle(undo?: Conversation[]) {
+		const settle = !undo;
+		const { done, failed } = await forEachChat(undo ?? unsettled, (c) =>
+			fetch(`/api/conversations/${c.id}/settle`, { method: settle ? 'POST' : 'DELETE' })
+		);
+		if (undo) {
+			// Settling unpins, so undoing it pins those chats again.
+			await Promise.all(
+				done
+					.filter((c) => c.pinned)
+					.map((c) => fetch(`/api/conversations/${c.id}/pin`, { method: 'POST' }).catch(() => null))
+			);
+		} else {
+			stopSelecting();
+		}
+		await invalidateAll();
+		await refreshSettled();
+		if (failed) toast.error(`Failed to ${settle ? 'settle' : 'un-settle'} ${plural(failed)}`);
+		if (settle && done.length) {
+			toast.success(`${plural(done.length)} settled`, {
+				action: { label: 'Undo', onClick: () => void bulkSettle(done) }
+			});
+		}
+	}
+
+	async function bulkMarkRead() {
+		const { done, failed } = await forEachChat([...selected.values()], (c) =>
+			fetch(`/api/conversations/${c.id}/read`, { method: 'POST' })
+		);
+		stopSelecting();
+		if (done.some((c) => c.id === markedUnread.id)) markedUnread.id = null;
+		await invalidateAll();
+		if (failed) toast.error(`Failed to mark ${plural(failed)} as read`);
+	}
+
+	async function bulkDelete() {
+		bulkDeleting = false;
+		const { done, failed } = await forEachChat([...selected.values()], (c) =>
+			fetch(`/api/conversations/${c.id}`, { method: 'DELETE' })
+		);
+		stopSelecting();
+		for (const c of done) forgetConversation(c.id);
+		if (done.length) toast.success(`${plural(done.length)} deleted`);
+		if (failed) toast.error(`Failed to delete ${plural(failed)}`);
+		if (done.some((c) => c.id === currentId)) await goto(resolve('/'));
+		await invalidateAll();
+	}
 
 	function handleNavigate() {
 		if (isMobile.current) onclose();
@@ -335,6 +404,7 @@
 	 * rows, the settled shelf, search results); the layout data is reloaded separately.
 	 */
 	function forgetConversation(id: string) {
+		selected.delete(id);
 		if (paged.rows.some((c) => c.id === id)) {
 			paged = { ...paged, rows: paged.rows.filter((c) => c.id !== id) };
 		}
@@ -1054,16 +1124,13 @@
 	</div>
 {/snippet}
 
-<!-- A row's checkbox while picking chats; coding and private chats can't be picked. -->
+<!-- A row's checkbox while picking chats. -->
 {#snippet selectBox(c: Conversation, offset: string)}
-	{@const reason = unselectableReason(c)}
 	<input
 		type="checkbox"
-		class="{offset} ml-2 size-4 shrink-0 accent-primary disabled:opacity-40"
+		class="{offset} ml-2 size-4 shrink-0 accent-primary"
 		aria-label="Select {displayTitle(c)}"
-		title={reason ?? undefined}
 		checked={selected.has(c.id)}
-		disabled={reason !== null}
 		onchange={() => toggleSelected(c)}
 	/>
 {/snippet}
@@ -1169,13 +1236,11 @@
 					<PencilIcon class="size-4" />
 					Rename
 				</DropdownMenu.Item>
-				{#if canMakePrivate}
-					<!-- Picks several chats to make private at once. -->
-					<DropdownMenu.Item onSelect={() => startSelecting(c)}>
-						<ListChecksIcon class="size-4" />
-						Select…
-					</DropdownMenu.Item>
-				{/if}
+				<!-- Picks several chats to act on at once. -->
+				<DropdownMenu.Item onSelect={() => startSelecting(c)}>
+					<ListChecksIcon class="size-4" />
+					Select…
+				</DropdownMenu.Item>
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item variant="destructive" onSelect={() => (deleteTarget = c)}>
 					<Trash2Icon class="size-4" />
@@ -1190,7 +1255,17 @@
      gets an opaque (pre-mixed) tint there: iOS colours the translucent status bar from a
      solid background at the top and falls back to a soft fade over a see-through one,
      which washed out the header. -->
+<!-- Esc is a shortcut only: the selection bar's ✕ does the same. -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <aside
+	onkeydown={(e) => {
+		// Unless something inside (a menu, the search box) already used it.
+		if (e.key === 'Escape' && selecting && !e.defaultPrevented) {
+			e.preventDefault();
+			e.stopPropagation();
+			stopSelecting();
+		}
+	}}
 	class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30 max-md:overflow-hidden max-md:bg-[color-mix(in_oklab,var(--muted)_30%,var(--background))]"
 >
 	<div
@@ -1281,14 +1356,59 @@
 				{selected.size === 0 ? 'Select chats' : `${selected.size} selected`}
 			</span>
 			<Button
-				size="sm"
-				disabled={selected.size === 0}
-				onclick={() => (makePrivateTargets = [...selected.values()])}
+				variant="ghost"
+				size="icon-sm"
+				title="Mark as read"
+				aria-label="Mark selected as read"
+				disabled={selected.size === 0 || bulkBusy}
+				onclick={() => void bulkMarkRead()}
 			>
-				<LockIcon class="size-3.5" />
-				Make private…
+				<MailOpenIcon />
 			</Button>
-			<Button variant="ghost" size="sm" onclick={stopSelecting}>Cancel</Button>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				title="Settle"
+				aria-label="Settle selected"
+				disabled={unsettled.length === 0 || bulkBusy}
+				onclick={() => void bulkSettle()}
+			>
+				<ArchiveIcon />
+			</Button>
+			{#if canMakePrivate}
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					title={selected.size > 0 && privatable.length === 0
+						? 'None of these can be made private'
+						: 'Make private…'}
+					aria-label="Make selected private"
+					disabled={privatable.length === 0 || bulkBusy}
+					onclick={() => (makePrivateTargets = privatable)}
+				>
+					<LockIcon />
+				</Button>
+			{/if}
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				class="hover:text-destructive"
+				title="Delete"
+				aria-label="Delete selected"
+				disabled={selected.size === 0 || bulkBusy}
+				onclick={() => (bulkDeleting = true)}
+			>
+				<Trash2Icon />
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				title="Cancel (Esc)"
+				aria-label="Cancel selection"
+				onclick={stopSelecting}
+			>
+				<XIcon />
+			</Button>
 		</div>
 	{/if}
 	<nav
@@ -1609,6 +1729,19 @@
 				<Button type="submit">Save</Button>
 			</Dialog.Footer>
 		</form>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={bulkDeleting} onOpenChange={(open) => (bulkDeleting = open)}>
+	<Dialog.Content>
+		<Dialog.Header>
+			<Dialog.Title>Delete {plural(selected.size)}?</Dialog.Title>
+			<Dialog.Description>They will be moved to trash and purged after 30 days.</Dialog.Description>
+		</Dialog.Header>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (bulkDeleting = false)}>Cancel</Button>
+			<Button variant="destructive" onclick={bulkDelete}>Delete</Button>
+		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
 

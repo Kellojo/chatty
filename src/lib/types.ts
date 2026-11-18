@@ -522,6 +522,10 @@ export interface MessageUsage {
 	/** Summed over the reply's model calls (tool runs excluded); absent on untimed rows. */
 	ttftMs?: number | null;
 	decodeMs?: number | null;
+	/** Tokens the conversation holds after this reply: its final step's prompt plus output. Absent on older rows. */
+	contextTokens?: number | null;
+	/** The model's context window when the reply was generated. Absent on older rows. */
+	contextLength?: number | null;
 	/** Present on newer messages; absent on pre-breakdown rows. */
 	promptChars?: PromptCharBreakdown;
 }

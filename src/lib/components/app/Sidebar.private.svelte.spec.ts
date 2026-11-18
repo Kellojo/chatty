@@ -107,7 +107,7 @@ async function openRowMenu(id: string) {
 }
 
 describe('Sidebar multi-select → Make private', () => {
-	it('picks chats and makes them private in one go, skipping coding and private ones', async () => {
+	it('picks chats and makes the eligible ones private in one go', async () => {
 		const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
 			if (url.endsWith('/derived-concepts')) return json({ concepts: [] });
 			if (url === '/api/conversations/private' && init?.method === 'POST') {
@@ -124,22 +124,21 @@ describe('Sidebar multi-select → Make private', () => {
 		await expect
 			.element(browserPage.getByRole('checkbox', { name: 'Select Tax return' }))
 			.toBeChecked();
-		await expect
-			.element(browserPage.getByRole('checkbox', { name: 'Select Refactor scheduler' }))
-			.toBeDisabled();
-		await expect
-			.element(browserPage.getByRole('checkbox', { name: 'Select Already locked' }))
-			.toBeDisabled();
+		// Coding tasks and private chats can be picked for the other bulk actions,
+		// but Make private leaves them out.
+		await browserPage.getByRole('checkbox', { name: 'Select Refactor scheduler' }).click();
+		await browserPage.getByRole('checkbox', { name: 'Select Already locked' }).click();
+		await expect.element(browserPage.getByText('3 selected')).toBeInTheDocument();
 		// While picking, a click on a row picks it instead of opening it.
 		const link = document.querySelector('a[data-conversation-id="b"]') as HTMLAnchorElement;
 		// Seen after the app's own (delegated) handler.
 		const prevented = vi.fn((e: MouseEvent) => e.defaultPrevented);
 		document.addEventListener('click', prevented, { once: true });
 		link.click();
-		await expect.element(browserPage.getByText('2 selected')).toBeInTheDocument();
+		await expect.element(browserPage.getByText('4 selected')).toBeInTheDocument();
 		expect(prevented).toHaveReturnedWith(true);
 
-		await browserPage.getByRole('button', { name: 'Make private…' }).click();
+		await browserPage.getByRole('button', { name: 'Make selected private' }).click();
 		await expect.element(browserPage.getByText('Make 2 chats private?')).toBeInTheDocument();
 		await browserPage.getByRole('button', { name: 'Make private', exact: true }).click();
 		await vi.waitFor(() =>
@@ -153,7 +152,7 @@ describe('Sidebar multi-select → Make private', () => {
 			.not.toBeInTheDocument();
 	});
 
-	it('offers no selection without a trusted provider', async () => {
+	it('offers no Make private action without a trusted provider', async () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => new Response('{}', { status: 404 }))
@@ -161,6 +160,13 @@ describe('Sidebar multi-select → Make private', () => {
 		state.privateData = { ...state.privateData, available: false };
 		renderSidebar();
 		await openRowMenu('a');
-		expect(document.body.textContent).not.toContain('Select…');
+		await browserPage.getByRole('menuitem', { name: 'Select…' }).click();
+		await expect.element(browserPage.getByText('1 selected')).toBeInTheDocument();
+		await expect
+			.element(browserPage.getByRole('button', { name: 'Make selected private' }))
+			.not.toBeInTheDocument();
+		await expect
+			.element(browserPage.getByRole('button', { name: 'Settle selected' }))
+			.toBeInTheDocument();
 	});
 });
