@@ -11,6 +11,7 @@ import {
 } from '../db/repo/mcp-servers.js';
 import { estimateToolTokens } from '../llm/promptBreakdown.js';
 import { createLogger } from '../logger.js';
+import { restrictedFetchFor } from './access.js';
 import { connectionAuthProvider, oauthFetch, toSignInError } from './oauth.js';
 import { BUILTIN_SERVERS } from './servers/index.js';
 import type { CallerContext } from './types.js';
@@ -134,7 +135,14 @@ async function openServer(row: McpServerRow, ctx: CallerContext): Promise<Server
 			}
 		};
 	}
-	if (row.transport === 'stdio') return connectStdio(row);
+	// A non-admin's personal server can't reach loopback or link-local addresses (see access.ts).
+	const restrictedFetch = restrictedFetchFor(getDb(), row);
+	if (row.transport === 'stdio') {
+		// Only admins add stdio servers; one whose owner lost admin no longer runs.
+		if (restrictedFetch)
+			throw new Error(`MCP server ${row.name} runs a command, which needs an admin owner`);
+		return connectStdio(row);
+	}
 	if (!row.url) throw new Error(`MCP server ${row.name} has no url configured`);
 	const type = row.transport === 'sse' ? 'sse' : 'http';
 	if (row.auth === 'oauth') {
@@ -143,7 +151,7 @@ async function openServer(row: McpServerRow, ctx: CallerContext): Promise<Server
 		try {
 			const client = await createMCPClient({
 				// Token refreshes go through oauthFetch too (see there).
-				transport: { type, url: row.url, authProvider, fetch: oauthFetch },
+				transport: { type, url: row.url, authProvider, fetch: restrictedFetch ?? oauthFetch },
 				maxRetries: 2
 			});
 			return { client, close: () => client.close() };
@@ -154,7 +162,12 @@ async function openServer(row: McpServerRow, ctx: CallerContext): Promise<Server
 	const headers: Record<string, string> = {};
 	if (row.token_enc) headers.authorization = `Bearer ${decryptSecret(row.token_enc)}`;
 	const client = await createMCPClient({
-		transport: { type, url: row.url, headers },
+		transport: {
+			type,
+			url: row.url,
+			headers,
+			...(restrictedFetch ? { fetch: restrictedFetch } : {})
+		},
 		maxRetries: 2
 	});
 	return { client, close: () => client.close() };

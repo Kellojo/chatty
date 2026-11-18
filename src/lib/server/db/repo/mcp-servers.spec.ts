@@ -100,9 +100,28 @@ describe('mcp-servers repo', () => {
 
 	it('listEnabledMcpServers filters by enabled only', () => {
 		repo.updateMcpServer(db, 'builtin-fs', { enabled: false });
-		const names = repo.listEnabledMcpServers(db).map((r) => r.name);
+		const names = repo.listEnabledMcpServers(db, 'u1').map((r) => r.name);
 		expect(names).not.toContain('fs');
 		expect(names).toContain('webfetch');
+	});
+
+	it('offers personal servers only to their owner', () => {
+		db.prepare(
+			`INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role) VALUES
+			 ('u1', 'a@b.c', 'A', 0, 0, 0, 'user'), ('u2', 'd@e.f', 'D', 0, 0, 0, 'user')`
+		).run();
+		const mine = repo.createMcpServer(db, {
+			name: 'mine',
+			transport: 'http',
+			url: 'https://mcp.example.com',
+			ownerUserId: 'u1'
+		});
+		expect(repo.toPublic(mine).personal).toBe(true);
+		expect(repo.listEnabledMcpServers(db, 'u1').map((r) => r.name)).toContain('mine');
+		expect(repo.listEnabledMcpServers(db, 'u2').map((r) => r.name)).not.toContain('mine');
+		expect(repo.isMcpServerVisibleTo(mine, 'u2')).toBe(false);
+		// Shared servers (every builtin) are everyone's.
+		expect(repo.listEnabledMcpServers(db, 'u2').map((r) => r.name)).toContain('webfetch');
 	});
 
 	it('rejects duplicate names', () => {

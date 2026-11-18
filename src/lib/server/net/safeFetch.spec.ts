@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.resetModules();
 delete process.env.ALLOW_PRIVATE_NETWORK_FETCH;
-const { isBlockedAddress, isLinkLocalOrReserved, safeFetch } = await import('./safeFetch.js');
+const { isBlockedAddress, isLinkLocalOrReserved, isLoopbackOrReserved, lanFetch, safeFetch } =
+	await import('./safeFetch.js');
 
 describe('isBlockedAddress', () => {
 	it.each([
@@ -40,6 +41,38 @@ describe('isLinkLocalOrReserved', () => {
 		for (const ip of ['127.0.0.1', '10.0.0.5', '192.168.1.2', '100.101.102.103', '::1']) {
 			expect(isLinkLocalOrReserved(ip)).toBe(false);
 		}
+	});
+});
+
+describe('isLoopbackOrReserved', () => {
+	it('blocks loopback, metadata and link-local but allows LAN, tailnet and public', () => {
+		for (const ip of [
+			'127.0.0.1',
+			'::1',
+			'::ffff:127.0.0.1',
+			'::ffff:7f00:1',
+			'169.254.169.254',
+			'fe80::1',
+			'0.0.0.0',
+			'nope'
+		]) {
+			expect(isLoopbackOrReserved(ip)).toBe(true);
+		}
+		for (const ip of [
+			'192.168.178.29',
+			'10.0.0.5',
+			'172.16.0.1',
+			'100.101.102.103',
+			'fd00::1',
+			'1.1.1.1'
+		]) {
+			expect(isLoopbackOrReserved(ip)).toBe(false);
+		}
+	});
+
+	it('lanFetch refuses loopback and metadata IP literals', async () => {
+		await expect(lanFetch('http://127.0.0.1:1/')).rejects.toThrow(/private or reserved/);
+		await expect(lanFetch('http://169.254.169.254/')).rejects.toThrow(/private or reserved/);
 	});
 });
 

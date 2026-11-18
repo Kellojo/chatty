@@ -109,7 +109,8 @@ export const SETTINGS_SECTIONS = [
 		href: '/settings/mcp',
 		label: 'MCP servers',
 		icon: BlocksIcon,
-		adminOnly: true,
+		// Everyone manages their personal servers; admins also the shared ones.
+		adminOnly: false,
 		group: 'Integrations'
 	},
 	{

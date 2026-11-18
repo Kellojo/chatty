@@ -248,3 +248,43 @@ describe('describeError', () => {
 		expect(describeError('plain')).toBe('plain');
 	});
 });
+
+describe('personal MCP servers', () => {
+	function personalServer(ownerUserId: string, auth: 'oauth' | 'token' = 'oauth') {
+		return createMcpServer(getDb(), {
+			name: `personal-${auth}`,
+			transport: 'http',
+			url: `${base}/mcp`,
+			auth,
+			ownerUserId
+		});
+	}
+
+	it("refuses a sign-in to another user's personal server", async () => {
+		getDb().prepare(`UPDATE "user" SET role = 'admin' WHERE id = 'u1'`).run();
+		const server = personalServer('u1');
+		await expect(
+			startMcpOAuth(getDb(), server.id, 'u2', 'https://ignored.example')
+		).rejects.toThrow('MCP server not found');
+		// The owner, an admin, may use a server on the local network.
+		await start(server.id, 'u1');
+	});
+
+	it("keeps a non-admin's personal server off loopback addresses", async () => {
+		const oauth = personalServer('u1');
+		// Discovery can't reach the loopback server, so there's no sign-in to start.
+		await expect(startMcpOAuth(getDb(), oauth.id, 'u1', 'https://ignored.example')).rejects.toThrow(
+			/authorization server/
+		);
+
+		const token = personalServer('u1', 'token');
+		const failure = await connectServer(token, ctx('u1')).then(
+			async (conn) => {
+				await conn.close();
+				return null;
+			},
+			(e: unknown) => e
+		);
+		expect(describeError(failure)).toMatch(/private or reserved address/);
+	});
+});

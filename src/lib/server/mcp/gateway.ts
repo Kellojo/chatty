@@ -99,7 +99,7 @@ function createGatewayServer(identity: ApiKeyIdentity, tools: () => Promise<Buil
 /** The tools a key may use: its servers, narrowed to the tools it was given. */
 async function buildKeyTools(identity: ApiKeyIdentity): Promise<BuiltTools> {
 	const db = getDb();
-	const access = resolveMcpAccess(db, identity.mcpAccess);
+	const access = resolveMcpAccess(db, identity.mcpAccess, identity.userId);
 	const built = await buildTools({
 		userId: identity.userId,
 		// Never admin: an approved third-party client must not edit shared memory or global settings.

@@ -94,6 +94,8 @@ export interface McpServerInfo {
 	toolCount: number | null;
 	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
 	toolTokens: number | null;
+	/** Only offered to the user who added it; otherwise shared with everyone. */
+	personal: boolean;
 }
 
 /** A server's tool calls over the usage window (Settings → MCP servers). */

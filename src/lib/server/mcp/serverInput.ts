@@ -1,7 +1,8 @@
 // Shared validation for creating/updating MCP servers via /api/mcp-servers.
-// These routes are admin-only (requireAdmin). That matters most for `stdio`
-// servers, which spawn an arbitrary command on the host: never expose create or
-// update of MCP servers to non-admin callers (REST, MCP tools or otherwise).
+// Any user may manage their own personal HTTP/SSE servers there. Shared servers
+// and `stdio` servers, which spawn an arbitrary command on the host, stay
+// admin-only: never let a non-admin create a stdio server or switch one to stdio
+// (REST, MCP tools or otherwise).
 import { z } from 'zod';
 import {
 	parseMcpArgs,
@@ -37,6 +38,8 @@ const authSchema = z.enum(['token', 'oauth']);
 const oauthClientIdSchema = z.string().trim().min(1).max(2048);
 const oauthClientSecretSchema = z.string().min(1).max(4096);
 const oauthScopeSchema = z.string().trim().min(1).max(1024);
+/** Admins: offer the server only to themselves. A non-admin's server is always personal. */
+const personalSchema = z.boolean().optional();
 
 export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 	z.object({
@@ -49,7 +52,8 @@ export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 		oauthClientSecret: oauthClientSecretSchema.nullish(),
 		oauthScope: oauthScopeSchema.nullish(),
 		enabled: z.boolean().optional(),
-		loadMode: loadModeSchema.optional()
+		loadMode: loadModeSchema.optional(),
+		personal: personalSchema
 	}),
 	z.object({
 		name: nameSchema,
@@ -57,7 +61,8 @@ export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 		command: commandSchema,
 		args: argsSchema.default([]),
 		enabled: z.boolean().optional(),
-		loadMode: loadModeSchema.optional()
+		loadMode: loadModeSchema.optional(),
+		personal: personalSchema
 	})
 ]);
 

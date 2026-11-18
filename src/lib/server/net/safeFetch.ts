@@ -91,6 +91,24 @@ export function isLinkLocalOrReserved(ip: string): boolean {
 	return alwaysBlocked.check(ip, 'ipv6');
 }
 
+const loopback = new net.BlockList();
+loopback.addSubnet('127.0.0.0', 8, 'ipv4');
+loopback.addAddress('::1', 'ipv6');
+
+/**
+ * What user-added services on the LAN/tailnet may still not reach: loopback (Chatty's
+ * own host) plus everything `isLinkLocalOrReserved` refuses. Private LAN, CGNAT
+ * (tailnet) and unique-local ranges are allowed.
+ */
+export function isLoopbackOrReserved(ip: string): boolean {
+	if (isLinkLocalOrReserved(ip)) return true;
+	const family = net.isIP(ip);
+	if (family === 4) return loopback.check(ip, 'ipv4');
+	const v4 = mappedV4(ip);
+	if (v4) return loopback.check(v4, 'ipv4');
+	return loopback.check(ip, 'ipv6');
+}
+
 function mappedV4(ip: string): string | null {
 	const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
 	if (dotted) return dotted[1];
@@ -122,6 +140,7 @@ const lookupGuardedBy =
 	};
 
 const guardedAgent = new Agent({ connect: { lookup: lookupGuardedBy(isBlockedAddress) } });
+const lanAgent = new Agent({ connect: { lookup: lookupGuardedBy(isLoopbackOrReserved) } });
 
 /**
  * Dispatcher for user-configured services that may legitimately live on
@@ -136,13 +155,20 @@ const MAX_REDIRECTS = 5;
 const CREDENTIAL_HEADERS = ['authorization', 'cookie', 'proxy-authorization'];
 const BODY_HEADERS = ['content-type', 'content-length', 'content-encoding', 'content-language'];
 
-function checkUrl(url: URL): void {
+interface Policy {
+	isBad: (ip: string) => boolean;
+	dispatcher: Agent;
+}
+const PUBLIC_ONLY: Policy = { isBad: isBlockedAddress, dispatcher: guardedAgent };
+const LAN_ALLOWED: Policy = { isBad: isLoopbackOrReserved, dispatcher: lanAgent };
+
+function checkUrl(url: URL, policy: Policy): void {
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
 		throw new Error(`unsupported protocol: ${url.protocol}`);
 	}
 	// IP-literal hosts skip DNS lookup, so check them here.
 	const host = url.hostname.replace(/^\[|\]$/g, '');
-	if (net.isIP(host) && isBlockedAddress(host)) throw new BlockedAddressError(host, host);
+	if (net.isIP(host) && policy.isBad(host)) throw new BlockedAddressError(host, host);
 }
 
 /**
@@ -152,13 +178,27 @@ function checkUrl(url: URL): void {
  */
 export async function safeFetch(input: string, init: RequestInit = {}): Promise<Response> {
 	if (config.ALLOW_PRIVATE_NETWORK_FETCH) return fetch(input, init);
+	return guardedFetch(input, init, PUBLIC_ONLY);
+}
+
+/**
+ * Like `safeFetch`, but private LAN / tailnet addresses are allowed too, for
+ * user-added services such as personal MCP servers. Loopback, link-local
+ * (cloud metadata) and other reserved ranges stay refused on every hop.
+ */
+export async function lanFetch(input: string, init: RequestInit = {}): Promise<Response> {
+	if (config.ALLOW_PRIVATE_NETWORK_FETCH) return fetch(input, init);
+	return guardedFetch(input, init, LAN_ALLOWED);
+}
+
+async function guardedFetch(input: string, init: RequestInit, policy: Policy): Promise<Response> {
 	const follow = (init.redirect ?? 'follow') === 'follow';
 	let url = new URL(input);
 	const headers = new Headers(init.headers);
 	let method = (init.method ?? 'GET').toUpperCase();
 	let body = init.body;
 	for (let hop = 0; ; hop++) {
-		checkUrl(url);
+		checkUrl(url, policy);
 		let res: Response;
 		try {
 			res = await fetch(url, {
@@ -168,7 +208,7 @@ export async function safeFetch(input: string, init: RequestInit = {}): Promise<
 				headers,
 				redirect: 'manual',
 				// undici-specific option honoured by Node's built-in fetch.
-				dispatcher: guardedAgent
+				dispatcher: policy.dispatcher
 			} as RequestInit);
 		} catch (e) {
 			// Surface the guard's reason instead of undici's generic "fetch failed".

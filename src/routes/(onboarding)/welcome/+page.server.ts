@@ -1,7 +1,7 @@
 import { isPrivateDataEnabled } from '$lib/server/privacy/feature.js';
 import { redirect } from '@sveltejs/kit';
 import { getDb } from '$lib/server/db/index.js';
-import { listMcpServers } from '$lib/server/db/repo/mcp-servers.js';
+import { listMcpServersFor } from '$lib/server/db/repo/mcp-servers.js';
 import { findRoleModel, listModels, resolveDefaultChatModel } from '$lib/server/db/repo/models.js';
 import { getProvider } from '$lib/server/db/repo/providers.js';
 import { getOnboarding, getUserSettings } from '$lib/server/db/repo/user-settings.js';
@@ -64,7 +64,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		return {
 			webSearch: Boolean(web.searxng.url || web.brave.source || web.perplexity.source),
 			voice: Boolean(findRoleModel(db, 'speech-to-text') || findRoleModel(db, 'text-to-speech')),
-			tools: listMcpServers(db).some((server) => server.builtin === 0),
+			tools: listMcpServersFor(db, user.id).some((server) => server.builtin === 0),
 			people: listUsers(db).length > 1,
 			modelCount: listModels(db).filter((m) => m.enabled === 1).length
 		};

@@ -6,7 +6,7 @@ process.env.DATABASE_PATH = ':memory:';
 
 const { closeDb, getDb } = await import('$lib/server/db/index.js');
 const { createApiKey } = await import('$lib/server/db/repo/api-keys.js');
-const { listMcpServers } = await import('$lib/server/db/repo/mcp-servers.js');
+const { createMcpServer, listMcpServers } = await import('$lib/server/db/repo/mcp-servers.js');
 const gateway = await import('$lib/server/db/repo/mcp-gateway.js');
 const { POST, GET } = await import('./+server.js');
 
@@ -115,38 +115,80 @@ describe('MCP gateway', () => {
 describe('mcp-gateway access', () => {
 	it('gives a key without saved access the default servers, all tools', () => {
 		const db = getDb();
-		const names = gateway.resolveMcpAccess(db, null).servers.map((r) => r.name);
+		const names = gateway.resolveMcpAccess(db, null, 'u1').servers.map((r) => r.name);
 		expect(names).toContain('skills');
 		expect(names).not.toContain('memory');
 		expect(names).not.toContain('chat-search');
 		expect(names).not.toContain('fs');
 		expect(names).not.toContain('code-exec');
-		expect([...gateway.resolveMcpAccess(db, null).tools.values()].every((t) => t === null)).toBe(
-			true
-		);
+		expect(
+			[...gateway.resolveMcpAccess(db, null, 'u1').tools.values()].every((t) => t === null)
+		).toBe(true);
 	});
 
 	it('skips servers that no longer exist', () => {
-		const access = gateway.resolveMcpAccess(getDb(), [
-			{ serverId: 'gone', tools: null },
-			{ serverId: server('memory').id, tools: ['search_memory'] }
-		]);
+		const access = gateway.resolveMcpAccess(
+			getDb(),
+			[
+				{ serverId: 'gone', tools: null },
+				{ serverId: server('memory').id, tools: ['search_memory'] }
+			],
+			'u1'
+		);
 		expect(access.servers.map((r) => r.name)).toEqual(['memory']);
 		expect(access.tools.get('memory')).toEqual(new Set(['search_memory']));
+	});
+});
+
+describe('MCP gateway and personal servers', () => {
+	it("never gives a key another user's personal server, even when listed", () => {
+		const db = getDb();
+		db.prepare(
+			`INSERT INTO "user" (id, email, name, "emailVerified", "createdAt", "updatedAt", role)
+			 VALUES ('u2', 'd@e.f', 'D', 0, 0, 0, 'user')`
+		).run();
+		const theirs = createMcpServer(db, {
+			name: 'theirs',
+			transport: 'http',
+			url: 'https://mcp.example.com',
+			ownerUserId: 'u2'
+		});
+		const mine = createMcpServer(db, {
+			name: 'mine',
+			transport: 'http',
+			url: 'https://mcp.example.com',
+			ownerUserId: 'u1'
+		});
+		const listed = gateway.resolveMcpAccess(
+			db,
+			[
+				{ serverId: theirs.id, tools: null },
+				{ serverId: mine.id, tools: null }
+			],
+			'u1'
+		);
+		expect(listed.servers.map((s) => s.name)).toEqual(['mine']);
+		expect(gateway.defaultMcpAccess(db, 'u1').map((e) => e.serverId)).toContain(mine.id);
+		expect(gateway.defaultMcpAccess(db, 'u1').map((e) => e.serverId)).not.toContain(theirs.id);
+		expect(gateway.listMcpGatewayServers(db, 'u1').map((s) => s.name)).not.toContain('theirs');
 	});
 });
 
 describe('MCP gateway defaults', () => {
 	it('leaves chat search and memory out of a new key unless picked', async () => {
 		const db = getDb();
-		const ids = gateway.defaultMcpAccess(db).map((e) => e.serverId);
+		const ids = gateway.defaultMcpAccess(db, 'u1').map((e) => e.serverId);
 		expect(ids).not.toContain(server('chat-search').id);
 		expect(ids).not.toContain(server('memory').id);
 		// A key with explicit access to them still gets them.
-		const access = gateway.resolveMcpAccess(db, [
-			{ serverId: server('chat-search').id, tools: null },
-			{ serverId: server('memory').id, tools: ['search_memory'] }
-		]);
+		const access = gateway.resolveMcpAccess(
+			db,
+			[
+				{ serverId: server('chat-search').id, tools: null },
+				{ serverId: server('memory').id, tools: ['search_memory'] }
+			],
+			'u1'
+		);
 		expect(access.servers.map((s) => s.name).sort()).toEqual(['chat-search', 'memory']);
 	});
 });

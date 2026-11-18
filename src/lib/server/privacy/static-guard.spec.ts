@@ -38,6 +38,7 @@ const FETCH_FILES: Record<string, string> = {
 	'lib/server/llm/lmstudio.ts': 'model probe, no content',
 	'lib/server/llm/openrouterImage.ts': 'built by resolveImageModel, which checks privacy',
 	'lib/server/mcp/oauth.ts': 'OAuth discovery and tokens, no content',
+	'lib/server/mcp/access.ts': 'transport of personal MCP servers; tools are not restricted',
 	'lib/server/t3/client.ts': 'coding chats are never private',
 	'lib/server/net/safeFetch.ts': 'the guarded fetch itself',
 	'lib/server/net/favicon.ts': 'site icons only, no chat content',
@@ -54,7 +55,7 @@ const MODEL_CALL =
 	/\b(streamText|generateText|generateImage|generateObject|streamObject|embedMany|embed)\(/;
 const PROVIDER_FACTORY = /from ['"]@ai-sdk\/(?!mcp['"]|svelte['"]|provider['"]|provider-utils['"])/;
 /** A call of the global fetch, or passing it on (e.g. a `fetchImpl = fetch` default). */
-const FETCH = /(?:^|[^\w.])(?:safeFetch|fetch)\(|=\s*fetch(?![\w(])/;
+const FETCH = /(?:^|[^\w.])(?:safeFetch|lanFetch|fetch)\(|=\s*fetch(?![\w(])/;
 
 async function sourceFiles(dir: string): Promise<string[]> {
 	const entries = await fs.readdir(dir, { withFileTypes: true, recursive: true });

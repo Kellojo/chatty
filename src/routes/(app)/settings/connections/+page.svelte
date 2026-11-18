@@ -85,16 +85,12 @@
 			<EmptyState
 				icon={PlugIcon}
 				title="Nothing to connect"
-				description={data.isAdmin
-					? 'Add an MCP server with OAuth sign-in under MCP servers, and it shows up here.'
-					: 'An admin hasn’t added any MCP servers that need you to sign in.'}
+				description="Add an MCP server with OAuth sign-in under MCP servers, and it shows up here."
 				compact
 			>
-				{#if data.isAdmin}
-					<Button variant="outline" size="sm" href={resolve('/settings/mcp')}>
-						Manage MCP servers
-					</Button>
-				{/if}
+				<Button variant="outline" size="sm" href={resolve('/settings/mcp')}>
+					Manage MCP servers
+				</Button>
 			</EmptyState>
 		</div>
 	{:else}

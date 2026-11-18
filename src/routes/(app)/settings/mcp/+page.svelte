@@ -107,6 +107,10 @@
 		scope: '',
 		manual: false
 	});
+	const accessLabels = { shared: 'Everyone', personal: 'Only me' } as const;
+	const publicUrlHint =
+		'Public or local-network addresses work; Chatty won’t connect your servers to localhost.';
+
 	const authLabels: Record<AuthMode, string> = {
 		token: 'Token (or none)',
 		oauth: 'OAuth (each user signs in)'
@@ -148,6 +152,8 @@
 
 	let addOpen = $state(false);
 	let addName = $state('');
+	/** Admins: offer the new server only to themselves. Non-admins' servers always are. */
+	let addPersonal = $state(false);
 	let addTransport = $state<ConfigurableTransport>('http');
 	let addUrl = $state('');
 	let addCommand = $state('');
@@ -229,6 +235,7 @@
 
 	function resetAddForm() {
 		addName = '';
+		addPersonal = false;
 		addTransport = 'http';
 		addUrl = '';
 		addAuth = emptyAuth();
@@ -247,6 +254,7 @@
 		try {
 			await api('/api/mcp-servers', 'POST', {
 				name: addName,
+				...(data.isAdmin ? { personal: addPersonal } : {}),
 				...connectionBody(addTransport, addUrl, addCommand, addArgs),
 				...(addTransport === 'stdio' ? {} : authBody(addAuth, false))
 			});
@@ -406,6 +414,9 @@
 	/** Non-default connection settings, shown as quiet labels before the host. */
 	function rowFlags(server: McpServerInfo) {
 		const flags: { label: string; title: string }[] = [];
+		// Everything a non-admin sees is theirs, so only admins need telling apart.
+		if (data.isAdmin && server.personal)
+			flags.push({ label: 'Only you', title: 'Only offered to you, in your chats and agent runs' });
 		if (server.auth === 'oauth')
 			flags.push({ label: 'OAuth', title: 'Each user signs in under Settings → Connected apps' });
 		if (server.transport === 'sse')
@@ -540,7 +551,9 @@
 
 <SettingsHeader
 	title="MCP servers"
-	description="Tools from Model Context Protocol servers, available in chats and agent runs."
+	description={data.isAdmin
+		? 'Tools from Model Context Protocol servers, available in chats and agent runs.'
+		: 'Your own Model Context Protocol servers. Only you get their tools, in your chats and agent runs.'}
 >
 	{#snippet actions()}
 		<Button onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
@@ -560,7 +573,7 @@
 		</Select.Root>
 		{#if form.mode === 'oauth'}
 			<p class="text-xs text-muted-foreground">
-				Each user connects their own account under
+				Everyone who can use it connects their own account under
 				<a class="underline underline-offset-2" href={resolve('/settings/connections')}
 					>Connected apps</a
 				>.
@@ -765,29 +778,34 @@
 	</SettingsListItem>
 {/snippet}
 
-<Tabs.Root value={activeTab} onValueChange={selectTab} class="gap-6">
-	<Tabs.List class="self-start">
-		<Tabs.Trigger value="servers"
-			><BlocksIcon class="size-4" aria-hidden="true" />Servers</Tabs.Trigger
-		>
-		<Tabs.Trigger value="statistics">
-			<ChartColumnIcon class="size-4" aria-hidden="true" />Statistics
-		</Tabs.Trigger>
-	</Tabs.List>
-	<Tabs.Content value="servers" class="flex flex-col gap-6">
-		{@render serverList()}
-	</Tabs.Content>
-	<Tabs.Content value="statistics">
-		<McpUsageStats
-			stats={data.stats}
-			period={data.stats.period}
-			servers={data.servers}
-			usage={data.usage}
-			onPeriodChange={(period) => navigate({ period })}
-			onShowServer={openUsage}
-		/>
-	</Tabs.Content>
-</Tabs.Root>
+{#if data.stats}
+	<Tabs.Root value={activeTab} onValueChange={selectTab} class="gap-6">
+		<Tabs.List class="self-start">
+			<Tabs.Trigger value="servers"
+				><BlocksIcon class="size-4" aria-hidden="true" />Servers</Tabs.Trigger
+			>
+			<Tabs.Trigger value="statistics">
+				<ChartColumnIcon class="size-4" aria-hidden="true" />Statistics
+			</Tabs.Trigger>
+		</Tabs.List>
+		<Tabs.Content value="servers" class="flex flex-col gap-6">
+			{@render serverList()}
+		</Tabs.Content>
+		<Tabs.Content value="statistics">
+			<McpUsageStats
+				stats={data.stats}
+				period={data.stats.period}
+				servers={data.servers}
+				usage={data.usage}
+				onPeriodChange={(period) => navigate({ period })}
+				onShowServer={openUsage}
+			/>
+		</Tabs.Content>
+	</Tabs.Root>
+{:else}
+	<!-- Instance-wide statistics are for admins; everyone else just has their servers. -->
+	<div class="flex flex-col gap-6">{@render serverList()}</div>
+{/if}
 
 {#snippet columnHeader()}
 	<!-- Column labels; mirrors the row's trailing layout (stats, switch, menu). -->
@@ -856,7 +874,9 @@
 				? matchCount(shownCustom, customServers)
 				: customServers.length
 					? `${onCount(customServers)} of ${customServers.length} on`
-					: "Servers you've connected over HTTP, SSE or stdio."}
+					: data.isAdmin
+						? "Servers you've connected over HTTP, SSE or stdio."
+						: 'Servers you’ve connected over HTTP or SSE. Only you can use them.'}
 			flush
 			class="overflow-visible"
 		>
@@ -870,7 +890,9 @@
 					<div class="flex flex-col gap-1">
 						<p class="text-sm font-medium">No servers added yet</p>
 						<p class="text-sm text-muted-foreground">
-							Add a remote server over HTTP or run a local one over stdio.
+							{data.isAdmin
+								? 'Add a remote server over HTTP or run a local one over stdio.'
+								: 'Add a remote server over HTTP.'}
 						</p>
 					</div>
 					<Button size="sm" onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
@@ -903,7 +925,9 @@
 		<Dialog.Header>
 			<Dialog.Title>Add server</Dialog.Title>
 			<Dialog.Description class="text-pretty">
-				Connect a remote server over HTTP or SSE, or run a local command.
+				{data.isAdmin
+					? 'Connect a remote server over HTTP or SSE, or run a local command.'
+					: 'Connect a remote server over HTTP or SSE. Only you can use it.'}
 			</Dialog.Description>
 		</Dialog.Header>
 		<form onsubmit={submitAdd} class="flex min-h-0 min-w-0 flex-col gap-6">
@@ -922,6 +946,27 @@
 						placeholder="my-server"
 					/>
 				</div>
+				{#if data.isAdmin}
+					<div class="flex flex-col gap-2">
+						<Label for="add-access">Who can use it</Label>
+						<Select.Root
+							type="single"
+							value={addPersonal ? 'personal' : 'shared'}
+							onValueChange={(value) => (addPersonal = value === 'personal')}
+						>
+							<Select.Trigger id="add-access" class="w-full"
+								>{addPersonal ? accessLabels.personal : accessLabels.shared}</Select.Trigger
+							>
+							<Select.Content>
+								<Select.Item value="shared">{accessLabels.shared}</Select.Item>
+								<Select.Item value="personal">{accessLabels.personal}</Select.Item>
+							</Select.Content>
+						</Select.Root>
+						<p class="text-xs text-muted-foreground">
+							Can’t be changed later. Other users never see a server only you can use.
+						</p>
+					</div>
+				{/if}
 				<div class="flex flex-col gap-2">
 					<Label for="add-transport">Transport</Label>
 					<Select.Root type="single" bind:value={addTransport}>
@@ -931,7 +976,9 @@
 						<Select.Content>
 							<Select.Item value="http">{transportLabels.http}</Select.Item>
 							<Select.Item value="sse">{transportLabels.sse}</Select.Item>
-							<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
+							{#if data.isAdmin}
+								<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
+							{/if}
 						</Select.Content>
 					</Select.Root>
 				</div>
@@ -955,6 +1002,9 @@
 							required
 							placeholder="https://example.com/mcp"
 						/>
+						{#if data.publicAddressesOnly}
+							<p class="text-xs text-muted-foreground">{publicUrlHint}</p>
+						{/if}
 					</div>
 					{@render authFields(addAuth, 'add', false)}
 				{/if}
@@ -1000,7 +1050,9 @@
 						<Select.Content>
 							<Select.Item value="http">{transportLabels.http}</Select.Item>
 							<Select.Item value="sse">{transportLabels.sse}</Select.Item>
-							<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
+							{#if data.isAdmin}
+								<Select.Item value="stdio">{transportLabels.stdio}</Select.Item>
+							{/if}
 						</Select.Content>
 					</Select.Root>
 				</div>
@@ -1018,6 +1070,9 @@
 					<div class="flex flex-col gap-2">
 						<Label for="edit-url">URL</Label>
 						<Input id="edit-url" type="url" bind:value={editUrl} required />
+						{#if data.publicAddressesOnly}
+							<p class="text-xs text-muted-foreground">{publicUrlHint}</p>
+						{/if}
 					</div>
 					{@render authFields(editAuth, 'edit', true)}
 				{/if}
