@@ -170,3 +170,40 @@ describe('Sidebar multi-select → Make private', () => {
 			.toBeInTheDocument();
 	});
 });
+
+describe('Sidebar multi-select → bulk actions', () => {
+	it('deletes the picked chats and keeps the ones that failed picked', async () => {
+		const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+			if (init?.method === 'DELETE' && url === '/api/conversations/a') return json({ ok: true });
+			if (init?.method === 'DELETE') return new Response('{}', { status: 500 });
+			return new Response('{}', { status: 404 });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		renderSidebar();
+		await openRowMenu('a');
+		await browserPage.getByRole('menuitem', { name: 'Select…' }).click();
+		(document.querySelector('a[data-conversation-id="b"]') as HTMLAnchorElement).click();
+		await expect.element(browserPage.getByText('2 selected')).toBeInTheDocument();
+
+		await browserPage.getByRole('button', { name: 'Delete selected' }).click();
+		await expect.element(browserPage.getByText('Delete 2 conversations?')).toBeInTheDocument();
+		await browserPage.getByRole('button', { name: 'Delete 2', exact: true }).click();
+
+		// "b" failed: still picked, ready to retry; "a" is gone from the selection.
+		await expect.element(browserPage.getByText('1 selected')).toBeInTheDocument();
+		await expect
+			.element(browserPage.getByRole('checkbox', { name: 'Select Doctor visit' }))
+			.toBeChecked();
+	});
+
+	it('marks only unread picks as read, and is off when none are unread', async () => {
+		const fetchMock = vi.fn(async () => new Response('{}', { status: 404 }));
+		vi.stubGlobal('fetch', fetchMock);
+		renderSidebar();
+		await openRowMenu('a');
+		await browserPage.getByRole('menuitem', { name: 'Select…' }).click();
+		await expect
+			.element(browserPage.getByRole('button', { name: 'Mark selected as read' }))
+			.toBeDisabled();
+	});
+});

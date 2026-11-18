@@ -136,10 +136,21 @@
 	);
 	const contextTone = $derived(
 		contextPercent === null || contextPercent < 75
-			? 'bg-foreground/60'
+			? 'bg-foreground/70'
 			: contextPercent < 90
 				? 'bg-warning'
 				: 'bg-destructive'
+	);
+	/** A word next to the bar once it fills up, so the state doesn't rest on colour alone. */
+	const contextNote = $derived(
+		contextPercent === null || contextPercent < 75
+			? null
+			: contextPercent < 90
+				? 'Filling up'
+				: 'Nearly full'
+	);
+	const contextNoteTone = $derived(
+		contextPercent !== null && contextPercent >= 90 ? 'text-destructive' : 'text-warning-foreground'
 	);
 	const noun = $derived(coding ? 'task' : 'conversation');
 
@@ -381,6 +392,58 @@
 			? 'w-80'
 			: 'w-60'}"
 	>
+		{#if contextUsage}
+			<!-- Read-only: how much of the model's context the chat fills, as of the last reply. -->
+			<div
+				class="px-2 pt-1.5 pb-2 text-xs text-muted-foreground"
+				title="As of the latest reply from {contextUsage.modelId
+					.split('/')
+					.pop()}{contextUsage.length
+					? ''
+					: '. Its context window size is unknown, so no percentage is shown.'}"
+			>
+				<div class="flex items-baseline justify-between gap-2">
+					<span class="font-medium text-foreground/80">Context</span>
+					<span class="text-foreground tabular-nums">
+						{#if contextUsage.length}
+							{formatCount(contextUsage.tokens)}<span class="text-muted-foreground"
+								>&nbsp;/&nbsp;{formatCount(contextUsage.length)}</span
+							>
+						{:else}
+							{formatCount(contextUsage.tokens)}&nbsp;<span class="text-muted-foreground"
+								>tokens used</span
+							>
+						{/if}
+					</span>
+				</div>
+				{#if contextPercent !== null}
+					<div
+						class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted-foreground/15"
+						role="meter"
+						aria-label="Context used"
+						aria-valuemin={0}
+						aria-valuemax={100}
+						aria-valuenow={contextPercent}
+						aria-valuetext="{contextPercent}% of the context window{contextNote
+							? `, ${contextNote.toLowerCase()}`
+							: ''}"
+					>
+						<div class="h-full rounded-full {contextTone}" style:width="{contextPercent}%"></div>
+					</div>
+					<p class="mt-1 flex justify-between gap-2 tabular-nums">
+						<span class="text-foreground/70">{contextPercent}% used</span>
+						{#if contextNote}
+							<span class="font-medium {contextNoteTone}">{contextNote}</span>
+						{/if}
+					</p>
+					{#if contextPercent >= 90}
+						<!-- What happens next, so a full bar doesn't read as a dead end. -->
+						<p class="mt-1 leading-4">Older messages will be summarised to make room.</p>
+					{/if}
+				{/if}
+			</div>
+			<DropdownMenu.Separator />
+		{/if}
 		<!--
 			Phone-only actions (the header has no room for them) lead the menu. Not
 			rendered on wider screens, where hidden items would still take arrow-key focus.
@@ -495,38 +558,6 @@
 			<Trash2Icon class="size-4" />
 			Delete
 		</DropdownMenu.Item>
-		{#if contextUsage}
-			<DropdownMenu.Separator />
-			<!-- Read-only: how much of the model's context the chat fills, as of the last reply. -->
-			<div
-				class="px-2 py-1.5 text-xs text-muted-foreground"
-				title="As of the latest reply from {contextUsage.modelId.split('/').pop()}"
-			>
-				<div class="flex items-baseline justify-between gap-2">
-					<span>Context</span>
-					<span class="text-foreground tabular-nums">
-						{formatCount(contextUsage.tokens)}{#if contextUsage.length}
-							<span class="text-muted-foreground"> / {formatCount(contextUsage.length)}</span>
-						{/if}
-						<span class="sr-only">tokens</span>
-					</span>
-				</div>
-				{#if contextPercent !== null}
-					<div
-						class="mt-1.5 h-1 overflow-hidden rounded-full bg-muted"
-						role="meter"
-						aria-label="Context used"
-						aria-valuemin={0}
-						aria-valuemax={100}
-						aria-valuenow={contextPercent}
-						aria-valuetext="{contextPercent}% of the context window"
-					>
-						<div class="h-full rounded-full {contextTone}" style:width="{contextPercent}%"></div>
-					</div>
-					<p class="mt-1 tabular-nums">{contextPercent}% used</p>
-				{/if}
-			</div>
-		{/if}
 	</DropdownMenu.Content>
 </DropdownMenu.DropdownMenu>
 

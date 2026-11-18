@@ -144,6 +144,35 @@
 		selected.clear();
 	}
 
+	/**
+	 * Leaves selection on request (Esc, ✕). The toolbar that had focus goes away,
+	 * so focus moves to the first picked row, or else the search box.
+	 */
+	function cancelSelecting() {
+		const first = [...selected.keys()][0];
+		const link = first
+			? listEl?.querySelector<HTMLElement>(`a[data-conversation-id="${CSS.escape(first)}"]`)
+			: null;
+		stopSelecting();
+		(link ?? searchInput)?.focus();
+	}
+
+	function toggleSelectAll() {
+		if (allShownSelected) selected.clear();
+		else for (const c of shownRows) selected.set(c.id, c);
+	}
+
+	/** A row's background: the picked rows while selecting, else the open chat. */
+	function rowHighlight(id: string): string {
+		// A tint plus an edge mark, so picked rows don't read as hovered or unread ones.
+		if (selecting && selected.has(id)) {
+			return 'bg-primary/10 text-foreground shadow-[inset_2px_0_0_var(--primary)] dark:bg-primary/20';
+		}
+		return !selecting && id === currentId
+			? 'bg-accent text-accent-foreground'
+			: 'hover:bg-accent/50';
+	}
+
 	function toggleSelected(c: Conversation) {
 		if (selected.has(c.id)) selected.delete(c.id);
 		else selected.set(c.id, c);
@@ -170,53 +199,89 @@
 	async function forEachChat(
 		rows: Conversation[],
 		run: (c: Conversation) => Promise<Response>
-	): Promise<{ done: Conversation[]; failed: number }> {
+	): Promise<{ done: Conversation[]; failed: Conversation[] }> {
 		bulkBusy = true;
 		try {
 			const results = await Promise.all(rows.map((c) => run(c).catch(() => null)));
-			const done = rows.filter((_, i) => results[i]?.ok);
-			return { done, failed: rows.length - done.length };
+			return {
+				done: rows.filter((_, i) => results[i]?.ok),
+				failed: rows.filter((_, i) => !results[i]?.ok)
+			};
 		} finally {
 			bulkBusy = false;
 		}
 	}
 
-	const plural = (n: number) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`;
-
-	/** Settles the picked chats; `undo` un-settles chats a bulk settle just put away. */
-	async function bulkSettle(undo?: Conversation[]) {
-		const settle = !undo;
-		const { done, failed } = await forEachChat(undo ?? unsettled, (c) =>
-			fetch(`/api/conversations/${c.id}/settle`, { method: settle ? 'POST' : 'DELETE' })
-		);
-		if (undo) {
-			// Settling unpins, so undoing it pins those chats again.
-			await Promise.all(
-				done
-					.filter((c) => c.pinned)
-					.map((c) => fetch(`/api/conversations/${c.id}/pin`, { method: 'POST' }).catch(() => null))
-			);
-		} else {
+	/**
+	 * After a bulk action: leave selection when everything worked, else keep
+	 * just the chats that failed picked, ready to retry.
+	 */
+	function settleSelection(failed: Conversation[]) {
+		if (failed.length === 0) {
 			stopSelecting();
+			return;
 		}
+		selected.clear();
+		for (const c of failed) selected.set(c.id, c);
+	}
+
+	const plural = (n: number) => `${n} ${n === 1 ? 'conversation' : 'conversations'}`;
+	const failedNote = (failed: Conversation[], action: string) =>
+		`Couldn't ${action} ${plural(failed.length)}; ${failed.length === 1 ? 'it stays' : 'they stay'} selected`;
+
+	/** Settles the picked chats that aren't settled yet. */
+	async function bulkSettle() {
+		const { done, failed } = await forEachChat(unsettled, (c) =>
+			fetch(`/api/conversations/${c.id}/settle`, { method: 'POST' })
+		);
+		settleSelection(failed);
 		await invalidateAll();
 		await refreshSettled();
-		if (failed) toast.error(`Failed to ${settle ? 'settle' : 'un-settle'} ${plural(failed)}`);
-		if (settle && done.length) {
+		if (failed.length) toast.error(failedNote(failed, 'settle'));
+		if (done.length) {
 			toast.success(`${plural(done.length)} settled`, {
-				action: { label: 'Undo', onClick: () => void bulkSettle(done) }
+				action: { label: 'Undo', onClick: () => void undoBulkSettle(done) }
 			});
 		}
 	}
 
+	/** Un-settles chats a bulk settle put away, pinning the ones it unpinned again. */
+	async function undoBulkSettle(rows: Conversation[]) {
+		const unsettle = await forEachChat(rows, (c) =>
+			fetch(`/api/conversations/${c.id}/settle`, { method: 'DELETE' })
+		);
+		const repin = await forEachChat(
+			unsettle.done.filter((c) => c.pinned),
+			(c) => fetch(`/api/conversations/${c.id}/pin`, { method: 'POST' })
+		);
+		await invalidateAll();
+		await refreshSettled();
+		if (unsettle.failed.length || repin.failed.length) {
+			const parts = [
+				unsettle.failed.length ? `un-settle ${plural(unsettle.failed.length)}` : null,
+				repin.failed.length ? `re-pin ${plural(repin.failed.length)}` : null
+			].filter(Boolean);
+			toast.error(`Couldn't ${parts.join(' or ')}`);
+		}
+		if (unsettle.done.length) toast.success(`${plural(unsettle.done.length)} restored`);
+	}
+
+	/** The picked chats showing as unread (a new reply, or a failure not yet seen). */
+	const unreadSelected = $derived(
+		[...selected.values()].filter((c) => {
+			const state = rowState(c);
+			return state === 'unread' || state === 'failed';
+		})
+	);
+
 	async function bulkMarkRead() {
-		const { done, failed } = await forEachChat([...selected.values()], (c) =>
+		const { done, failed } = await forEachChat(unreadSelected, (c) =>
 			fetch(`/api/conversations/${c.id}/read`, { method: 'POST' })
 		);
-		stopSelecting();
+		settleSelection(failed);
 		if (done.some((c) => c.id === markedUnread.id)) markedUnread.id = null;
 		await invalidateAll();
-		if (failed) toast.error(`Failed to mark ${plural(failed)} as read`);
+		if (failed.length) toast.error(failedNote(failed, 'mark as read'));
 	}
 
 	async function bulkDelete() {
@@ -224,10 +289,10 @@
 		const { done, failed } = await forEachChat([...selected.values()], (c) =>
 			fetch(`/api/conversations/${c.id}`, { method: 'DELETE' })
 		);
-		stopSelecting();
+		settleSelection(failed);
 		for (const c of done) forgetConversation(c.id);
 		if (done.length) toast.success(`${plural(done.length)} deleted`);
-		if (failed) toast.error(`Failed to delete ${plural(failed)}`);
+		if (failed.length) toast.error(failedNote(failed, 'delete'));
 		if (done.some((c) => c.id === currentId)) await goto(resolve('/'));
 		await invalidateAll();
 	}
@@ -688,6 +753,20 @@
 	const shownResults = $derived(
 		searchResults ? visibleEntries.flatMap((e) => (e.kind === 'row' ? [e.conversation] : [])) : []
 	);
+	/** Every row on screen: the list (or search results) plus any open shelves. */
+	const shownRows = $derived(
+		searchResults
+			? shownResults
+			: [
+					...visibleEntries.flatMap((e) => (e.kind === 'row' ? [e.conversation] : [])),
+					...(snoozedOpen ? shownSnoozed : []),
+					...(settledOpen ? (settledItems ?? []) : [])
+				]
+	);
+	const allShownSelected = $derived(
+		shownRows.length > 0 && shownRows.every((c) => selected.has(c.id))
+	);
+
 	const activeResultAnnouncement = $derived.by(() => {
 		const index = shownResults.findIndex((c) => c.id === activeResultId);
 		const c = shownResults[index];
@@ -936,9 +1015,8 @@
 				? c.coding.runStartedAt
 				: (serverActiveChats.get(c.id) ?? null)}
 	<div
-		class="group mb-0.5 flex w-full items-start rounded-md text-sm {c.id === currentId
-			? 'bg-accent text-accent-foreground'
-			: 'hover:bg-accent/50'} {settled && c.id !== currentId
+		class="group mb-0.5 flex w-full items-start rounded-md text-sm {rowHighlight(c.id)} {settled &&
+		c.id !== currentId
 			? 'text-muted-foreground'
 			: ''} {searchResults && c.id === activeResultId ? 'ring-2 ring-ring/50' : ''}"
 	>
@@ -971,7 +1049,7 @@
 					<span
 						class="min-w-0 truncate leading-5 {attention
 							? 'font-semibold'
-							: state === 'idle' && !settled && c.id !== currentId
+							: state === 'idle' && !settled && c.id !== currentId && !selected.has(c.id)
 								? 'text-foreground/70 group-focus-within:text-foreground group-hover:text-foreground dark:text-foreground/60'
 								: ''}">{displayTitle(c)}</span
 					>
@@ -1063,9 +1141,10 @@
 	{@const status = state === 'idle' ? null : rowStatus(c, state)}
 	{@const current = c.id === currentId}
 	<div
-		class="group mb-0.5 flex w-full items-center rounded-md text-sm {current
-			? 'bg-accent text-accent-foreground'
-			: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground/85'}"
+		class="group mb-0.5 flex w-full items-center rounded-md text-sm {rowHighlight(c.id)} {current &&
+		!selecting
+			? ''
+			: 'text-muted-foreground hover:text-foreground/85'}"
 	>
 		{#if selecting}
 			{@render selectBox(c, '')}
@@ -1263,7 +1342,7 @@
 		if (e.key === 'Escape' && selecting && !e.defaultPrevented) {
 			e.preventDefault();
 			e.stopPropagation();
-			stopSelecting();
+			cancelSelecting();
 		}
 	}}
 	class="flex h-full w-72 shrink-0 flex-col border-r bg-muted/30 max-md:overflow-hidden max-md:bg-[color-mix(in_oklab,var(--muted)_30%,var(--background))]"
@@ -1348,19 +1427,35 @@
 	</div>
 	{#if selecting}
 		<div
-			class="mx-3 mb-2 flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-sm"
+			class="mx-3 mb-1 flex items-center gap-0.5 rounded-md border bg-background py-1 pr-1 pl-[3px] text-sm"
 			role="toolbar"
 			aria-label="Selected chats"
 		>
-			<span class="min-w-0 flex-1 truncate text-muted-foreground" aria-live="polite">
+			<!-- Lines up with the rows' checkboxes below. -->
+			<input
+				type="checkbox"
+				class="mr-2 size-4 shrink-0 accent-primary"
+				aria-label={allShownSelected ? 'Deselect all' : 'Select all shown'}
+				title={allShownSelected ? 'Deselect all' : 'Select all shown'}
+				checked={allShownSelected}
+				indeterminate={selected.size > 0 && !allShownSelected}
+				onchange={toggleSelectAll}
+			/>
+			<span
+				class="min-w-0 flex-1 truncate text-[13px] whitespace-nowrap tabular-nums"
+				aria-live="polite"
+			>
 				{selected.size === 0 ? 'Select chats' : `${selected.size} selected`}
 			</span>
 			<Button
 				variant="ghost"
 				size="icon-sm"
-				title="Mark as read"
+				class="size-7 text-foreground"
+				title={selected.size > 0 && unreadSelected.length === 0
+					? 'Nothing unread selected'
+					: 'Mark as read'}
 				aria-label="Mark selected as read"
-				disabled={selected.size === 0 || bulkBusy}
+				disabled={unreadSelected.length === 0 || bulkBusy}
 				onclick={() => void bulkMarkRead()}
 			>
 				<MailOpenIcon />
@@ -1368,6 +1463,7 @@
 			<Button
 				variant="ghost"
 				size="icon-sm"
+				class="size-7 text-foreground"
 				title="Settle"
 				aria-label="Settle selected"
 				disabled={unsettled.length === 0 || bulkBusy}
@@ -1379,9 +1475,12 @@
 				<Button
 					variant="ghost"
 					size="icon-sm"
+					class="size-7 text-foreground"
 					title={selected.size > 0 && privatable.length === 0
-						? 'None of these can be made private'
-						: 'Make private…'}
+						? 'Coding tasks and chats that are already private are skipped'
+						: privatable.length < selected.size
+							? `Make ${privatable.length} of ${selected.size} private… (coding tasks and private chats are skipped)`
+							: 'Make private…'}
 					aria-label="Make selected private"
 					disabled={privatable.length === 0 || bulkBusy}
 					onclick={() => (makePrivateTargets = privatable)}
@@ -1389,11 +1488,13 @@
 					<LockIcon />
 				</Button>
 			{/if}
+			<!-- Set apart from the safe actions: a hairline, then the destructive one. -->
+			<span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
 			<Button
 				variant="ghost"
 				size="icon-sm"
-				class="hover:text-destructive"
-				title="Delete"
+				class="size-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
+				title="Delete…"
 				aria-label="Delete selected"
 				disabled={selected.size === 0 || bulkBusy}
 				onclick={() => (bulkDeleting = true)}
@@ -1403,9 +1504,10 @@
 			<Button
 				variant="ghost"
 				size="icon-sm"
+				class="ml-1 size-7 text-foreground"
 				title="Cancel (Esc)"
 				aria-label="Cancel selection"
-				onclick={stopSelecting}
+				onclick={cancelSelecting}
 			>
 				<XIcon />
 			</Button>
@@ -1738,9 +1840,18 @@
 			<Dialog.Title>Delete {plural(selected.size)}?</Dialog.Title>
 			<Dialog.Description>They will be moved to trash and purged after 30 days.</Dialog.Description>
 		</Dialog.Header>
+		{@const titles = [...selected.values()].map(displayTitle)}
+		<ul class="divide-y rounded-md border text-sm">
+			{#each titles.slice(0, 5) as title, i (i)}
+				<li class="truncate px-3 py-1.5">{title}</li>
+			{/each}
+			{#if titles.length > 5}
+				<li class="px-3 py-1.5 text-muted-foreground">and {titles.length - 5} more</li>
+			{/if}
+		</ul>
 		<Dialog.Footer>
 			<Button variant="outline" onclick={() => (bulkDeleting = false)}>Cancel</Button>
-			<Button variant="destructive" onclick={bulkDelete}>Delete</Button>
+			<Button variant="destructive" onclick={bulkDelete}>Delete {selected.size}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
