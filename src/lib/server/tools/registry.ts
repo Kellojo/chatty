@@ -4,7 +4,11 @@ import type { Tool } from 'ai';
 import type { ToolInfo } from '$lib/types.js';
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
-import { listEnabledMcpServers, type McpServerRow } from '../db/repo/mcp-servers.js';
+import {
+	isMcpServerVisibleTo,
+	listEnabledMcpServers,
+	type McpServerRow
+} from '../db/repo/mcp-servers.js';
 import { recordMcpToolCall } from '../db/repo/mcp-tool-usage.js';
 import { createLogger } from '../logger.js';
 import { connectServer, listServerTools } from '../mcp/clientManager.js';
@@ -64,8 +68,10 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		trust: input.trust,
 		privateOnly: input.privateOnly
 	};
-	const rows = (input.servers ?? listEnabledMcpServers(db)).filter(
+	const rows = (input.servers ?? listEnabledMcpServers(db, input.userId)).filter(
 		(row) =>
+			// Another user's personal server is never offered, even when handed in.
+			isMcpServerVisibleTo(row, input.userId) &&
 			(input.memoryEnabled || row.name !== 'memory') &&
 			// web_search is only offered once a search provider is set up.
 			(row.builtin !== 1 || row.name !== 'websearch' || isWebSearchConfigured(db))
@@ -239,7 +245,7 @@ function isConnectionError(e: unknown): boolean {
 export async function listToolInfo(userId: string): Promise<ToolInfo[]> {
 	const built = await buildTools({ userId, memoryEnabled: true });
 	const builtin = new Set(
-		listEnabledMcpServers(getDb())
+		listEnabledMcpServers(getDb(), userId)
 			.filter((row) => row.builtin === 1)
 			.map((row) => row.name)
 	);

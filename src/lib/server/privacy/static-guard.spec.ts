@@ -38,6 +38,7 @@ const FETCH_FILES: Record<string, string> = {
 	'lib/server/llm/lmstudio.ts': 'model probe, no content',
 	'lib/server/llm/openrouterImage.ts': 'built by resolveImageModel, which checks privacy',
 	'lib/server/mcp/oauth.ts': 'OAuth discovery and tokens, no content',
+	'lib/server/mcp/access.ts': 'transport of personal MCP servers; tools are not restricted',
 	'lib/server/t3/client.ts': 'coding chats are never private',
 	'lib/server/net/safeFetch.ts': 'the guarded fetch itself',
 	'lib/server/net/favicon.ts': 'site icons only, no chat content',

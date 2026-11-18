@@ -35,9 +35,9 @@ export function exposedByDefault(row: Pick<McpServerRow, 'name' | 'builtin'>): b
 	return !(row.builtin === 1 && HIDDEN_BY_DEFAULT.has(row.name));
 }
 
-/** A new key's access: the default servers, with all their tools. */
-export function defaultMcpAccess(db: Db): McpKeyAccess {
-	return listEnabledMcpServers(db)
+/** A new key's access: the default servers its user can use, with all their tools. */
+export function defaultMcpAccess(db: Db, userId: string): McpKeyAccess {
+	return listEnabledMcpServers(db, userId)
 		.filter(exposedByDefault)
 		.map((row) => ({ serverId: row.id, tools: null }));
 }
@@ -49,10 +49,19 @@ export interface ResolvedMcpAccess {
 	tools: Map<string, Set<string> | null>;
 }
 
-/** What a key may use right now; servers since deleted or disabled are left out. */
-export function resolveMcpAccess(db: Db, access: McpKeyAccess | null): ResolvedMcpAccess {
-	const entries = new Map((access ?? defaultMcpAccess(db)).map((e) => [e.serverId, e.tools]));
-	const servers = listEnabledMcpServers(db).filter((row) => entries.has(row.id));
+/**
+ * What a key may use right now. Servers since deleted or disabled, and personal
+ * servers of anyone but the key's user, are left out.
+ */
+export function resolveMcpAccess(
+	db: Db,
+	access: McpKeyAccess | null,
+	userId: string
+): ResolvedMcpAccess {
+	const entries = new Map(
+		(access ?? defaultMcpAccess(db, userId)).map((e) => [e.serverId, e.tools])
+	);
+	const servers = listEnabledMcpServers(db, userId).filter((row) => entries.has(row.id));
 	return {
 		servers,
 		tools: new Map(
@@ -67,7 +76,7 @@ export function resolveMcpAccess(db: Db, access: McpKeyAccess | null): ResolvedM
 /** Every enabled server, as the gateway overview and the key editor show it. */
 export function listMcpGatewayServers(db: Db, userId: string): McpGatewayServer[] {
 	const connected = listConnectedMcpServerIds(db, userId);
-	return listEnabledMcpServers(db).map((row) => ({
+	return listEnabledMcpServers(db, userId).map((row) => ({
 		id: row.id,
 		name: row.name,
 		builtin: row.builtin === 1,

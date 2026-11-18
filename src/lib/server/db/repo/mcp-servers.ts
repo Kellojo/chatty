@@ -30,6 +30,8 @@ export interface McpServerRow {
 	tool_count: number | null;
 	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
 	tool_tokens: number | null;
+	/** The only user the server is offered to; null: shared with everyone. */
+	owner_user_id: string | null;
 }
 
 export interface McpServer {
@@ -52,6 +54,8 @@ export interface McpServer {
 	toolCount: number | null;
 	/** Estimated prompt tokens of those tools' definitions; null before the first connect. */
 	toolTokens: number | null;
+	/** Only offered to the user who added it (see owner_user_id). */
+	personal: boolean;
 }
 
 /** Parses the JSON `args` column, tolerating malformed values. */
@@ -82,18 +86,39 @@ export function toPublic(row: McpServerRow): McpServer {
 		hasOauthClientSecret: !!row.oauth_client_secret_enc,
 		oauthScope: row.oauth_scope,
 		toolCount: row.tool_count ?? null,
-		toolTokens: row.tool_tokens ?? null
+		toolTokens: row.tool_tokens ?? null,
+		personal: row.owner_user_id != null
 	};
 }
 
+/** Every server, including other users' personal ones: only for code that isn't acting for a user. */
 export function listMcpServers(db: Db): McpServerRow[] {
 	return db
 		.prepare('SELECT * FROM mcp_servers ORDER BY builtin DESC, name')
 		.all() as McpServerRow[];
 }
 
-export function listEnabledMcpServers(db: Db): McpServerRow[] {
-	return listMcpServers(db).filter((row) => row.enabled === 1);
+/** Whether a server is offered to `userId`: shared servers are everyone's, personal ones their owner's. */
+export function isMcpServerVisibleTo(
+	row: Pick<McpServerRow, 'owner_user_id'>,
+	userId: string
+): boolean {
+	return row.owner_user_id == null || row.owner_user_id === userId;
+}
+
+/** The shared servers plus `userId`'s personal ones. */
+export function listMcpServersFor(db: Db, userId: string): McpServerRow[] {
+	return db
+		.prepare(
+			`SELECT * FROM mcp_servers WHERE owner_user_id IS NULL OR owner_user_id = ?
+			 ORDER BY builtin DESC, name`
+		)
+		.all(userId) as McpServerRow[];
+}
+
+/** The enabled servers `userId` may use. */
+export function listEnabledMcpServers(db: Db, userId: string): McpServerRow[] {
+	return listMcpServersFor(db, userId).filter((row) => row.enabled === 1);
 }
 
 /**
@@ -125,14 +150,16 @@ export interface CreateMcpServerInput {
 	oauthClientId?: string | null;
 	oauthClientSecret?: string | null;
 	oauthScope?: string | null;
+	/** Makes it a personal server of this user; omitted: shared with everyone. */
+	ownerUserId?: string | null;
 }
 
 export function createMcpServer(db: Db, input: CreateMcpServerInput): McpServerRow {
 	const id = randomUUID();
 	db.prepare(
 		`INSERT INTO mcp_servers (id, name, transport, command, args, url, token_enc, enabled, builtin,
-		 load_mode, auth, oauth_client_id, oauth_client_secret_enc, oauth_scope)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
+		 load_mode, auth, oauth_client_id, oauth_client_secret_enc, oauth_scope, owner_user_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
 	).run(
 		id,
 		input.name,
@@ -146,7 +173,8 @@ export function createMcpServer(db: Db, input: CreateMcpServerInput): McpServerR
 		input.auth ?? 'token',
 		input.oauthClientId ?? null,
 		input.oauthClientSecret ? encryptSecret(input.oauthClientSecret) : null,
-		input.oauthScope ?? null
+		input.oauthScope ?? null,
+		input.ownerUserId ?? null
 	);
 	return getMcpServer(db, id)!;
 }

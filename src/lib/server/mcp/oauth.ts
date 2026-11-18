@@ -24,13 +24,19 @@ import {
 import { config } from '../config.js';
 import { decryptSecret, encryptSecret } from '../crypto.js';
 import type { Db } from '../db/index.js';
-import { getMcpServer, setMcpOAuthClientInfo, type McpServerRow } from '../db/repo/mcp-servers.js';
+import {
+	getMcpServer,
+	isMcpServerVisibleTo,
+	setMcpOAuthClientInfo,
+	type McpServerRow
+} from '../db/repo/mcp-servers.js';
 import {
 	deleteMcpOAuthSession,
 	getMcpOAuthSession,
 	getMcpOAuthSessionByState,
 	updateMcpOAuthSession
 } from '../db/repo/mcp-oauth-sessions.js';
+import { restrictedFetchFor } from './access.js';
 
 export const OAUTH_CALLBACK_PATH = '/api/mcp-oauth/callback';
 
@@ -93,9 +99,13 @@ interface AuthServerSummary {
 	clientIdMetadataDocumentSupported: boolean;
 }
 
-async function fetchJson(url: string, init?: RequestInit): Promise<Record<string, unknown> | null> {
+async function fetchJson(
+	url: string,
+	fetchFn: typeof fetch,
+	init?: RequestInit
+): Promise<Record<string, unknown> | null> {
 	try {
-		const res = await fetch(url, {
+		const res = await fetchFn(url, {
 			...init,
 			headers: { accept: 'application/json', ...init?.headers },
 			signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)
@@ -108,9 +118,12 @@ async function fetchJson(url: string, init?: RequestInit): Promise<Record<string
 }
 
 /** The `resource_metadata` URL from an unauthenticated request's WWW-Authenticate challenge. */
-async function challengedResourceMetadataUrl(serverUrl: string): Promise<string | null> {
+async function challengedResourceMetadataUrl(
+	serverUrl: string,
+	fetchFn: typeof fetch
+): Promise<string | null> {
 	try {
-		const res = await fetch(serverUrl, {
+		const res = await fetchFn(serverUrl, {
 			method: 'POST',
 			headers: {
 				'content-type': 'application/json',
@@ -128,7 +141,10 @@ async function challengedResourceMetadataUrl(serverUrl: string): Promise<string 
 }
 
 /** Finds the authorization server of an MCP server (RFC 9728, then RFC 8414 / OIDC discovery). */
-export async function discoverAuthorizationServer(serverUrl: string): Promise<AuthServerSummary> {
+export async function discoverAuthorizationServer(
+	serverUrl: string,
+	fetchFn: typeof fetch = fetch
+): Promise<AuthServerSummary> {
 	const url = new URL(serverUrl);
 	const path = url.pathname.replace(/\/+$/, '');
 	const candidates = [
@@ -137,12 +153,12 @@ export async function discoverAuthorizationServer(serverUrl: string): Promise<Au
 	];
 	let resource: Record<string, unknown> | null = null;
 	for (const candidate of candidates) {
-		resource = await fetchJson(candidate);
+		resource = await fetchJson(candidate, fetchFn);
 		if (resource) break;
 	}
 	if (!resource) {
-		const challenged = await challengedResourceMetadataUrl(serverUrl);
-		if (challenged) resource = await fetchJson(challenged);
+		const challenged = await challengedResourceMetadataUrl(serverUrl, fetchFn);
+		if (challenged) resource = await fetchJson(challenged, fetchFn);
 	}
 	const servers = resource?.authorization_servers;
 	const issuer = Array.isArray(servers) && typeof servers[0] === 'string' ? servers[0] : null;
@@ -160,7 +176,7 @@ export async function discoverAuthorizationServer(serverUrl: string): Promise<Au
 		...(asPath ? [`${as.origin}${asPath}/.well-known/openid-configuration`] : [])
 	];
 	for (const metadataUrl of metadataUrls) {
-		const metadata = await fetchJson(metadataUrl);
+		const metadata = await fetchJson(metadataUrl, fetchFn);
 		if (!metadata) continue;
 		return {
 			issuer: typeof metadata.issuer === 'string' ? metadata.issuer : issuer,
@@ -212,7 +228,7 @@ async function ensureRegistration(db: Db, row: McpServerRow, origin: string): Pr
 	if (existing && existing.origin === origin) return;
 	writeRegistration(db, row.id, null);
 
-	const server = await discoverAuthorizationServer(row.url!);
+	const server = await discoverAuthorizationServer(row.url!, restrictedFetchFor(db, row) ?? fetch);
 	if (row.oauth_client_id) {
 		writeRegistration(db, row.id, {
 			kind: 'manual',
@@ -376,7 +392,12 @@ export class McpOAuthProvider implements OAuthClientProvider {
 // ---------------------------------------------------------------------------
 // Flows used by the API routes and the connection manager.
 
-function assertOAuthServer(row: McpServerRow | undefined): asserts row is McpServerRow {
+/** The OAuth server a sign-in is for; another user's personal server is treated as missing. */
+function assertOAuthServer(
+	row: McpServerRow | undefined,
+	userId: string
+): asserts row is McpServerRow {
+	if (row && !isMcpServerVisibleTo(row, userId)) throw new Error('MCP server not found');
 	if (!row || row.auth !== 'oauth' || !row.url || row.transport === 'stdio') {
 		throw new Error('This MCP server doesn’t use OAuth');
 	}
@@ -393,7 +414,7 @@ export async function startMcpOAuth(
 	requestOrigin: string
 ): Promise<StartResult> {
 	const row = getMcpServer(db, serverId);
-	assertOAuthServer(row);
+	assertOAuthServer(row, userId);
 	const origin = appOrigin(requestOrigin);
 	await ensureRegistration(db, row, origin);
 	const session = getMcpOAuthSession(db, row.id, userId);
@@ -411,7 +432,7 @@ export async function startMcpOAuth(
 		auth(provider, {
 			serverUrl: row.url!,
 			scope: row.oauth_scope ?? undefined,
-			fetchFn: oauthFetch
+			fetchFn: restrictedFetchFor(db, row) ?? oauthFetch
 		});
 	let result: Awaited<ReturnType<typeof start>>;
 	try {
@@ -441,7 +462,7 @@ export async function finishMcpOAuth(
 	if (!session || session.user_id !== userId)
 		throw new Error('This sign-in link is invalid or expired');
 	const row = getMcpServer(db, session.server_id);
-	assertOAuthServer(row);
+	assertOAuthServer(row, userId);
 	const provider = new McpOAuthProvider(db, row.id, userId, appOrigin(requestOrigin));
 	try {
 		const result = await auth(provider, {
@@ -449,7 +470,7 @@ export async function finishMcpOAuth(
 			authorizationCode: params.code,
 			callbackState: params.state,
 			callbackIssuer: params.issuer ?? undefined,
-			fetchFn: oauthFetch
+			fetchFn: restrictedFetchFor(db, row) ?? oauthFetch
 		});
 		if (result !== 'AUTHORIZED') throw new Error('Sign-in wasn’t completed');
 	} finally {

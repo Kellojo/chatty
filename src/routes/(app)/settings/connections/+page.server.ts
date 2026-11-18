@@ -10,7 +10,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	const user = requireUser(locals);
 	const db = getDb();
 	const connected = listConnectedMcpServerIds(db, user.id);
-	const connections: McpConnectionInfo[] = listEnabledMcpServers(db)
+	const connections: McpConnectionInfo[] = listEnabledMcpServers(db, user.id)
 		.filter((row) => row.auth === 'oauth' && row.url)
 		.map((row) => ({
 			id: row.id,
@@ -18,5 +18,5 @@ export const load: PageServerLoad = ({ locals }) => {
 			url: row.url!,
 			connected: connected.has(row.id)
 		}));
-	return { connections, isAdmin: (user as { role?: string }).role === 'admin' };
+	return { connections };
 };
