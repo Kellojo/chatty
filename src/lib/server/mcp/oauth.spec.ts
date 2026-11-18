@@ -270,7 +270,7 @@ describe('personal MCP servers', () => {
 		await start(server.id, 'u1');
 	});
 
-	it("keeps a non-admin's personal server off private addresses", async () => {
+	it("keeps a non-admin's personal server off loopback addresses", async () => {
 		const oauth = personalServer('u1');
 		// Discovery can't reach the loopback server, so there's no sign-in to start.
 		await expect(startMcpOAuth(getDb(), oauth.id, 'u1', 'https://ignored.example')).rejects.toThrow(

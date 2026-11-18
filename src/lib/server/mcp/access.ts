@@ -3,15 +3,15 @@
  * every user and managed by admins. A personal server is offered to its owner only,
  * who manages it.
  *
- * Personal servers of non-admins are user input like a URL handed to the fetch
- * tools: Chatty only connects to them on public addresses (unless
- * ALLOW_PRIVATE_NETWORK_FETCH is set), so a user can't make it reach the LAN,
- * localhost or cloud metadata. Admins' servers may live anywhere, as before.
+ * Personal servers of non-admins are user input, but often self-hosted: Chatty
+ * connects to them on public and private LAN / tailnet addresses, but not on
+ * loopback (its own host) or link-local (cloud metadata) ones, unless
+ * ALLOW_PRIVATE_NETWORK_FETCH is set. Admins' servers may live anywhere.
  */
 import { error } from '@sveltejs/kit';
 import type { Db } from '../db/index.js';
 import { getMcpServer, isMcpServerVisibleTo, type McpServerRow } from '../db/repo/mcp-servers.js';
-import { safeFetch } from '../net/safeFetch.js';
+import { lanFetch } from '../net/safeFetch.js';
 
 export interface McpActor {
 	id: string;
@@ -40,7 +40,7 @@ export function requireManageableMcpServer(db: Db, id: string, actor: McpActor):
 	return row;
 }
 
-/** Whether connections to the server must stay on public addresses: a non-admin's personal server. */
+/** Whether connections to the server must stay off loopback/link-local addresses: a non-admin's personal server. */
 export function isNetworkRestricted(db: Db, row: Pick<McpServerRow, 'owner_user_id'>): boolean {
 	if (row.owner_user_id == null) return false;
 	const owner = db.prepare('SELECT role FROM "user" WHERE id = ?').get(row.owner_user_id) as
@@ -49,12 +49,13 @@ export function isNetworkRestricted(db: Db, row: Pick<McpServerRow, 'owner_user_
 }
 
 /**
- * `fetch` that only reaches public addresses: every request and redirect hop is
- * checked when it connects (see safeFetch), so DNS rebinding can't get around it.
+ * `fetch` that reaches public and LAN addresses but not loopback or link-local:
+ * every request and redirect hop is checked when it connects (see safeFetch), so
+ * DNS rebinding can't get around it.
  */
-export const publicOnlyFetch: typeof fetch = (input, init) => {
+export const restrictedFetch: typeof fetch = (input, init) => {
 	if (input instanceof Request) {
-		return safeFetch(input.url, {
+		return lanFetch(input.url, {
 			method: input.method,
 			headers: input.headers,
 			body: input.body,
@@ -63,7 +64,7 @@ export const publicOnlyFetch: typeof fetch = (input, init) => {
 			...init
 		} as RequestInit);
 	}
-	return safeFetch(input instanceof URL ? input.href : input, init);
+	return lanFetch(input instanceof URL ? input.href : input, init);
 };
 
 /** The fetch a server's connections and OAuth requests must use, or undefined when unrestricted. */
@@ -71,5 +72,5 @@ export function restrictedFetchFor(
 	db: Db,
 	row: Pick<McpServerRow, 'owner_user_id'>
 ): typeof fetch | undefined {
-	return isNetworkRestricted(db, row) ? publicOnlyFetch : undefined;
+	return isNetworkRestricted(db, row) ? restrictedFetch : undefined;
 }

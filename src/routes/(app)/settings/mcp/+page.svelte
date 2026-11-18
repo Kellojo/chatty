@@ -109,7 +109,7 @@
 	});
 	const accessLabels = { shared: 'Everyone', personal: 'Only me' } as const;
 	const publicUrlHint =
-		'Must be on a public address: Chatty won’t connect your servers to localhost or private networks.';
+		'Public or local-network addresses work; Chatty won’t connect your servers to localhost.';
 
 	const authLabels: Record<AuthMode, string> = {
 		token: 'Token (or none)',

@@ -38,7 +38,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		stats: isAdmin
 			? { period, ...onlyServers(getMcpUsageStats(db, periodDays(period)), listed) }
 			: null,
-		/** Non-admins' servers must be reachable on a public address (see mcp/access.ts). */
+		/** Non-admins' servers can't be on localhost or link-local addresses (see mcp/access.ts). */
 		publicAddressesOnly: !isAdmin && !config.ALLOW_PRIVATE_NETWORK_FETCH,
 		// What to register at an authorization server that needs Chatty set up by hand.
 		oauth: { clientMetadataUrl: clientMetadataUrl(origin), redirectUrl: oauthRedirectUrl(origin) }

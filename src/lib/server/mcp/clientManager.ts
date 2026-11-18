@@ -135,7 +135,7 @@ async function openServer(row: McpServerRow, ctx: CallerContext): Promise<Server
 			}
 		};
 	}
-	// A non-admin's personal server may only be reached on public addresses (see access.ts).
+	// A non-admin's personal server can't reach loopback or link-local addresses (see access.ts).
 	const restrictedFetch = restrictedFetchFor(getDb(), row);
 	if (row.transport === 'stdio') {
 		// Only admins add stdio servers; one whose owner lost admin no longer runs.

@@ -55,7 +55,7 @@ const MODEL_CALL =
 	/\b(streamText|generateText|generateImage|generateObject|streamObject|embedMany|embed)\(/;
 const PROVIDER_FACTORY = /from ['"]@ai-sdk\/(?!mcp['"]|svelte['"]|provider['"]|provider-utils['"])/;
 /** A call of the global fetch, or passing it on (e.g. a `fetchImpl = fetch` default). */
-const FETCH = /(?:^|[^\w.])(?:safeFetch|fetch)\(|=\s*fetch(?![\w(])/;
+const FETCH = /(?:^|[^\w.])(?:safeFetch|lanFetch|fetch)\(|=\s*fetch(?![\w(])/;
 
 async function sourceFiles(dir: string): Promise<string[]> {
 	const entries = await fs.readdir(dir, { withFileTypes: true, recursive: true });
