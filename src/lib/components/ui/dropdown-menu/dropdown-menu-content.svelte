@@ -8,6 +8,8 @@
 		ref = $bindable(null),
 		sideOffset = 4,
 		align = 'start',
+		// Keep menus off the screen edge (a phone's row menus otherwise sit flush against it).
+		collisionPadding = 8,
 		portalProps,
 		class: className,
 		...restProps
@@ -20,6 +22,7 @@
 	<DropdownMenuPrimitive.Content
 		bind:ref
 		data-slot="dropdown-menu-content"
+		{collisionPadding}
 		{sideOffset}
 		{align}
 		class={cn(

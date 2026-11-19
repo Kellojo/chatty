@@ -183,22 +183,30 @@
 		</div>
 
 		{#if showTimeControl && activeOption === 'custom'}
-			<div class="-mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-				<span class="text-sm text-muted-foreground">Custom dates</span>
-				<Input
-					type="date"
-					aria-label="From date"
-					class="w-full sm:w-[160px]"
-					bind:value={customFrom}
-					onchange={applyCustom}
-				/>
-				<Input
-					type="date"
-					aria-label="To date"
-					class="w-full sm:w-[160px]"
-					bind:value={customTo}
-					onchange={applyCustom}
-				/>
+			<!-- Labelled, because an empty date input shows nothing on iOS (no placeholder).
+			     min-w-0 + appearance-none: iOS gives date inputs a wide intrinsic size that
+			     otherwise pushes them past the screen edge. -->
+			<div class="-mt-3 grid grid-cols-2 gap-2 sm:flex sm:items-end sm:justify-end">
+				<label class="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+					From
+					<Input
+						type="date"
+						class="w-full min-w-0 appearance-none sm:w-[160px]"
+						bind:value={customFrom}
+						max={customTo || undefined}
+						onchange={applyCustom}
+					/>
+				</label>
+				<label class="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+					To
+					<Input
+						type="date"
+						class="w-full min-w-0 appearance-none sm:w-[160px]"
+						bind:value={customTo}
+						min={customFrom || undefined}
+						onchange={applyCustom}
+					/>
+				</label>
 			</div>
 		{/if}
 

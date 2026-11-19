@@ -277,6 +277,17 @@
 		padding: 0.125rem 0.375rem;
 		transition: opacity 150ms;
 	}
+	/* Touch screens always show the zoom controls (below), where they sat on the diagram's
+	   bottom-right corner: reserve a strip under the diagram for them instead. */
+	@media not ((hover: hover) and (pointer: fine)) {
+		:global(
+			[data-expanded='false'] [data-language='mermaid'] > div:has(> div > button[title='Zoom in'])
+		) {
+			/* Streamdown's min-h-28 plus the strip, so the diagram keeps its height. */
+			min-height: 9.5rem;
+			padding-bottom: 2.5rem;
+		}
+	}
 	/* On a pointer device the zoom controls appear on hover or focus, so they don't sit on a short
 	   diagram at rest. Touch screens and the expanded view always show them. */
 	@media (hover: hover) and (pointer: fine) {

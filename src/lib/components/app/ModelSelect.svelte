@@ -277,7 +277,7 @@
 	<Select.Content
 		{align}
 		collisionPadding={8}
-		class="h-[min(24rem,var(--bits-select-content-available-height))] w-(--bits-select-anchor-width) max-w-[calc(100vw-1rem)] min-w-72"
+		class="h-[min(24rem,var(--bits-select-content-available-height))] w-(--bits-select-anchor-width) max-w-[calc(100vw-1rem)] min-w-72 max-sm:w-[calc(100vw-1rem)]"
 	>
 		<div class="sticky top-0 z-10 border-b bg-popover/95 p-1 backdrop-blur-sm">
 			<div class="relative">

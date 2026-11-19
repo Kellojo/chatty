@@ -427,6 +427,7 @@
 	     open or closed at the finger's speed (settleMs), as iOS does. -->
 	<div
 		bind:this={drawerTrack}
+		data-drawer-track
 		class={cn(
 			'fixed top-(--titlebar-height) bottom-0 left-0 flex w-[200%] md:contents',
 			dragProgress === null && 'transition-transform duration-300 ease-out'
@@ -485,6 +486,7 @@
 			? `opacity: ${1 - Math.min(1, dragProgress * 2)}`
 			: undefined}
 		bind:ref={sidebarButton}
+		data-sidebar-toggle
 		tabindex={buttonHidden && !isDesktop.current ? -1 : undefined}
 		aria-hidden={buttonHidden && !isDesktop.current ? 'true' : undefined}
 		onclick={() => toggleSidebar()}

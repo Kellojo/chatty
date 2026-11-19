@@ -335,3 +335,29 @@
 		0 -1px 0 100vmax var(--border);
 	clip-path: inset(-1px -100vmax 0);
 }
+
+/*
+ * Fullscreen tables and diagrams in replies (Streamdown) are position: fixed inside the
+ * chat. On a phone two ancestors trap them: the sliding drawer track's transform makes
+ * it their containing block (so they size to the 200%-wide track and half of them is
+ * off screen), and the chat scroller's fade mask clips them and keeps them under the
+ * chat header. Lift both while one is open, and hide the floating sidebar button that
+ * would sit on its toolbar. The drawer is closed then, so `left: -100%` puts the chat
+ * exactly where translateX(-50%) had it.
+ */
+:root:has([data-streamdown='table-fullscreen'], [data-expanded='true']) {
+	[data-drawer-track] {
+		left: -100%;
+		transform: none !important;
+		transition: none !important;
+	}
+
+	[data-chat-scroll] {
+		mask-image: none !important;
+	}
+
+	/* Floats above the drawer track, so it would sit on the fullscreen view's toolbar. */
+	[data-sidebar-toggle] {
+		visibility: hidden;
+	}
+}

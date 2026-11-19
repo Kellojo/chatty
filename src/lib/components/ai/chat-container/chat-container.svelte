@@ -63,6 +63,7 @@
 
 <div
 	{@attach bindScrollElement}
+	data-chat-scroll
 	class={cn(
 		// Phones get a longer top fade: their header's two-line title sits right above it.
 		!positioned && 'invisible',

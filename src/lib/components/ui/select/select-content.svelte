@@ -9,6 +9,8 @@
 		ref = $bindable(null),
 		class: className,
 		sideOffset = 4,
+		// Keep lists off the screen edge (on a phone they otherwise sit flush against it).
+		collisionPadding = 8,
 		portalProps,
 		children,
 		preventScroll = true,
@@ -22,6 +24,7 @@
 	<SelectPrimitive.Content
 		bind:ref
 		{sideOffset}
+		{collisionPadding}
 		{preventScroll}
 		data-slot="select-content"
 		class={cn(

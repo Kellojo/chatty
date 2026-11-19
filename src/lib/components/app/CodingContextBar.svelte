@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Select from '$lib/components/ui/select/index.js';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
@@ -53,6 +54,16 @@
 	const projectListboxId = `${uid}-projects`;
 	const branchListboxId = `${uid}-branches`;
 	let searchEl = $state<HTMLInputElement | null>(null);
+
+	// On a phone a list pinned to open straight down from its chip runs off the screen
+	// (the project/branch lists past the right edge, the permissions list past the left):
+	// let it shift (and flip) there.
+	const narrow = new MediaQuery('(max-width: 639px)');
+	// Focusing the search box on a touch screen pops the keyboard over the list just opened.
+	const finePointer = new MediaQuery('(pointer: fine)');
+	function focusSearch() {
+		if (finePointer.current) requestAnimationFrame(() => searchEl?.focus());
+	}
 
 	// Filled like the model picker inside the input, so they read as its settings
 	// rather than as more suggestion pills (which are outlined).
@@ -276,7 +287,7 @@
 					onOpenChange={(open) => {
 						projectQuery = '';
 						// After bits-ui moves focus into the list, so typing filters instead of jumping.
-						if (open) requestAnimationFrame(() => searchEl?.focus());
+						if (open) focusSearch();
 					}}
 				>
 					<Select.Trigger
@@ -293,7 +304,7 @@
 					<Select.Content
 						side="bottom"
 						align="start"
-						avoidCollisions={false}
+						avoidCollisions={narrow.current}
 						id={projectListboxId}
 						class="max-h-[min(26rem,var(--bits-select-content-available-height))] min-w-64"
 					>
@@ -356,7 +367,7 @@
 							onOpenChange={(open) => {
 								branchQuery = '';
 								if (!open) return;
-								requestAnimationFrame(() => searchEl?.focus());
+								focusSearch();
 								// Picks up branches created since the list was loaded.
 								if (!task.branchesError) void task.refreshBranches();
 							}}
@@ -384,7 +395,7 @@
 							<Select.Content
 								side="bottom"
 								align="start"
-								avoidCollisions={false}
+								avoidCollisions={narrow.current}
 								id={branchListboxId}
 								class="max-h-[min(24rem,var(--bits-select-content-available-height))] min-w-72"
 							>
@@ -476,7 +487,7 @@
 					<Select.Content
 						side="bottom"
 						align="end"
-						avoidCollisions={false}
+						avoidCollisions={narrow.current}
 						class="w-[min(20rem,calc(100vw-2rem))]"
 					>
 						<Select.Group>
