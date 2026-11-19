@@ -7,7 +7,9 @@ export const GET: RequestHandler = async ({ locals }) => {
 	const user = requireUser(locals);
 	const { tools, toolToServer, close } = await buildTools({
 		userId: user.id,
-		memoryEnabled: true
+		memoryEnabled: true,
+		// A picker: private servers' tools are listed, never run from here.
+		listing: true
 	});
 	try {
 		return json({

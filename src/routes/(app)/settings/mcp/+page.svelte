@@ -154,6 +154,8 @@
 	let addName = $state('');
 	/** Admins: offer the new server only to themselves. Non-admins' servers always are. */
 	let addPersonal = $state(false);
+	/** Its tools return private data: only chats on trusted models get them. */
+	let addPrivate = $state(false);
 	let addTransport = $state<ConfigurableTransport>('http');
 	let addUrl = $state('');
 	let addCommand = $state('');
@@ -167,7 +169,10 @@
 	let editUrl = $state('');
 	let editCommand = $state('');
 	let editArgs = $state('');
+	let editPrivate = $state(false);
 	let editBusy = $state(false);
+	/** Shown while private data is on, or to turn off a server that is still private. */
+	const showPrivateField = (current: boolean) => data.privateData.enabled || current;
 
 	/** One argument per line; blank lines are ignored. */
 	function parseArgs(value: string): string[] {
@@ -236,6 +241,7 @@
 	function resetAddForm() {
 		addName = '';
 		addPersonal = false;
+		addPrivate = false;
 		addTransport = 'http';
 		addUrl = '';
 		addAuth = emptyAuth();
@@ -255,6 +261,7 @@
 			await api('/api/mcp-servers', 'POST', {
 				name: addName,
 				...(data.isAdmin ? { personal: addPersonal } : {}),
+				...(addPrivate ? { private: true } : {}),
 				...connectionBody(addTransport, addUrl, addCommand, addArgs),
 				...(addTransport === 'stdio' ? {} : authBody(addAuth, false))
 			});
@@ -285,6 +292,7 @@
 		};
 		editCommand = server.command ?? '';
 		editArgs = server.args.join('\n');
+		editPrivate = server.private;
 		editOpen = true;
 	}
 
@@ -295,6 +303,7 @@
 		try {
 			await api(`/api/mcp-servers/${editId}`, 'PATCH', {
 				name: editName,
+				private: editPrivate,
 				...connectionBody(editTransport, editUrl, editCommand, editArgs),
 				...(editTransport === 'stdio' ? {} : authBody(editAuth, true))
 			});
@@ -417,6 +426,12 @@
 		// Everything a non-admin sees is theirs, so only admins need telling apart.
 		if (data.isAdmin && server.personal)
 			flags.push({ label: 'Only you', title: 'Only offered to you, in your chats and agent runs' });
+		if (server.private)
+			flags.push({
+				label: 'Private',
+				title:
+					'Only offered to chats whose models may process private data; using it makes the chat private'
+			});
 		if (server.auth === 'oauth')
 			flags.push({ label: 'OAuth', title: 'Each user signs in under Settings → Connected apps' });
 		if (server.transport === 'sse')
@@ -559,6 +574,19 @@
 		<Button onclick={openAdd}><PlusIcon class="size-4" />Add server</Button>
 	{/snippet}
 </SettingsHeader>
+
+{#snippet privateField(id: string, checked: boolean, onchange: (value: boolean) => void)}
+	<div class="flex items-start justify-between gap-4">
+		<div class="flex flex-col gap-1">
+			<Label for={id}>Returns private data</Label>
+			<p class="text-xs text-pretty text-muted-foreground">
+				Only chats whose every model may process private data get its tools, and using one makes the
+				chat private. API keys never get it.
+			</p>
+		</div>
+		<Switch {id} {checked} onCheckedChange={onchange} class="mt-0.5" />
+	</div>
+{/snippet}
 
 {#snippet authFields(form: AuthForm, id: string, editing: boolean)}
 	{@const server = editing ? data.servers.find((s) => s.id === editId) : undefined}
@@ -1008,6 +1036,9 @@
 					</div>
 					{@render authFields(addAuth, 'add', false)}
 				{/if}
+				{#if showPrivateField(false)}
+					{@render privateField('add-private', addPrivate, (value) => (addPrivate = value))}
+				{/if}
 			</div>
 			<Dialog.Footer>
 				<Dialog.Close>
@@ -1075,6 +1106,9 @@
 						{/if}
 					</div>
 					{@render authFields(editAuth, 'edit', true)}
+				{/if}
+				{#if showPrivateField(data.servers.find((s) => s.id === editId)?.private ?? false)}
+					{@render privateField('edit-private', editPrivate, (value) => (editPrivate = value))}
 				{/if}
 			</div>
 			<Dialog.Footer>

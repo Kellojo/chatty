@@ -15,6 +15,7 @@ import { connectServer, listServerTools } from '../mcp/clientManager.js';
 import { McpSignInRequiredError } from '../mcp/oauth.js';
 import { acquireMcpServer, cachedMcpTools, type McpLease } from '../mcp/pool.js';
 import type { CallerContext } from '../mcp/types.js';
+import { reportPrivate, seesPrivate } from '../mcp/servers/private-items.js';
 import { isWebSearchConfigured } from '../websearch/service.js';
 import { pickDeferredTools, SEARCH_TOOLS_NAME, type ToolCatalog } from './toolSearch.js';
 import { wrapMcpTools, type McpToolCallOutcome } from './wrap.js';
@@ -45,6 +46,11 @@ export interface BuildToolsInput {
 	trust?: Trust;
 	/** See CallerContext.privateOnly. */
 	privateOnly?: boolean;
+	/**
+	 * Also list private servers' tools to an untrusted caller: only for tool
+	 * pickers, which never run them (a call still refuses without a trusted turn).
+	 */
+	listing?: boolean;
 }
 
 export interface BuiltTools extends ToolCatalog {
@@ -72,6 +78,8 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		(row) =>
 			// Another user's personal server is never offered, even when handed in.
 			isMcpServerVisibleTo(row, input.userId) &&
+			// A private server's tools return private data: trusted turns only.
+			(row.private !== 1 || input.listing === true || seesPrivate(ctx)) &&
 			(input.memoryEnabled || row.name !== 'memory') &&
 			// web_search is only offered once a search provider is set up.
 			(row.builtin !== 1 || row.name !== 'websearch' || isWebSearchConfigured(db))
@@ -97,6 +105,12 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 		}
 		closers.push(result.value.close);
 		const set = wrapMcpTools(result.value.tools, row.name, {
+			// Taints the turn (its chat becomes private) before anything the server
+			// returns reaches the model; throws for a caller that can't record it.
+			beforeCall:
+				row.private === 1
+					? () => reportPrivate(ctx, `the private MCP server "${row.name}"`)
+					: undefined,
 			onError: result.value.onError,
 			onCall: (outcome) => {
 				trackCall(row, ctx.userId, outcome);
@@ -241,9 +255,15 @@ function isConnectionError(e: unknown): boolean {
 	return CONNECTION_ERROR.test(e instanceof Error ? e.message : String(e));
 }
 
-/** Lists every tool currently available to the user (for pickers in the UI), sorted by server then name. */
-export async function listToolInfo(userId: string): Promise<ToolInfo[]> {
-	const built = await buildTools({ userId, memoryEnabled: true });
+/**
+ * Lists every tool currently available to the user (for pickers in the UI), sorted by server
+ * then name. `includePrivate: false` leaves out private servers (the MCP gateway can't use them).
+ */
+export async function listToolInfo(
+	userId: string,
+	{ includePrivate = true }: { includePrivate?: boolean } = {}
+): Promise<ToolInfo[]> {
+	const built = await buildTools({ userId, memoryEnabled: true, listing: includePrivate });
 	const builtin = new Set(
 		listEnabledMcpServers(getDb(), userId)
 			.filter((row) => row.builtin === 1)

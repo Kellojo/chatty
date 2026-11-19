@@ -40,6 +40,8 @@ const oauthClientSecretSchema = z.string().min(1).max(4096);
 const oauthScopeSchema = z.string().trim().min(1).max(1024);
 /** Admins: offer the server only to themselves. A non-admin's server is always personal. */
 const personalSchema = z.boolean().optional();
+/** Its tools return private data: only trusted chats get them. */
+const privateSchema = z.boolean().optional();
 
 export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 	z.object({
@@ -53,7 +55,8 @@ export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 		oauthScope: oauthScopeSchema.nullish(),
 		enabled: z.boolean().optional(),
 		loadMode: loadModeSchema.optional(),
-		personal: personalSchema
+		personal: personalSchema,
+		private: privateSchema
 	}),
 	z.object({
 		name: nameSchema,
@@ -62,7 +65,8 @@ export const mcpServerCreateSchema = z.discriminatedUnion('transport', [
 		args: argsSchema.default([]),
 		enabled: z.boolean().optional(),
 		loadMode: loadModeSchema.optional(),
-		personal: personalSchema
+		personal: personalSchema,
+		private: privateSchema
 	})
 ]);
 
@@ -78,7 +82,8 @@ export const mcpServerPatchSchema = z.object({
 	command: commandSchema.nullish(),
 	args: argsSchema.optional(),
 	enabled: z.boolean().optional(),
-	loadMode: loadModeSchema.optional()
+	loadMode: loadModeSchema.optional(),
+	private: privateSchema
 });
 
 export type McpServerPatchBody = z.infer<typeof mcpServerPatchSchema>;

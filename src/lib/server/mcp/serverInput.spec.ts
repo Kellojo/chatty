@@ -26,6 +26,7 @@ function row(overrides: Partial<McpServerRow> = {}): McpServerRow {
 		tool_count: null,
 		tool_tokens: null,
 		owner_user_id: null,
+		private: 0,
 		...overrides
 	};
 }

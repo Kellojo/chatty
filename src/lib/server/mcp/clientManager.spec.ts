@@ -38,7 +38,8 @@ function stdioRow(command: string | null, args: string[]): McpServerRow {
 		oauth_client_info_enc: null,
 		tool_count: null,
 		tool_tokens: null,
-		owner_user_id: null
+		owner_user_id: null,
+		private: 0
 	};
 }
 

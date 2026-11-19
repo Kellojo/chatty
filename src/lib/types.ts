@@ -96,6 +96,8 @@ export interface McpServerInfo {
 	toolTokens: number | null;
 	/** Only offered to the user who added it; otherwise shared with everyone. */
 	personal: boolean;
+	/** Returns private data: only offered to chats whose every model is trusted with it. */
+	private: boolean;
 }
 
 /** A server's tool calls over the usage window (Settings → MCP servers). */

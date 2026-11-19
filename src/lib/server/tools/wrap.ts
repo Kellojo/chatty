@@ -10,6 +10,8 @@ export interface McpToolCallOutcome {
 }
 
 export interface WrapMcpToolsOptions {
+	/** Runs before every call; throwing refuses the call (e.g. a private server in an untrusted turn). */
+	beforeCall?: () => void;
 	/** Sees every thrown error first (e.g. to drop a dead pooled connection). */
 	onError?: (error: unknown) => void;
 	/** Called once per finished call. */
@@ -29,7 +31,7 @@ function isErrorResult(result: unknown): boolean {
 export function wrapMcpTools(
 	set: Record<string, Tool>,
 	serverName: string,
-	{ onError, onCall }: WrapMcpToolsOptions = {}
+	{ beforeCall, onError, onCall }: WrapMcpToolsOptions = {}
 ): Record<string, Tool> {
 	const wrapped: Record<string, Tool> = {};
 	for (const [name, tool] of Object.entries(set)) {
@@ -46,6 +48,7 @@ export function wrapMcpTools(
 					onCall?.({ tool: name, ok, durationMs: performance.now() - started });
 				let result: unknown;
 				try {
+					beforeCall?.();
 					result = await runInToolCall(options?.toolCallId, () =>
 						execute(input as never, options as never)
 					);

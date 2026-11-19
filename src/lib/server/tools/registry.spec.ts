@@ -9,6 +9,8 @@ const { buildTools } = await import('./registry.js');
 const repo = await import('../db/repo/mcp-servers.js');
 const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
 const { closeAllMcpClients, sweepIdleMcpClients } = await import('../mcp/pool.js');
+const { createConversation } = await import('../db/repo/conversations.js');
+const { TurnPrivacy } = await import('../privacy/taint.js');
 
 const STDIO_SERVER = `
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -253,4 +255,56 @@ describe('tools registry', () => {
 		const serverA = built.toolToServer[collisionToolName];
 		expect(typeof serverA).toBe('string');
 	});
+
+	it('offers a private server only to trusted turns, and taints the chat on a call', async () => {
+		const db = getDb();
+		repo.createMcpServer(db, {
+			name: 'stdio-private',
+			transport: 'stdio',
+			command: process.execPath,
+			args: ['--input-type=module', '-e', STDIO_SERVER],
+			private: true
+		});
+		const callOptions = { toolCallId: 't1', messages: [], context: {} };
+
+		// No trust (the gateway, background callers) and untrusted turns never get it.
+		const plain = await buildTools({ userId: 'u1', memoryEnabled: true });
+		expect(plain.tools.ping).toBeUndefined();
+		await plain.close();
+		const open = createConversation(db, 'u1', { private: false });
+		const untrusted = new TurnPrivacy(db, 'u1', { conversationId: open.id, trust: 'untrusted' });
+		const hidden = await buildTools({
+			userId: 'u1',
+			memoryEnabled: true,
+			conversationId: open.id,
+			privacy: untrusted,
+			trust: 'untrusted'
+		});
+		expect(hidden.tools.ping).toBeUndefined();
+		await hidden.close();
+
+		// Pickers list it, but can't run it.
+		const listed = await buildTools({ userId: 'u1', memoryEnabled: true, listing: true });
+		expect(listed.toolToServer.ping).toBe('stdio-private');
+		await expect(listed.tools.ping.execute!({}, callOptions)).rejects.toThrow();
+		await listed.close();
+
+		const trusted = new TurnPrivacy(db, 'u1', { conversationId: open.id, trust: 'trusted' });
+		const built = await buildTools({
+			userId: 'u1',
+			memoryEnabled: true,
+			conversationId: open.id,
+			privacy: trusted,
+			trust: 'trusted'
+		});
+		expect(trusted.tainted).toBe(false);
+		const output = await built.tools.ping.execute!({}, callOptions);
+		expect(JSON.stringify(output)).toContain('pong');
+		expect(trusted.tainted).toBe(true);
+		const row = db.prepare('SELECT private FROM conversations WHERE id = ?').get(open.id) as {
+			private: number;
+		};
+		expect(row.private).toBe(1);
+		await built.close();
+	}, 30_000);
 });
