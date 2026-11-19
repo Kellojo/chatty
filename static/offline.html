@@ -1,0 +1,97 @@
+<!doctype html>
+<!--
+	Shown by the service worker for a page that can't be loaded offline and wasn't saved on an
+	earlier visit (see the 'pages' runtime cache in vite.config.ts). Self-contained: no app CSS.
+-->
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f9f8f7" />
+		<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e0d0c" />
+		<title>Offline · Chatty</title>
+		<style>
+			:root {
+				--bg: #f9f8f7;
+				--fg: #1c1917;
+				--muted: #78716c;
+				--btn-bg: #1c1917;
+				--btn-fg: #fafaf9;
+				--border: #e7e5e4;
+			}
+			@media (prefers-color-scheme: dark) {
+				:root {
+					--bg: #0e0d0c;
+					--fg: #fafaf9;
+					--muted: #a8a29e;
+					--btn-bg: #fafaf9;
+					--btn-fg: #1c1917;
+					--border: #292524;
+				}
+			}
+			html,
+			body {
+				height: 100%;
+				margin: 0;
+			}
+			body {
+				box-sizing: border-box;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 0.75rem;
+				padding: env(safe-area-inset-top) 1.5rem env(safe-area-inset-bottom);
+				background: var(--bg);
+				color: var(--fg);
+				font-family:
+					system-ui,
+					-apple-system,
+					sans-serif;
+				text-align: center;
+			}
+			h1 {
+				margin: 0;
+				font-size: 1.25rem;
+				font-weight: 600;
+			}
+			p {
+				margin: 0;
+				max-width: 22rem;
+				color: var(--muted);
+				line-height: 1.5;
+			}
+			.actions {
+				display: flex;
+				gap: 0.5rem;
+				margin-top: 0.5rem;
+			}
+			a,
+			button {
+				padding: 0.625rem 1.25rem;
+				border: 1px solid var(--border);
+				border-radius: 9999px;
+				background: transparent;
+				color: var(--fg);
+				font: inherit;
+				font-weight: 500;
+				text-decoration: none;
+				cursor: pointer;
+			}
+			button {
+				border-color: var(--btn-bg);
+				background: var(--btn-bg);
+				color: var(--btn-fg);
+			}
+		</style>
+	</head>
+	<body>
+		<h1>You're offline</h1>
+		<p>This page wasn't saved for offline use. Chats you've opened recently are still available.</p>
+		<div class="actions">
+			<a href="/">Saved chats</a>
+			<button type="button" onclick="location.reload()">Try again</button>
+		</div>
+	</body>
+</html>

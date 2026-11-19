@@ -6,11 +6,15 @@
 //
 // Kept free of `$lib` imports: vite.config.ts imports the cache names.
 
-/** Runtime caches holding one account's chats. */
+/** Runtime caches holding one account's chats and pages. */
 export const USER_DATA_CACHES = {
 	conversations: 'api-conversations',
 	chatPageData: 'chat-page-data',
-	olderMessages: 'chat-older-messages'
+	olderMessages: 'chat-older-messages',
+	/** Server-rendered pages (they embed the sidebar's chats). */
+	pages: 'pages',
+	/** Load data of the other pages, for client-side navigation between them. */
+	pageData: 'page-data'
 } as const;
 
 /** The account whose data the caches hold. */

@@ -7,6 +7,7 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 // Cleared on sign-out and account change (src/lib/offline-cache.ts).
 import { USER_DATA_CACHES } from './src/lib/offline-cache.js';
+import { precacheTransform } from './scripts/pwa-precache.js';
 
 // Files other apps may share into Chatty: the composer's attachment types
 // (its file picker's `accept`). Android matches shares by MIME type.
@@ -143,18 +144,51 @@ export default defineConfig(({ mode }) => {
 					]
 				},
 				workbox: {
-					// Serve the precached app shell for navigations when offline.
-					navigateFallback: '/',
-					// Server endpoints that are navigated to (OAuth callbacks, file
-					// downloads) and the MCP gateway's OAuth approval page must reach
-					// the server, not get the cached shell.
-					navigateFallbackDenylist: [/^\/api\//, /^\/oauth\//, /^\/\.well-known\//],
+					// Pages are server-rendered, so there's no precached app shell to fall
+					// back to: a fallback of '/' made the service worker throw on start (it
+					// isn't in the precache), so nothing worked offline. Navigations are
+					// cached as they're visited instead (the 'pages' route below).
+					navigateFallback: null,
+					// static/offline.html is precached for the page route's fallback.
+					globPatterns: ['client/**/*.{js,css,ico,png,svg,webp,webmanifest,html}'],
+					// Leaves lazily loaded chunks out of the precache (scripts/pwa-precache.ts).
+					manifestTransforms: [precacheTransform('manifest.webmanifest')],
 					// Notification click handling (see static/notification-sw.js).
 					// Shares from other apps (see static/share-target-sw.js).
 					importScripts: ['/notification-sw.js', '/share-target-sw.js'],
 					// HTML/data payloads can exceed the default 2 MiB precache limit.
 					maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
 					runtimeCaching: [
+						{
+							// Build output that isn't precached (lazily loaded chunks): hashed and
+							// immutable, so cached on first use and served from the cache after.
+							urlPattern: ({ url }) =>
+								url.origin === self.location.origin && url.pathname.startsWith('/_app/immutable/'),
+							handler: 'CacheFirst',
+							options: {
+								cacheName: 'app-chunks',
+								cacheableResponse: { statuses: [200] },
+								expiration: { maxEntries: 500, maxAgeSeconds: 60 * 24 * 60 * 60 }
+							}
+						},
+						{
+							// Pages: from the network, else the copy saved on the last visit, else
+							// the offline page. Redirects (e.g. to /login) aren't saved. Server
+							// endpoints that are navigated to (OAuth callbacks, file downloads, the
+							// MCP gateway's approval page) always go to the server.
+							urlPattern: ({ url, request }) =>
+								request.mode === 'navigate' &&
+								url.origin === self.location.origin &&
+								!/^\/(?:api|oauth|\.well-known)\//.test(url.pathname),
+							handler: 'NetworkFirst',
+							options: {
+								cacheName: USER_DATA_CACHES.pages,
+								networkTimeoutSeconds: 5,
+								cacheableResponse: { statuses: [200] },
+								expiration: { maxEntries: 50, maxAgeSeconds: 7 * 24 * 60 * 60 },
+								precacheFallback: { fallbackURL: '/offline.html' }
+							}
+						},
 						{
 							// Offline history browsing: sidebar conversation lists.
 							urlPattern: ({ url, request }) =>
@@ -180,6 +214,23 @@ export default defineConfig(({ mode }) => {
 								cacheName: USER_DATA_CACHES.chatPageData,
 								networkTimeoutSeconds: 5,
 								expiration: { maxEntries: 100, maxAgeSeconds: 7 * 24 * 60 * 60 }
+							}
+						},
+						{
+							// Every other page's load data, so moving between pages that were
+							// visited keeps working offline (a failed __data.json fetch makes
+							// SvelteKit fall back to a full navigation, which the 'pages' route
+							// then answers from its cache or with the offline page).
+							urlPattern: ({ url, request }) =>
+								request.method === 'GET' &&
+								url.origin === self.location.origin &&
+								url.pathname.endsWith('/__data.json'),
+							handler: 'NetworkFirst',
+							options: {
+								cacheName: USER_DATA_CACHES.pageData,
+								networkTimeoutSeconds: 5,
+								cacheableResponse: { statuses: [200] },
+								expiration: { maxEntries: 50, maxAgeSeconds: 7 * 24 * 60 * 60 }
 							}
 						},
 						{
