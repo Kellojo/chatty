@@ -83,9 +83,13 @@
 		ol: {
 			base: 'my-3 in-[li]:my-1 ml-0 list-outside pl-6 whitespace-normal text-foreground [&:has(>li:nth-child(10))]:pl-9 [&:has(>li[value])]:pl-9 [&[start]]:pl-9'
 		},
-		// Links render as buttons (link safety). The default wrap-anywhere let a link split mid-word in
-		// narrow table cells; break-word only breaks a word that can't fit on its own line.
-		link: { base: 'text-primary font-medium underline wrap-break-word hover:text-primary/80' },
+		// Links render as buttons (link safety): atomic inline-blocks sized to their min-content. In
+		// prose that needs wrap-anywhere, or a long URL widens the button past the screen on phones.
+		// In table cells it let a link split mid-word (auto layout shrinks cells to min-content), so
+		// cells use break-word and a long URL scrolls the table sideways instead.
+		link: {
+			base: 'text-primary font-medium underline wrap-anywhere in-[td]:wrap-break-word hover:text-primary/80'
+		},
 		// One card like code blocks: a header strip with the table actions, then the table edge to edge.
 		table: {
 			wrapper:

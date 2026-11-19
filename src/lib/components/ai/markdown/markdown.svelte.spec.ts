@@ -81,8 +81,21 @@ describe('Markdown', () => {
 		await expect
 			.poll(() => screen.container.querySelector('[data-streamdown="link"]'))
 			.not.toBeNull();
+		const link = screen.container.querySelector('td [data-streamdown="link"]')!;
+		expect(link.classList).toContain('in-[td]:wrap-break-word');
+	});
+
+	// A link is an inline-block button; without wrap-anywhere a long URL is as wide
+	// as the whole URL and scrolls the chat sideways on phones.
+	it('wraps long links in prose anywhere', async () => {
+		const screen = render(Markdown, {
+			content: `See [https://example.com/${'a'.repeat(200)}](https://example.com/x)`,
+			streaming: false
+		});
+		await expect
+			.poll(() => screen.container.querySelector('[data-streamdown="link"]'))
+			.not.toBeNull();
 		const link = screen.container.querySelector('[data-streamdown="link"]')!;
-		expect(link.classList).toContain('wrap-break-word');
-		expect(link.classList).not.toContain('wrap-anywhere');
+		expect(link.classList).toContain('wrap-anywhere');
 	});
 });
