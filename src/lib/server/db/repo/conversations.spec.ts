@@ -7,6 +7,7 @@ import {
 	getConversation,
 	listConversations,
 	listConversationsSince,
+	listFailedUnreadChatIds,
 	listSettledConversations,
 	markConversationRead,
 	searchConversations,
@@ -47,6 +48,23 @@ describe('conversations repo', () => {
 		expect(list.map((c) => c.id)).toEqual([b.id, a.id]);
 		softDeleteConversation(db, 'u1', a.id);
 		expect(listConversations(db, 'u1').map((c) => c.id)).toEqual([b.id]);
+	});
+
+	it('listFailedUnreadChatIds lists unread chats whose newest reply failed', () => {
+		const failed = createConversation(db, 'u1', { title: 'failed' });
+		const ok = createConversation(db, 'u1', { title: 'ok' });
+		const recovered = createConversation(db, 'u1', { title: 'retried' });
+		const seen = createConversation(db, 'u1', { title: 'seen' });
+		const reply = (conversationId: string, status: 'complete' | 'failed', createdAt: number) =>
+			createMessage(db, { conversationId, role: 'assistant', parts: [], status, createdAt });
+		reply(failed.id, 'failed', 10);
+		reply(ok.id, 'complete', 10);
+		reply(recovered.id, 'failed', 10);
+		reply(recovered.id, 'complete', 20);
+		reply(seen.id, 'failed', 10);
+		markConversationRead(db, 'u1', seen.id);
+		expect(listFailedUnreadChatIds(db, 'u1')).toEqual([failed.id]);
+		expect(listFailedUnreadChatIds(db, 'u2')).toEqual([]);
 	});
 
 	it('getConversation enforces ownership', () => {

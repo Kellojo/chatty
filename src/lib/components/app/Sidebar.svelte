@@ -71,6 +71,7 @@
 		conversations,
 		hasMore,
 		unreadIds,
+		failedUnreadIds = [],
 		snoozed = [],
 		settledCount,
 		autoSettleDays,
@@ -84,6 +85,8 @@
 		conversations: Conversation[];
 		hasMore: boolean;
 		unreadIds: string[];
+		/** Unread chats whose newest reply failed: shown as "Failed", not "New reply". */
+		failedUnreadIds?: string[];
 		/** Snoozed chats, soonest to wake first; listed in their own group below the dated ones. */
 		snoozed?: Conversation[];
 		settledCount: number;
@@ -900,7 +903,7 @@
 			unreadIds.includes(c.id) &&
 			(page.url.pathname !== `/chat/${c.id}` || markedUnread.id === c.id);
 		if (!unread) return 'idle';
-		return status === 'failed' ? 'failed' : 'unread';
+		return status === 'failed' || failedUnreadIds.includes(c.id) ? 'failed' : 'unread';
 	}
 
 	function rowTitle(c: Conversation, state: RowState): string {

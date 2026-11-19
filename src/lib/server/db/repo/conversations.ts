@@ -627,6 +627,27 @@ export function listUnreadChatIds(db: Db, userId: string): string[] {
 	).map((row) => row.id);
 }
 
+/**
+ * Unread chats whose newest reply failed (e.g. the provider rejected the request), so the
+ * sidebar can say "Failed" rather than announce a new reply that never came.
+ */
+export function listFailedUnreadChatIds(db: Db, userId: string): string[] {
+	return (
+		db
+			.prepare(
+				`SELECT c.id FROM conversations c
+				 WHERE c.user_id = ? AND c.kind = 'chat' AND c.deleted_at IS NULL
+				   AND (
+				     SELECT m.status FROM messages m
+				     WHERE m.conversation_id = c.id AND m.role = 'assistant'
+				       AND m.created_at > COALESCE(c.last_read_at, 0)
+				     ORDER BY m.created_at DESC LIMIT 1
+				   ) = 'failed'`
+			)
+			.all(userId) as { id: string }[]
+	).map((row) => row.id);
+}
+
 export const SEARCH_PAGE_SIZE = 50;
 export const MAX_SEARCH_PAGE_SIZE = 200;
 

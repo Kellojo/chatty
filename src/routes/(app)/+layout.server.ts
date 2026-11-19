@@ -9,6 +9,7 @@ import {
 	listConversations,
 	listSnoozedConversations,
 	listUnreadChatIds,
+	listFailedUnreadChatIds,
 	toPublic
 } from '$lib/server/db/repo/conversations.js';
 import { getOnboarding, getUserSettings } from '$lib/server/db/repo/user-settings.js';
@@ -41,6 +42,7 @@ export const load: LayoutServerLoad = async ({ locals, depends, url }) => {
 		settledCount: countSettledConversations(db, locals.user.id),
 		autoSettleDays: config.CONVERSATION_AUTO_SETTLE_DAYS,
 		unreadIds: listUnreadChatIds(db, locals.user.id),
+		failedUnreadIds: listFailedUnreadChatIds(db, locals.user.id),
 		sidebarOpen: settings.sidebarOpen,
 		settings,
 		privateData: privateDataStatus(db)

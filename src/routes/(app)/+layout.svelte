@@ -448,6 +448,7 @@
 				conversations={data.conversations}
 				hasMore={data.hasMoreConversations}
 				unreadIds={data.unreadIds}
+				failedUnreadIds={data.failedUnreadIds}
 				snoozed={data.snoozed}
 				settledCount={data.settledCount}
 				autoSettleDays={data.autoSettleDays}
