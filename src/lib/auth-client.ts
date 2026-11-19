@@ -8,6 +8,9 @@ import { clearUserDataCaches } from '$lib/offline-cache.js';
 // `signIn.social` endpoint, so no client plugin is needed.
 export const authClient = createAuthClient();
 
+/** Longest sign-out waits for push teardown before going ahead anyway. */
+const PUSH_TEARDOWN_TIMEOUT_MS = 3000;
+
 /**
  * Ends the session and leaves for the login page; on failure, says so and stays put.
  * Turns off push on this device first, and drops the offline chat caches.
@@ -17,7 +20,12 @@ export const authClient = createAuthClient();
 export async function signOutToLogin(): Promise<boolean> {
 	// Stop pushes first, while still signed in to unregister: a signed-out
 	// phone must not keep showing this account's chats on its lock screen.
-	await disablePush().catch(() => undefined);
+	// Bounded: in the installed iOS app the service worker / push calls can stall
+	// indefinitely, which left the button spinning and the session alive.
+	await Promise.race([
+		disablePush().catch(() => undefined),
+		new Promise<void>((done) => setTimeout(done, PUSH_TEARDOWN_TIMEOUT_MS))
+	]);
 	try {
 		const { error } = await authClient.signOut();
 		if (error) throw new Error(error.message);
