@@ -24,7 +24,7 @@
 	     translucent status bar, smearing the header. An opaque bar keeps the page below it,
 	     coloured by theme-color (ModeWatcher). iOS reads this only when the app is installed. -->
 	<meta name="apple-mobile-web-app-status-bar-style" content="default" />
-	<link rel="apple-touch-icon" href="/pwa-192x192.png" />
+	<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 </svelte:head>
 <!-- Browser/PWA bar colours: --background in each mode (layout.css). -->
 <ModeWatcher

@@ -104,7 +104,10 @@ export default defineConfig(({ mode }) => {
 					// Installed on desktop, the app draws into the title bar (the window
 					// controls float over it); see --safe-top in src/routes/layout.css.
 					display_override: ['window-controls-overlay'],
+					// Linked from src/app.html. Opens on the new-chat page.
+					id: '/',
 					start_url: '/',
+					scope: '/',
 					// Share text, links and files from other apps into a new chat. The
 					// service worker takes the POST (static/share-target-sw.js) and hands
 					// it to the new-chat page, src/routes/(app)/+page.svelte.
