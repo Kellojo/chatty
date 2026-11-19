@@ -103,22 +103,9 @@
  */
 :root {
 	--titlebar-height: 0px;
-	/* Where page content may start: below a phone's status bar / notch, and below the edge blur. */
-	--safe-top: calc(env(safe-area-inset-top, 0px) + var(--edge-blur, 0px));
+	/* Where page content may start: below a phone's status bar / notch. */
+	--safe-top: env(safe-area-inset-top, 0px);
 	--app-top: var(--safe-top);
-}
-
-/*
- * The installed iOS 26 app draws a "Liquid Glass" blur over the top ~2rem of the page,
- * whatever the status bar style, and nothing turns it off: text there gets smeared.
- * Keep content below it. iOS only (-webkit-touch-callout), installed app only.
- */
-@supports (-webkit-touch-callout: none) {
-	@media (display-mode: standalone) {
-		:root {
-			--edge-blur: 2rem;
-		}
-	}
 }
 
 @media (display-mode: window-controls-overlay) {
