@@ -6,6 +6,7 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import LinkIcon from '@lucide/svelte/icons/link';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import MessageCircleQuestionMarkIcon from '@lucide/svelte/icons/message-circle-question-mark';
 	import ShieldQuestionMarkIcon from '@lucide/svelte/icons/shield-question-mark';
@@ -53,13 +54,17 @@
 
 	const isApproval = $derived(request.kind === 'approval');
 	const isSecret = $derived(request.kind === 'secret');
+	/** The agent asks to pair another T3 machine: only T3 Code can, Chatty can decline. */
+	const isLink = $derived(request.kind === 'link');
+	/** A card with its own controls (secret, link) rather than a set of choices. */
+	const isCard = $derived(isSecret || isLink);
 	/** The real choices; handing the decision back is a quieter action of its own. */
 	const choices = $derived(
-		isSecret ? [] : request.options.filter((o) => o.id !== request.deferOptionId)
+		isCard ? [] : request.options.filter((o) => o.id !== request.deferOptionId)
 	);
 	/** Typed into the card only (never the composer), sent straight to T3, then cleared. */
 	let secret = $state('');
-	const secretDecline = $derived(isSecret ? request.options[0] : undefined);
+	const cardDecline = $derived(isCard ? request.options[0] : undefined);
 	const secretHost = $derived.by(() => {
 		try {
 			return request.url ? new URL(request.url).host : null;
@@ -211,6 +216,9 @@
 				{:else if isSecret}
 					<KeyRoundIcon class="size-3.5 shrink-0 text-primary" />
 					<span class="text-primary">Secret requested</span>
+				{:else if isLink}
+					<LinkIcon class="size-3.5 shrink-0 text-primary" />
+					<span class="text-primary">Link a machine</span>
 				{:else}
 					<MessageCircleQuestionMarkIcon class="size-3.5 shrink-0 text-primary" />
 					<span class="text-primary">Question for you</span>
@@ -410,28 +418,30 @@
 	</div>
 
 	<!-- With nothing to choose, the composer's "Type your answer…" says it all. -->
-	{#if isSecret}
+	{#if isCard}
 		<div
 			class="-mt-2 flex items-center justify-between gap-2 px-3 pb-2 sm:mt-0 sm:min-h-10 sm:border-t sm:bg-muted/40 sm:px-4 sm:py-1.5"
 		>
 			<span class="text-xs text-muted-foreground">
-				Kept out of the chat: sent straight to the coding agent's machine.
+				{isSecret
+					? "Kept out of the chat: sent straight to the coding agent's machine."
+					: 'Pair it in T3 Code, or decline. A new message also dismisses this.'}
 			</span>
-			{#if secretDecline}
+			{#if cardDecline}
 				<Button
 					size="sm"
 					variant="ghost"
 					class={[
 						'h-7 shrink-0 px-2 text-xs aria-disabled:pointer-events-none max-sm:h-9 max-sm:px-3',
-						busy && sending !== secretDecline.id && 'opacity-50'
+						busy && sending !== cardDecline.id && 'opacity-50'
 					]}
 					aria-disabled={busy}
-					onclick={() => choose(secretDecline)}
+					onclick={() => choose(cardDecline)}
 				>
-					{#if sending === secretDecline.id}
+					{#if sending === cardDecline.id}
 						<LoaderCircleIcon class="size-3.5 animate-spin" /><span class="sr-only">Sending…</span>
 					{/if}
-					{secretDecline.label}
+					{cardDecline.label}
 				</Button>
 			{/if}
 		</div>

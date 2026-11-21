@@ -337,11 +337,15 @@
 						<ToolIcon kind={display.kind} class="size-3.5" />
 					{/if}
 				</span>
-				<span class="shrink-0 font-medium text-foreground/90">{display.label}</span>
+				<!-- Labels can be long (e.g. a secret request's prompt); truncate instead of overflowing. -->
+				<span class="min-w-0 truncate font-medium text-foreground/90" title={display.label}
+					>{display.label}</span
+				>
 				{#if detail}
 					<span
 						class={cn(
-							'min-w-0 truncate text-xs',
+							// Shrinks far faster than the label, so the excerpt gives way first.
+							'min-w-0 shrink-[999] truncate text-xs',
 							// The icon and "Failed" already say it went wrong; the excerpt stays readable grey.
 							'text-muted-foreground',
 							!display.prose && display.detail && 'font-mono'

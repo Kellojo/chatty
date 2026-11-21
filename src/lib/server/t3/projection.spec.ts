@@ -779,6 +779,248 @@ describe('summarizeTask', () => {
 		});
 	});
 
+	describe('secret and link cards', () => {
+		const secret = (id: string, at: string, overrides: Record<string, unknown> = {}) => ({
+			id,
+			runId: 'run-1',
+			ordinal: 1,
+			type: 'secret_request',
+			status: 'waiting',
+			label: `Secret ${id}`,
+			reason: 'Needed',
+			secretStatus: 'pending',
+			startedAt: at,
+			updatedAt: at,
+			...overrides
+		});
+		const link = (overrides: Record<string, unknown> = {}) => ({
+			id: 'link-1',
+			runId: 'run-1',
+			ordinal: 2,
+			type: 'link_request',
+			status: 'waiting',
+			title: 'vps',
+			label: 'vps',
+			url: 'http://10.0.0.5:3773',
+			reason: 'To deploy there',
+			linkStatus: 'pending',
+			startedAt: '2026-11-07T10:05:00.000Z',
+			updatedAt: '2026-11-07T10:05:00.000Z',
+			...overrides
+		});
+		const userMessage = (at: string, createdBy = 'user') => ({
+			id: `m-${at}`,
+			role: 'user',
+			createdBy,
+			text: 'hi',
+			createdAt: at,
+			updatedAt: at
+		});
+
+		it('shows the newest of several pending secrets, as T3 does', () => {
+			const state = emptyThreadState();
+			applyStreamItem(
+				state,
+				snapshot({
+					runs: [run()],
+					turnItems: [
+						secret('s1', '2026-11-07T10:01:00.000Z'),
+						secret('s2', '2026-11-07T10:02:00.000Z', { ordinal: 2 })
+					]
+				})
+			);
+			expect(summarizeTask(state).pendingRequest?.requestId).toBe('s2');
+			const saved = { ordinal: 2, status: 'completed', secretStatus: 'saved' };
+			applyStreamItem(
+				state,
+				event(11, 'turn-item.updated', secret('s2', '2026-11-07T10:02:00.000Z', saved))
+			);
+			expect(summarizeTask(state)).toMatchObject({
+				status: 'awaiting_input',
+				pendingRequest: { requestId: 's1', kind: 'secret' }
+			});
+		});
+
+		it('drops a secret once its run ends, even before T3 cancels the card', () => {
+			const state = emptyThreadState();
+			applyStreamItem(
+				state,
+				snapshot({ runs: [run()], turnItems: [secret('s1', '2026-11-07T10:01:00.000Z')] })
+			);
+			applyStreamItem(state, event(11, 'run.updated', run({ status: 'completed' })));
+			expect(summarizeTask(state)).toMatchObject({ status: 'idle', pendingRequest: null });
+		});
+
+		it('lets an approval go first, but not a question asked before the secret', () => {
+			const state = emptyThreadState();
+			applyStreamItem(
+				state,
+				snapshot({
+					runs: [run({ status: 'waiting' })],
+					runtimeRequests: [
+						{
+							id: 'q1',
+							kind: 'user_input',
+							status: 'pending',
+							createdAt: '2026-11-07T10:01:00.000Z'
+						}
+					],
+					turnItems: [secret('s1', '2026-11-07T10:02:00.000Z')]
+				})
+			);
+			expect(summarizeTask(state).pendingRequest?.requestId).toBe('s1');
+
+			applyStreamItem(
+				state,
+				event(11, 'runtime-request.updated', {
+					id: 'a1',
+					kind: 'command',
+					status: 'pending',
+					runId: 'run-1',
+					createdAt: '2026-11-07T10:00:00.000Z'
+				})
+			);
+			expect(summarizeTask(state).pendingRequest).toMatchObject({
+				requestId: 'a1',
+				kind: 'approval'
+			});
+		});
+
+		it('asks to link a machine until the user writes again, even after the run ended', () => {
+			const state = emptyThreadState();
+			applyStreamItem(
+				state,
+				snapshot({
+					runs: [run({ status: 'completed' })],
+					messages: [userMessage('2026-11-07T10:00:00.000Z')],
+					turnItems: [link()]
+				})
+			);
+			expect(summarizeTask(state)).toMatchObject({
+				status: 'awaiting_input',
+				pendingRequest: {
+					requestId: 'link-1',
+					kind: 'link',
+					title: 'vps',
+					detail: 'To deploy there',
+					url: 'http://10.0.0.5:3773',
+					options: [{ id: 'decline', label: 'Decline' }],
+					allowFreeText: false
+				}
+			});
+			// The agent runtime's own notices are not the user writing.
+			applyStreamItem(
+				state,
+				event(11, 'message.updated', userMessage('2026-11-07T10:06:00.000Z', 'agent'))
+			);
+			expect(summarizeTask(state).pendingRequest?.kind).toBe('link');
+			applyStreamItem(state, event(12, 'message.updated', userMessage('2026-11-07T10:07:00.000Z')));
+			expect(summarizeTask(state)).toMatchObject({ status: 'idle', pendingRequest: null });
+		});
+
+		it('stops asking once the link is answered', () => {
+			for (const linkStatus of ['linked', 'declined', 'cancelled', 'failed']) {
+				const state = emptyThreadState();
+				applyStreamItem(
+					state,
+					snapshot({
+						runs: [run({ status: 'completed' })],
+						turnItems: [link({ linkStatus, status: 'completed' })]
+					})
+				);
+				expect(summarizeTask(state).pendingRequest).toBeNull();
+			}
+		});
+
+		it('renders cards with their outcome, never as failed steps', () => {
+			const state = emptyThreadState();
+			const declined = { status: 'cancelled', secretStatus: 'declined' };
+			applyStreamItem(
+				state,
+				snapshot({
+					runs: [run()],
+					turnItems: [
+						secret('s1', '2026-11-07T10:01:00.000Z', declined),
+						link({ status: 'failed', linkStatus: 'failed', failure: 'Pairing code expired' })
+					]
+				})
+			);
+			expect(renderRun(state, run()).map((e) => e.part)).toEqual([
+				{
+					type: 'dynamic-tool',
+					toolName: 'secret_request',
+					toolCallId: 's1',
+					state: 'output-available',
+					input: { label: 'Secret s1', reason: 'Needed' },
+					output: { status: 'declined' }
+				},
+				{
+					type: 'dynamic-tool',
+					toolName: 'link_request',
+					toolCallId: 'link-1',
+					state: 'output-available',
+					input: { label: 'vps', reason: 'To deploy there' },
+					output: { status: 'failed', failure: 'Pairing code expired' }
+				}
+			]);
+		});
+	});
+
+	it('does not put a provider login refresh to the user', () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [run()],
+				runtimeRequests: [{ id: 'auth', kind: 'auth_refresh', status: 'pending', runId: 'run-1' }]
+			})
+		);
+		expect(summarizeTask(state)).toMatchObject({ status: 'running', pendingRequest: null });
+	});
+
+	it('takes the status from the run before a rolled-back one', () => {
+		const state = emptyThreadState();
+		applyStreamItem(
+			state,
+			snapshot({
+				runs: [
+					run({ status: 'completed' }),
+					run({ id: 'run-2', ordinal: 2, status: 'rolled_back', userMessageId: 'msg-2' })
+				]
+			})
+		);
+		expect(summarizeTask(state).status).toBe('idle');
+		applyStreamItem(state, event(11, 'run.updated', run({ status: 'rolled_back' })));
+		expect(summarizeTask(state).status).toBe('idle');
+	});
+
+	it('replaces stale state with a snapshot sent on resume', () => {
+		const state = emptyThreadState();
+		const pending = { id: 'a1', kind: 'command', status: 'pending', runId: 'run-1' };
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'waiting' })], runtimeRequests: [pending] }, 10)
+		);
+		expect(summarizeTask(state).status).toBe('awaiting_input');
+		// Answered while disconnected; T3 answers a resume past its replay window
+		// with a fresh snapshot.
+		applyStreamItem(
+			state,
+			snapshot(
+				{
+					runs: [run({ status: 'completed' })],
+					runtimeRequests: [{ ...pending, status: 'resolved' }]
+				},
+				400
+			)
+		);
+		expect(summarizeTask(state)).toMatchObject({ status: 'idle', pendingRequest: null });
+		expect(state.lastSequence).toBe(400);
+		// Events from before the snapshot can't regress it.
+		applyStreamItem(state, event(399, 'run.updated', run({ status: 'running' })));
+		expect(summarizeTask(state).status).toBe('idle');
+	});
+
 	it('maps the last run status when nothing is pending', () => {
 		const state = emptyThreadState();
 		expect(summarizeTask(state).status).toBe('starting');

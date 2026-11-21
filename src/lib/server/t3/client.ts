@@ -228,6 +228,28 @@ type Pending = {
 	timer: ReturnType<typeof setTimeout>;
 };
 
+/**
+ * Messages of T3 errors that carry only a `reason` on the wire (their message
+ * is a getter that isn't encoded). From T3's contracts.
+ */
+const REASON_MESSAGES: Record<string, Record<string, string>> = {
+	SecretRequestError: {
+		load_failed: 'Could not load the secret request.',
+		not_found: 'This secret request no longer exists.',
+		already_answered: 'This secret request was already answered.',
+		agent_stopped: "The agent that asked has stopped, so this secret can't be used.",
+		store_failed: 'Could not store the secret.',
+		reference_unreadable: 'Could not read the secret from the secret provider.',
+		record_failed: 'Saved the secret, but could not update the request.'
+	},
+	PeerLinkRequestError: {
+		load_failed: 'Could not load the link request.',
+		not_found: 'This link request no longer exists.',
+		already_answered: 'This link request was already answered.',
+		record_failed: 'Could not update the link request.'
+	}
+};
+
 /** Turns an encoded Effect `Exit` failure cause into a readable message. */
 export function describeFailureCause(cause: unknown): { message: string; unauthorized: boolean } {
 	const reasons = Array.isArray(cause) ? cause : [];
@@ -244,7 +266,12 @@ export function describeFailureCause(cause: unknown): { message: string; unautho
 					unauthorized: true
 				};
 			}
-			return { message: str(err.message) ?? str(err.detail) ?? tag, unauthorized: false };
+			const reason = str(err.reason);
+			const byReason = reason ? REASON_MESSAGES[tag]?.[reason] : undefined;
+			return {
+				message: str(err.message) ?? str(err.detail) ?? byReason ?? tag,
+				unauthorized: false
+			};
 		}
 		if (r._tag === 'Die') {
 			const defect = r.defect;

@@ -1121,3 +1121,78 @@ describe('CodingFollower mirrored message order', () => {
 		expect(activeLeafId(db, conversationId)).toBe('u1m:reply');
 	});
 });
+
+describe('CodingFollower secret requests', () => {
+	const snapshot = (sequence: number, secretStatus: string) => ({
+		kind: 'snapshot',
+		snapshotSequence: sequence,
+		projection: {
+			thread: { id: 't1' },
+			runs: [
+				{
+					id: 'r1',
+					ordinal: 1,
+					status: secretStatus === 'pending' ? 'waiting' : 'running',
+					userMessageId: 'm1',
+					requestedAt: '2026-11-07T10:00:00.000Z',
+					startedAt: '2026-11-07T10:00:01.000Z'
+				}
+			],
+			messages: [{ id: 'm1', role: 'user', createdBy: 'user', text: 'Push it' }],
+			turnItems: [
+				{
+					id: 'sec1',
+					runId: 'r1',
+					ordinal: 1,
+					type: 'secret_request',
+					status: secretStatus === 'pending' ? 'waiting' : 'completed',
+					label: 'Gitea token',
+					reason: 'To push',
+					secretStatus,
+					startedAt: '2026-11-07T10:00:02.000Z'
+				}
+			]
+		}
+	});
+
+	it('keeps the prompt and reply in the chat while a secret is pending, and clears it once answered in T3', async () => {
+		const { createMessage, listMessages } = await import('../db/repo/messages.js');
+		const db = getDb();
+		createMessage(db, {
+			id: 'm1',
+			conversationId,
+			role: 'user',
+			parts: [{ type: 'text', text: 'Push it' }],
+			status: 'complete'
+		});
+		failConnect = false;
+		follower.beginTurn('m1');
+		await follower.follow();
+		const stream = lastConnection!.streams[0];
+
+		stream.onValue(snapshot(1, 'pending'));
+		await seconds(2);
+		const row = coding.getCodingConversation(db, conversationId)!;
+		expect(row.status).toBe('awaiting_input');
+		expect(JSON.parse(row.pending_request!)).toMatchObject({
+			requestId: 'sec1',
+			kind: 'secret',
+			title: 'Gitea token'
+		});
+		const messages = listMessages(db, conversationId);
+		expect(messages.map((m) => [m.id, m.role])).toEqual([
+			['m1', 'user'],
+			['m1:reply', 'assistant']
+		]);
+		expect(JSON.parse(messages[1].parts)).toMatchObject([
+			{ type: 'dynamic-tool', toolName: 'secret_request', state: 'input-available' }
+		]);
+
+		// Answered in T3 itself: the card goes away here too.
+		stream.onValue(snapshot(2, 'saved'));
+		await seconds(2);
+		const answered = coding.getCodingConversation(db, conversationId)!;
+		expect(answered.pending_request).toBeNull();
+		expect(answered.status).toBe('running');
+	});
+});

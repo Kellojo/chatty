@@ -8,6 +8,7 @@
 // and item kinds are ignored.
 
 import {
+	LINK_DECLINE_OPTION,
 	SECRET_DECLINE_OPTION,
 	type CodingPendingOption,
 	type CodingPendingRequest,
@@ -735,6 +736,32 @@ export function renderRunSegments(
 					)
 				);
 				break;
+			case 'secret_request':
+			case 'link_request': {
+				// Only what the agent asked for and how it ended: a secret itself never
+				// reaches Chatty's copy of the thread.
+				const outcome = str(type === 'secret_request' ? item.secretStatus : item.linkStatus);
+				const linkedLabel = str(item.linkedLabel);
+				const failure = str(item.failure);
+				entries.push(
+					toolEntry(
+						item,
+						type,
+						{
+							label: str(item.label) ?? str(item.title) ?? str(item.url),
+							reason: str(item.reason)
+						},
+						{
+							status: outcome,
+							...(linkedLabel ? { linked: linkedLabel } : {}),
+							...(failure ? { failure: capText(failure) } : {})
+						},
+						// Declined or cancelled is an answer, not a failed step.
+						!outcome || outcome === 'pending' ? 'running' : 'completed'
+					)
+				);
+				break;
+			}
 			case 'error':
 				entries.push({
 					key: id,
@@ -892,92 +919,143 @@ const DEFAULT_DECISIONS: CodingPendingOption[] = [
 	{ id: 'decline', label: 'Decline' }
 ];
 
+/** Request kinds T3 doesn't put to the user (`auth_refresh`: the provider renews its own login). */
+const NOT_FOR_USER = new Set(['auth_refresh']);
+
 function pendingRequest(state: ThreadState): CodingPendingRequest | null {
 	const itemFor = (request: Rec) => state.itemByRequest.get(String(request.id));
 	const current = str(activeRun(state)?.id);
 	// A request left pending by a run that has since ended can't be answered, so
-	// only requests of a still-active run count, the latest run's first.
+	// only requests of a still-active run count: the latest run's first, then (as
+	// T3 orders them) approvals before questions, newest first.
 	const pending = [...state.runtimeRequests.values()]
-		.filter((r) => r.status === 'pending')
+		.filter((r) => r.status === 'pending' && !NOT_FOR_USER.has(String(r.kind)))
 		.map((request) => {
-			const runId = str(request.runId) ?? str(itemFor(request)?.runId);
+			const item = itemFor(request);
+			const runId = str(request.runId) ?? str(item?.runId);
 			const run = runId ? state.runs.get(runId) : undefined;
-			return { request, runId, active: runId ? !!run && isRunActive(run) : current !== null };
+			const question = request.kind === 'user_input' || item?.type === 'user_input_request';
+			return {
+				request,
+				item,
+				runId,
+				question,
+				createdAt: time(request.createdAt) ?? time(item?.startedAt) ?? 0,
+				active: runId ? !!run && isRunActive(run) : current !== null
+			};
 		})
 		.filter((p) => p.active)
-		.sort((a, b) => Number(b.runId === current) - Number(a.runId === current))
-		.map((p) => p.request);
-	for (const request of pending) {
-		const requestId = String(request.id);
-		const item = itemFor(request);
-		const createdAt = time(request.createdAt) ?? time(item?.startedAt) ?? Date.now();
-		if (request.kind === 'user_input' || item?.type === 'user_input_request') {
-			const questions = Array.isArray(item?.questions) ? item.questions.map(obj) : [];
-			const question = questions.find((q) => q !== null) ?? null;
-			const options = Array.isArray(question?.options) ? question.options : [];
-			return {
-				requestId,
-				kind: 'question',
-				questionId: str(question?.id) ?? undefined,
-				title: str(question?.question) ?? str(question?.header) ?? 'The agent has a question',
-				detail: str(question?.header) && str(question?.question) ? str(question?.header) : null,
-				options: options
-					.map(obj)
-					.filter((o): o is Rec => o !== null && str(o.label) !== null)
-					.map((o) => {
-						const description = str(o.description);
-						return {
-							id: str(o.value) ?? String(o.label),
-							label: String(o.label),
-							...(description ? { description } : {})
-						};
-					}),
-				allowFreeText: question?.allowCustomAnswer !== false || options.length === 0,
-				createdAt
-			};
-		}
-		const options = Array.isArray(item?.options)
-			? item.options
-					.map(obj)
-					.filter((o): o is Rec => o !== null && str(o.decision) !== null)
-					.map((o) => ({ id: String(o.decision), label: str(o.label) ?? String(o.decision) }))
-			: [];
+		.sort(
+			(a, b) =>
+				Number(b.runId === current) - Number(a.runId === current) ||
+				Number(a.question) - Number(b.question) ||
+				b.createdAt - a.createdAt
+		);
+	const top = pending[0];
+	// A secret or link card stands in for a question (T3 counts it as one): it
+	// shows unless an approval waits, or a question came after it.
+	if (!top || top.question) {
+		const card = pendingCard(state);
+		if (card && (!top || card.createdAt >= top.createdAt)) return card;
+	}
+	if (!top) return null;
+	const { request, item } = top;
+	const requestId = String(request.id);
+	const createdAt = top.createdAt || Date.now();
+	if (top.question) {
+		const questions = Array.isArray(item?.questions) ? item.questions.map(obj) : [];
+		const question = questions.find((q) => q !== null) ?? null;
+		const options = Array.isArray(question?.options) ? question.options : [];
 		return {
 			requestId,
-			kind: 'approval',
-			title:
-				str(item?.prompt) ??
-				str(item?.title) ??
-				`Approve ${str(request.kind)?.replace(/[-_]/g, ' ') ?? 'action'}?`,
-			detail: str(item?.reason),
-			options: options.length > 0 ? options : DEFAULT_DECISIONS,
-			allowFreeText: true,
+			kind: 'question',
+			questionId: str(question?.id) ?? undefined,
+			title: str(question?.question) ?? str(question?.header) ?? 'The agent has a question',
+			detail: str(question?.header) && str(question?.question) ? str(question?.header) : null,
+			options: options
+				.map(obj)
+				.filter((o): o is Rec => o !== null && str(o.label) !== null)
+				.map((o) => {
+					const description = str(o.description);
+					return {
+						id: str(o.value) ?? String(o.label),
+						label: String(o.label),
+						...(description ? { description } : {})
+					};
+				}),
+			allowFreeText: question?.allowCustomAnswer !== false || options.length === 0,
 			createdAt
 		};
 	}
-	return pendingSecretRequest(state, current);
+	const options = Array.isArray(item?.options)
+		? item.options
+				.map(obj)
+				.filter((o): o is Rec => o !== null && str(o.decision) !== null)
+				.map((o) => ({ id: String(o.decision), label: str(o.label) ?? String(o.decision) }))
+		: [];
+	return {
+		requestId,
+		kind: 'approval',
+		title:
+			str(item?.prompt) ??
+			str(item?.title) ??
+			`Approve ${str(request.kind)?.replace(/[-_]/g, ' ') ?? 'action'}?`,
+		detail: str(item?.reason),
+		options: options.length > 0 ? options : DEFAULT_DECISIONS,
+		allowFreeText: true,
+		createdAt
+	};
 }
 
 /**
- * A secret the agent asked for (T3's `request_secret` tool): a `secret_request`
- * turn item, not a runtime request. Only one of a still-active run counts; T3
- * cancels the rest when their run ends.
+ * When the user last wrote in the thread themselves (not the agent's runtime
+ * notices), in ms; null when never. A link card stops asking once they did.
  */
-function pendingSecretRequest(
-	state: ThreadState,
-	current: string | null
-): CodingPendingRequest | null {
-	const pending = itemsOfType(state, 'secret_request')
+function latestUserAuthoredMessageAt(state: ThreadState): number | null {
+	let latest: number | null = null;
+	for (const message of state.messages.values()) {
+		if (message.role !== 'user' || message.createdBy !== 'user') continue;
+		const at = time(message.updatedAt) ?? time(message.createdAt);
+		if (at !== null && (latest === null || at > latest)) latest = at;
+	}
+	return latest;
+}
+
+/**
+ * A card item waiting on the user, as T3 counts them (`waitsOnUser`): a secret
+ * the agent asked for while its run is still live, or a machine it asked to
+ * link, until the user writes in the thread again (even after the run ended).
+ * The newest first, as T3 shows it.
+ */
+function pendingCard(state: ThreadState): CodingPendingRequest | null {
+	const userWroteAt = latestUserAuthoredMessageAt(state);
+	const cardAt = (item: Rec) => time(item.startedAt) ?? time(item.updatedAt) ?? 0;
+	const waiting = [...itemsOfType(state, 'secret_request'), ...itemsOfType(state, 'link_request')]
 		.filter((item) => {
-			if (item.secretStatus !== 'pending') return false;
-			const runId = str(item.runId);
-			const run = runId ? state.runs.get(runId) : undefined;
-			return runId ? !!run && isRunActive(run) : current !== null;
+			if (item.type === 'secret_request') {
+				if (item.secretStatus !== 'pending') return false;
+				const run = state.runs.get(str(item.runId) ?? '');
+				return !!run && isRunActive(run);
+			}
+			return item.linkStatus === 'pending' && (userWroteAt === null || userWroteAt <= cardAt(item));
 		})
-		.sort((a, b) => (str(a.startedAt) ?? '').localeCompare(str(b.startedAt) ?? ''));
-	const item = pending[0];
+		.sort((a, b) => cardAt(b) - cardAt(a) || (num(b.ordinal) ?? 0) - (num(a.ordinal) ?? 0));
+	const item = waiting[0];
 	if (!item) return null;
 	const url = webUrl(str(item.url));
+	const createdAt = cardAt(item) || Date.now();
+	if (item.type === 'link_request') {
+		return {
+			requestId: String(item.id),
+			kind: 'link',
+			title: str(item.label) ?? str(item.title) ?? str(item.url) ?? 'Link an environment',
+			detail: str(item.reason),
+			...(url ? { url } : {}),
+			options: [{ id: LINK_DECLINE_OPTION, label: 'Decline' }],
+			allowFreeText: false,
+			createdAt
+		};
+	}
 	const placeholder = str(item.placeholder);
 	return {
 		requestId: String(item.id),
@@ -988,7 +1066,7 @@ function pendingSecretRequest(
 		...(placeholder ? { placeholder } : {}),
 		options: [{ id: SECRET_DECLINE_OPTION, label: 'Decline' }],
 		allowFreeText: false,
-		createdAt: time(item.startedAt) ?? time(item.updatedAt) ?? Date.now()
+		createdAt
 	};
 }
 
@@ -1092,14 +1170,15 @@ export function summarizeTask(state: ThreadState): TaskSummary {
 	const { url: prUrl, state: prState } = pullRequestOf(thread);
 	const pending = pendingRequest(state);
 	const runs = sortedRuns(state);
-	const last = runs.at(-1);
+	// A rolled-back run was undone: the task stands where the run before it left it.
+	const last = runs.filter((r) => r.status !== 'rolled_back').at(-1);
 	let status: CodingTaskStatus;
 	if (pending) status = 'awaiting_input';
 	// Background subagents keep working after their turn ends; the task isn't
 	// done until they are.
 	else if (runs.some(isRunActive) || hasRunningSubagent(state)) status = 'running';
 	else if (isWaitingOnBackgroundWork(state, last)) status = 'waiting';
-	else if (!last) status = 'starting';
+	else if (!last) status = runs.length > 0 ? 'idle' : 'starting';
 	else if (last.status === 'completed') status = 'idle';
 	else if (last.status === 'failed') status = 'failed';
 	else status = 'interrupted';

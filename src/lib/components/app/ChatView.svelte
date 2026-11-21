@@ -1025,7 +1025,9 @@
 			? 'The agent needs your approval'
 			: pending.kind === 'secret'
 				? 'The agent asks for a secret'
-				: 'The agent has a question';
+				: pending.kind === 'link'
+					? 'The agent asks to link a machine'
+					: 'The agent has a question';
 		const text = `${lead}: ${pending.title}`;
 		return approval ? { polite: '', assertive: text } : { polite: text, assertive: '' };
 	});

@@ -193,6 +193,30 @@ describe('toolOutcome', () => {
 			answer: 'Only unit tests'
 		});
 	});
+
+	it('reads how a coding agent’s secret or link card ended', async () => {
+		const { toolOutcome, describeTool } = await import('$lib/tool-meta.js');
+		expect(toolOutcome('secret_request', { status: 'saved' })).toEqual({
+			label: 'Saved',
+			negative: false
+		});
+		expect(toolOutcome('secret_request', { status: 'declined' })?.negative).toBe(true);
+		expect(toolOutcome('secret_request', { status: 'pending' })).toBeNull();
+		expect(toolOutcome('link_request', { status: 'linked', linked: 'vps' })).toEqual({
+			label: 'Linked',
+			negative: false,
+			answer: 'vps'
+		});
+		expect(toolOutcome('link_request', { status: 'failed', failure: 'Code expired' })).toEqual({
+			label: 'Failed',
+			negative: true,
+			answer: 'Code expired'
+		});
+		expect(describeTool('secret_request', { label: 'Gitea token' })).toMatchObject({
+			label: 'Asked for a secret',
+			detail: 'Gitea token'
+		});
+	});
 });
 
 describe('subagentActivity', () => {

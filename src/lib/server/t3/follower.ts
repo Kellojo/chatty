@@ -573,6 +573,20 @@ export class CodingFollower {
 	}
 
 	/**
+	 * Declines a `link_request` item (the agent asked to pair another T3
+	 * machine). Linking itself needs a pairing code from that machine, which
+	 * only T3 Code's own UI collects. Needs the token's `access:write` scope.
+	 */
+	async declineLink(turnItemId: string): Promise<void> {
+		if (!this.threadId) throw new T3ClientError('Task has no thread yet', 'protocol');
+		await this.rpc('peerLinks.answerRequest', {
+			threadId: this.threadId,
+			turnItemId,
+			answer: { type: 'decline' }
+		});
+	}
+
+	/**
 	 * Run the user stopped here. Until T3 reports it ended, renders must not
 	 * reopen a live stream for it (that would undo the Stop).
 	 */

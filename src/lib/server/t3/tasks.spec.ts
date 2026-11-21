@@ -14,6 +14,8 @@ const follower = {
 	),
 	sendMessage: vi.fn(async () => {}),
 	respond: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
+	answerSecret: vi.fn<(id: string, secret: string | undefined) => Promise<void>>(async () => {}),
+	declineLink: vi.fn<(id: string) => Promise<void>>(async () => {}),
 	stop: vi.fn()
 };
 const t3HttpGet = vi.fn();
@@ -380,6 +382,89 @@ describe('respondToCodingRequest', () => {
 		// Kept for the timeline: T3 only reports that it was declined.
 		expect(coding.getCodingRequestAnswers(db, conversationId)).toEqual({
 			req2: 'Run the unit tests only'
+		});
+	});
+
+	describe('secret and link cards', () => {
+		const card = (kind: 'secret' | 'link', requestId: string) =>
+			coding.updateCodingConversation(db, conversationId, {
+				threadId: 't1',
+				pendingRequest: {
+					kind,
+					requestId,
+					title: kind === 'secret' ? 'Gitea token' : 'vps',
+					detail: null,
+					options: [{ id: 'decline', label: 'Decline' }],
+					allowFreeText: false,
+					createdAt: 0
+				}
+			});
+
+		it('sends a secret straight to T3, trimmed, without keeping it', async () => {
+			card('secret', 's1');
+			await respondToCodingRequest('u1', conversationId, { requestId: 's1', text: ' tok ' }, db);
+			expect(follower.answerSecret).toHaveBeenCalledWith('s1', 'tok');
+			expect(coding.getCodingRequestAnswers(db, conversationId)).toEqual({});
+			expect(JSON.stringify(db.prepare('SELECT * FROM coding_conversations').all())).not.toMatch(
+				/tok\b/
+			);
+		});
+
+		it('declines a secret, and refuses an empty one', async () => {
+			card('secret', 's2');
+			await expect(
+				respondToCodingRequest('u1', conversationId, { requestId: 's2', text: '  ' }, db)
+			).rejects.toMatchObject({ status: 400 });
+			await respondToCodingRequest(
+				'u1',
+				conversationId,
+				{ requestId: 's2', optionId: 'decline' },
+				db
+			);
+			expect(follower.answerSecret).toHaveBeenCalledWith('s2', undefined);
+		});
+
+		it('surfaces T3 refusing the answer and lets the user try again', async () => {
+			card('secret', 's3');
+			follower.answerSecret.mockRejectedValueOnce(
+				new T3ClientError(
+					"The agent that asked has stopped, so this secret can't be used.",
+					'remote'
+				)
+			);
+			await expect(
+				respondToCodingRequest('u1', conversationId, { requestId: 's3', text: 'tok' }, db)
+			).rejects.toMatchObject({
+				status: 502,
+				message: "The agent that asked has stopped, so this secret can't be used."
+			});
+			await respondToCodingRequest('u1', conversationId, { requestId: 's3', text: 'tok' }, db);
+			expect(follower.answerSecret).toHaveBeenCalledTimes(2);
+		});
+
+		it('only declines a link request, reporting a token without the scope for it', async () => {
+			card('link', 'l1');
+			await expect(
+				respondToCodingRequest('u1', conversationId, { requestId: 'l1', text: 'yes' }, db)
+			).rejects.toMatchObject({ status: 400 });
+			expect(follower.declineLink).not.toHaveBeenCalled();
+
+			follower.declineLink.mockRejectedValueOnce(
+				new T3ClientError('Token is missing the "access:write" scope', 'unauthorized')
+			);
+			await expect(
+				respondToCodingRequest('u1', conversationId, { requestId: 'l1', optionId: 'decline' }, db)
+			).rejects.toMatchObject({
+				status: 403,
+				message: 'Token is missing the "access:write" scope'
+			});
+			await respondToCodingRequest(
+				'u1',
+				conversationId,
+				{ requestId: 'l1', optionId: 'decline' },
+				db
+			);
+			expect(follower.declineLink).toHaveBeenLastCalledWith('l1');
 		});
 	});
 });

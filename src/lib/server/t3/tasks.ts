@@ -12,6 +12,7 @@ import type {
 } from '$lib/coding-environments.js';
 import {
 	codingDeclineOption,
+	LINK_DECLINE_OPTION,
 	repositoryName,
 	SECRET_DECLINE_OPTION,
 	type CodingModelRef
@@ -774,6 +775,12 @@ export async function respondToCodingRequest(
 			const decline = input.optionId === SECRET_DECLINE_OPTION;
 			if (!decline && !text) throw new CodingTaskError(400, 'Enter the secret or decline');
 			await follower.answerSecret(pending.requestId, decline ? undefined : text);
+		} else if (pending.kind === 'link') {
+			// Linking needs a pairing code only T3 Code collects; Chatty can only decline.
+			if (input.optionId !== LINK_DECLINE_OPTION) {
+				throw new CodingTaskError(400, 'Link the machine in T3 Code, or decline');
+			}
+			await follower.declineLink(pending.requestId);
 		} else if (pending.kind === 'approval') {
 			// A typed reply without a decision says what to do instead: it declines,
 			// with the reply as the agent's feedback.

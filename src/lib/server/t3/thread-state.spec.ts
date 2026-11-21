@@ -203,6 +203,14 @@ describe('title', () => {
 		expect(local().title).toBe('Generated title');
 	});
 
+	it('lets a rename on T3 win over a concurrent one in Chatty', () => {
+		reconcile({ title: 'Fix the build' });
+		conversations.updateConversation(db, 'u1', conversationId, { title: 'Mine' });
+		expect(reconcile({ title: 'Theirs' })).toBe(false);
+		expect(local().title).toBe('Theirs');
+		expect(agreed().remote_title).toBe('Theirs');
+	});
+
 	it('asks to push a rename in Chatty', () => {
 		reconcile({ title: 'Fix the build' });
 		conversations.updateConversation(db, 'u1', conversationId, { title: 'Renamed' });
@@ -286,6 +294,16 @@ describe('snoozed', () => {
 		conversations.snoozeConversation(db, 'u1', conversationId, later());
 		expect(reconcile({ snoozedUntil: 0 })).toBe(true);
 		expect(local().snoozed_until).not.toBeNull();
+	});
+
+	it('lets T3 win when both sides snoozed to different times', () => {
+		reconcile({ snoozedUntil: 0 });
+		const mine = later();
+		const theirs = mine + 30 * 60 * 1000;
+		conversations.snoozeConversation(db, 'u1', conversationId, mine);
+		expect(reconcile({ snoozedUntil: theirs })).toBe(false);
+		expect(local().snoozed_until).toBe(theirs);
+		expect(agreed().remote_snoozed_until).toBe(theirs);
 	});
 
 	it('treats a snooze that ran out as no snooze on either side', () => {

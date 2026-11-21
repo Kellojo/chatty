@@ -59,25 +59,39 @@ async function runSync(db: Db, env: CodingEnvironmentRow): Promise<void> {
 		const now = Date.now();
 		const untilDay = dayInZone(now, config.TZ);
 		const sinceDay = dayInZone(now - (USAGE_HISTORY_DAYS - 1) * 86_400_000, config.TZ);
-		const summary = parseUsageSummary(
-			await connection.call('server.getUsageSummary', {
-				sinceDay,
-				untilDay,
-				timeZone: config.TZ,
-				resolution: 'day'
-			})
-		);
+		// Token and cost history needs the optional `diagnostics:read` scope. A
+		// token without it still works for tasks: keep the history synced before
+		// rather than flag the whole environment as rejected.
+		let summary: ReturnType<typeof parseUsageSummary> | null = null;
+		try {
+			summary = parseUsageSummary(
+				await connection.call('server.getUsageSummary', {
+					sinceDay,
+					untilDay,
+					timeZone: config.TZ,
+					resolution: 'day'
+				})
+			);
+		} catch (e) {
+			if (!(e instanceof T3ClientError && e.kind === 'unauthorized')) throw e;
+			log.warn('Coding environment token cannot read usage history', {
+				environmentId: env.id,
+				error: e.message
+			});
+		}
 
 		db.transaction(() => {
 			replaceUsageLimits(db, env.id, limits);
 			recordUsageLimitSamples(db, env.id, limits, now);
 			replaceResetCredits(db, env.id, credits);
-			replaceUsageDaily(
-				db,
-				env.id,
-				{ fromDay: summary.sinceDay ?? sinceDay, toDay: summary.untilDay ?? untilDay },
-				summary.rows
-			);
+			if (summary) {
+				replaceUsageDaily(
+					db,
+					env.id,
+					{ fromDay: summary.sinceDay ?? sinceDay, toDay: summary.untilDay ?? untilDay },
+					summary.rows
+				);
+			}
 		})();
 		// Two environments may turn out to be the same server only now (e.g. one
 		// added before duplicates were refused, or reached under another URL):

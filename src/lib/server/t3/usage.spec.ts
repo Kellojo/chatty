@@ -199,4 +199,18 @@ describe('describeFailureCause', () => {
 		);
 		expect(describeFailureCause(null).message).toBe('Request failed');
 	});
+
+	it('reads the message of errors that carry only a reason', () => {
+		const fail = (error: unknown) => describeFailureCause([{ _tag: 'Fail', error }]);
+		expect(fail({ _tag: 'SecretRequestError', reason: 'agent_stopped' })).toEqual({
+			message: "The agent that asked has stopped, so this secret can't be used.",
+			unauthorized: false
+		});
+		expect(fail({ _tag: 'PeerLinkRequestError', reason: 'already_answered' }).message).toBe(
+			'This link request was already answered.'
+		);
+		expect(fail({ _tag: 'SecretRequestError', reason: 'something_new' }).message).toBe(
+			'SecretRequestError'
+		);
+	});
 });

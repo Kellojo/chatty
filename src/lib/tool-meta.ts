@@ -177,6 +177,18 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	todo_list: { label: 'Updated plan', server: 'coding', kind: 'todo' },
 	approval: { label: 'Approval', server: 'coding', kind: 'approval', detail: 'request' },
 	question: { label: 'Asked a question', server: 'coding', kind: 'question' },
+	secret_request: {
+		label: 'Asked for a secret',
+		server: 'coding',
+		kind: 'approval',
+		detail: 'label'
+	},
+	link_request: {
+		label: 'Asked to link a machine',
+		server: 'coding',
+		kind: 'approval',
+		detail: 'label'
+	},
 	checkpoint: { label: 'Checkpoint', server: 'coding', kind: 'checkpoint' },
 	dynamic_tool: { label: 'Used a tool', server: 'coding', kind: 'tool' },
 	error: { label: 'Error', server: 'coding', kind: 'error' },
@@ -390,6 +402,7 @@ export interface ToolOutcome {
 
 /** How an approval request or question was resolved, from its recorded decision. */
 export function toolOutcome(name: string, output: unknown): ToolOutcome | null {
+	if (name === 'secret_request' || name === 'link_request') return cardOutcome(output);
 	if (name !== 'approval' && name !== 'question') return null;
 	const result = output as
 		{ decision?: unknown; status?: unknown; answer?: unknown } | null | undefined;
@@ -404,6 +417,24 @@ export function toolOutcome(name: string, output: unknown): ToolOutcome | null {
 	if (/^cancel/i.test(value)) return outcome('Cancelled', true);
 	if (name === 'question') return outcome('Answered', false);
 	return outcome(value.charAt(0).toUpperCase() + value.slice(1), false);
+}
+
+/** Outcomes of a coding agent's secret or link card (T3's `secretStatus` / `linkStatus`). */
+const CARD_OUTCOMES: Record<string, ToolOutcome> = {
+	saved: { label: 'Saved', negative: false },
+	linked: { label: 'Linked', negative: false },
+	declined: { label: 'Declined', negative: true },
+	cancelled: { label: 'Cancelled', negative: true },
+	failed: { label: 'Failed', negative: true }
+};
+
+function cardOutcome(output: unknown): ToolOutcome | null {
+	const result = output as { status?: unknown; linked?: unknown; failure?: unknown } | null;
+	const outcome = typeof result?.status === 'string' ? CARD_OUTCOMES[result.status] : undefined;
+	if (!outcome) return null;
+	// What was linked, or why linking failed (never a secret: T3 doesn't send it).
+	const note = result?.status === 'failed' ? result.failure : result?.linked;
+	return typeof note === 'string' && note.trim() ? { ...outcome, answer: note.trim() } : outcome;
 }
 
 interface ToolPartLike {

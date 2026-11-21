@@ -128,16 +128,20 @@ export interface CodingPendingOption {
 
 /** Option id that turns a secret request down. */
 export const SECRET_DECLINE_OPTION = 'decline';
+/** Option id that turns a link request down. */
+export const LINK_DECLINE_OPTION = 'decline';
 
 /**
- * An approval, question or secret request from the coding agent waiting on the
- * user. A secret request's `requestId` is its T3 turn item id; the secret is
- * typed into the card itself (never the composer) and goes straight to T3.
+ * An approval, question, secret or link request from the coding agent waiting
+ * on the user. A secret or link request's `requestId` is its T3 turn item id.
+ * A secret is typed into the card itself (never the composer) and goes
+ * straight to T3. A link request asks to pair another T3 machine, which only
+ * T3 Code itself can do; Chatty can decline it, and a new message dismisses it.
  */
 export interface CodingPendingRequest {
 	requestId: string;
-	kind: 'approval' | 'question' | 'secret';
-	/** Where to get the secret, e.g. a token settings page (secrets only). */
+	kind: 'approval' | 'question' | 'secret' | 'link';
+	/** Where to get the secret (e.g. a token settings page), or the machine to link. */
 	url?: string;
 	/** Input placeholder (secrets only). */
 	placeholder?: string;
@@ -168,7 +172,7 @@ export function codingDeclineOption(
  * agent's feedback).
  */
 export function acceptsTypedAnswer(request: CodingPendingRequest): boolean {
-	if (!request.allowFreeText || request.kind === 'secret') return false;
+	if (!request.allowFreeText || request.kind === 'secret' || request.kind === 'link') return false;
 	return request.kind === 'question' || codingDeclineOption(request) !== undefined;
 }
 
