@@ -6,6 +6,7 @@ import {
 	searchPerplexity,
 	searchPlaces,
 	searchSearxng,
+	searchSearxngPlaces,
 	PERPLEXITY_ENDPOINT,
 	verifySearxng,
 	WebSearchError,
@@ -334,6 +335,162 @@ describe('searchPlaces', () => {
 	});
 });
 
+describe('searchSearxngPlaces', () => {
+	// What SearXNG's OpenStreetMap engine returns (Nominatim's string coordinates),
+	// then the same café from Photon, then an unplaceable result.
+	const MAP = {
+		results: [
+			{
+				template: 'map.html',
+				title: 'Café Janis',
+				url: 'https://openstreetmap.org/node/42',
+				osm: { type: 'node', id: 42 },
+				latitude: '38.7069',
+				longitude: '-9.1447',
+				type: 'Cafe',
+				address: {
+					name: 'Café Janis',
+					road: 'Rua Ribeira Nova',
+					house_number: '17',
+					postcode: '1200-370',
+					locality: 'Lisboa',
+					country: 'Portugal'
+				},
+				data: [
+					{ label: 'Cuisine', key: 'cuisine', value: 'coffee_shop;breakfast' },
+					{ label: 'Opening hours', key: 'opening_hours', value: 'Mo-Su 09:00-19:00' }
+				],
+				links: [
+					{ label: 'Website', url: 'https://cafejanis.pt/', url_label: 'https://cafejanis.pt/' },
+					{ label: 'Phone', url: 'tel:+351%2021%20000%200000', url_label: '+351 21 000 0000' },
+					{ label: 'Wikidata', url: 'https://wikidata.org/wiki/Q1', url_label: 'Q1' }
+				]
+			},
+			{
+				template: 'map.html',
+				title: 'Café Janis',
+				url: 'https://openstreetmap.org/node/42',
+				osm: { type: 'node', id: 42 },
+				latitude: 38.7069,
+				longitude: -9.1447
+			},
+			// The same café again, without an OSM id and a few meters off.
+			{ template: 'map.html', title: 'café janis', latitude: 38.70692, longitude: -9.14468 },
+			{ template: 'map.html', title: 'Somewhere', latitude: 'x', longitude: '1' },
+			{
+				template: 'map.html',
+				title: 'Hello, Kristof',
+				osm: { type: 'node', id: 7 },
+				latitude: 38.71,
+				longitude: -9.15,
+				address: null
+			}
+		]
+	};
+
+	it('searches the map category by name and trims OSM results for the model', async () => {
+		const fetchImpl = mockFetch({ body: MAP });
+		const places = await searchSearxngPlaces(
+			'http://s',
+			{ query: 'cafe', location: 'lisbon portugal', limit: 5 },
+			asFetch(fetchImpl)
+		);
+		const url = new URL(String(fetchImpl.mock.calls[0][0]));
+		expect(url.searchParams.get('q')).toBe('cafe in lisbon portugal');
+		expect(url.searchParams.get('categories')).toBe('map');
+		expect(places).toEqual([
+			{
+				name: 'Café Janis',
+				address: 'Rua Ribeira Nova 17, 1200-370 Lisboa, Portugal',
+				categories: ['Cafe', 'coffee shop', 'breakfast'],
+				phone: '+351 21 000 0000',
+				openingHours: 'Mo-Su 09:00-19:00',
+				coordinates: [38.7069, -9.1447],
+				website: 'https://cafejanis.pt/',
+				listing: 'https://openstreetmap.org/node/42'
+			},
+			{ name: 'Hello, Kristof', coordinates: [38.71, -9.15] }
+		]);
+	});
+
+	it("takes the website link, even a social page, over Wikipedia's", async () => {
+		const result = (links: { url: string; url_label: string }[]) => ({
+			results: [{ title: 'Tasca', latitude: 1, longitude: 2, links }]
+		});
+		const search = async (body: unknown) =>
+			(
+				await searchSearxngPlaces(
+					'http://s',
+					{ query: 'tasca', location: 'lisbon', limit: 1 },
+					asFetch(mockFetch({ body }))
+				)
+			)[0].website;
+		const wikipedia = { url: 'https://pt.wikipedia.org/wiki/Tasca', url_label: 'Tasca (pt)' };
+		const facebook = { url: 'https://facebook.com/tasca', url_label: 'https://facebook.com/tasca' };
+		expect(await search(result([wikipedia, facebook]))).toBe('https://facebook.com/tasca');
+		expect(await search(result([wikipedia]))).toBeUndefined();
+		// OSM websites don't always carry a scheme.
+		const bare = { url: 'www.tasca.pt', url_label: 'www.tasca.pt' };
+		expect(await search(result([bare]))).toBe('https://www.tasca.pt/');
+	});
+
+	it('writes the house number first where that is the custom', async () => {
+		const address = {
+			road: 'Congress Ave',
+			house_number: '1100',
+			postcode: '78701',
+			locality: 'Austin',
+			country: 'United States',
+			country_code: 'us'
+		};
+		const [place] = await searchSearxngPlaces(
+			'http://s',
+			{ query: 'capitol', location: 'austin tx', limit: 1 },
+			asFetch(
+				mockFetch({ body: { results: [{ title: 'Capitol', latitude: 1, longitude: 2, address }] } })
+			)
+		);
+		expect(place.address).toBe('1100 Congress Ave, Austin 78701, United States');
+	});
+
+	it('stops at the limit', async () => {
+		const places = await searchSearxngPlaces(
+			'http://s',
+			{ query: 'cafe', location: 'lisbon', limit: 1 },
+			asFetch(mockFetch({ body: MAP }))
+		);
+		expect(places.map((p) => p.name)).toEqual(['Café Janis']);
+	});
+
+	it('needs what to look for and where, without asking SearXNG', async () => {
+		const fetchImpl = mockFetch({ body: MAP });
+		await expect(
+			searchSearxngPlaces('http://s', { location: 'lisbon', limit: 3 }, asFetch(fetchImpl))
+		).rejects.toThrow(/query.*location/);
+		await expect(
+			searchSearxngPlaces(
+				'http://s',
+				{ query: 'cafe', latitude: 1, longitude: 2, limit: 3 },
+				asFetch(fetchImpl)
+			)
+		).rejects.toThrow(WebSearchError);
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
+	it('reports failed map engines instead of an empty answer', async () => {
+		const fetchImpl = mockFetch({
+			body: { results: [], unresponsive_engines: [['openstreetmap', 'timeout']] }
+		});
+		await expect(
+			searchSearxngPlaces(
+				'http://s',
+				{ query: 'cafe', location: 'lisbon', limit: 3 },
+				asFetch(fetchImpl)
+			)
+		).rejects.toThrow('SearXNG engines failed: openstreetmap (timeout)');
+	});
+});
+
 describe('searchPerplexity', () => {
 	it('posts the query and maps results to source cards', async () => {
 		const fetchImpl = mockFetch({
@@ -415,6 +572,11 @@ describe('cancellation', () => {
 		['Brave', (signal, f) => searchBrave('k', 'q', { limit: 1, signal }, f)],
 		['Brave news', (signal, f) => searchBrave('k', 'q', { limit: 1, type: 'news', signal }, f)],
 		['Brave places', (signal, f) => searchPlaces('k', { location: 'x', limit: 1, signal }, f)],
+		[
+			'SearXNG places',
+			(signal, f) =>
+				searchSearxngPlaces('http://s', { query: 'q', location: 'x', limit: 1, signal }, f)
+		],
 		['Perplexity', (signal, f) => searchPerplexity('k', 'q', { limit: 1, signal }, f)]
 	];
 

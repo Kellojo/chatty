@@ -11,6 +11,8 @@ import {
 	searchPerplexity,
 	searchPlaces as searchBravePlaces,
 	searchSearxng,
+	searchSearxngPlaces,
+	isNamedPlaceQuery,
 	verifySearxng,
 	WebSearchError,
 	type FetchImpl,
@@ -22,6 +24,8 @@ import {
 	type SearchType
 } from './providers.js';
 import { fuseResults, type MergedResult } from './merge.js';
+import { GoogleMapsError } from '../maps/google.js';
+import { getGoogleMapsKey, searchPlacesWithGoogle } from '../maps/service.js';
 
 const log = createLogger('websearch');
 
@@ -117,9 +121,23 @@ export function canSearch(db: Db, type: SearchType): boolean {
 	return configuredProviders(db).some((id) => PROVIDER_TYPES[id].includes(type));
 }
 
-/** Place search is Brave's alone. */
-export function isPlaceSearchConfigured(db: Db): boolean {
-	return !!getApiKey(db, 'brave');
+/**
+ * Place search providers, best first: Google has photos and reviews, Brave ratings, and
+ * both search around coordinates; SearXNG (OpenStreetMap) has none of that.
+ */
+const PLACE_PROVIDER_IDS = ['google', 'brave', 'searxng'] as const;
+export type PlaceProviderId = (typeof PLACE_PROVIDER_IDS)[number];
+
+export const PLACE_PROVIDER_NAMES: Record<PlaceProviderId, string> = {
+	google: 'Google Maps',
+	brave: PROVIDER_NAMES.brave,
+	searxng: PROVIDER_NAMES.searxng
+};
+
+export function placeProviders(db: Db): PlaceProviderId[] {
+	return PLACE_PROVIDER_IDS.filter((id) =>
+		id === 'google' ? !!getGoogleMapsKey(db) : isConfigured(db, id)
+	);
 }
 
 function keyInfo(db: Db, id: KeyProviderId) {
@@ -449,12 +467,83 @@ async function combinedSearch(
 	return { mode: 'combined', results: fuseResults(lists, PROVIDER_IDS, opts.limit), providers };
 }
 
+export interface PlaceSearchOutcome {
+	provider: PlaceProviderId;
+	places: Place[];
+	/**
+	 * With places: why the providers before `provider` didn't answer. Without: which
+	 * providers failed, so "nothing found" isn't mistaken for a full search.
+	 */
+	errors: string[];
+}
+
+export interface PlaceSearchOptions {
+	/** Who searched: only they can load the photos found. */
+	userId?: string;
+	fetchImpl?: FetchImpl;
+}
+
+function runPlaceSearch(
+	db: Db,
+	id: PlaceProviderId,
+	query: PlaceQuery,
+	{ userId, fetchImpl = fetch }: PlaceSearchOptions
+): Promise<Place[]> {
+	if (id === 'google') return searchPlacesWithGoogle(db, query, userId, fetchImpl);
+	const search = id === 'searxng' ? searchSearxngPlaces : searchBravePlaces;
+	return search(targetOf(db, id), query, fetchImpl);
+}
+
+const placeError = (e: unknown, id: PlaceProviderId) =>
+	e instanceof WebSearchError || e instanceof GoogleMapsError
+		? e.message
+		: `${PLACE_PROVIDER_NAMES[id]}: ${e instanceof Error ? e.message : String(e)}`;
+
+/** SearXNG searches places by name only; the others also around coordinates or without a query. */
+const canSearchPlaces = (id: PlaceProviderId, q: PlaceQuery) =>
+	id !== 'searxng' || isNamedPlaceQuery(q);
+
+/**
+ * Searches the best configured provider that can run the query, falling back to the
+ * next when one fails or finds nothing. Finding nothing everywhere is an empty answer,
+ * not an error.
+ */
 export async function searchPlaces(
 	db: Db,
 	query: PlaceQuery,
-	fetchImpl: FetchImpl = fetch
-): Promise<Place[]> {
-	const key = getApiKey(db, 'brave');
-	if (!key) throw new Error('place search needs a Brave Search API key');
-	return searchBravePlaces(key, query, fetchImpl);
+	opts: PlaceSearchOptions = {}
+): Promise<PlaceSearchOutcome> {
+	const configured = placeProviders(db);
+	if (configured.length === 0) {
+		throw new Error(
+			'place search needs a Google Maps or Brave Search API key, or a SearXNG instance'
+		);
+	}
+	const able = configured.filter((id) => canSearchPlaces(id, query));
+	// None can run it: let the first say why.
+	const providers = able.length ? able : configured.slice(0, 1);
+	// Everything said about the providers tried so far, and just their failures.
+	const notes: string[] = [];
+	const failures: string[] = [];
+	let emptyFrom: PlaceProviderId | undefined;
+	for (const provider of providers) {
+		try {
+			const places = await runPlaceSearch(db, provider, query, opts);
+			if (places.length) return { provider, places, errors: notes };
+			emptyFrom ??= provider;
+			notes.push(`${PLACE_PROVIDER_NAMES[provider]} found no places`);
+		} catch (e) {
+			if (query.signal?.aborted) throw e;
+			const error = placeError(e, provider);
+			notes.push(error);
+			failures.push(error);
+		}
+	}
+	// An empty answer still says which providers couldn't be asked.
+	if (emptyFrom) return { provider: emptyFrom, places: [], errors: failures };
+	// Providers left out above, e.g. SearXNG when Brave failed on a search around coordinates.
+	const skipped = configured
+		.filter((id) => !providers.includes(id))
+		.map((id) => `${PLACE_PROVIDER_NAMES[id]} skipped (needs both query and location)`);
+	throw new Error([...failures, ...skipped].join('; '));
 }

@@ -16,7 +16,7 @@ import { McpSignInRequiredError } from '../mcp/oauth.js';
 import { acquireMcpServer, cachedMcpTools, type McpLease } from '../mcp/pool.js';
 import type { CallerContext } from '../mcp/types.js';
 import { reportPrivate, seesPrivate } from '../mcp/servers/private-items.js';
-import { isWebSearchConfigured } from '../websearch/service.js';
+import { isWebSearchConfigured, placeProviders } from '../websearch/service.js';
 import { pickDeferredTools, SEARCH_TOOLS_NAME, type ToolCatalog } from './toolSearch.js';
 import { wrapMcpTools, type McpToolCallOutcome } from './wrap.js';
 
@@ -81,8 +81,11 @@ export async function buildTools(input: BuildToolsInput): Promise<BuiltTools> {
 			// A private server's tools return private data: trusted turns only.
 			(row.private !== 1 || input.listing === true || seesPrivate(ctx)) &&
 			(input.memoryEnabled || row.name !== 'memory') &&
-			// web_search is only offered once a search provider is set up.
-			(row.builtin !== 1 || row.name !== 'websearch' || isWebSearchConfigured(db))
+			// web_search and search_places are only offered once a provider for one is set up.
+			(row.builtin !== 1 ||
+				row.name !== 'websearch' ||
+				isWebSearchConfigured(db) ||
+				placeProviders(db).length > 0)
 	);
 	const tools: Record<string, Tool> = {};
 	const toolToServer: Record<string, string> = {};

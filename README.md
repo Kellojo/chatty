@@ -76,6 +76,7 @@ services:
 | `SEARXNG_URL`                   | —                      | SearXNG URL for the `web_search` tool; overrides the one saved in Settings → Services   |
 | `BRAVE_SEARCH_API_KEY`          | —                      | Brave Search API key for `web_search`; overrides the key saved in Settings → Services   |
 | `PERPLEXITY_API_KEY`            | —                      | Perplexity API key for `web_search`; overrides the key saved in Settings → Services     |
+| `GOOGLE_MAPS_API_KEY`           | —                      | Google Maps Platform key for `search_places` and map tiles; overrides Settings → Services |
 
 Model Intelligence Index scores come from [Artificial Analysis](https://artificialanalysis.ai) (free API key, 100 requests a day). Save the key in **Settings → Services**, where it is stored encrypted, or set `ARTIFICIAL_ANALYSIS_API_KEY`. Scores are fetched only when you save the key, sync a provider's models (at most once an hour) or click Refresh; nothing runs in the background. A refresh costs 2–3 requests.
 
@@ -83,8 +84,8 @@ Model Intelligence Index scores come from [Artificial Analysis](https://artifici
 
 Models get a `web_search` tool (web results, or news with `type: "news"`) once a search provider is configured in **Settings → Services**; without one, the tool isn't offered at all. Three providers are supported:
 
-- **SearXNG**: a self-hosted metasearch engine. Enter its base URL (e.g. `http://searxng:8080`) or set `SEARXNG_URL`. Since the admin configures it, it may be on localhost or a private network without `ALLOW_PRIVATE_NETWORK_FETCH`; only link-local/metadata addresses are refused. Chatty talks to its JSON API, which SearXNG disables by default: add `json` to `search.formats` in its `settings.yml`, otherwise saving fails with HTTP 403.
-- **Brave Search API**: save an [API key](https://api-dashboard.search.brave.com/app/keys) (stored encrypted) or set `BRAVE_SEARCH_API_KEY`. Brave also adds a `search_places` tool (restaurants, shops, sights… with address, rating, opening hours and coordinates) via its Place Search API, which is part of the Search plan.
+- **SearXNG**: a self-hosted metasearch engine. Enter its base URL (e.g. `http://searxng:8080`) or set `SEARXNG_URL`. Since the admin configures it, it may be on localhost or a private network without `ALLOW_PRIVATE_NETWORK_FETCH`; only link-local/metadata addresses are refused. Chatty talks to its JSON API, which SearXNG disables by default: add `json` to `search.formats` in its `settings.yml`, otherwise saving fails with HTTP 403. SearXNG also enables the `search_places` tool through its map engines (OpenStreetMap, Photon), searched by name, e.g. "ramen" in "lisbon portugal": addresses, opening hours, phone numbers and coordinates, but no ratings. Keep at least the `openstreetmap` engine enabled.
+- **Brave Search API**: save an [API key](https://api-dashboard.search.brave.com/app/keys) (stored encrypted) or set `BRAVE_SEARCH_API_KEY`. Brave also adds a `search_places` tool (restaurants, shops, sights… with address, rating, opening hours and coordinates) via its Place Search API, which is part of the Search plan. It also searches around coordinates. With both configured, place search uses Brave and falls back to SearXNG when Brave fails or finds nothing.
 - **Perplexity Search API**: save an [API key](https://www.perplexity.ai/account/api/keys) (stored encrypted) or set `PERPLEXITY_API_KEY`. It returns ranked web results, not generated answers, and has no news search, so news searches use the other providers.
 
 Each is checked with a test search before it's saved, and env vars override what's saved in the app. Results come back as the same source cards as `fetch`, so citations look alike.
@@ -122,6 +123,15 @@ search:
     - html
     - json
 ```
+
+### Maps
+
+Chat maps (the ```` ```map ```` widget) show OpenStreetMap tiles by default. Connecting **Google Maps** in **Settings → Services → Maps** (or setting `GOOGLE_MAPS_API_KEY`) does two things:
+
+- `search_places` asks Google first (then Brave, then SearXNG, when Google fails or finds nothing), with ratings, opening hours, a short summary, up to 3 photos and up to 3 reviews per place. Even without a web search provider, models get `search_places` then.
+- Chat maps switch to Google map tiles, with the Google Maps logo and Google's copyright line, since Google's terms want its places shown on a Google map.
+
+The key needs a Google Cloud project with billing, and both the **Places API (New)** and the **Map Tiles API** enabled; saving checks both. Restrict the key to those two APIs. Every request goes through Chatty, so the browser never sees the key, and tiles, photos and the copyright line only load for signed-in users (in private chats, only after **Show map**). Photos are served from `/api/maps/photo/…`, and only to the user whose search found them; Google's terms don't allow storing them, so the links live in memory for a week and stop working after a restart. Searches with reviews and photos are billed in Google's more expensive Places tiers, and each photo and tile is a request of its own; check Google's pricing and set quotas in the Cloud console.
 
 ## Deployment
 

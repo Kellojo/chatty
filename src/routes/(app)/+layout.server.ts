@@ -13,6 +13,7 @@ import {
 	toPublic
 } from '$lib/server/db/repo/conversations.js';
 import { getOnboarding, getUserSettings } from '$lib/server/db/repo/user-settings.js';
+import { mapTiles } from '$lib/server/maps/service.js';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals, depends, url }) => {
@@ -45,6 +46,8 @@ export const load: LayoutServerLoad = async ({ locals, depends, url }) => {
 		failedUnreadIds: listFailedUnreadChatIds(db, locals.user.id),
 		sidebarOpen: settings.sidebarOpen,
 		settings,
-		privateData: privateDataStatus(db)
+		privateData: privateDataStatus(db),
+		// Google tiles once a Google Maps key is set (its places belong on a Google map).
+		mapTiles: mapTiles(db)
 	};
 };

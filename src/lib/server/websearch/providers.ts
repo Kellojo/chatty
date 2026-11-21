@@ -52,7 +52,7 @@ const USER_AGENT = 'ai-chat/0.1 (+https://localhost)';
 const TIMEOUT_MS = 15_000;
 
 /** A request's signal: the provider timeout, plus the caller's signal when there is one. */
-function requestSignal(signal: AbortSignal | undefined): AbortSignal {
+export function requestSignal(signal: AbortSignal | undefined): AbortSignal {
 	const timeout = AbortSignal.timeout(TIMEOUT_MS);
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
@@ -61,7 +61,10 @@ function requestSignal(signal: AbortSignal | undefined): AbortSignal {
  * Runs a request, passing the caller's abort through as-is: a cancelled search isn't a
  * provider error, so it must not be reported as "unreachable" or tried elsewhere.
  */
-async function cancellable<T>(signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+export async function cancellable<T>(
+	signal: AbortSignal | undefined,
+	run: () => Promise<T>
+): Promise<T> {
 	try {
 		return await run();
 	} catch (e) {
@@ -73,7 +76,12 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 const stripTags = (s: string) => s.replace(/<[^>]*>/g, '');
 
-function httpUrl(raw: unknown, base?: string): string | undefined {
+/** Drops fields the provider didn't give, so they don't show up as `undefined`. */
+function compact<T extends object>(value: T): T {
+	return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
+}
+
+export function httpUrl(raw: unknown, base?: string): string | undefined {
 	if (typeof raw !== 'string' || !raw.trim()) return undefined;
 	try {
 		const u = new URL(raw.trim(), base);
@@ -102,12 +110,10 @@ function toCard(r: {
 		favicon: httpUrl(r.favicon) ?? httpUrl('/favicon.ico', r.url),
 		image: httpUrl(r.image)
 	};
-	return Object.fromEntries(
-		Object.entries(card).filter(([, v]) => v !== undefined)
-	) as unknown as PageMeta;
+	return compact(card);
 }
 
-function networkMessage(e: unknown): string {
+export function networkMessage(e: unknown): string {
 	if (e instanceof Error && e.name === 'TimeoutError') return 'timed out';
 	const cause = (e as { cause?: unknown })?.cause;
 	const reason =
@@ -115,8 +121,8 @@ function networkMessage(e: unknown): string {
 	return reason || 'request failed';
 }
 
-async function readJson(res: Response): Promise<unknown> {
-	const { body } = await readBodyLimited(res, MAX_BODY_BYTES);
+export async function readJson(res: Response, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
+	const { body } = await readBodyLimited(res, maxBytes);
 	return JSON.parse(body.toString('utf-8'));
 }
 
@@ -158,11 +164,13 @@ async function querySearxng(
 	baseUrl: string,
 	query: string,
 	opts: Partial<SearchOptions>,
-	fetchImpl: FetchImpl
+	fetchImpl: FetchImpl,
+	{ categories, maxBytes }: { categories?: string; maxBytes?: number } = {}
 ): Promise<SearxngResponse> {
 	const params = new URLSearchParams({ q: query, format: 'json' });
 	if (opts.timeRange) params.set('time_range', opts.timeRange);
-	if (opts.type === 'news') params.set('categories', 'news');
+	const category = categories ?? (opts.type === 'news' ? 'news' : undefined);
+	if (category) params.set('categories', category);
 	let res: Response;
 	try {
 		res = await fetchImpl(`${baseUrl}/search?${params}`, {
@@ -193,7 +201,7 @@ async function querySearxng(
 	}
 	let data: unknown;
 	try {
-		data = await readJson(res);
+		data = await readJson(res, maxBytes);
 	} catch {
 		throw new WebSearchError(
 			`SearXNG answered with something other than JSON; check the URL points at SearXNG and ${JSON_HINT}`,
@@ -235,15 +243,18 @@ export async function searchSearxng(
 			}),
 			published: typeof r.publishedDate === 'string' ? r.publishedDate : undefined
 		}));
-	// No results because every engine failed is an outage, not an empty answer.
-	const failed = Array.isArray(data.unresponsive_engines) ? data.unresponsive_engines : [];
-	if (results.length === 0 && failed.length > 0) {
-		const engines = failed
-			.map((e) => (Array.isArray(e) ? `${e[0]} (${e[1]})` : String(e)))
-			.join(', ');
-		throw new WebSearchError(`SearXNG engines failed: ${engines}`, 'searxng');
-	}
+	if (results.length === 0) throwIfEnginesFailed(data);
 	return results;
+}
+
+/** No results because every engine failed is an outage, not an empty answer. */
+function throwIfEnginesFailed(data: SearxngResponse): void {
+	const failed = Array.isArray(data.unresponsive_engines) ? data.unresponsive_engines : [];
+	if (failed.length === 0) return;
+	const engines = failed
+		.map((e) => (Array.isArray(e) ? `${e[0]} (${e[1]})` : String(e)))
+		.join(', ');
+	throw new WebSearchError(`SearXNG engines failed: ${engines}`, 'searxng');
 }
 
 // ── Brave Search ─────────────────────────────────────────────────────────────
@@ -368,12 +379,38 @@ export interface Place {
 	phone?: string;
 	/** Today's opening hours, e.g. "07:00–18:00". */
 	hoursToday?: string;
+	/**
+	 * Weekly opening hours, e.g. "Mo-Fr 08:00-18:00; Sa 09:00-14:00" (OpenStreetMap) or
+	 * "Monday: 9:00 AM – 5:00 PM; …" (Google).
+	 */
+	openingHours?: string;
+	openNow?: boolean;
+	/** A short description of the place. */
+	summary?: string;
 	distance?: string;
 	/** [latitude, longitude] */
 	coordinates?: [number, number];
 	website?: string;
-	/** The listing the data comes from (Yelp, TripAdvisor…). */
+	/** The listing the data comes from (Yelp, TripAdvisor, Google Maps…). */
 	listing?: string;
+	/** Photos served by Chatty (`/api/maps/photo/…`), each with its author to credit. */
+	photos?: PlacePhoto[];
+	reviews?: PlaceReview[];
+}
+
+export interface PlacePhoto {
+	url: string;
+	author?: string;
+	authorUrl?: string;
+}
+
+export interface PlaceReview {
+	author?: string;
+	authorUrl?: string;
+	rating?: number;
+	/** When it was written, e.g. "2 months ago". */
+	when?: string;
+	text: string;
 }
 
 function toPlace(r: Json): Place | null {
@@ -412,9 +449,7 @@ function toPlace(r: Json): Place | null {
 		website: httpUrl(r.url),
 		listing: httpUrl(r.provider_url)
 	};
-	return Object.fromEntries(
-		Object.entries(place).filter(([, v]) => v !== undefined)
-	) as unknown as Place;
+	return compact(place);
 }
 
 /** Brave's Place Search: points of interest around coordinates or a named location. */
@@ -440,6 +475,156 @@ export async function searchPlaces(
 		.map(toPlace)
 		.filter((p): p is Place => p !== null)
 		.slice(0, q.limit);
+}
+
+// ── SearXNG places ───────────────────────────────────────────────────────────
+
+/**
+ * Map results can carry an area's outline (GeoJSON), which for a city runs to
+ * megabytes; allow for that rather than fail on a cut-off body.
+ */
+const SEARXNG_MAP_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * How close (in degrees, ~100 m) two results with the same name count as one place:
+ * Nominatim can return a venue both as its entrance node and as its building, whose
+ * center may sit tens of meters away.
+ */
+const SAME_SPOT_DEG = 0.001;
+
+const coordinate = (v: unknown): number | undefined => {
+	const n = typeof v === 'string' ? Number(v) : v;
+	return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
+};
+
+/**
+ * Countries that write "24 Main St, Springfield 12345" rather than "Hauptstraße 24,
+ * 12345 Berlin". Photon's addresses have no country code and always get the latter.
+ */
+const NUMBER_FIRST = new Set(['us', 'gb', 'ie', 'ca', 'au', 'nz']);
+
+/** "Rua Augusta 24, 1100-053 Lisboa, Portugal" from an OSM address. */
+function osmAddress(a: Json): string | undefined {
+	const join = (...parts: unknown[]) =>
+		parts.filter((p): p is string => typeof p === 'string' && !!p.trim()).join(' ');
+	const numberFirst = NUMBER_FIRST.has(str(a.country_code)?.toLowerCase() ?? '');
+	const line = (
+		numberFirst
+			? [join(a.house_number, a.road), join(a.locality, a.postcode), join(a.country)]
+			: [join(a.road, a.house_number), join(a.postcode, a.locality), join(a.country)]
+	)
+		.filter(Boolean)
+		.join(', ');
+	return line || undefined;
+}
+
+/** A `tel:` number as written, also when the link escaped its spaces. */
+function decodeTel(tel: string): string {
+	try {
+		return decodeURIComponent(tel);
+	} catch {
+		return tel;
+	}
+}
+
+/** A place from a map engine, which always comes with coordinates. */
+type OsmPlace = Place & { coordinates: [number, number] };
+
+function toOsmPlace(r: Json): OsmPlace | null {
+	const name = str(r.title);
+	const lat = coordinate(r.latitude);
+	const lng = coordinate(r.longitude);
+	if (!name || lat === undefined || lng === undefined) return null;
+	const data = Array.isArray(r.data) ? r.data.map(obj) : [];
+	const value = (key: string) => str(data.find((d) => d.key === key)?.value);
+	const links = Array.isArray(r.links) ? r.links.map(obj) : [];
+	// `phone` or `contact:phone`, whichever OSM lists first; one number is enough here.
+	const tel = links
+		.map((l) => str(l.url))
+		.find((u) => u?.startsWith('tel:'))
+		?.slice(4);
+	// The website link is labelled with its own URL (Wikipedia's with a title, Wikidata's
+	// with an id), which OSM doesn't require to start with a scheme.
+	const site = str(links.find((l) => str(l.url) && l.url === l.url_label)?.url);
+	const website = site && httpUrl(/^[a-z][a-z\d+.-]*:/i.test(site) ? site : `https://${site}`);
+	const categories = [
+		...(str(r.type) ? [str(r.type)!] : []),
+		...(value('cuisine')
+			?.split(';')
+			.map((c) => c.trim().replace(/_/g, ' '))
+			.filter(Boolean) ?? [])
+	];
+	const place: OsmPlace = {
+		name,
+		address: osmAddress(obj(r.address)),
+		categories: categories.length ? categories : undefined,
+		phone: tel && decodeTel(tel),
+		openingHours: value('opening_hours'),
+		coordinates: [lat, lng],
+		website,
+		listing: httpUrl(r.url)
+	};
+	return compact(place);
+}
+
+const osmId = (r: Json): string | undefined => {
+	const osm = obj(r.osm);
+	return str(osm.type) && osm.id !== undefined ? `${osm.type}/${String(osm.id)}` : undefined;
+};
+
+type Found = { place: OsmPlace; osm?: string };
+
+/**
+ * The same place from several map engines (OpenStreetMap, Photon…): the same OSM
+ * object, or the same name at about the same spot.
+ */
+function samePlace(a: Found, b: Found): boolean {
+	if (a.osm && a.osm === b.osm) return true;
+	const [aLat, aLng] = a.place.coordinates;
+	const [bLat, bLng] = b.place.coordinates;
+	return (
+		a.place.name.toLowerCase() === b.place.name.toLowerCase() &&
+		Math.abs(aLat - bLat) < SAME_SPOT_DEG &&
+		Math.abs(aLng - bLng) < SAME_SPOT_DEG
+	);
+}
+
+/** SearXNG's map engines can only search by name: what to look for, and where. */
+export const isNamedPlaceQuery = (q: PlaceQuery): boolean => !!q.query && !!q.location;
+
+/**
+ * SearXNG's map engines (OpenStreetMap and Photon), searched by name: they have no
+ * nearby search, so this needs what to look for and where, e.g. "ramen in lisbon
+ * portugal". Places come without ratings or prices.
+ */
+export async function searchSearxngPlaces(
+	baseUrl: string,
+	q: PlaceQuery,
+	fetchImpl: FetchImpl = fetch
+): Promise<Place[]> {
+	if (!isNamedPlaceQuery(q)) {
+		throw new WebSearchError(
+			'SearXNG place search needs both what to look for (query) and a location name',
+			'searxng'
+		);
+	}
+	const data = await cancellable(q.signal, () =>
+		querySearxng(baseUrl, `${q.query} in ${q.location}`, { signal: q.signal }, fetchImpl, {
+			categories: 'map',
+			maxBytes: SEARXNG_MAP_MAX_BYTES
+		})
+	);
+	const found: Found[] = [];
+	for (const r of data.results) {
+		const place = toOsmPlace(r);
+		if (!place) continue;
+		const next = { place, osm: osmId(r) };
+		if (found.some((f) => samePlace(f, next))) continue;
+		found.push(next);
+		if (found.length === q.limit) break;
+	}
+	const places = found.map((f) => f.place);
+	if (places.length === 0) throwIfEnginesFailed(data);
+	return places;
 }
 
 // ── Perplexity ───────────────────────────────────────────────────────────────

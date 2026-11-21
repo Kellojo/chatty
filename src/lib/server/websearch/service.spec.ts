@@ -10,6 +10,7 @@ const { encryptSecret } = await import('../crypto.js');
 const { config } = await import('../config.js');
 const { buildTools } = await import('../tools/registry.js');
 const service = await import('./service.js');
+const { PHOTO_PATH, resetMapsState } = await import('../maps/service.js');
 const { createWebsearchServer } = await import('../mcp/servers/websearch.js');
 const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
 const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
@@ -37,15 +38,31 @@ const SEARXNG_RESULTS = { results: [{ url: 'https://a.example/', title: 'From Se
 const BRAVE_RESULTS = { web: { results: [{ url: 'https://b.example/', title: 'From Brave' }] } };
 const BRAVE_NEWS = { results: [{ url: 'https://n.example/', title: 'Brave news' }] };
 const PERPLEXITY_RESULTS = { results: [{ url: 'https://p.example/', title: 'From Perplexity' }] };
+const GOOGLE_PLACES = {
+	places: [
+		{
+			displayName: { text: 'Google café' },
+			location: { latitude: 1, longitude: 2 },
+			photos: [{ name: 'places/g1/photos/p1' }]
+		}
+	]
+};
+const GOOGLE_SESSION = { session: 'sess-1', expiry: '4102444800' };
+
+/** Places API (New) and Map Tiles answers. */
+const googleBody = (url: string) =>
+	url.includes('tile.googleapis.com') ? GOOGLE_SESSION : GOOGLE_PLACES;
 
 function stubFetch(searxngStatus = 200, braveStatus = 200, perplexityStatus = 200) {
 	const fetchMock = vi.fn(async (input: unknown) => {
 		const url = String(input);
-		const [status, body] = url.includes('api.search.brave.com')
-			? [braveStatus, url.includes('/news/') ? BRAVE_NEWS : BRAVE_RESULTS]
-			: url.includes('api.perplexity.ai')
-				? [perplexityStatus, PERPLEXITY_RESULTS]
-				: [searxngStatus, SEARXNG_RESULTS];
+		const [status, body] = url.includes('googleapis.com')
+			? [200, googleBody(url)]
+			: url.includes('api.search.brave.com')
+				? [braveStatus, url.includes('/news/') ? BRAVE_NEWS : BRAVE_RESULTS]
+				: url.includes('api.perplexity.ai')
+					? [perplexityStatus, PERPLEXITY_RESULTS]
+					: [searxngStatus, SEARXNG_RESULTS];
 		return new Response(JSON.stringify(body), {
 			status,
 			headers: { 'content-type': 'application/json' }
@@ -55,8 +72,9 @@ function stubFetch(searxngStatus = 200, braveStatus = 200, perplexityStatus = 20
 	return fetchMock;
 }
 
-function configure({ searxng = false, brave = false, perplexity = false } = {}) {
+function configure({ searxng = false, brave = false, perplexity = false, google = false } = {}) {
 	const db = getDb();
+	if (google) setSetting(db, 'maps.google.apiKey', encryptSecret('google-key-4321'));
 	if (searxng) setSetting(db, 'websearch.searxng.url', SEARXNG);
 	if (brave) setSetting(db, 'websearch.brave.apiKey', encryptSecret('brave-key-1234'));
 	if (perplexity) setSetting(db, 'websearch.perplexity.apiKey', encryptSecret('pplx-key-5678'));
@@ -64,6 +82,7 @@ function configure({ searxng = false, brave = false, perplexity = false } = {}) 
 
 beforeEach(() => {
 	closeDb();
+	resetMapsState();
 	getDb()
 		.prepare(
 			`INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt, role)
@@ -78,9 +97,10 @@ afterEach(() => {
 	config.SEARXNG_URL = undefined;
 	config.BRAVE_SEARCH_API_KEY = undefined;
 	config.PERPLEXITY_API_KEY = undefined;
+	config.GOOGLE_MAPS_API_KEY = undefined;
 });
 
-type ProviderKey = 'searxng' | 'brave' | 'perplexity';
+type ProviderKey = 'searxng' | 'brave' | 'perplexity' | 'google';
 /** A provider's reply: a body (default: its canned results), a status and a delay, or 'hang'. */
 type Route = { status?: number; body?: unknown; delayMs?: number } | 'hang';
 
@@ -88,15 +108,18 @@ type Route = { status?: number; body?: unknown; delayMs?: number } | 'hang';
 function routeFetch(routes: Partial<Record<ProviderKey, Route>> = {}) {
 	const fetchMock = vi.fn((input: unknown, init?: RequestInit) => {
 		const url = String(input);
-		const id: ProviderKey = url.includes('api.search.brave.com')
-			? 'brave'
-			: url.includes('api.perplexity.ai')
-				? 'perplexity'
-				: 'searxng';
+		const id: ProviderKey = url.includes('googleapis.com')
+			? 'google'
+			: url.includes('api.search.brave.com')
+				? 'brave'
+				: url.includes('api.perplexity.ai')
+					? 'perplexity'
+					: 'searxng';
 		const canned = {
 			searxng: SEARXNG_RESULTS,
 			brave: url.includes('/news/') ? BRAVE_NEWS : BRAVE_RESULTS,
-			perplexity: PERPLEXITY_RESULTS
+			perplexity: PERPLEXITY_RESULTS,
+			google: googleBody(url)
 		}[id];
 		const route = routes[id] ?? {};
 		return new Promise<Response>((resolve, reject) => {
@@ -121,7 +144,13 @@ function routeFetch(routes: Partial<Record<ProviderKey, Route>> = {}) {
 const calledProviders = (fetchMock: ReturnType<typeof routeFetch>) =>
 	fetchMock.mock.calls.map(([input]) => {
 		const url = String(input);
-		return url.includes('brave') ? 'brave' : url.includes('perplexity') ? 'perplexity' : 'searxng';
+		return url.includes('googleapis.com')
+			? 'google'
+			: url.includes('brave')
+				? 'brave'
+				: url.includes('perplexity')
+					? 'perplexity'
+					: 'searxng';
 	});
 
 const statuses = (outcome: { providers: { id: string; status: string; backup: boolean }[] }) =>
@@ -510,7 +539,221 @@ describe('websearch server tools', () => {
 		configure({ brave: true });
 		const tools = await listedTools();
 		expect(tools.web_search).toContain('type');
-		expect(tools.search_places).toContain('location');
+		expect(tools.search_places).toEqual([
+			'latitude',
+			'limit',
+			'location',
+			'longitude',
+			'query',
+			'radius_m'
+		]);
+	});
+
+	it('offers places around coordinates with Google', async () => {
+		configure({ google: true });
+		expect((await listedTools()).search_places).toEqual([
+			'latitude',
+			'limit',
+			'location',
+			'longitude',
+			'query',
+			'radius_m'
+		]);
+	});
+
+	it('offers places by name only with SearXNG alone', async () => {
+		configure({ searxng: true });
+		expect((await listedTools()).search_places).toEqual(['limit', 'location', 'query']);
+	});
+});
+
+describe('searchPlaces', () => {
+	const query = { query: 'cafe', location: 'lisbon', limit: 3 };
+	const BRAVE_PLACES = { results: [{ title: 'Brave café', coordinates: [1, 2] }] };
+	const MAP = { results: [{ title: 'OSM café', latitude: '1', longitude: '2' }] };
+
+	it('needs Brave or SearXNG', async () => {
+		configure({ perplexity: true });
+		expect(service.placeProviders(getDb())).toEqual([]);
+		await expect(service.searchPlaces(getDb(), query)).rejects.toThrow(/Brave.*SearXNG/);
+	});
+
+	it('prefers Brave', async () => {
+		configure({ searxng: true, brave: true });
+		const fetchMock = routeFetch({ brave: { body: BRAVE_PLACES } });
+		const outcome = await service.searchPlaces(getDb(), query);
+		expect(outcome).toEqual({
+			provider: 'brave',
+			places: [{ name: 'Brave café', coordinates: [1, 2] }],
+			errors: []
+		});
+		expect(calledProviders(fetchMock)).toEqual(['brave']);
+	});
+
+	it('falls back to SearXNG when Brave fails', async () => {
+		configure({ searxng: true, brave: true });
+		const fetchMock = routeFetch({ brave: { status: 500 }, searxng: { body: MAP } });
+		const outcome = await service.searchPlaces(getDb(), query);
+		expect(outcome.provider).toBe('searxng');
+		expect(outcome.places).toEqual([{ name: 'OSM café', coordinates: [1, 2] }]);
+		expect(outcome.errors).toHaveLength(1);
+		expect(calledProviders(fetchMock)).toEqual(['brave', 'searxng']);
+	});
+
+	it('falls back to SearXNG when Brave finds nothing', async () => {
+		configure({ searxng: true, brave: true });
+		routeFetch({ brave: { body: { results: [] } }, searxng: { body: MAP } });
+		const outcome = await service.searchPlaces(getDb(), query);
+		expect(outcome).toMatchObject({
+			provider: 'searxng',
+			errors: ['Brave Search found no places']
+		});
+	});
+
+	it('answers empty, not with an error, when no provider finds anything', async () => {
+		configure({ searxng: true, brave: true });
+		routeFetch({ brave: { body: { results: [] } }, searxng: { body: { results: [] } } });
+		expect(await service.searchPlaces(getDb(), query)).toEqual({
+			provider: 'brave',
+			places: [],
+			errors: []
+		});
+	});
+
+	it('says which providers failed when the others found nothing', async () => {
+		configure({ searxng: true, brave: true });
+		routeFetch({ brave: { body: { results: [] } }, searxng: { status: 502 } });
+		expect(await service.searchPlaces(getDb(), query)).toEqual({
+			provider: 'brave',
+			places: [],
+			errors: ['SearXNG returned HTTP 502']
+		});
+	});
+
+	it("skips SearXNG for searches it can't run", async () => {
+		configure({ searxng: true, brave: true });
+		const fetchMock = routeFetch({ brave: { status: 500 } });
+		const nearby = { query: 'cafe', latitude: 1, longitude: 2, limit: 3 };
+		await expect(service.searchPlaces(getDb(), nearby)).rejects.toThrow(
+			/^Brave Search[^;]*; SearXNG skipped \(needs both query and location\)$/
+		);
+		expect(calledProviders(fetchMock)).toEqual(['brave']);
+	});
+
+	it('says why when only SearXNG is configured and the search has no location', async () => {
+		configure({ searxng: true });
+		await expect(
+			service.searchPlaces(getDb(), { query: 'cafe', latitude: 1, longitude: 2, limit: 3 })
+		).rejects.toThrow(/location name/);
+	});
+
+	it('throws with every reason when all providers fail', async () => {
+		configure({ searxng: true, brave: true });
+		routeFetch({ brave: { status: 500 }, searxng: { status: 502 } });
+		await expect(service.searchPlaces(getDb(), query)).rejects.toThrow(
+			/; SearXNG returned HTTP 502/
+		);
+	});
+
+	it('tries Google first, with photos only the searching user can load', async () => {
+		configure({ google: true, searxng: true, brave: true });
+		expect(service.placeProviders(getDb())).toEqual(['google', 'brave', 'searxng']);
+		const fetchMock = routeFetch();
+		const outcome = await service.searchPlaces(getDb(), query, { userId: 'u1' });
+		expect(outcome).toMatchObject({ provider: 'google', errors: [] });
+		expect(outcome.places).toEqual([
+			{
+				name: 'Google café',
+				coordinates: [1, 2],
+				photos: [{ url: expect.stringMatching(new RegExp(`^${PHOTO_PATH}`)) }]
+			}
+		]);
+		expect(calledProviders(fetchMock)).toEqual(['google']);
+		const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(input).toBe('https://places.googleapis.com/v1/places:searchText');
+		expect(new Headers(init.headers).get('x-goog-api-key')).toBe('google-key-4321');
+	});
+
+	it('uses the env Google key and an injected fetch', async () => {
+		config.GOOGLE_MAPS_API_KEY = 'env-google';
+		const global = routeFetch();
+		const injected = vi.fn(async () => new Response(JSON.stringify(GOOGLE_PLACES)));
+		const outcome = await service.searchPlaces(getDb(), query, {
+			fetchImpl: injected as unknown as typeof fetch
+		});
+		expect(outcome.provider).toBe('google');
+		// Without a user nobody could load the photos.
+		expect(outcome.places[0].photos).toBeUndefined();
+		expect(injected).toHaveBeenCalledTimes(1);
+		expect(global).not.toHaveBeenCalled();
+	});
+
+	it('falls back to Brave, then SearXNG, naming Google Maps', async () => {
+		configure({ google: true, searxng: true, brave: true });
+		const fetchMock = routeFetch({
+			google: { status: 403, body: { error: { message: 'API key not valid' } } },
+			brave: { body: { results: [] } },
+			searxng: { body: MAP }
+		});
+		const outcome = await service.searchPlaces(getDb(), query, { userId: 'u1' });
+		expect(outcome).toEqual({
+			provider: 'searxng',
+			places: [{ name: 'OSM café', coordinates: [1, 2] }],
+			errors: ['Google Places returned HTTP 403: API key not valid', 'Brave Search found no places']
+		});
+		expect(calledProviders(fetchMock)).toEqual(['google', 'brave', 'searxng']);
+	});
+
+	it('falls back to Brave when Google finds nothing', async () => {
+		configure({ google: true, brave: true });
+		routeFetch({ google: { body: { places: [] } }, brave: { body: BRAVE_PLACES } });
+		expect(await service.searchPlaces(getDb(), query)).toEqual({
+			provider: 'brave',
+			places: [{ name: 'Brave café', coordinates: [1, 2] }],
+			errors: ['Google Maps found no places']
+		});
+	});
+
+	it('answers empty from Google when nobody finds anything', async () => {
+		configure({ google: true, brave: true });
+		routeFetch({ google: { body: {} }, brave: { body: { results: [] } } });
+		expect(await service.searchPlaces(getDb(), query)).toEqual({
+			provider: 'google',
+			places: [],
+			errors: []
+		});
+	});
+
+	it('throws with the Google reason when Google is the only provider', async () => {
+		config.GOOGLE_MAPS_API_KEY = 'env-google';
+		const injected = vi.fn(async () => {
+			throw new Error('boom');
+		});
+		await expect(
+			service.searchPlaces(getDb(), query, { fetchImpl: injected as unknown as typeof fetch })
+		).rejects.toThrow(/^Google Places is unreachable \(boom\)$/);
+	});
+
+	it('stops instead of falling back from Google when the caller aborts', async () => {
+		configure({ google: true, brave: true });
+		const fetchMock = routeFetch({ google: 'hang' });
+		const controller = new AbortController();
+		const pending = service.searchPlaces(getDb(), { ...query, signal: controller.signal });
+		const reason = new Error('turn stopped');
+		controller.abort(reason);
+		await expect(pending).rejects.toBe(reason);
+		expect(calledProviders(fetchMock)).toEqual(['google']);
+	});
+
+	it('stops instead of falling back when the caller aborts', async () => {
+		configure({ searxng: true, brave: true });
+		const fetchMock = routeFetch({ brave: 'hang' });
+		const controller = new AbortController();
+		const pending = service.searchPlaces(getDb(), { ...query, signal: controller.signal });
+		const reason = new Error('turn stopped');
+		controller.abort(reason);
+		await expect(pending).rejects.toBe(reason);
+		expect(calledProviders(fetchMock)).toEqual(['brave']);
 	});
 });
 
@@ -540,11 +783,28 @@ describe('web_search tool registration', () => {
 		}
 	});
 
-	it('offers search_places only with a Brave key', async () => {
-		configure({ searxng: true });
+	it('offers search_places with Brave or SearXNG', async () => {
+		configure({ perplexity: true });
 		const without = await buildTools({ userId: 'u1', memoryEnabled: false });
 		expect(without.tools.search_places).toBeUndefined();
 		await without.close();
+
+		configure({ searxng: true });
+		const withSearxng = await buildTools({ userId: 'u1', memoryEnabled: false });
+		try {
+			routeFetch({
+				searxng: { body: { results: [{ title: 'OSM café', latitude: 1, longitude: 2 }] } }
+			});
+			const output = (await withSearxng.tools.search_places.execute!(
+				{ query: 'cafe', location: 'lisbon' },
+				{ toolCallId: 't1', messages: [], context: {} }
+			)) as { content: Array<{ text: string }> };
+			expect(output.content[0].text).toBe(
+				'Places via SearXNG (OpenStreetMap):\n[1] {"name":"OSM café","coordinates":[1,2]}'
+			);
+		} finally {
+			await withSearxng.close();
+		}
 
 		configure({ brave: true });
 		const withBrave = await buildTools({ userId: 'u1', memoryEnabled: false });
@@ -558,5 +818,71 @@ describe('web_search tool registration', () => {
 		} finally {
 			await withBrave.close();
 		}
+	});
+});
+
+describe('search_places with Google', () => {
+	const description = () =>
+		withServer(async (client) => {
+			const { tools } = await client.listTools();
+			return tools.find((t) => t.name === 'search_places')?.description ?? '';
+		});
+
+	it('mentions photos and reviews only when Google answers first', async () => {
+		configure({ brave: true });
+		expect(await description()).not.toContain('photos and reviews');
+		configure({ google: true });
+		expect(await description()).toContain('photos and reviews');
+	});
+
+	it('answers via Google Maps, with photo URLs for the calling user', async () => {
+		configure({ google: true, searxng: true });
+		const tools = await buildTools({ userId: 'u1', memoryEnabled: false });
+		try {
+			routeFetch();
+			const output = (await tools.tools.search_places.execute!(
+				{ query: 'cafe', location: 'lisbon' },
+				{ toolCallId: 't1', messages: [], context: {} }
+			)) as { content: Array<{ text: string }> };
+			const [header, line] = output.content[0].text.split('\n');
+			expect(header).toBe('Places via Google Maps:');
+			const place = JSON.parse(line.replace(/^\[1\] /, ''));
+			expect(place).toEqual({
+				name: 'Google café',
+				coordinates: [1, 2],
+				photos: [{ url: expect.stringMatching(new RegExp(`^${PHOTO_PATH}[\\w-]+$`)) }]
+			});
+		} finally {
+			await tools.close();
+		}
+	});
+
+	it('is offered with a Google Maps key alone, without web_search', async () => {
+		configure({ google: true });
+		const tools = await buildTools({ userId: 'u1', memoryEnabled: false });
+		try {
+			expect(tools.toolToServer.search_places).toBe('websearch');
+			expect(tools.tools.web_search).toBeUndefined();
+		} finally {
+			await tools.close();
+		}
+	});
+
+	it('notes the fallback when Google fails', async () => {
+		configure({ google: true, searxng: true });
+		routeFetch({
+			google: { status: 500, body: {} },
+			searxng: { body: { results: [{ title: 'OSM café', latitude: 1, longitude: 2 }] } }
+		});
+		const text = await withServer(async (client) => {
+			const res = await client.callTool({
+				name: 'search_places',
+				arguments: { query: 'cafe', location: 'lisbon' }
+			});
+			return (res.content as { text: string }[])[0].text;
+		});
+		expect(text.split('\n')[0]).toBe(
+			'Places via SearXNG (OpenStreetMap) (fallback; Google Places returned HTTP 500):'
+		);
 	});
 });

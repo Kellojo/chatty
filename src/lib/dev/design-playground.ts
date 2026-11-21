@@ -253,7 +253,16 @@ function widgets(): PlaygroundMessage[] {
 								name: 'Fábrica Coffee Roasters',
 								lat: 38.7163,
 								lng: -9.1428,
-								notes: 'Great flat white'
+								notes: 'Great flat white',
+								openNow: true,
+								reviews: [
+									{
+										author: 'Marta S.',
+										rating: 5,
+										when: '2 months ago',
+										text: 'Excellent flat white and friendly baristas. Gets busy around noon.'
+									}
+								]
 							}
 						]
 					})
@@ -359,7 +368,7 @@ export const BUILTIN_TOOL_EXAMPLES: Record<string, ReturnType<typeof mcp>[]> = {
 		mcp(
 			'search_places',
 			{ query: 'coffee', location: 'lisbon portugal', limit: 1 },
-			'[1] {"name":"Fábrica Coffee Roasters","address":"R. das Portas de Santo Antão 136, 1150-269 Lisboa","categories":["Coffee & Tea","Cafe"],"rating":"4.6/5 (1820 reviews)","price":"€","hoursToday":"08:00–19:00","coordinates":[38.7167,-9.1405],"website":"https://fabricacoffeeroasters.com"}'
+			'Places via Brave Search:\n[1] {"name":"Fábrica Coffee Roasters","address":"R. das Portas de Santo Antão 136, 1150-269 Lisboa","categories":["Coffee & Tea","Cafe"],"rating":"4.6/5 (1820 reviews)","price":"€","hoursToday":"08:00–19:00","coordinates":[38.7167,-9.1405],"website":"https://fabricacoffeeroasters.com"}'
 		)
 	],
 	datetime: [

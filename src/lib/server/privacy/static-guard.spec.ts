@@ -47,6 +47,8 @@ const FETCH_FILES: Record<string, string> = {
 	'lib/server/mcp/servers/fs.ts': 'fs_curl, a tool; tools are not restricted',
 	'lib/server/websearch/providers.ts': 'web_search, a tool; tools are not restricted',
 	'lib/server/websearch/service.ts': 'web_search (a tool) and admin setup',
+	'lib/server/maps/google.ts': 'search_places (a tool), map tiles and photos, no chat content',
+	'lib/server/maps/service.ts': 'search_places (a tool), map tiles, photos and admin setup',
 	'lib/server/skills/gitImport.ts': 'started by the user, no chat content',
 	'lib/server/benchmarks/artificial-analysis.ts': 'model scores only, no user data'
 };

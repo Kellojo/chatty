@@ -5,10 +5,12 @@ import { PROVIDER_NAMES, type ProviderId, type SearchType } from '../../websearc
 import {
 	canSearch,
 	getSearchMode,
-	isPlaceSearchConfigured,
+	PLACE_PROVIDER_NAMES,
+	placeProviders,
 	searchOrder,
 	searchPlaces,
 	webSearch,
+	type PlaceSearchOutcome,
 	type WebSearchOutcome
 } from '../../websearch/service.js';
 import type { CallerContext } from '../types.js';
@@ -72,6 +74,22 @@ export function formatResults(query: string, outcome: WebSearchOutcome): string 
 		return snippet ? `${heading}\n${snippet}` : heading;
 	});
 	return [`Results for "${query}" ${header(outcome)}:`, ...lines].join('\n\n');
+}
+
+function formatPlaces(outcome: PlaceSearchOutcome): string {
+	const source =
+		outcome.provider === 'searxng'
+			? 'SearXNG (OpenStreetMap)'
+			: PLACE_PROVIDER_NAMES[outcome.provider];
+	const errors = outcome.errors.join('; ');
+	if (outcome.places.length === 0) {
+		return `No places found via ${source}${errors ? ` (${errors})` : ''}.`;
+	}
+	const note = errors ? ` (fallback; ${errors})` : '';
+	return [
+		`Places via ${source}${note}:`,
+		...outcome.places.map((p, i) => `[${i + 1}] ${JSON.stringify(p)}`)
+	].join('\n');
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -146,55 +164,76 @@ export function createWebsearchServer(ctx?: CallerContext): McpServer {
 
 	if (!canSearch(db, 'web')) webSearchTool.disable();
 
+	// Google and Brave search around coordinates; SearXNG's OpenStreetMap engines only by name.
+	const places = placeProviders(db);
+	const nearby = places[0] !== 'searxng';
+	const google = places[0] === 'google';
+	const location = z
+		.string()
+		.trim()
+		.min(1)
+		.describe('City and country, e.g. "lisbon portugal" or "austin tx united states"');
+	const query = z.string().trim().min(1).describe('What to look for, e.g. "coffee"');
+	const nearbyInput = {
+		latitude: z.number().min(-90).max(90).optional(),
+		longitude: z.number().min(-180).max(180).optional(),
+		radius_m: z
+			.number()
+			.positive()
+			.optional()
+			.describe('Search radius in meters around the coordinates')
+	};
 	const placesTool = server.registerTool(
 		'search_places',
 		{
-			description:
-				'Find places (restaurants, shops, sights, services…) near a location: name, address, ' +
-				"rating, price, phone, today's opening hours, coordinates and website. Give a location " +
-				'name or coordinates; leave out query to list popular places there.',
+			description: google
+				? 'Find places (restaurants, shops, sights, services…) near a location: name, address, ' +
+					'rating, price, phone, opening hours, a short summary, coordinates, website, photos ' +
+					'and reviews. Give a location name or coordinates; leave out query to list popular ' +
+					'places there. Base what you say about a place on its reviews and summary.'
+				: nearby
+					? 'Find places (restaurants, shops, sights, services…) near a location: name, address, ' +
+						"rating, price, phone, today's opening hours, coordinates and website. Give a location " +
+						'name or coordinates; leave out query to list popular places there.'
+					: 'Find places (restaurants, shops, sights, services…) in a location from OpenStreetMap: ' +
+						'name, address, category, opening hours, phone, coordinates and website. No ratings.',
 			inputSchema: {
-				query: z.string().trim().min(1).optional().describe('What to look for, e.g. "coffee"'),
-				location: z
-					.string()
-					.trim()
-					.min(1)
-					.optional()
-					.describe('City and country, e.g. "lisbon portugal" or "austin tx united states"'),
-				latitude: z.number().min(-90).max(90).optional(),
-				longitude: z.number().min(-180).max(180).optional(),
-				radius_m: z
-					.number()
-					.positive()
-					.optional()
-					.describe('Search radius in meters around the coordinates'),
+				query: nearby ? query.optional() : query,
+				location: nearby ? location.optional() : location,
+				...(nearby && nearbyInput),
 				limit: z.number().int().min(1).max(MAX_PLACES).optional()
 			}
 		},
-		async ({ query, location, latitude, longitude, radius_m, limit }, extra) => {
+		async (args, extra) => {
+			const { query, location, limit } = args;
+			// Only given when nearbyInput is part of the schema.
+			const { latitude, longitude, radius_m } = args as z.infer<z.ZodObject<typeof nearbyInput>>;
 			const hasCoords = latitude !== undefined && longitude !== undefined;
 			if (!hasCoords && !location) {
 				return err('give a location or both latitude and longitude');
 			}
 			try {
-				const places = await searchPlaces(getDb(), {
-					query,
-					location,
-					latitude,
-					longitude,
-					radius: radius_m,
-					limit: limit ?? DEFAULT_PLACES,
-					signal: extra.signal
-				});
-				if (places.length === 0) return text('No places found.');
-				return text(places.map((p, i) => `[${i + 1}] ${JSON.stringify(p)}`).join('\n'));
+				const outcome = await searchPlaces(
+					getDb(),
+					{
+						query,
+						location,
+						latitude,
+						longitude,
+						radius: radius_m,
+						limit: limit ?? DEFAULT_PLACES,
+						signal: extra.signal
+					},
+					{ userId: ctx?.userId }
+				);
+				return text(formatPlaces(outcome));
 			} catch (e) {
 				if (extra.signal.aborted) throw e;
 				return err(`place search failed: ${message(e)}`);
 			}
 		}
 	);
-	if (!isPlaceSearchConfigured(db)) placesTool.disable();
+	if (places.length === 0) placesTool.disable();
 
 	return server;
 }

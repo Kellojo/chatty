@@ -69,13 +69,77 @@
 	font-weight: 500;
 }
 
+.map-widget .leaflet-popup-content > * + * {
+	margin-top: 6px;
+}
+
+.map-widget-photo {
+	margin: 0;
+}
+
+.map-widget-photo img {
+	display: block;
+	width: 100%;
+	max-width: 240px;
+	height: auto;
+	aspect-ratio: 16 / 9;
+	object-fit: cover;
+	border-radius: 0.5rem;
+	background: var(--muted);
+}
+
+.map-widget-photo figcaption {
+	margin-top: 2px;
+	font-size: 10px;
+	color: var(--muted-foreground);
+}
+
+.map-widget-reviews {
+	margin: 0;
+	padding: 6px 0 0;
+	list-style: none;
+	border-top: 1px solid var(--border);
+}
+
+.map-widget-reviews > li + li {
+	margin-top: 6px;
+}
+
+.map-widget .leaflet-popup-content p.map-widget-review-text,
+.map-widget .leaflet-popup-content p.map-widget-review-meta {
+	margin: 0;
+}
+
+.map-widget-review-text {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	line-clamp: 3;
+	overflow: hidden;
+}
+
+.map-widget-review-meta {
+	font-size: 0.7rem;
+	color: var(--muted-foreground);
+}
+
 .map-widget .leaflet-control-attribution {
 	font-size: 10px;
 	background: color-mix(in oklab, var(--background) 80%, transparent);
 	color: var(--muted-foreground);
 }
 
-/* Dim and invert the light OSM tiles in dark mode; markers stay untouched. */
-.dark .map-widget .leaflet-tile-pane {
+/* Dim and invert the light OSM tiles in dark mode; markers stay untouched.
+   Google's tiles are shown as Google serves them. */
+.dark .map-widget .leaflet-container:not(.map-widget-google) .leaflet-tile-pane {
 	filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9);
+}
+
+/* Google's logo on Google tiles: 16–19px tall, never scaled out of proportion. */
+.map-widget .map-widget-google-logo {
+	display: block;
+	height: 18px;
+	width: auto;
+	pointer-events: none;
+	user-select: none;
 }

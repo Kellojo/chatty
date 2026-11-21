@@ -68,7 +68,11 @@ const schema = z.object({
 	// Settings → Services; these take precedence when set.
 	SEARXNG_URL: z.string().url().optional(),
 	BRAVE_SEARCH_API_KEY: z.string().min(1).optional(),
-	PERPLEXITY_API_KEY: z.string().min(1).optional()
+	PERPLEXITY_API_KEY: z.string().min(1).optional(),
+	// Google Maps Platform key (Places API (New) and Map Tiles API) for place search with
+	// photos and reviews, and Google map tiles. Optional: it can also be saved in
+	// Settings → Services; this one takes precedence when set.
+	GOOGLE_MAPS_API_KEY: z.string().min(1).optional()
 });
 
 export type Config = z.infer<typeof schema>;

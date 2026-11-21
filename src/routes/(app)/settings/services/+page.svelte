@@ -5,6 +5,7 @@
 	import { onMount } from 'svelte';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
+	import MapIcon from '@lucide/svelte/icons/map';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
@@ -12,6 +13,7 @@
 	import SettingsListItem from '$lib/components/app/settings/SettingsListItem.svelte';
 	import ArtificialAnalysisDialog from '$lib/components/app/settings/services/ArtificialAnalysisDialog.svelte';
 	import ProviderIcon from '$lib/components/app/ProviderIcon.svelte';
+	import GoogleMapsDialog from '$lib/components/app/settings/services/GoogleMapsDialog.svelte';
 	import WebSearchDialog from '$lib/components/app/settings/services/WebSearchDialog.svelte';
 	import WebSearchModePanel from '$lib/components/app/settings/services/WebSearchModePanel.svelte';
 	import {
@@ -32,7 +34,13 @@
 	const aaFailed = $derived(aaConnected && aa.aa.status.lastError !== null);
 
 	/** Every service on this page; a new one adds its id here, a row and a dialog below. */
-	const SERVICE_IDS = ['artificial-analysis', 'searxng', 'brave', 'perplexity'] as const;
+	const SERVICE_IDS = [
+		'artificial-analysis',
+		'searxng',
+		'brave',
+		'perplexity',
+		'google-maps'
+	] as const;
 	type ServiceId = (typeof SERVICE_IDS)[number];
 	const isServiceId = (id: string | null): id is ServiceId =>
 		(SERVICE_IDS as readonly (string | null)[]).includes(id);
@@ -48,8 +56,10 @@
 	const searxngDialog = dialogOpen('searxng');
 	const braveDialog = dialogOpen('brave');
 	const perplexityDialog = dialogOpen('perplexity');
+	const googleMapsDialog = dialogOpen('google-maps');
 
 	const ws = $derived(data.webSearch);
+	const googleMaps = $derived(data.maps.google);
 	/** Modes, Default and Backup only only mean something with more than one provider. */
 	const wsSeveral = $derived(connectedProviders(ws).length > 1);
 
@@ -184,6 +194,35 @@
 	</ul>
 </SettingsSection>
 
+<SettingsSection title="Maps" description="Place search and map tiles for chat maps." flush>
+	<ul class="divide-y divide-border/60 border-t border-border/60">
+		<SettingsListItem title="Google Maps">
+			{#snippet leading()}<MapIcon class="size-4" />{/snippet}
+			{#snippet badges()}
+				{#if googleMaps.source}
+					<Badge variant="secondary" class="text-success-foreground">Connected</Badge>
+				{/if}
+			{/snippet}
+			{#snippet meta()}
+				{#if googleMaps.source}
+					API key ••••{googleMaps.hint}
+				{:else}
+					Places with photos and reviews, and Google map tiles
+				{/if}
+			{/snippet}
+			{#snippet trailing()}
+				<Button
+					size="sm"
+					variant={googleMaps.source ? 'outline' : 'default'}
+					onclick={() => (configuring = 'google-maps')}
+				>
+					{googleMaps.source ? 'Configure' : 'Connect'}
+				</Button>
+			{/snippet}
+		</SettingsListItem>
+	</ul>
+</SettingsSection>
+
 <ArtificialAnalysisDialog
 	bind:open={aaDialog.get, aaDialog.set}
 	aa={aa.aa}
@@ -198,3 +237,4 @@
 	provider="perplexity"
 	info={ws}
 />
+<GoogleMapsDialog bind:open={googleMapsDialog.get, googleMapsDialog.set} info={googleMaps} />

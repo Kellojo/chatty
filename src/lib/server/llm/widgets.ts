@@ -27,7 +27,7 @@ const WIDGETS: PromptWidget[] = [
 	},
 	{
 		language: 'map',
-		prompt: `\`\`\`map: whenever your answer lists specific local places (restaurants, hotels, shops, landmarks, ...), end it with {"title":"optional","markers":[{"name":"required","lat":38.7151,"lng":-9.1341,"address":"optional","phone":"optional","website":"optional","rating":4.4,"notes":"optional"}]}. Take coordinates from a place-search tool when you used one, otherwise use well-known coordinates of established places. Never invent coordinates: leave a place out rather than guess, and never put one place's coordinates under another's name. The map frames its markers itself. Up to ~10 markers, best matches first.`
+		prompt: `\`\`\`map: whenever your answer lists specific local places (restaurants, hotels, shops, landmarks, ...), end it with {"title":"optional","markers":[{"name":"required","lat":38.7151,"lng":-9.1341,"address":"optional","phone":"optional","website":"optional","rating":4.4,"notes":"optional","photos":[…],"reviews":[…]}]}. Take coordinates from a place-search tool when you used one, otherwise use well-known coordinates of established places. Copy photos and reviews verbatim from search_places results when present; never invent them. Never invent coordinates: leave a place out rather than guess, and never put one place's coordinates under another's name. The map frames its markers itself. Up to ~10 markers, best matches first.`
 	},
 	{
 		language: 'events',

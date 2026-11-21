@@ -4,6 +4,7 @@ import { listAaModels } from '$lib/server/db/repo/aa-models.js';
 import { listModels, toPublic as modelToPublic } from '$lib/server/db/repo/models.js';
 import { getKeyInfo, getStatus } from '$lib/server/benchmarks/artificial-analysis.js';
 import { matchScores } from '$lib/server/benchmarks/match.js';
+import { getMapsInfo } from '$lib/server/maps/service.js';
 import { getWebSearchInfo } from '$lib/server/websearch/service.js';
 import type { PageServerLoad } from './$types';
 
@@ -20,6 +21,7 @@ export const load: PageServerLoad = ({ locals }) => {
 			matched,
 			total: models.length
 		},
-		webSearch: getWebSearchInfo(db)
+		webSearch: getWebSearchInfo(db),
+		maps: getMapsInfo(db)
 	};
 };
