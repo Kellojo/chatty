@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ConversationRow } from '../db/repo/conversations.js';
-import { BASE_PROMPT, buildSystemPrompt } from './systemPrompt.js';
+import { BASE_PROMPT, buildSystemPrompt, todayLine } from './systemPrompt.js';
 import { widgetsPrompt } from './widgets.js';
 
 // Without tool names only the always-on widgets are listed.
@@ -66,5 +66,23 @@ ${widgets}`);
 		const conv = makeConv();
 		const result = await buildSystemPrompt(conv, '   hello world   ');
 		expect(result).toBe(`${basePrompt}\n\nhello world`);
+	});
+});
+
+describe('todayLine', () => {
+	it('states the date in the given zone, where it may already be tomorrow', () => {
+		const now = new Date('2026-11-21T23:30:00Z');
+		expect(todayLine(now, 'Europe/Berlin')).toBe(
+			'Today is Sunday, 22 November 2026 (Europe/Berlin).'
+		);
+		expect(todayLine(now, 'UTC')).toBe('Today is Saturday, 21 November 2026 (UTC).');
+	});
+
+	it('puts the date ahead of the global instructions when asked to', async () => {
+		const result = await buildSystemPrompt(makeConv(), {
+			globalInstructions: 'be brief',
+			today: new Date('2026-11-21T12:00:00Z')
+		});
+		expect(result).toMatch(/\n\nToday is Saturday, 21 November 2026 \([^)]+\)\.\n\nbe brief$/);
 	});
 });

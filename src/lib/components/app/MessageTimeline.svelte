@@ -5,6 +5,7 @@
 	import { cn } from '$lib/utils.js';
 	import type { TimeFormat } from '$lib/user-settings.js';
 	import { Markdown } from '$lib/components/ai/markdown/index.js';
+	import { indexSources } from '$lib/source-cards.js';
 	import { Message, MessageActions, MessageContent } from '$lib/components/ai/message/index.js';
 	import ActivityGroup from './ActivityGroup.svelte';
 	import HtmlRenderFrame from './HtmlRenderFrame.svelte';
@@ -83,6 +84,9 @@
 		speech?: SpeechPlayback | null;
 		class?: string;
 	} = $props();
+
+	/** What the replies' ```links fences may cite, filled in from the tools' source cards. */
+	const sourceIndex = $derived(indexSources(messages));
 
 	let mounted = $state(false);
 	/** Detected after mount so the server markup and hydration agree. */
@@ -171,6 +175,7 @@
 								class="w-full max-w-none"
 								content={part.text}
 								{conversationId}
+								{sourceIndex}
 								streaming={messageActive}
 							/>
 						{/if}

@@ -176,12 +176,15 @@
 	import { codingAssetUrl, escapeLocalImagePaths, isLocalImagePath } from '$lib/coding-assets.js';
 	import { t3ThreadLinkToPath } from '$lib/t3-thread-links.js';
 	import { loadKatexCss, mayContainMath } from './katex-css.js';
+	import type { SourceIndex } from '$lib/source-cards.js';
 
 	type Props = {
 		content: string;
 		id?: string;
 		class?: string;
 		conversationId?: string | null;
+		/** The pages the conversation's tools returned: what a ```links fence may cite. */
+		sourceIndex?: SourceIndex | null;
 		/**
 		 * Whether the content may still grow. Finished content is parsed once as
 		 * a whole instead of block by block with incomplete-markdown repair, which
@@ -198,6 +201,7 @@
 		id,
 		class: className,
 		conversationId,
+		sourceIndex = null,
 		streaming = true,
 		...restProps
 	}: Props = $props();
@@ -208,6 +212,12 @@
 		'conversationId',
 		untrack(() => conversationId)
 	);
+	// A getter: tool results keep arriving while the reply streams.
+	setContext('sources', {
+		get current() {
+			return sourceIndex;
+		}
+	});
 
 	// Coding agents embed screenshots by their path on the coding machine.
 	// Streamdown would block those (`C:` reads as a URL scheme), so they are

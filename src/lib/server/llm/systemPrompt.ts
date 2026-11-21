@@ -1,3 +1,5 @@
+import { DateTime } from 'luxon';
+import { config } from '../config.js';
 import type { ConversationRow } from '../db/repo/conversations.js';
 import { resolveSkill, skillsIndexPrompt } from '../skills/scanner.js';
 import { widgetsPrompt } from './widgets.js';
@@ -18,6 +20,16 @@ export interface SystemPromptOptions {
 	toolNames?: Iterable<string>;
 	// Set false where nobody renders widgets (hidden agent runs).
 	includeWidgets?: boolean;
+	// States this day's date, so "next weekend" or "upcoming" needs no clock tool call.
+	// Only the date: it changes once a day, which keeps the prompt cacheable.
+	today?: Date;
+}
+
+/** "Today is Saturday, 21 November 2026 (Europe/Berlin)." in the server's zone. */
+export function todayLine(now: Date, zone: string = config.TZ): string {
+	const dt = DateTime.fromJSDate(now, { zone });
+	const day = (dt.isValid ? dt : DateTime.fromJSDate(now, { zone: 'utc' })).setLocale('en-GB');
+	return `Today is ${day.toFormat('cccc, d LLLL yyyy')} (${day.zoneName}).`;
 }
 
 /**
@@ -62,7 +74,8 @@ export async function buildSystemPromptParts(
 
 	const extra = opts.globalInstructions?.trim() ?? '';
 	const warning = opts.extraWarning ? `Note for this turn: ${opts.extraWarning}` : '';
-	const system = [extra, warning].filter(Boolean).join('\n\n');
+	const date = opts.today ? todayLine(opts.today) : '';
+	const system = [date, extra, warning].filter(Boolean).join('\n\n');
 
 	return {
 		base: conversation.system_prompt ?? BASE_PROMPT,

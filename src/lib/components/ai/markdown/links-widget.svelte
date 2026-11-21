@@ -1,15 +1,18 @@
 <script lang="ts">
+	import { getContext } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import LibraryBigIcon from '@lucide/svelte/icons/library-big';
 	import WidgetCard from './widget-card.svelte';
 	import LinkSafetyModal from './link-safety-modal.svelte';
 	import { inlineImageUrl } from './image-url.js';
+	import { sourceKey, type SourceIndex } from '$lib/source-cards.js';
 
 	/**
-	 * A ```links fence: an answer's sources as a footnote line under it, typically the
-	 * `fetch` / `web_search` source cards passed through verbatim. Payload:
+	 * A ```links fence: an answer's sources as a footnote line under it. Payload:
 	 * `{ title?, links: [{ url, title?, site?, description?, favicon? }] }`
-	 * or a bare array of links.
+	 * or a bare array of links. The model usually gives just the URLs; the rest comes
+	 * from the cards the conversation's `fetch` / `web_search` results returned, and a
+	 * URL none of its tool results contained is left out.
 	 */
 	type Source = {
 		url: string;
@@ -72,6 +75,27 @@
 		return u.protocol === 'https:' || u.protocol === 'http:' ? u : null;
 	}
 
+	const sources = getContext<{ readonly current: SourceIndex | null } | undefined>('sources');
+
+	/**
+	 * A link (or bare URL) with its tool card filled in under what the model wrote.
+	 * Null when the conversation's tools returned pages but never this one.
+	 */
+	function withCard(v: unknown): Record<string, unknown> | null {
+		const link = typeof v === 'string' ? { url: v } : rec(v);
+		const raw = str(link?.url ?? link?.href);
+		if (!link || !raw) return null;
+		const index = sources?.current;
+		const key = sourceKey(raw);
+		if (!index || !key) return link;
+		const card = index.cards.get(key);
+		// Without any tool results (an answer from memory) there is nothing to check against.
+		if (!card && !index.seen.has(key) && index.seen.size > 0) return null;
+		if (!card) return link;
+		const given = Object.fromEntries(Object.entries(link).filter(([, value]) => str(value)));
+		return { ...card, ...given };
+	}
+
 	function parseSource(v: unknown): Source | null {
 		const l = rec(v);
 		const url = webUrl(l?.url ?? l?.href);
@@ -107,7 +131,7 @@
 			const seen = new Set<string>();
 			const links: Source[] = [];
 			for (const item of list) {
-				const source = parseSource(item);
+				const source = parseSource(withCard(item));
 				if (!source || seen.has(source.url)) continue;
 				seen.add(source.url);
 				if (links.length < MAX_LINKS) links.push(source);

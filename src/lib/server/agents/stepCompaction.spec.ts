@@ -18,6 +18,7 @@ const {
 	compactStepMessages,
 	compactionThreshold,
 	createStepSummarizer,
+	equalShareCap,
 	splitSteps,
 	SUMMARY_MARKER
 } = await import('./stepCompaction.js');
@@ -81,6 +82,18 @@ describe('splitSteps', () => {
 	});
 });
 
+describe('equalShareCap', () => {
+	it('is null when the sizes already fit', () => {
+		expect(equalShareCap([100, 200], 300)).toBeNull();
+	});
+
+	it('lets small sizes keep theirs and splits the rest equally among the large ones', () => {
+		// 100 stays; 900 left for the two large ones.
+		expect(equalShareCap([1000, 100, 5000], 1000)).toBe(450);
+		expect(equalShareCap([600, 600, 600], 900)).toBe(300);
+	});
+});
+
 describe('compactStepMessages', () => {
 	it('leaves the prompt alone under the threshold', async () => {
 		const messages = run('x'.repeat(5000));
@@ -123,6 +136,50 @@ describe('compactStepMessages', () => {
 		const text = outputOf(result.messages, 4);
 		expect(text.length).toBeLessThan(11_000);
 		expect(text).toContain('chars truncated');
+	});
+
+	it('shrinks parallel results that only overflow together to an equal share', async () => {
+		const ids = ['p0', 'p1', 'p2', 'p3'];
+		const messages: ModelMessage[] = [
+			{ role: 'user', content: [{ type: 'text', text: 'Compare four pages.' }] },
+			{
+				role: 'assistant',
+				content: ids.map((id) => ({
+					type: 'tool-call' as const,
+					toolCallId: id,
+					toolName: 'fetch',
+					input: { id }
+				}))
+			},
+			{
+				role: 'tool',
+				content: ids.map((id, i) => ({
+					type: 'tool-result' as const,
+					toolCallId: id,
+					toolName: 'fetch',
+					// Each is under the single-output share (10,000 chars); together over half the threshold.
+					output: {
+						type: 'text' as const,
+						value: (i === 0 ? 's' : 'p').repeat(i === 0 ? 1000 : 9000)
+					}
+				}))
+			}
+		];
+		const result = await compactStepMessages({
+			messages,
+			promptTokens: 12_000,
+			thresholdTokens: 10_000
+		});
+		expect(result.truncated).toBe(3);
+		const outputs = (result.messages[2].content as Array<{ output: { value: string } }>).map(
+			(p) => p.output.value
+		);
+		expect(outputs[0]).toBe('s'.repeat(1000));
+		for (const text of outputs.slice(1)) {
+			expect(text).toContain('chars truncated');
+			// (20,000 − 1,000) / 3 each, plus the truncation note.
+			expect(text.length).toBeLessThan(6_400);
+		}
 	});
 
 	it('folds older steps into a summary when eliding is not enough', async () => {

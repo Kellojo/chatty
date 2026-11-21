@@ -39,22 +39,39 @@ function header(outcome: WebSearchOutcome): string {
 }
 
 /**
- * One line per result: its source card first and verbatim (for citing), then which
- * providers found it and when it was published. `via` is left out when one provider
- * found every result, since it would only repeat the header.
+ * Whether a result links somewhere fetchable: an http(s) URL on a dotted host.
+ * Some engines hand back their own redirect links (`http://go/v1/…`) instead.
  */
-function formatResults(query: string, outcome: WebSearchOutcome): string {
+export function isWebResultUrl(url: string): boolean {
+	if (!URL.canParse(url)) return false;
+	const u = new URL(url);
+	return (u.protocol === 'https:' || u.protocol === 'http:') && u.hostname.includes('.');
+}
+
+/**
+ * Two lines per result: title, site and URL, then the snippet with which providers
+ * found it and when it was published. Favicons and preview images stay out: they
+ * only matter to the ```links widget, which gets the full cards separately.
+ * `via` is left out when one provider found every result, since it would only
+ * repeat the header.
+ */
+export function formatResults(query: string, outcome: WebSearchOutcome): string {
 	if (outcome.results.length === 0) return `No results for "${query}" ${header(outcome)}.`;
 	const contributors = new Set(outcome.results.flatMap((r) => r.via));
 	const showVia = contributors.size > 1;
 	const lines = outcome.results.map((r, i) => {
+		const { url, title, site, description } = r.card;
 		const notes = [
 			...(showVia ? [`via ${names(r.via).join(', ')}`] : []),
 			...(r.published ? [`published ${r.published}`] : [])
 		];
-		return `[${i + 1}] ${JSON.stringify(r.card)}${notes.length ? ` (${notes.join(' · ')})` : ''}`;
+		const snippet = [description, notes.length ? `(${notes.join(' · ')})` : '']
+			.filter(Boolean)
+			.join(' ');
+		const heading = `[${i + 1}] ${title}${site && !title.includes(site) ? ` — ${site}` : ''}\n${url}`;
+		return snippet ? `${heading}\n${snippet}` : heading;
 	});
-	return [`Results for "${query}" ${header(outcome)}:`, ...lines].join('\n');
+	return [`Results for "${query}" ${header(outcome)}:`, ...lines].join('\n\n');
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -77,13 +94,13 @@ export function createWebsearchServer(ctx?: CallerContext): McpServer {
 		{
 			description:
 				(news ? 'Search the web, or recent news with type "news". ' : 'Search the web. ') +
-				'Each result is a source card (url, title, site, snippet). ' +
+				'Each result has a title, site, URL and snippet. ' +
 				(combining
 					? 'Results are merged from several search engines; "via" names the ones that found each result. '
 					: '') +
 				'Use fetch to read a result in full before relying on details. ' +
 				'To cite results, cite inline as [1], [2]… and end your answer with a ' +
-				'```links block of {"links":[card, …]} (cards verbatim, in citation order).',
+				'```links block of {"links":[{"url":"…"}, …]} (the results’ URLs, in citation order).',
 			inputSchema: {
 				query: z.string().trim().min(1),
 				...(news && {
@@ -102,15 +119,23 @@ export function createWebsearchServer(ctx?: CallerContext): McpServer {
 		async ({ query, limit, time_range, ...rest }, extra) => {
 			const type = 'type' in rest ? (rest.type as SearchType | undefined) : undefined;
 			try {
-				const outcome = await webSearch(getDb(), query, {
+				const found = await webSearch(getDb(), query, {
 					limit: limit ?? DEFAULT_RESULTS,
 					timeRange: time_range,
 					type,
 					signal: extra.signal
 				});
+				const outcome = {
+					...found,
+					results: found.results.filter((r) => isWebResultUrl(r.card.url))
+				};
 				// Lets the user's ```links cards show these sites' favicons (/api/favicon).
 				if (ctx) for (const r of outcome.results) rememberSource(ctx.userId, r.card);
-				return text(formatResults(query, outcome));
+				// The cards are for the chat's ```links widget only: the model gets `content`.
+				return {
+					...text(formatResults(query, outcome)),
+					structuredContent: { sources: outcome.results.map((r) => r.card) }
+				};
 			} catch (e) {
 				// A cancelled call gets no answer; let the MCP layer handle it as such.
 				if (extra.signal.aborted) throw e;

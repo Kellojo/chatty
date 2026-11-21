@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { page } from 'vitest/browser';
 import LinksWidget from './links-widget.svelte';
+import { indexSources } from '$lib/source-cards.js';
 
 const payload = JSON.stringify({
 	links: [
@@ -117,5 +118,57 @@ describe('LinksWidget', () => {
 		expect(open).not.toHaveBeenCalled();
 		await page.getByRole('button', { name: 'Open link' }).click();
 		expect(open).toHaveBeenCalledWith('https://www.example.com/post', '_blank', 'noreferrer');
+	});
+	it('fills cited URLs in from the tool cards and drops URLs no tool returned', async () => {
+		const index = indexSources([
+			{
+				parts: [
+					{
+						type: 'tool-web_search',
+						output: {
+							content: [{ type: 'text', text: 'also https://seen.example/page' }],
+							structuredContent: {
+								sources: [
+									{
+										url: 'https://www.songkick.com/artists/1-lane-8',
+										title: 'Lane 8 Tour Dates',
+										site: 'Songkick'
+									}
+								]
+							}
+						}
+					}
+				]
+			}
+		]);
+		const code = JSON.stringify({
+			links: [
+				{ url: 'http://songkick.com/artists/1-lane-8/' },
+				'https://seen.example/page',
+				{ url: 'https://made-up.example/never-fetched', title: 'Invented' }
+			]
+		});
+		const screen = render(LinksWidget, {
+			props: { code, isIncomplete: false },
+			context: new Map([['sources', { current: index }]])
+		});
+		await expect
+			.element(screen.getByRole('link', { name: '1. Lane 8 Tour Dates, Songkick (songkick.com)' }))
+			.toBeInTheDocument();
+		await expect
+			.element(screen.getByRole('link', { name: /^2\. seen\.example\/page/ }))
+			.toBeInTheDocument();
+		expect(screen.getByRole('link').elements()).toHaveLength(2);
+	});
+
+	it('keeps every link when the conversation has no tool results to check against', async () => {
+		const code = JSON.stringify({
+			links: [{ url: 'https://from-memory.example/', title: 'Known' }]
+		});
+		const screen = render(LinksWidget, {
+			props: { code, isIncomplete: false },
+			context: new Map([['sources', { current: indexSources([]) }]])
+		});
+		await expect.element(screen.getByRole('link', { name: /Known/ })).toBeInTheDocument();
 	});
 });

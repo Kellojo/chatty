@@ -13,8 +13,21 @@ const log = createLogger('webfetch');
 const MAX_BYTES = 1024 * 1024;
 /** Only the start of a page is searched for <head> metadata. */
 const MAX_HEAD_BYTES = 256 * 1024;
+/**
+ * Characters returned per call unless the model asks for more: a whole page
+ * would fill a small local model's context in one step. Later chunks come
+ * from `start_index`.
+ */
+const DEFAULT_MAX_CHARS = 8000;
+const MAX_CHARS = 50_000;
+/** A <main> or lone <article> with less text than this isn't trusted to be the page's content. */
+const MIN_MAIN_TEXT = 400;
+const MAX_EVENTS = 25;
 
-/** A page's source card: one entry of a ```links fence's `links` array. */
+/**
+ * A page's source card. Tools hand cards to the chat in `structuredContent.sources`
+ * (which the model never sees); the ```links widget fills cited URLs in from them.
+ */
 export type PageMeta = {
 	url: string;
 	title: string;
@@ -367,6 +380,172 @@ export function extractPageMeta(html: string, pageUrl: string): PageMeta {
 	) as unknown as PageMeta;
 }
 
+type Json = Record<string, unknown>;
+
+const isJson = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : v == null ? [] : [v]);
+
+/** The parsed JSON-LD blocks of a page; malformed ones (common in the wild) are skipped. */
+function ldJsonBlocks(html: string): unknown[] {
+	const blocks: unknown[] = [];
+	const script =
+		/<script\b[^>]*type\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script\s*>/gi;
+	for (const m of html.matchAll(script)) {
+		const raw = m[1].replace(/^\s*(?:<!--|<!\[CDATA\[)|(?:-->|\]\]>)\s*$/g, '').trim();
+		try {
+			blocks.push(JSON.parse(raw));
+		} catch {
+			// Not valid JSON: nothing to read.
+		}
+	}
+	return blocks;
+}
+
+/** schema.org Event and its subtypes (MusicEvent, SportsEvent, ...), and Festival. */
+const isEvent = (node: Json) =>
+	list(node['@type']).some(
+		(t) => typeof t === 'string' && /(?:Event|Festival)$/.test(t.replace(/^.*[/:]/, ''))
+	);
+
+/** Event nodes anywhere in a JSON-LD tree: top level, @graph, item lists, sub-events. */
+function collectEvents(node: unknown, out: Json[], depth = 0): void {
+	if (depth > 8 || out.length >= 200) return;
+	if (Array.isArray(node)) {
+		for (const n of node) collectEvents(n, out, depth + 1);
+		return;
+	}
+	if (!isJson(node)) return;
+	if (isEvent(node)) out.push(node);
+	for (const key of ['@graph', 'itemListElement', 'item', 'mainEntity', 'subEvent', 'event']) {
+		if (key in node) collectEvents(node[key], out, depth + 1);
+	}
+}
+
+const scalar = (v: unknown, max = 120): string | undefined =>
+	typeof v === 'number' ? String(v) : typeof v === 'string' ? clean(v, max) : undefined;
+const nameOf = (v: unknown): string | undefined => {
+	const first = list(v)[0];
+	return isJson(first) ? scalar(first.name) : scalar(first);
+};
+/** "https://schema.org/InStock" → "InStock". */
+const enumValue = (v: unknown): string | undefined =>
+	typeof v === 'string' && v.trim()
+		? v.trim().replace(/^https?:\/\/schema\.org\//i, '')
+		: undefined;
+
+/** Venue name and address, e.g. "halle02, Zollhofgarten 2, Heidelberg, DE". */
+function placeOf(v: unknown): string | undefined {
+	const place = list(v)[0];
+	if (!isJson(place)) return scalar(place, 200);
+	const a = place.address;
+	const address = isJson(a)
+		? [scalar(a.streetAddress), scalar(a.addressLocality), nameOf(a.addressCountry)]
+		: [scalar(a, 200)];
+	const parts = [scalar(place.name), ...address].filter((p): p is string => !!p);
+	return parts.length ? [...new Set(parts)].join(', ') : undefined;
+}
+
+/** "from 35 EUR, InStock": the first offer's price and availability. */
+function offersOf(v: unknown): string | undefined {
+	const offers = list(v).filter(isJson);
+	const o = offers[0];
+	if (!o) return undefined;
+	const price = scalar(o.lowPrice ?? o.price);
+	const currency = scalar(o.priceCurrency);
+	const from = offers.length > 1 || o.lowPrice !== undefined ? 'from ' : '';
+	const parts = [
+		price !== undefined ? `${from}${price}${currency ? ` ${currency}` : ''}` : undefined,
+		enumValue(o.availability)
+	].filter(Boolean);
+	return parts.length ? parts.join(', ') : undefined;
+}
+
+function eventLine(e: Json, pageUrl: string): string | null {
+	const name = scalar(e.name, 160);
+	const start = scalar(e.startDate);
+	if (!name && !start) return null;
+	const end = scalar(e.endDate);
+	const status = enumValue(e.eventStatus);
+	const performers = list(e.performer)
+		.map(nameOf)
+		.filter((p): p is string => !!p)
+		.slice(0, 6);
+	const offer = list(e.offers).find(isJson);
+	const url =
+		absolute(scalar(e.url, 500), pageUrl) ??
+		(offer ? absolute(scalar(offer.url, 500), pageUrl) : undefined);
+	const fields = [
+		start ? (end && end !== start ? `${start} – ${end}` : start) : 'date unknown',
+		name,
+		placeOf(e.location),
+		performers.length ? `with ${performers.join(', ')}` : undefined,
+		offersOf(e.offers),
+		status && status !== 'EventScheduled' ? status : undefined,
+		url
+	];
+	return `- ${fields.filter(Boolean).join(' · ')}`;
+}
+
+/**
+ * The events a page declares in schema.org JSON-LD, one line each. Ticket shops,
+ * venues and aggregators embed them for search engines, often in the server HTML of
+ * pages that otherwise render with JavaScript; a few lines replace pages of markup.
+ */
+export function structuredEvents(html: string, pageUrl: string): string | null {
+	const nodes: Json[] = [];
+	for (const block of ldJsonBlocks(html)) collectEvents(block, nodes);
+	const lines = [
+		...new Set(nodes.map((e) => eventLine(e, pageUrl)).filter((l): l is string => !!l))
+	];
+	if (lines.length === 0) return null;
+	const more = lines.length > MAX_EVENTS ? `\n… and ${lines.length - MAX_EVENTS} more` : '';
+	return `Events in this page's structured data (schema.org):\n${lines.slice(0, MAX_EVENTS).join('\n')}${more}`;
+}
+
+const textLength = (html: string) =>
+	stripTags(html.replace(NOISE, '')).replace(/\s+/g, ' ').trim().length;
+
+/**
+ * The page's main content when it marks one (<main>, or a single <article>) with
+ * real text in it; otherwise the whole page. Drops site chrome such as headers,
+ * menus, footers and "related" rails that pages put outside it.
+ */
+export function mainContent(html: string): string {
+	const main = /<main\b[^>]*>([\s\S]*)<\/main\s*>/i.exec(html)?.[1];
+	if (main && textLength(main) >= MIN_MAIN_TEXT) return main;
+	const articles = [...html.matchAll(/<article\b[^>]*>([\s\S]*?)<\/article\s*>/gi)];
+	if (articles.length === 1 && textLength(articles[0][1]) >= MIN_MAIN_TEXT) return articles[0][1];
+	return html;
+}
+
+/**
+ * One window of a long text, cut at a line break near its end when there is one,
+ * with a note on where the next window starts.
+ */
+export function textWindow(
+	text: string,
+	start: number,
+	max: number
+): { text: string; end: number } {
+	if (start > 0 && start >= text.length) {
+		return {
+			text: `[start_index ${start} is past the end of this page (${text.length} chars)]`,
+			end: text.length
+		};
+	}
+	let end = Math.min(text.length, start + max);
+	if (end < text.length) {
+		const lineBreak = text.lastIndexOf('\n', end);
+		if (lineBreak > start + max * 0.8) end = lineBreak;
+	}
+	const head = start > 0 ? `[… continuing from char ${start}]\n\n` : '';
+	const tail =
+		end < text.length
+			? `\n\n… [chars ${start}–${end} of ${text.length} shown; call fetch again with start_index=${end} for more]`
+			: '';
+	return { text: `${head}${text.slice(start, end).trim()}${tail}`, end };
+}
+
 /** Lets /api/favicon serve this site's icon to the user; recording never fails the fetch. */
 export function rememberSource(userId: string, card: PageMeta): void {
 	try {
@@ -384,17 +563,39 @@ export function createWebfetchServer(ctx?: CallerContext): McpServer {
 		'fetch',
 		{
 			description:
-				'Fetch a URL as text. HTML pages come as markdown (default), plain text or raw html per format. ' +
+				'Fetch a URL as text. HTML pages come as markdown (default) or plain text of their main ' +
+				'content, or as raw html; events the page declares in structured data are listed first. ' +
+				`Returns up to max_length characters (default ${DEFAULT_MAX_CHARS}); a longer page says ` +
+				'which start_index continues it. ' +
 				'Text responses only: save PDFs, images and other binary files to the workspace with fs_curl. ' +
-				'HTML pages also return a source card; to cite fetched pages, cite inline as [1], [2]… and end your answer with a ' +
-				'```links block of {"links":[card, …]} (cards verbatim, in citation order).',
+				'To cite fetched pages, cite inline as [1], [2]… and end your answer with a ' +
+				'```links block of {"links":[{"url":"…"}, …]} (the pages’ URLs, in citation order).',
 			inputSchema: {
 				url: z.string(),
-				format: z.enum(['markdown', 'text', 'html']).optional()
+				format: z.enum(['markdown', 'text', 'html']).optional(),
+				max_length: z
+					.number()
+					.int()
+					.min(500)
+					.max(MAX_CHARS)
+					.optional()
+					.describe(`Characters to return; default ${DEFAULT_MAX_CHARS}`),
+				start_index: z
+					.number()
+					.int()
+					.min(0)
+					.optional()
+					.describe('Character offset to continue a long page from')
 			}
 		},
-		async ({ url, format }) => {
+		async ({ url, format, max_length, start_index }) => {
 			const fmt = format ?? 'markdown';
+			const show = (full: string, truncated: boolean) => {
+				const window = textWindow(full, start_index ?? 0, max_length ?? DEFAULT_MAX_CHARS);
+				// The 1 MB read limit only matters once the window reaches what was read.
+				const cut = truncated && window.end >= full.length ? '\n… truncated' : '';
+				return `${window.text}${cut}`;
+			};
 			let res: Response;
 			try {
 				res = await safeFetch(url, {
@@ -422,17 +623,25 @@ export function createWebfetchServer(ctx?: CallerContext): McpServer {
 				return binaryError('binary (no content type)');
 			}
 			const body = limited.body.toString('utf-8');
-			const suffix = limited.truncated ? '\n… truncated' : '';
-			if (!/text\/html|application\/xhtml/i.test(mime)) return text(body + suffix);
+			if (!/text\/html|application\/xhtml/i.test(mime)) return text(show(body, limited.truncated));
 			const pageUrl = res.url || url;
-			const converted =
-				fmt === 'html' ? body : fmt === 'text' ? htmlToText(body) : htmlToMarkdown(body, pageUrl);
-			const result = text(converted + suffix);
-			// The body stays the first content part; the card is an extra part.
+			let page: string;
+			if (fmt === 'html') {
+				page = body;
+			} else {
+				const content = mainContent(body);
+				const converted = fmt === 'text' ? htmlToText(content) : htmlToMarkdown(content, pageUrl);
+				const events = structuredEvents(body, pageUrl);
+				page = events ? `${events}\n\n---\n\n${converted}` : converted;
+			}
 			const card = extractPageMeta(body, pageUrl);
 			if (ctx) rememberSource(ctx.userId, card);
-			result.content.push({ type: 'text', text: `Source card: ${JSON.stringify(card)}` });
-			return result;
+			// The card is for the chat's ```links widget only: the model gets `content`.
+			const sources = pageUrl === url ? [card] : [card, { ...card, url }];
+			return {
+				content: [{ type: 'text', text: show(page, limited.truncated) }],
+				structuredContent: { sources }
+			};
 		}
 	);
 	return server;

@@ -938,7 +938,8 @@ export async function runChatTurn(
 			boundSkillNames,
 			includeSkillsIndex: 'load_skill' in tools,
 			extraWarning: manualSkillWarning,
-			toolNames: Object.keys(tools)
+			toolNames: Object.keys(tools),
+			today: new Date()
 		});
 		toolsSection = deferredToolsPrompt(catalog);
 		system = [

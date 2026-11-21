@@ -433,9 +433,9 @@ describe('web_search output', () => {
 		configure({ searxng: true, brave: true });
 		routeFetch({ brave: { body: { web: { results: [] } } } });
 		const text = await webSearchText({ query: 'q' });
-		const [header, line] = text.split('\n');
+		const [header, ...results] = text.split('\n');
 		expect(header).toBe('Results for "q" via SearXNG + Brave Search:');
-		expect(line).not.toContain('via');
+		expect(results.join('\n')).not.toContain('via');
 	});
 
 	it('marks an answer from the backup round', async () => {
@@ -455,9 +455,35 @@ describe('web_search output', () => {
 		routeFetch({ searxng: { status: 500, body: {} } });
 		const text = await webSearchText({ query: 'q' });
 		expect(text).toBe(
-			'Results for "q" via Brave Search (fallback; SearXNG returned HTTP 500):\n' +
-				`[1] {"url":"https://b.example/","title":"From Brave","site":"b.example","favicon":"https://b.example/favicon.ico"}`
+			'Results for "q" via Brave Search (fallback; SearXNG returned HTTP 500):\n\n' +
+				'[1] From Brave — b.example\nhttps://b.example/'
 		);
+	});
+
+	it('gives the model title, site, URL and snippet, and the chat the full cards', async () => {
+		configure({ searxng: true });
+		routeFetch({
+			searxng: {
+				body: {
+					results: [
+						{ url: 'https://s.example/a', title: 'Tour dates', content: 'Next show: Tallinn' },
+						// An engine's own redirect link: nothing to fetch or cite.
+						{ url: 'http://go/v1/Ac1urFoPHj0', title: 'Redirect' }
+					]
+				}
+			}
+		});
+		const res = await withServer((client) =>
+			client.callTool({ name: 'web_search', arguments: { query: 'q' } })
+		);
+		const text = (res.content as { text: string }[])[0].text;
+		expect(text).toBe(
+			'Results for "q" via SearXNG:\n\n[1] Tour dates — s.example\nhttps://s.example/a\nNext show: Tallinn'
+		);
+		expect(text).not.toContain('favicon');
+		expect(res.structuredContent).toEqual({
+			sources: [expect.objectContaining({ url: 'https://s.example/a', title: 'Tour dates' })]
+		});
 	});
 
 	it('explains via only when results can come from several providers', async () => {
@@ -503,9 +529,12 @@ describe('web_search tool registration', () => {
 			const output = (await after.tools.web_search.execute!(
 				{ query: 'svelte' },
 				{ toolCallId: 't1', messages: [], context: {} }
-			)) as { content: Array<{ text: string }> };
+			)) as { content: Array<{ text: string }>; structuredContent: { sources: unknown[] } };
 			expect(output.content[0].text).toContain('via SearXNG');
-			expect(output.content[0].text).toContain('"url":"https://a.example/"');
+			expect(output.content[0].text).toContain('\nhttps://a.example/');
+			expect(output.structuredContent.sources).toEqual([
+				expect.objectContaining({ url: 'https://a.example/' })
+			]);
 		} finally {
 			await after.close();
 		}

@@ -34,6 +34,67 @@ const RICH =
 	'<pre><code class="language-js">if (a &lt; b) {\n  go();\n}</code></pre>' +
 	'<p>Caf&eacute;? &copy; 2024 &#8211; &quot;quoted&quot;&nbsp;end</p></body></html>';
 
+const filler = (label: string) =>
+	Array.from({ length: 20 }, (_, i) => `<p>${label} paragraph ${i} with enough words.</p>`).join(
+		''
+	);
+
+/** A venue page: menu and footer around <main>, events in JSON-LD (one malformed block). */
+const EVENTS_PAGE =
+	'<html><head><title>Venue</title>' +
+	'<script type="application/ld+json">{not json</script>' +
+	'<script type="application/ld+json">' +
+	JSON.stringify({
+		'@context': 'https://schema.org',
+		'@graph': [
+			{ '@type': 'Organization', name: 'Venue GmbH' },
+			{
+				'@type': 'MusicEvent',
+				name: 'Lane 8',
+				startDate: '2026-11-21T22:00',
+				endDate: '2026-11-22T05:00',
+				location: {
+					'@type': 'Place',
+					name: 'Noblessneri valukoda',
+					address: {
+						'@type': 'PostalAddress',
+						streetAddress: 'Peetri 10',
+						addressLocality: 'Tallinn',
+						addressCountry: { name: 'EE' }
+					}
+				},
+				performer: [{ '@type': 'MusicGroup', name: 'Lane 8' }, 'Pyfel'],
+				offers: [
+					{ price: 35, priceCurrency: 'EUR', availability: 'https://schema.org/InStock' },
+					{ price: 50, priceCurrency: 'EUR' }
+				],
+				url: '/events/lane-8'
+			}
+		]
+	}) +
+	'</script>' +
+	'<script type="application/ld+json">' +
+	JSON.stringify([
+		{
+			'@type': 'ItemList',
+			itemListElement: [
+				{
+					'@type': 'ListItem',
+					item: {
+						'@type': ['Event'],
+						name: 'Festival day',
+						startDate: '2027-06-11',
+						location: 'Glendalough Estate',
+						eventStatus: 'https://schema.org/EventPostponed'
+					}
+				}
+			]
+		}
+	]) +
+	'</script></head><body><header><p>Site menu and login</p></header>' +
+	`<main><h1>What's on</h1>${filler('Main')}</main>` +
+	`<footer>${filler('Footer')}</footer></body></html>`;
+
 let httpServer: http.Server;
 let base: string;
 
@@ -56,6 +117,19 @@ beforeAll(async () => {
 				res.end();
 			};
 			pump();
+			return;
+		}
+		if (req.url === '/events') {
+			res.writeHead(200, { 'content-type': 'text/html' }).end(EVENTS_PAGE);
+			return;
+		}
+		if (req.url === '/long') {
+			const lines = Array.from({ length: 400 }, (_, i) => `<p>Line ${i} of a long page.</p>`);
+			res.writeHead(200, { 'content-type': 'text/html' }).end(`<body>${lines.join('')}</body>`);
+			return;
+		}
+		if (req.url === '/moved') {
+			res.writeHead(302, { location: '/article' }).end();
 			return;
 		}
 		if (req.url === '/article') {
@@ -176,10 +250,49 @@ describe('webfetch server', () => {
 		expect(resultText(res)).toContain('plain <b>text</b>');
 	});
 
-	it('truncates bodies past the size limit and marks them truncated', async () => {
-		const out = resultText(await callFetch({ url: `${base}/huge`, format: 'text' }));
-		expect(out.endsWith('\n… truncated')).toBe(true);
-		expect(out.length).toBe(1024 * 1024 + '\n… truncated'.length);
+	it('stops reading at the size limit and marks the end of what was read as truncated', async () => {
+		const first = resultText(await callFetch({ url: `${base}/huge`, format: 'text' }));
+		expect(first).toContain('chars 0–8000 of 1048576 shown');
+		expect(first).toContain('start_index=8000');
+		expect(first).not.toContain('… truncated');
+		const last = resultText(
+			await callFetch({ url: `${base}/huge`, format: 'text', start_index: 1024 * 1024 - 1000 })
+		);
+		expect(last.startsWith('[… continuing from char 1047576]\n\n')).toBe(true);
+		expect(last.endsWith(`${'a'.repeat(1000)}\n… truncated`)).toBe(true);
+	});
+
+	it('returns a long page in windows, cut at line breaks, continued by start_index', async () => {
+		const first = resultText(await callFetch({ url: `${base}/long`, max_length: 500 }));
+		const next = /start_index=(\d+)/.exec(first)?.[1];
+		expect(first.startsWith('Line 0 of a long page.')).toBe(true);
+		expect(first).toMatch(/of a long page\.\n\n… \[chars 0–\d+ of \d+ shown/);
+		const second = resultText(
+			await callFetch({ url: `${base}/long`, max_length: 500, start_index: Number(next) })
+		);
+		expect(second).toMatch(/^\[… continuing from char \d+\]\n\nLine \d+ of a long page\./);
+		const past = resultText(await callFetch({ url: `${base}/long`, start_index: 10_000_000 }));
+		expect(past).toMatch(/^\[start_index 10000000 is past the end of this page/);
+	});
+
+	it("lists the page's structured-data events first, then only its main content", async () => {
+		const out = resultText(await callFetch({ url: `${base}/events` }));
+		const [events, content] = out.split('\n\n---\n\n');
+		expect(events).toBe(
+			"Events in this page's structured data (schema.org):\n" +
+				`- 2026-11-21T22:00 – 2026-11-22T05:00 · Lane 8 · Noblessneri valukoda, Peetri 10, Tallinn, EE · with Lane 8, Pyfel · from 35 EUR, InStock · ${base}/events/lane-8\n` +
+				'- 2027-06-11 · Festival day · Glendalough Estate · EventPostponed'
+		);
+		expect(content.startsWith("# What's on")).toBe(true);
+		expect(content).toContain('Main paragraph 19');
+		expect(content).not.toContain('Site menu');
+		expect(content).not.toContain('Footer paragraph');
+	});
+
+	it('keeps the whole page when its <main> holds next to no text', async () => {
+		const html = `<body><main><p>Loading…</p></main><div>${filler('Body')}</div></body>`;
+		const { mainContent } = await import('./webfetch.js');
+		expect(mainContent(html)).toBe(html);
 	});
 
 	it('does not mark small bodies as truncated', async () => {
@@ -193,12 +306,16 @@ describe('webfetch server', () => {
 		expect(resultText(res)).toContain('500');
 	});
 
-	it('adds a source card for HTML pages after the body', async () => {
+	it('hands the source card to the chat in structuredContent, not to the model', async () => {
 		const res = (await callFetch({ url: `${base}/article` })) as {
 			content: Array<{ type: string; text: string }>;
+			structuredContent: { sources: unknown[] };
 		};
+		expect(res.content).toHaveLength(1);
 		expect(res.content[0].text).toContain('Article body');
-		const card = JSON.parse(res.content[1].text.replace(/^Source card: /, ''));
+		expect(res.content[0].text).not.toContain('favicon');
+		expect(res.structuredContent.sources).toHaveLength(1);
+		const card = res.structuredContent.sources[0];
 		expect(card).toEqual({
 			url: `${base}/article`,
 			title: 'Rust & WebAssembly',
@@ -207,6 +324,16 @@ describe('webfetch server', () => {
 			favicon: `${base}/static/icon.svg`,
 			image: `${base}/img/cover.png`
 		});
+	});
+
+	it('also files the card under the requested URL when the page redirected', async () => {
+		const res = (await callFetch({ url: `${base}/moved` })) as {
+			structuredContent: { sources: Array<{ url: string; title: string }> };
+		};
+		expect(res.structuredContent.sources.map((s) => [s.url, s.title])).toEqual([
+			[`${base}/article`, 'Rust & WebAssembly'],
+			[`${base}/moved`, 'Rust & WebAssembly']
+		]);
 	});
 
 	it("records the page's site and favicon for the user's /api/favicon", async () => {

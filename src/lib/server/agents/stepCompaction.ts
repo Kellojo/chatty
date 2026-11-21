@@ -18,7 +18,8 @@ import { cacheTokens, computeUsageCostUsd } from '../proxy/pricing.js';
  * context window, cheapest first:
  *
  * 1. elide the outputs of older tool results (the model can re-run a tool),
- * 2. truncate any single recent tool result that alone eats the budget,
+ * 2. truncate any single recent tool result that alone eats the budget, and the
+ *    recent ones together when parallel calls overflow it jointly,
  * 3. fold older steps into an LLM-written progress summary.
  *
  * Each pass compacts well below the trigger point so the prompt cache is not
@@ -40,6 +41,10 @@ const ELIDE_MIN_CHARS = 800;
 const ELIDE_PREVIEW_CHARS = 240;
 /** A single kept tool output may use at most this share of the threshold. */
 const SINGLE_OUTPUT_SHARE = 0.25;
+/** The kept (recent) tool outputs together may use at most this share of the threshold. */
+const RECENT_OUTPUTS_SHARE = 0.5;
+/** Shrinking recent outputs to fit together never cuts one below this. */
+const MIN_RECENT_OUTPUT_CHARS = 2000;
 const TRANSCRIPT_PART_CHARS = 2000;
 const SUMMARY_MAX_TOKENS = 2000;
 
@@ -106,6 +111,24 @@ function elidedOutput(output: ToolResultOutput): ToolResultOutput {
 		type: 'text',
 		value: `[Earlier tool output elided to save context (${text.length} chars). Preview: ${preview}${text.length > preview.length ? '…' : ''} — call the tool again if you need the full result.]`
 	};
+}
+
+/**
+ * The largest size that, applied as a cap to every one of `sizes`, makes them sum to at
+ * most `budget` (smaller ones keep their size; the rest share what is left equally).
+ * Null when they already fit.
+ */
+export function equalShareCap(sizes: number[], budget: number): number | null {
+	const total = sizes.reduce((sum, n) => sum + n, 0);
+	if (total <= budget) return null;
+	const sorted = [...sizes].sort((a, b) => a - b);
+	let remaining = budget;
+	for (let i = 0; i < sorted.length; i++) {
+		const share = remaining / (sorted.length - i);
+		if (sorted[i] > share) return Math.floor(share);
+		remaining -= sorted[i];
+	}
+	return null;
 }
 
 interface ToolResultRef {
@@ -281,6 +304,27 @@ export async function compactStepMessages(input: CompactStepInput): Promise<Comp
 		messages = replaceOutput(messages, ref, { type: 'text', value: text });
 		tokens -= ref.tokens - estimateTokens(text);
 		result.truncated++;
+	}
+
+	// 2b. Parallel calls bring several results at once that may only overflow together
+	// (five fetched pages): cut the largest down to an equal share until they fit.
+	const recentRefs = toolResults(messages, recent.flat());
+	const cap = equalShareCap(
+		recentRefs.map((r) => r.chars),
+		Math.floor(thresholdTokens * RECENT_OUTPUTS_SHARE) * 4
+	);
+	if (cap !== null) {
+		const limit = Math.max(cap, MIN_RECENT_OUTPUT_CHARS);
+		for (const ref of recentRefs) {
+			if (ref.chars <= limit) continue;
+			const part = (messages[ref.message].content as Exclude<ModelMessage['content'], string>)[
+				ref.part
+			] as Extract<Exclude<ModelMessage['content'], string>[number], { type: 'tool-result' }>;
+			const text = truncateMiddle(outputText(part.output), limit);
+			messages = replaceOutput(messages, ref, { type: 'text', value: text });
+			tokens -= ref.tokens - estimateTokens(text);
+			result.truncated++;
+		}
 	}
 
 	if (result.elided + result.truncated > 0) result.stage = 'elided';
