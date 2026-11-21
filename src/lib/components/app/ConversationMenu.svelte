@@ -48,6 +48,7 @@
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import ArchiveRestoreIcon from '@lucide/svelte/icons/archive-restore';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import DownloadIcon from '@lucide/svelte/icons/download';
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import LockOpenIcon from '@lucide/svelte/icons/lock-open';
 	import { formatCount } from '$lib/formats.js';
@@ -215,6 +216,14 @@
 			pinned: until !== null ? false : conversation.pinned
 		});
 		await invalidateAll();
+	}
+
+	/** Downloads the whole chat as one Markdown file (the server sets the name). */
+	function exportConversation() {
+		const link = document.createElement('a');
+		link.href = `/api/conversations/${conversation.id}/export`;
+		link.download = '';
+		link.click();
 	}
 
 	function openRename() {
@@ -521,6 +530,10 @@
 		<DropdownMenu.Item onSelect={openRename}>
 			<PencilIcon class="size-4" />
 			Rename
+		</DropdownMenu.Item>
+		<DropdownMenu.Item onSelect={exportConversation}>
+			<DownloadIcon class="size-4" />
+			Export
 		</DropdownMenu.Item>
 		{#if showPrivacy}
 			{#if conversation.private}
