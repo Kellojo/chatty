@@ -49,7 +49,10 @@ function buildFactory(provider: ProviderRow): LanguageModelFactory {
 		name: providerSlug(provider),
 		apiKey,
 		baseURL: provider.base_url,
-		includeUsage: true
+		includeUsage: true,
+		// Without this the SDK downgrades a `json_schema` response format to
+		// plain `json_object`, dropping the schema proxy clients ask for.
+		supportsStructuredOutputs: true
 	});
 	return (modelId) => p(modelId);
 }

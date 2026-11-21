@@ -219,6 +219,40 @@ describe('llm registry', () => {
 		]);
 	});
 
+	it('openai-compatible models forward a JSON schema as a strict json_schema response format', async () => {
+		const fetchMock = vi.fn(async () =>
+			Response.json({
+				id: 'c1',
+				object: 'chat.completion',
+				created: 0,
+				model: 'local',
+				choices: [
+					{ index: 0, message: { role: 'assistant', content: '{}' }, finish_reason: 'stop' }
+				]
+			})
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		const { db, providers, models, registry } = await loadModules();
+		const p = providers.createProvider(db, {
+			name: 'Local',
+			type: 'openai-compatible',
+			baseUrl: 'http://localhost:1234/v1'
+		});
+		models.createModel(db, { providerId: p.id, modelId: 'local' });
+		const model = registry.resolveModel({ providerId: p.id, modelId: 'local' }, { tainted: false });
+		const schema = { type: 'object', properties: { name: { type: 'string' } } } as const;
+		await (model as import('@ai-sdk/provider').LanguageModelV4).doGenerate({
+			prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+			responseFormat: { type: 'json', schema, name: 'recipe' }
+		});
+		const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		const body = JSON.parse(init.body as string);
+		expect(body.response_format).toMatchObject({
+			type: 'json_schema',
+			json_schema: { name: 'recipe', schema }
+		});
+	});
+
 	it('fetchProviderModels requires a key for anthropic', async () => {
 		const { db, providers, registry } = await loadModules();
 		const p = providers.createProvider(db, { name: 'A', type: 'anthropic' });
