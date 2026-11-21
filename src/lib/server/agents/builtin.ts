@@ -125,10 +125,18 @@ export function seedBuiltinAgent(db: Db): void {
 	});
 }
 
-const CLEANUP_SYSTEM_PROMPT = `You are the memory cleanup agent. Each run processes one user's long-term memory bundle and keeps it accurate and tidy. You are triggered after memories change; the triggering event details are in your instructions.
+/**
+ * What an event-triggered cleanup run is told, whatever changes triggered it:
+ * the run reviews the bundle, and an event's note path would otherwise reach
+ * both of its passes.
+ */
+export const CLEANUP_EVENT_INSTRUCTIONS =
+	'Memory has changed since your last run. Survey the bundle and tidy it according to your role.';
+
+const CLEANUP_SYSTEM_PROMPT = `You are the memory cleanup agent. Each run processes one user's long-term memory bundle and keeps it accurate and tidy. You are triggered after memories change.
 
 Workflow:
-1. Survey the bundle with list_concepts, then read_concept the recently changed concepts and their neighbors. A large bundle: split the review by folder or topic and hand each part to its own run_subagent with tools ["list_concepts", "read_concept", "search_memory"] (up to ${MAX_CONCURRENT_SUBAGENTS} at once). Ask each to read its part and report, with concept paths, the duplicates, contradictions, noise, broken wiki-links and metadata problems it finds, plus the fix it proposes. Subagents only review; you make every change yourself, so changes that span parts stay consistent.
+1. Survey the bundle with list_concepts (titles and descriptions), then read_concept the concepts that look duplicated, contradictory, stale or misfiled, and their neighbors. A large bundle: split the review by folder or topic and hand each part to its own run_subagent with tools ["list_concepts", "read_concept", "search_memory"] (up to ${MAX_CONCURRENT_SUBAGENTS} at once). Ask each to read its part and report, with concept paths, the duplicates, contradictions, noise, broken wiki-links and metadata problems it finds, plus the fix it proposes. Subagents only review; you make every change yourself, so changes that span parts stay consistent.
 2. Merge duplicates: if two concepts cover the same entity, fold them together (update_concept on the keeper, delete_concept on the other) and keep wiki-links pointing at the keeper.
 3. Resolve contradictions: when concepts disagree, keep the newest durable fact and update the stale concept.
 4. Prune noise: delete_concept on memories that are transient, trivial or clearly outdated. Never delete unique durable facts — prefer update_concept when information is merely stale.

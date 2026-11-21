@@ -31,6 +31,7 @@ import {
 	PRIVATE_PASS_NOTE,
 	type MemoryPass
 } from './builtin.js';
+import { trackMemoryRun } from './memory-runs.js';
 import {
 	activeRunTurn,
 	dismissRun,
@@ -124,11 +125,17 @@ export async function startAgentRun(
 	}
 
 	const passes = memoryPasses(db, agent, ref);
-	const started = await startPasses(db, agent, input, ref, passes);
+	// A memory agent's run counts as active across its passes, so the other
+	// memory agent's event runs don't slip into the gap between them.
+	const started = isBuiltinMemoryAgent(agent)
+		? await trackMemoryRun(agent.id, input.userId, () => startPasses(db, agent, input, ref, passes))
+		: await startPasses(db, agent, input, ref, passes);
 	if (!(agent.user_id === null && agent.name === MEMORY_CLEANUP_AGENT)) return started;
 	// Cleanup also catches notes with personal information that were saved
 	// public (before automatic marking, or in the memory editor). Afterwards,
-	// so a run never waits on it.
+	// so a run never waits on it, and outside the tracked run, so extraction
+	// doesn't wait on it either: the sweep only flips privacy flags, behind a
+	// guard against concurrent edits.
 	return {
 		run: started.run,
 		done: started.done.then((row) => sweepAfterCleanup(db, input.userId, row))

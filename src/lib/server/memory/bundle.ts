@@ -62,6 +62,12 @@ export interface MemoryAuditInfo {
 	userId: string;
 	conversationId?: string | null;
 	agentRunId?: string | null;
+	/**
+	 * 'privacy': the write only changes the note's privacy (the privacy sweep,
+	 * privacy toggles), so memory cleanup has nothing to tidy. Set by server
+	 * code only, never from tool input.
+	 */
+	origin?: 'privacy';
 }
 
 const frontmatterSchema = z.object({
@@ -408,6 +414,7 @@ export async function writeConcept(
 		action,
 		author: audit.author,
 		...(audit.agentRunId ? { agentRunId: audit.agentRunId } : {}),
+		...(audit.origin ? { origin: audit.origin } : {}),
 		...(fm.private ? { private: true } : {})
 	});
 	scheduleIndex(path.dirname(target.abs));
@@ -685,7 +692,7 @@ export async function setConceptPathsPrivate(
 				},
 				body: concept.body
 			},
-			audit
+			{ ...audit, origin: 'privacy' }
 		);
 		recordPrivacyCheck(db, saved, userId);
 		updated++;

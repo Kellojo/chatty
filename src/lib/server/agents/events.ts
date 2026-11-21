@@ -21,8 +21,14 @@ import {
 import { subscribeAllServerEvents } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import { isPrivateContext } from '../privacy/policy.js';
-import { isBuiltinMemoryAgent, MEMORY_CLEANUP_AGENT, MEMORY_EXTRACTION_AGENT } from './builtin.js';
+import {
+	CLEANUP_EVENT_INSTRUCTIONS,
+	isBuiltinMemoryAgent,
+	MEMORY_CLEANUP_AGENT,
+	MEMORY_EXTRACTION_AGENT
+} from './builtin.js';
 import { settleCodingAgentRun } from './coding-runs.js';
+import { isMemoryRunActive, onMemoryRunSettled } from './memory-runs.js';
 
 const log = createLogger('agents');
 
@@ -182,20 +188,58 @@ function isBusy(db: Db, agentId: string): boolean {
 	return dispatching.has(agentId) || listRunningAgentIds(db, [agentId]).length > 0;
 }
 
-/**
- * Built-in agents that wait while another one works for the same user: memory
- * cleanup would otherwise tidy a bundle that extraction is still writing (and
- * its writes are what trigger cleanup). Their events queue up and run once the
- * other agent is done.
- */
-const WAITS_FOR: Record<string, string> = { [MEMORY_CLEANUP_AGENT]: MEMORY_EXTRACTION_AGENT };
+function isBuiltinCleanup(agent: Pick<AgentRow, 'user_id' | 'name'>): boolean {
+	return agent.user_id === null && agent.name === MEMORY_CLEANUP_AGENT;
+}
 
-function waitingOnOther(db: Db, agent: AgentRow, userId: string): boolean {
-	const other = agent.user_id === null ? WAITS_FOR[agent.name] : undefined;
-	if (!other) return false;
-	const row = db.prepare('SELECT id FROM agents WHERE name = ? AND user_id IS NULL').get(other) as
+function builtinAgentId(db: Db, name: string): string | undefined {
+	const row = db.prepare('SELECT id FROM agents WHERE name = ? AND user_id IS NULL').get(name) as
 		{ id: string } | undefined;
-	return !!row && (dispatching.has(row.id) || hasRunningAgentRun(db, row.id, userId));
+	return row?.id;
+}
+
+/** The other agent's run for this user is in progress (any pass, any starter). */
+function memoryRunInProgress(db: Db, agentId: string, userId: string): boolean {
+	return hasRunningAgentRun(db, agentId, userId) || isMemoryRunActive(agentId, userId);
+}
+
+/**
+ * The built-in memory agents don't work on one user's bundle at the same
+ * time; an agent that has to wait gets its events queued, and they run once
+ * the other is done. Extraction goes first:
+ * - cleanup waits while extraction runs or has events queued for the user, so
+ *   it tidies what extraction wrote (and extraction's writes are what trigger
+ *   cleanup) instead of a bundle that is still being written;
+ * - extraction waits only while a cleanup run is in progress, not for its
+ *   privacy sweep afterwards (which `dispatching` still covers) and never for
+ *   queued cleanup events, so the two can't wait on each other.
+ */
+function waitingOnOther(db: Db, agent: AgentRow, userId: string): boolean {
+	if (agent.user_id !== null) return false;
+	if (agent.name === MEMORY_CLEANUP_AGENT) {
+		const extraction = builtinAgentId(db, MEMORY_EXTRACTION_AGENT);
+		return (
+			!!extraction &&
+			(dispatching.has(extraction) ||
+				memoryRunInProgress(db, extraction, userId) ||
+				pending.get(extraction)?.has(userId) === true)
+		);
+	}
+	if (agent.name === MEMORY_EXTRACTION_AGENT) {
+		const cleanup = builtinAgentId(db, MEMORY_CLEANUP_AGENT);
+		return !!cleanup && memoryRunInProgress(db, cleanup, userId);
+	}
+	return false;
+}
+
+/**
+ * The built-in cleanup reviews the bundle rather than single changes: one
+ * fixed text instead of every Nth event's payload, which would also put a note
+ * path into the instructions both of its passes (public and private) get.
+ */
+function instructionsFor(agent: AgentRow, occurrences: Occurrence[], dropped = 0): string {
+	if (isBuiltinCleanup(agent)) return CLEANUP_EVENT_INSTRUCTIONS;
+	return buildEventInstructions(parseTriggerConfig(agent), occurrences, dropped);
 }
 
 function enqueue(agentId: string, userId: string, occurrence: Occurrence): void {
@@ -234,9 +278,17 @@ function dispatch(db: Db, agentId: string, userId: string, instructions: string,
 		});
 }
 
-/** Gives every agent with queued events a chance to run (one finished run can unblock several). */
+/**
+ * Gives every agent with queued events a chance to run (one finished run can
+ * unblock several). Memory extraction drains first, so cleanup's follow-up
+ * waits for what it writes.
+ */
 function drainPending(db: Db, run: RunFn): void {
-	for (const agentId of [...pending.keys()]) drainAgent(agentId, db, run);
+	const extraction = builtinAgentId(db, MEMORY_EXTRACTION_AGENT);
+	const ids = [...pending.keys()].sort(
+		(a, b) => Number(b === extraction) - Number(a === extraction)
+	);
+	for (const agentId of ids) drainAgent(agentId, db, run);
 }
 
 /** Starts a follow-up run for queued events once the agent is free. */
@@ -265,12 +317,7 @@ export function drainAgent(agentId: string, db: Db = getDb(), run: RunFn = defau
 			drainAgent(agentId, db, run);
 			return;
 		}
-		const instructions = buildEventInstructions(
-			parseTriggerConfig(agent),
-			occurrences,
-			entry.dropped
-		);
-		dispatch(db, agentId, userId, instructions, run);
+		dispatch(db, agentId, userId, instructionsFor(agent, occurrences, entry.dropped), run);
 	} catch (e) {
 		log.error(`Failed to drain queued events for agent ${agentId}`, {
 			agentId,
@@ -303,6 +350,10 @@ export async function emitAgentEvent(
 				if (isPrivate && agent.private !== 1 && !redact) continue;
 				if (agent.coding_target && fromAgentRun(db, payload)) continue;
 				if (fromOwnRun(db, agent.id, payload)) continue;
+				// Privacy-only writes (the sweep after each cleanup run, privacy
+				// toggles) leave cleanup nothing to tidy; counting them would let
+				// cleanup trigger itself. Read from the payload before redaction.
+				if (isBuiltinCleanup(agent) && payload.origin === 'privacy') continue;
 				const count = incrementAgentEventCounter(db, agent.id, userId, event);
 				const triggerConfig = parseTriggerConfig(agent);
 				const rawEvery = triggerConfig.every;
@@ -331,7 +382,7 @@ export async function emitAgentEvent(
 					drainAgent(agent.id, db, run);
 					continue;
 				}
-				dispatch(db, agent.id, userId, buildEventInstructions(triggerConfig, [occurrence]), run);
+				dispatch(db, agent.id, userId, instructionsFor(agent, [occurrence]), run);
 			} catch (e) {
 				log.error(`Event run of agent ${agent.id} failed`, {
 					agentId: agent.id,
@@ -372,4 +423,9 @@ export function startAgentEventDispatcher(): void {
 	if (globalFlag.__agentEventDispatcherStarted) return;
 	globalFlag.__agentEventDispatcherStarted = true;
 	subscribeAllServerEvents((userId, event) => handleServerEvent(userId, event));
+	// A memory run's last `agent.run.finished` comes before its run is done
+	// (and before cleanup's sweep), so events waiting on it drain from here too.
+	onMemoryRunSettled(() => {
+		if (pending.size > 0) drainPending(getDb(), defaultRun);
+	});
 }

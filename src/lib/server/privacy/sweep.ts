@@ -128,7 +128,8 @@ export async function sweepMemoryPrivacy(
 					},
 					body: concept.body
 				},
-				{ author: 'memory-cleanup', userId },
+				// Privacy-only: must not count as a change that triggers cleanup again.
+				{ author: 'memory-cleanup', userId, origin: 'privacy' },
 				unchangedSince(concept, hash)
 			).catch((e: unknown) => {
 				if (e instanceof ConceptWriteRefused) return null;

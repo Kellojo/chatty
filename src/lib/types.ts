@@ -292,6 +292,8 @@ export type ServerEvent =
 			author: string;
 			/** Set when an agent run made the change (lets that agent ignore its own writes). */
 			agentRunId?: string;
+			/** 'privacy': only the note's privacy changed (memory cleanup ignores these). */
+			origin?: 'privacy';
 			/**
 			 * The note is private (after a write or move; before a delete). Only
 			 * private agents get the event: the path alone can be sensitive.

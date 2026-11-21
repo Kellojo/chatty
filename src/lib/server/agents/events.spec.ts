@@ -3,7 +3,9 @@ import { openDatabase, type Db } from '../db/index.js';
 import { createAgent, setAgentOverride } from '../db/repo/agents.js';
 import { createAgentRun, finishAgentRun } from '../db/repo/agent-runs.js';
 import { createConversation } from '../db/repo/conversations.js';
+import { CLEANUP_EVENT_INSTRUCTIONS } from './builtin.js';
 import { emitAgentEvent, handleServerEvent } from './events.js';
+import { trackMemoryRun } from './memory-runs.js';
 
 let db: Db;
 
@@ -279,7 +281,7 @@ describe('memory cleanup waits for extraction', () => {
 			runFn
 		);
 		expect(runFn).toHaveBeenCalledTimes(1);
-		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u1', expect.stringContaining('b.md'));
+		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u1', CLEANUP_EVENT_INSTRUCTIONS);
 	});
 
 	it("doesn't hold up cleanup for another user", async () => {
@@ -288,6 +290,123 @@ describe('memory cleanup waits for extraction', () => {
 		const runFn = vi.fn().mockResolvedValue(undefined);
 		await emitAgentEvent('memory.changed', 'u2', { path: 'a.md' }, db, runFn);
 		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u2', expect.any(String));
+	});
+
+	function deferred() {
+		let resolve!: () => void;
+		const promise = new Promise<void>((r) => (resolve = r));
+		return { promise, resolve };
+	}
+
+	it('holds cleanup between the passes of an extraction run, whoever started it', async () => {
+		const { extraction, cleanup } = seedBuiltins();
+		const gate = deferred();
+		// No run row is running here, as between the public and the private pass.
+		const started = await trackMemoryRun(extraction.id, 'u1', async () => ({
+			run: null,
+			done: gate.promise
+		}));
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md' }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+
+		gate.resolve();
+		await started.done;
+		handleServerEvent(
+			'u1',
+			{ type: 'agent.run.finished', agentId: extraction.id, runId: 'r', status: 'success' },
+			db,
+			runFn
+		);
+		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u1', CLEANUP_EVENT_INSTRUCTIONS);
+	});
+
+	it("queues extraction while the user's cleanup runs, and runs it before cleanup's follow-up", async () => {
+		const { extraction, cleanup } = seedBuiltins();
+		const run = createAgentRun(db, { agentId: cleanup.id, userId: 'u1', trigger: 'manual' });
+		const gate = deferred();
+		const runFn = vi.fn().mockReturnValueOnce(gate.promise).mockResolvedValue(undefined);
+		await emitAgentEvent('chat.created', 'u1', {}, db, runFn);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md' }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+
+		finishAgentRun(db, run.id, 'success');
+		handleServerEvent(
+			'u1',
+			{ type: 'agent.run.finished', agentId: cleanup.id, runId: run.id, status: 'success' },
+			db,
+			runFn
+		);
+		expect(runFn).toHaveBeenCalledTimes(1);
+		expect(runFn.mock.calls[0][0]).toBe(extraction.id);
+
+		gate.resolve();
+		await vi.waitFor(() => expect(runFn).toHaveBeenCalledTimes(2));
+		expect(runFn.mock.calls[1][0]).toBe(cleanup.id);
+	});
+
+	it("doesn't start cleanup ahead of the user's queued extraction", async () => {
+		const { extraction, cleanup } = seedBuiltins();
+		const run = createAgentRun(db, { agentId: cleanup.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('chat.created', 'u1', {}, db, runFn);
+		// The cleanup run ends, but nothing has drained the queue yet.
+		finishAgentRun(db, run.id, 'success');
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md' }, db, runFn);
+		expect(runFn).not.toHaveBeenCalledWith(cleanup.id, expect.anything(), expect.anything());
+
+		handleServerEvent(
+			'u1',
+			{ type: 'agent.run.finished', agentId: cleanup.id, runId: run.id, status: 'success' },
+			db,
+			runFn
+		);
+		await vi.waitFor(() => expect(runFn).toHaveBeenCalledTimes(2));
+		expect(runFn.mock.calls.map((c) => c[0])).toEqual([extraction.id, cleanup.id]);
+	});
+
+	it("doesn't hold extraction for cleanup's privacy sweep after its run", async () => {
+		const { extraction, cleanup } = seedBuiltins();
+		// Dispatched and not done (its sweep), but no run in progress.
+		const runFn = vi.fn().mockReturnValue(new Promise(() => undefined));
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md' }, db, runFn);
+		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u1', expect.any(String));
+		await emitAgentEvent('chat.created', 'u1', {}, db, runFn);
+		expect(runFn).toHaveBeenCalledWith(extraction.id, 'u1', expect.any(String));
+	});
+
+	it('ignores privacy-only memory changes, private or not', async () => {
+		const { cleanup } = seedBuiltins();
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		// The sweep marking a note private (redacted for cleanup) and a toggle making one public.
+		await emitAgentEvent(
+			'memory.changed',
+			'u1',
+			{ path: 'a.md', origin: 'privacy', private: true },
+			db,
+			runFn
+		);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'b.md', origin: 'privacy' }, db, runFn);
+		expect(runFn).not.toHaveBeenCalled();
+		await emitAgentEvent('memory.changed', 'u1', { path: 'c.md' }, db, runFn);
+		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u1', CLEANUP_EVENT_INSTRUCTIONS);
+	});
+
+	it('gives cleanup fixed instructions without note paths, also for queued events', async () => {
+		const { extraction, cleanup } = seedBuiltins();
+		const run = createAgentRun(db, { agentId: extraction.id, userId: 'u1', trigger: 'manual' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'people/alice.md' }, db, runFn);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'people/bob.md' }, db, runFn);
+		finishAgentRun(db, run.id, 'success');
+		handleServerEvent(
+			'u1',
+			{ type: 'agent.run.finished', agentId: extraction.id, runId: run.id, status: 'success' },
+			db,
+			runFn
+		);
+		expect(runFn).toHaveBeenCalledTimes(1);
+		expect(runFn).toHaveBeenCalledWith(cleanup.id, 'u1', CLEANUP_EVENT_INSTRUCTIONS);
 	});
 
 	it('only applies to the built-in agents', async () => {
@@ -307,6 +426,17 @@ describe('memory cleanup waits for extraction', () => {
 		const runFn = vi.fn().mockResolvedValue(undefined);
 		await emitAgentEvent('memory.changed', 'u1', {}, db, runFn);
 		expect(runFn).toHaveBeenCalledWith(mine.id, 'u1', expect.any(String));
+	});
+
+	it('still lets other agents react to privacy-only changes, origin included', async () => {
+		const agent = seedEventAgent('u1', { event: 'memory.changed' });
+		const runFn = vi.fn().mockResolvedValue(undefined);
+		await emitAgentEvent('memory.changed', 'u1', { path: 'a.md', origin: 'privacy' }, db, runFn);
+		expect(runFn).toHaveBeenCalledWith(
+			agent.id,
+			'u1',
+			expect.stringContaining('"origin":"privacy"')
+		);
 	});
 });
 
@@ -523,7 +653,7 @@ describe('private conversations', () => {
 		expect(agentId).toBe(cleanup.id);
 		expect(instructions).not.toContain('alice');
 		expect(instructions).not.toContain(run.id);
-		expect(instructions).toContain('{"scope":"user","action":"update","private":true}');
+		expect(instructions).toBe(CLEANUP_EVENT_INSTRUCTIONS);
 	});
 
 	it('pins chat event payloads to ids: no titles or content reach the agent', async () => {
