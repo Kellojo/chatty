@@ -2,7 +2,10 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button, type ButtonVariant } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import MessageCircleQuestionMarkIcon from '@lucide/svelte/icons/message-circle-question-mark';
 	import ShieldQuestionMarkIcon from '@lucide/svelte/icons/shield-question-mark';
@@ -49,8 +52,21 @@
 	});
 
 	const isApproval = $derived(request.kind === 'approval');
+	const isSecret = $derived(request.kind === 'secret');
 	/** The real choices; handing the decision back is a quieter action of its own. */
-	const choices = $derived(request.options.filter((o) => o.id !== request.deferOptionId));
+	const choices = $derived(
+		isSecret ? [] : request.options.filter((o) => o.id !== request.deferOptionId)
+	);
+	/** Typed into the card only (never the composer), sent straight to T3, then cleared. */
+	let secret = $state('');
+	const secretDecline = $derived(isSecret ? request.options[0] : undefined);
+	const secretHost = $derived.by(() => {
+		try {
+			return request.url ? new URL(request.url).host : null;
+		} catch {
+			return null;
+		}
+	});
 	const deferOption = $derived(request.options.find((o) => o.id === request.deferOptionId));
 	/**
 	 * The highlighted choice: the recommended one. Without a recommendation only an
@@ -74,8 +90,8 @@
 		return isApproval ? 'Or type below to decline with a note.' : 'Or type your own answer below.';
 	});
 	/** A question's header (T3) reads as its label, an approval's detail as context. */
-	const header = $derived(!isApproval && request.detail ? request.detail : null);
-	const body = $derived(isApproval ? request.detail : null);
+	const header = $derived(request.kind === 'question' && request.detail ? request.detail : null);
+	const body = $derived(request.kind === 'question' ? null : request.detail);
 	const longTitle = $derived(request.title.length > 120);
 	/** Whether a scroll box (long question, approval reason) has more below its visible part. */
 	const clipped = $state({ title: false, body: false, code: false });
@@ -117,17 +133,22 @@
 		return option.id === primaryId ? 'default' : 'outline';
 	}
 
-	async function respond(key: string, body: { optionId?: string; text?: string }) {
+	/** Resolves true once the answer was accepted. */
+	async function respond(
+		key: string,
+		body: { optionId?: string; text?: string }
+	): Promise<boolean> {
 		// Buttons stay focusable while an answer sends (aria-disabled, so keyboard
 		// users keep their place if it fails); this is what keeps them inert.
-		if (busy) return;
+		if (busy) return false;
 		sending = key;
 		try {
 			if (onrespond) {
-				if (await onrespond(body)) {
+				const sent = await onrespond(body);
+				if (sent) {
 					onresponded?.();
 				}
-				return;
+				return sent;
 			}
 			const res = await fetch(`/api/coding/tasks/${encodeURIComponent(conversationId)}/respond`, {
 				method: 'POST',
@@ -139,14 +160,23 @@
 				throw new Error(data?.message ?? 'Failed to send your answer');
 			}
 			onresponded?.();
+			return true;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to send your answer');
+			return false;
 		} finally {
 			sending = null;
 		}
 	}
 
 	const choose = (option: CodingPendingOption) => respond(option.id, { optionId: option.id });
+
+	async function saveSecret(event: SubmitEvent) {
+		event.preventDefault();
+		if (!secret.trim()) return;
+		// Kept after a failed send, so it can be retried without pasting again.
+		if (await respond('save', { text: secret })) secret = '';
+	}
 
 	let title = $state<HTMLElement | null>(null);
 	const titleId = $props.id();
@@ -178,6 +208,9 @@
 				{#if isApproval}
 					<ShieldQuestionMarkIcon class="size-3.5 shrink-0 text-primary" />
 					<span class="text-primary">Needs your approval</span>
+				{:else if isSecret}
+					<KeyRoundIcon class="size-3.5 shrink-0 text-primary" />
+					<span class="text-primary">Secret requested</span>
 				{:else}
 					<MessageCircleQuestionMarkIcon class="size-3.5 shrink-0 text-primary" />
 					<span class="text-primary">Question for you</span>
@@ -243,7 +276,43 @@
 			{/if}
 		</div>
 
-		{#if hasDescriptions}
+		{#if isSecret}
+			{#if request.url}
+				<Button
+					href={request.url}
+					target="_blank"
+					rel="noopener noreferrer"
+					size="sm"
+					variant="outline"
+					class="self-start max-sm:h-10 max-sm:rounded-full max-sm:px-4"
+				>
+					Open {secretHost ?? 'link'}
+					<ExternalLinkIcon />
+				</Button>
+			{/if}
+			<form class="flex gap-2 max-sm:flex-col" onsubmit={saveSecret}>
+				<Input
+					type="password"
+					bind:value={secret}
+					placeholder={request.placeholder ?? 'Paste the secret'}
+					aria-label={request.title}
+					autocomplete="off"
+					spellcheck={false}
+					class="min-w-0 flex-1 max-sm:h-10"
+				/>
+				<Button
+					type="submit"
+					size="sm"
+					class="aria-disabled:pointer-events-none aria-disabled:opacity-50 max-sm:h-10 max-sm:rounded-full"
+					aria-disabled={busy || !secret.trim()}
+				>
+					{#if sending === 'save'}
+						<LoaderCircleIcon class="animate-spin" /><span class="sr-only">Sending…</span>
+					{/if}
+					Save securely
+				</Button>
+			</form>
+		{:else if hasDescriptions}
 			<div class="flex flex-col gap-1.5" role="group" aria-label="Answers">
 				{#each choices as option (option.id)}
 					{@const primary = option.id === primaryId}
@@ -341,7 +410,32 @@
 	</div>
 
 	<!-- With nothing to choose, the composer's "Type your answer…" says it all. -->
-	{#if typedHint || deferOption}
+	{#if isSecret}
+		<div
+			class="-mt-2 flex items-center justify-between gap-2 px-3 pb-2 sm:mt-0 sm:min-h-10 sm:border-t sm:bg-muted/40 sm:px-4 sm:py-1.5"
+		>
+			<span class="text-xs text-muted-foreground">
+				Kept out of the chat: sent straight to the coding agent's machine.
+			</span>
+			{#if secretDecline}
+				<Button
+					size="sm"
+					variant="ghost"
+					class={[
+						'h-7 shrink-0 px-2 text-xs aria-disabled:pointer-events-none max-sm:h-9 max-sm:px-3',
+						busy && sending !== secretDecline.id && 'opacity-50'
+					]}
+					aria-disabled={busy}
+					onclick={() => choose(secretDecline)}
+				>
+					{#if sending === secretDecline.id}
+						<LoaderCircleIcon class="size-3.5 animate-spin" /><span class="sr-only">Sending…</span>
+					{/if}
+					{secretDecline.label}
+				</Button>
+			{/if}
+		</div>
+	{:else if typedHint || deferOption}
 		<div
 			class="-mt-2 flex items-center justify-end gap-2 px-3 pb-2 sm:mt-0 sm:min-h-10 sm:justify-between sm:border-t sm:bg-muted/40 sm:px-4 sm:py-1.5"
 		>

@@ -560,6 +560,19 @@ export class CodingFollower {
 	}
 
 	/**
+	 * Answers a `secret_request` item: T3 stores the secret for the agent's
+	 * commands. Without `secret`, declines it. The secret is never kept here.
+	 */
+	async answerSecret(turnItemId: string, secret: string | undefined): Promise<void> {
+		if (!this.threadId) throw new T3ClientError('Task has no thread yet', 'protocol');
+		await this.rpc('secrets.answerRequest', {
+			threadId: this.threadId,
+			turnItemId,
+			answer: secret === undefined ? { type: 'decline' } : { type: 'save', secret }
+		});
+	}
+
+	/**
 	 * Run the user stopped here. Until T3 reports it ended, renders must not
 	 * reopen a live stream for it (that would undo the Stop).
 	 */

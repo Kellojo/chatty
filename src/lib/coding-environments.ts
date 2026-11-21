@@ -126,10 +126,21 @@ export interface CodingPendingOption {
 	description?: string;
 }
 
-/** An approval or question from the coding agent waiting on the user. */
+/** Option id that turns a secret request down. */
+export const SECRET_DECLINE_OPTION = 'decline';
+
+/**
+ * An approval, question or secret request from the coding agent waiting on the
+ * user. A secret request's `requestId` is its T3 turn item id; the secret is
+ * typed into the card itself (never the composer) and goes straight to T3.
+ */
 export interface CodingPendingRequest {
 	requestId: string;
-	kind: 'approval' | 'question';
+	kind: 'approval' | 'question' | 'secret';
+	/** Where to get the secret, e.g. a token settings page (secrets only). */
+	url?: string;
+	/** Input placeholder (secrets only). */
+	placeholder?: string;
 	/** T3 question id the answer is keyed by (questions only). */
 	questionId?: string;
 	title: string;
@@ -157,7 +168,7 @@ export function codingDeclineOption(
  * agent's feedback).
  */
 export function acceptsTypedAnswer(request: CodingPendingRequest): boolean {
-	if (!request.allowFreeText) return false;
+	if (!request.allowFreeText || request.kind === 'secret') return false;
 	return request.kind === 'question' || codingDeclineOption(request) !== undefined;
 }
 

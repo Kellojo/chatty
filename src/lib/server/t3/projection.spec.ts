@@ -699,6 +699,42 @@ describe('summarizeTask', () => {
 		});
 	});
 
+	it('surfaces a secret request of the active run', () => {
+		const secret = (secretStatus: string, runId = 'run-1') => ({
+			id: 'secret-1',
+			runId,
+			ordinal: 1,
+			type: 'secret_request',
+			status: secretStatus === 'pending' ? 'waiting' : 'completed',
+			label: 'Gitea access token',
+			reason: 'To push the branch',
+			url: 'https://git.example.com/user/settings/applications',
+			secretStatus
+		});
+		const state = emptyThreadState();
+		applyStreamItem(state, snapshot({ runs: [run()], turnItems: [secret('pending')] }));
+		expect(summarizeTask(state)).toMatchObject({
+			status: 'awaiting_input',
+			pendingRequest: {
+				requestId: 'secret-1',
+				kind: 'secret',
+				title: 'Gitea access token',
+				detail: 'To push the branch',
+				url: 'https://git.example.com/user/settings/applications',
+				options: [{ id: 'decline', label: 'Decline' }],
+				allowFreeText: false
+			}
+		});
+
+		applyStreamItem(state, snapshot({ runs: [run()], turnItems: [secret('saved')] }));
+		expect(summarizeTask(state).pendingRequest).toBeNull();
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'interrupted' })], turnItems: [secret('pending')] })
+		);
+		expect(summarizeTask(state).pendingRequest).toBeNull();
+	});
+
 	it('ignores requests left pending by a run that has ended', () => {
 		const state = emptyThreadState();
 		const approval = (id: string, runId: string) => ({

@@ -7,11 +7,12 @@
 // maps upserted by id. Everything is decoded defensively; unknown event types
 // and item kinds are ignored.
 
-import type {
-	CodingPendingOption,
-	CodingPendingRequest,
-	CodingPullRequestState,
-	CodingTaskStatus
+import {
+	SECRET_DECLINE_OPTION,
+	type CodingPendingOption,
+	type CodingPendingRequest,
+	type CodingPullRequestState,
+	type CodingTaskStatus
 } from '$lib/coding-environments.js';
 
 type Rec = Record<string, unknown>;
@@ -954,7 +955,41 @@ function pendingRequest(state: ThreadState): CodingPendingRequest | null {
 			createdAt
 		};
 	}
-	return null;
+	return pendingSecretRequest(state, current);
+}
+
+/**
+ * A secret the agent asked for (T3's `request_secret` tool): a `secret_request`
+ * turn item, not a runtime request. Only one of a still-active run counts; T3
+ * cancels the rest when their run ends.
+ */
+function pendingSecretRequest(
+	state: ThreadState,
+	current: string | null
+): CodingPendingRequest | null {
+	const pending = itemsOfType(state, 'secret_request')
+		.filter((item) => {
+			if (item.secretStatus !== 'pending') return false;
+			const runId = str(item.runId);
+			const run = runId ? state.runs.get(runId) : undefined;
+			return runId ? !!run && isRunActive(run) : current !== null;
+		})
+		.sort((a, b) => (str(a.startedAt) ?? '').localeCompare(str(b.startedAt) ?? ''));
+	const item = pending[0];
+	if (!item) return null;
+	const url = webUrl(str(item.url));
+	const placeholder = str(item.placeholder);
+	return {
+		requestId: String(item.id),
+		kind: 'secret',
+		title: str(item.label) ?? str(item.title) ?? 'The agent needs a secret',
+		detail: str(item.reason),
+		...(url ? { url } : {}),
+		...(placeholder ? { placeholder } : {}),
+		options: [{ id: SECRET_DECLINE_OPTION, label: 'Decline' }],
+		allowFreeText: false,
+		createdAt: time(item.startedAt) ?? time(item.updatedAt) ?? Date.now()
+	};
 }
 
 /** A PR record's state: on the record itself or on T3's cached `snapshot` of it. */

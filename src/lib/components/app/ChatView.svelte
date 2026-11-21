@@ -1021,7 +1021,12 @@
 		const pending = coding?.pendingRequest ?? agentQuestion?.request ?? null;
 		if (!pending) return { polite: '', assertive: '' };
 		const approval = pending.kind === 'approval';
-		const text = `${approval ? 'The agent needs your approval' : 'The agent has a question'}: ${pending.title}`;
+		const lead = approval
+			? 'The agent needs your approval'
+			: pending.kind === 'secret'
+				? 'The agent asks for a secret'
+				: 'The agent has a question';
+		const text = `${lead}: ${pending.title}`;
 		return approval ? { polite: '', assertive: text } : { polite: text, assertive: '' };
 	});
 

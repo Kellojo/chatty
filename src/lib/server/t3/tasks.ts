@@ -13,6 +13,7 @@ import type {
 import {
 	codingDeclineOption,
 	repositoryName,
+	SECRET_DECLINE_OPTION,
 	type CodingModelRef
 } from '$lib/coding-environments.js';
 import { autonomyFromRuntimeMode, CODING_RUNTIME_MODES } from '$lib/coding-task-details.js';
@@ -768,7 +769,12 @@ export async function respondToCodingRequest(
 	});
 	const text = input.text?.trim() || undefined;
 	try {
-		if (pending.kind === 'approval') {
+		if (pending.kind === 'secret') {
+			// The secret goes straight to T3: never remembered, logged or shown.
+			const decline = input.optionId === SECRET_DECLINE_OPTION;
+			if (!decline && !text) throw new CodingTaskError(400, 'Enter the secret or decline');
+			await follower.answerSecret(pending.requestId, decline ? undefined : text);
+		} else if (pending.kind === 'approval') {
 			// A typed reply without a decision says what to do instead: it declines,
 			// with the reply as the agent's feedback.
 			const decision = input.optionId ?? (text ? codingDeclineOption(pending)?.id : undefined);
