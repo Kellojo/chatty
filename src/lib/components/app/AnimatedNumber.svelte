@@ -12,6 +12,7 @@
 
 <script lang="ts">
 	import NumberFlow from '@number-flow/svelte';
+	import { onMount } from 'svelte';
 	import { countParts, formatSpend } from '$lib/formats.js';
 
 	let {
@@ -43,6 +44,14 @@
 		}
 	};
 
+	/**
+	 * NumberFlow's element rewrites its own server-rendered children when it
+	 * upgrades, so they can't be hydrated (Svelte would remount the whole page):
+	 * the server and hydration render the formatted text, NumberFlow takes over after.
+	 */
+	let mounted = $state(false);
+	onMount(() => (mounted = true));
+
 	/** What NumberFlow animates, or the text to show as-is. */
 	const shown = $derived.by(
 		(): { text: string } | { value: number; options: Intl.NumberFormatOptions; unit: string } => {
@@ -67,7 +76,10 @@
 
 <!-- The wrapper takes layout classes (width, alignment), which the custom element ignores. -->
 <span class={className}>
-	{#if 'text' in shown}{shown.text}{:else}<NumberFlow
+	{#if 'text' in shown}{shown.text}{:else if !mounted}{prefix}{new Intl.NumberFormat(
+			'en-US',
+			shown.options
+		).format(shown.value)}{shown.unit}{suffix}{:else}<NumberFlow
 			value={shown.value}
 			format={shown.options}
 			locales="en-US"
