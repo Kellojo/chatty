@@ -162,7 +162,8 @@
 			</Dialog.Description>
 		</Dialog.Header>
 
-		<form class="grid gap-5" onsubmit={submit}>
+		<!-- min-w-0 + grid-cols-1 keep the no-wrap tab labels from widening the dialog past the viewport on phones. -->
+		<form class="grid min-w-0 grid-cols-1 gap-5" onsubmit={submit}>
 			<Tabs.Root
 				value={mode}
 				onValueChange={(v) => {
@@ -172,16 +173,16 @@
 				}}
 			>
 				<Tabs.List class="w-full">
-					<Tabs.Trigger value="clone" disabled={busy}>
-						<GithubIcon class="size-4" />
+					<Tabs.Trigger class="min-w-0 px-2 sm:px-3" value="clone" disabled={busy}>
+						<GithubIcon class="hidden size-4 sm:block" />
 						Clone
 					</Tabs.Trigger>
-					<Tabs.Trigger value="folder" disabled={busy}>
-						<FolderOpenIcon class="size-4" />
+					<Tabs.Trigger class="min-w-0 px-2 sm:px-3" value="folder" disabled={busy}>
+						<FolderOpenIcon class="hidden size-4 sm:block" />
 						Open folder
 					</Tabs.Trigger>
-					<Tabs.Trigger value="empty" disabled={busy}>
-						<FolderPlusIcon class="size-4" />
+					<Tabs.Trigger class="min-w-0 px-2 sm:px-3" value="empty" disabled={busy}>
+						<FolderPlusIcon class="hidden size-4 sm:block" />
 						New empty
 					</Tabs.Trigger>
 				</Tabs.List>
