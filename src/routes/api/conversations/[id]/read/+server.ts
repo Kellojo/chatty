@@ -7,7 +7,7 @@ import {
 	markConversationRead,
 	setConversationReadAt
 } from '$lib/server/db/repo/conversations.js';
-import { queueThreadStatePush } from '$lib/server/t3/thread-state.js';
+import { markThreadUnread, queueThreadStatePush } from '$lib/server/t3/thread-state.js';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = ({ locals, params }) => {
@@ -31,6 +31,6 @@ export const DELETE: RequestHandler = ({ locals, params }) => {
 	const latest = latestAssistantMessageAt(db, params.id);
 	if (latest === null) error(409, { message: 'Nothing to mark unread yet' });
 	setConversationReadAt(db, user.id, params.id, latest - 1);
-	queueThreadStatePush(db, user.id, [params.id]);
+	void markThreadUnread(db, user.id, params.id);
 	return json({ ok: true });
 };

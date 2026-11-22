@@ -21,6 +21,7 @@
 // T3 → Chatty arrives through the task's follower (live thread events) and the
 // periodic pass in ./thread-sync.ts; Chatty → T3 is pushed whenever Chatty
 // changes one of these on a coding conversation (see queueThreadStatePush).
+// Marking unread here is sent as T3's own "mark unread" (see markThreadUnread).
 
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/index.js';
@@ -392,6 +393,33 @@ export async function pushThreadState(
 	const again = conversationIds.filter((id) => pushAgain.get(id) === userId && !pushing.has(id));
 	for (const id of again) pushAgain.delete(id);
 	if (again.length > 0) await pushThreadState(db, userId, again);
+}
+
+/**
+ * Marks a coding conversation's T3 thread unread (T3 moves its lastVisitedAt
+ * back before the latest run completed). Visits only move forward, so without
+ * this T3 keeps the thread read and the next reconcile reads it here again.
+ * Non-coding ids are ignored; never throws.
+ */
+export async function markThreadUnread(db: Db, userId: string, id: string): Promise<void> {
+	const row = getCodingConversation(db, id);
+	if (!row?.thread_id || !row.environment_id) return;
+	const env = getCodingEnvironment(db, userId, row.environment_id);
+	if (!env || env.enabled !== 1) return;
+	try {
+		await withT3Connection(env, (conn) =>
+			conn.call('orchestration.dispatchCommand', {
+				type: 'thread.mark-unread',
+				commandId: randomUUID(),
+				threadId: row.thread_id
+			})
+		);
+	} catch (e) {
+		log.warn('Could not mark T3 thread unread', {
+			conversationId: id,
+			error: e instanceof Error ? e.message : String(e)
+		});
+	}
 }
 
 /** Fire-and-forget {@link pushThreadState} for request handlers and jobs. */
