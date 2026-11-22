@@ -12,6 +12,7 @@ import type {
 	CodingProjectOption,
 	CodingWorkspaceMode
 } from '$lib/coding-environments.js';
+import { NO_PROJECT_ID } from '$lib/coding-environments.js';
 
 /** Everything POST /api/coding/tasks needs. */
 export interface CodingTaskDraft {
@@ -345,7 +346,10 @@ export class CodingTaskState {
 		this.branchValue = '';
 		if (!id || !envId) return;
 		this.applyDefaults();
-		let result = this.branchesCache.get(branchesKey(envId, id));
+		let result =
+			id === NO_PROJECT_ID
+				? { isRepo: false, branches: [] }
+				: this.branchesCache.get(branchesKey(envId, id));
 		if (!result) {
 			this.branchesLoading = true;
 			try {
@@ -378,7 +382,7 @@ export class CodingTaskState {
 	async refreshBranches(): Promise<void> {
 		const envId = this.environmentId;
 		const id = this.projectId;
-		if (!envId || !id || this.branchesLoading) return;
+		if (!envId || !id || id === NO_PROJECT_ID || this.branchesLoading) return;
 		this.branchesCache.delete(branchesKey(envId, id));
 		if (this.branchesError || !this.branches) return this.selectProject(id);
 		const seq = ++this.branchesRefreshSeq;

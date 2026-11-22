@@ -8,6 +8,7 @@
 	import FolderXIcon from '@lucide/svelte/icons/folder-x';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import MessageSquareDashedIcon from '@lucide/svelte/icons/message-square-dashed';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ServerIcon from '@lucide/svelte/icons/server';
@@ -85,9 +86,11 @@
 	const warnIconOnly =
 		'ring-1 ring-amber-500/40 [&>svg:first-child]:text-amber-600! dark:[&>svg:first-child]:text-amber-400!';
 
+	// "No project" is listed on its own above the projects.
+	const projects = $derived(task.options?.projects.filter((p) => !p.scratch) ?? []);
+	const noProject = $derived(task.options?.projects.find((p) => p.scratch) ?? null);
 	const filteredProjects = $derived.by(() => {
 		const q = projectQuery.trim().toLowerCase();
-		const projects = task.options?.projects ?? [];
 		return q ? projects.filter((p) => p.title.toLowerCase().includes(q)) : projects;
 	});
 
@@ -231,41 +234,6 @@
 				Retry
 			</Button>
 		</div>
-	{:else if task.options && task.options.projects.length === 0}
-		{#if task.environments.length > 1}<div>{@render environmentPicker()}</div>{/if}
-		<div
-			class="flex flex-col items-center gap-3 rounded-2xl border border-dashed px-4 py-4 text-center"
-		>
-			<p class="text-sm text-muted-foreground">
-				No projects on {task.environment?.name ?? 'this environment'} yet.
-			</p>
-			<div class="flex flex-wrap justify-center gap-2">
-				<Button size="sm" class="rounded-full" {disabled} onclick={() => openDialog('clone')}>
-					<GithubIcon class="size-4" />
-					Clone repository
-				</Button>
-				<Button
-					variant="outline"
-					size="sm"
-					class="rounded-full"
-					{disabled}
-					onclick={() => openDialog('folder')}
-				>
-					<FolderOpenIcon class="size-4" />
-					Open folder
-				</Button>
-				<Button
-					variant="outline"
-					size="sm"
-					class="rounded-full"
-					{disabled}
-					onclick={() => openDialog('empty')}
-				>
-					<FolderPlusIcon class="size-4" />
-					New empty project
-				</Button>
-			</div>
-		</div>
 	{:else}
 		<div class="flex flex-wrap items-center gap-2" role="group" aria-label="Coding task options">
 			{@render environmentPicker()}
@@ -296,7 +264,11 @@
 						aria-label="Project: {task.project?.title ?? 'none'}"
 						title="Switch or add a project"
 					>
-						<FolderIcon class="size-4" />
+						{#if task.project?.scratch}
+							<MessageSquareDashedIcon class="size-4" />
+						{:else}
+							<FolderIcon class="size-4" />
+						{/if}
 						<span class="truncate text-foreground">
 							{task.project?.title ?? 'Project'}
 						</span>
@@ -308,7 +280,7 @@
 						id={projectListboxId}
 						class="max-h-[min(26rem,var(--bits-select-content-available-height))] min-w-64"
 					>
-						{#if task.options.projects.length > SEARCH_THRESHOLD}
+						{#if projects.length > SEARCH_THRESHOLD}
 							{@render searchBox(
 								projectQuery,
 								(v) => (projectQuery = v),
@@ -316,8 +288,20 @@
 								projectListboxId
 							)}
 						{/if}
+						{#if noProject && !projectQuery.trim()}
+							<Select.Group>
+								<Select.Item value={noProject.id} label={noProject.title}>
+									<MessageSquareDashedIcon class="size-4 self-start text-muted-foreground" />
+									<span class="flex flex-col">
+										<span>{noProject.title}</span>
+										<span class="text-xs text-muted-foreground">Works in a new empty folder</span>
+									</span>
+								</Select.Item>
+							</Select.Group>
+							{#if projects.length > 0}<Select.Separator />{/if}
+						{/if}
 						<Select.Group>
-							<Select.Label>Projects</Select.Label>
+							{#if projects.length > 0}<Select.Label>Projects</Select.Label>{/if}
 							{#each filteredProjects as p (p.id)}
 								<Select.Item value={p.id} label={p.title}>
 									<span class="truncate">{p.title}</span>
@@ -326,9 +310,11 @@
 									{/if}
 								</Select.Item>
 							{:else}
-								<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-									No projects match “{projectQuery}”.
-								</div>
+								{#if projectQuery.trim()}
+									<div class="px-3 py-4 text-center text-sm text-muted-foreground">
+										No projects match “{projectQuery}”.
+									</div>
+								{/if}
 							{/each}
 						</Select.Group>
 						<!-- Pinned so the actions stay reachable when the list scrolls. -->
@@ -353,7 +339,15 @@
 					</Select.Content>
 				</Select.Root>
 
-				{#if task.project}
+				{#if task.project?.scratch}
+					<span
+						class={staticChip}
+						title="Without a project, the agent works in a new empty folder of its own"
+					>
+						<FolderPlusIcon class="size-4" />
+						<span class="truncate">New empty folder</span>
+					</span>
+				{:else if task.project}
 					{#if task.branchesLoading}
 						<span class="{staticChip} opacity-70" role="status">
 							<LoaderCircleIcon class="size-4 animate-spin" />

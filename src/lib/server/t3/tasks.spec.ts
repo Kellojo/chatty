@@ -47,6 +47,8 @@ const {
 	archiveCodingThread,
 	browseCodingFolders,
 	createCodingProject,
+	createCodingTask,
+	getCodingOptions,
 	resolveCodingTarget,
 	startCodingTurn,
 	respondToCodingRequest,
@@ -573,6 +575,54 @@ describe('resolveCodingTarget', () => {
 		);
 		await expect(
 			resolveCodingTarget('u1', { environmentId, projectId: 'p1', workspaceMode: 'worktree' }, db)
+		).rejects.toMatchObject({ status: 400 });
+	});
+});
+
+describe('no project', () => {
+	const target = {
+		providerInstanceId: 'codex',
+		model: 'gpt',
+		autonomy: 'auto' as const,
+		workspaceMode: 'local' as const
+	};
+
+	it("offers it last, in place of T3's own scratch project", async () => {
+		t3HttpGet.mockResolvedValue({
+			projects: [
+				{ id: 'p1', title: 'App', workspaceRoot: '/home/u/app' },
+				{ id: 's1', title: 'No project', workspaceRoot: '/home/u/.t3/scratch' }
+			]
+		});
+		call.mockImplementation(async () => ({ settings: {}, providers: [] }));
+		const { projects } = await getCodingOptions('u1', environmentId, db);
+		expect(projects.map((p) => [p.id, p.title, p.scratch ?? false])).toEqual([
+			['p1', 'App', false],
+			[':none', 'No project', true]
+		]);
+	});
+
+	it("starts in T3's scratch project, created on first use", async () => {
+		call.mockImplementation(async (tag) =>
+			tag === 'projects.ensureScratch' ? { projectId: 's1' } : {}
+		);
+		const { coding: row } = await createCodingTask(
+			'u1',
+			{ environmentId, projectId: ':none', ...target },
+			db
+		);
+		expect(t3HttpGet).not.toHaveBeenCalled();
+		expect(row.project_id).toBe('s1');
+		expect(row.project_title).toBe('No project');
+	});
+
+	it('refuses a worktree', async () => {
+		await expect(
+			resolveCodingTarget(
+				'u1',
+				{ environmentId, projectId: ':none', workspaceMode: 'worktree' },
+				db
+			)
 		).rejects.toMatchObject({ status: 400 });
 	});
 });

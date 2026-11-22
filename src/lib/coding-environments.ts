@@ -222,9 +222,20 @@ export interface CodingModelRef {
 	model: string;
 }
 
+/**
+ * Project id that stands for "no project": T3's scratch project, where each
+ * thread gets its own empty folder. Resolved to the real id when a task starts,
+ * so saved targets (agents, proposals) keep working if T3 recreates it.
+ * `:` never appears in T3's UUID project ids.
+ */
+export const NO_PROJECT_ID = ':none';
+export const NO_PROJECT_TITLE = 'No project';
+
 export interface CodingProjectOption {
 	id: string;
 	title: string;
+	/** The "no project" option (see NO_PROJECT_ID). */
+	scratch?: boolean;
 	defaultBranch: string | null;
 	isGitRepo: boolean;
 	/** T3's default model for new threads in this project (already resolved to an available one). */

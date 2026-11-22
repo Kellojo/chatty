@@ -13,6 +13,8 @@ import type {
 import {
 	codingDeclineOption,
 	LINK_DECLINE_OPTION,
+	NO_PROJECT_ID,
+	NO_PROJECT_TITLE,
 	repositoryName,
 	SECRET_DECLINE_OPTION,
 	type CodingModelRef
@@ -105,12 +107,35 @@ interface RemoteProject {
 	defaultWorkspaceMode: CodingWorkspaceMode | null;
 }
 
+/** "No project" until a task starts (see NO_PROJECT_ID). */
+const NO_PROJECT: RemoteProject = {
+	id: NO_PROJECT_ID,
+	title: NO_PROJECT_TITLE,
+	workspaceRoot: null,
+	isGitRepo: false,
+	defaultModel: null,
+	defaultWorkspaceMode: 'local'
+};
+
+/**
+ * T3's own scratch project (`<T3 home>/scratch`, titled "No project"). T3
+ * doesn't flag it in the project list, so it's recognised by what T3 creates;
+ * Chatty offers it as NO_PROJECT instead.
+ */
+const isScratchProject = (p: Rec) =>
+	p.title === NO_PROJECT_TITLE &&
+	typeof p.workspaceRoot === 'string' &&
+	/[\\/]scratch[\\/]?$/.test(p.workspaceRoot);
+
 async function listRemoteProjects(env: CodingEnvironmentRow): Promise<RemoteProject[]> {
 	const body = rec(await t3HttpGet(env.base_url, decryptSecret(env.token_enc), '/api/projects'));
 	const projects = Array.isArray(body?.projects) ? body.projects : [];
 	return projects
 		.map(rec)
-		.filter((p): p is Rec => p !== null && !!str(p.id) && !p.deletedAt && !p.archivedAt)
+		.filter(
+			(p): p is Rec =>
+				p !== null && !!str(p.id) && !p.deletedAt && !p.archivedAt && !isScratchProject(p)
+		)
 		.map((p) => ({
 			id: String(p.id),
 			title: str(p.title) ?? String(p.id),
@@ -148,9 +173,11 @@ export async function getCodingOptions(
 		const override = (projectId: string) => rec(overrides?.[projectId]);
 		const serverDefault = parseModelSelection(settings?.defaultModelSelection);
 		return {
-			projects: projects.map((p) => ({
+			// "No project" last, so a real project is the default pick.
+			projects: [...projects, NO_PROJECT].map((p) => ({
 				id: p.id,
 				title: p.title,
+				...(p === NO_PROJECT ? { scratch: true } : {}),
 				defaultBranch: null,
 				isGitRepo: p.isGitRepo,
 				defaultModel: resolveDefaultModel(
@@ -185,6 +212,7 @@ export async function getProjectBranches(
 	branches: { name: string; isDefault: boolean; current: boolean }[];
 }> {
 	const env = requireEnvironment(db, userId, environmentId);
+	if (projectId === NO_PROJECT_ID) return { isRepo: false, branches: [] };
 	try {
 		const project = (await listRemoteProjects(env)).find((p) => p.id === projectId);
 		if (!project) throw new CodingTaskError(404, 'Project not found on this environment');
@@ -419,6 +447,15 @@ export async function resolveCodingTarget(
 	db: Db = getDb()
 ): Promise<{ env: CodingEnvironmentRow; project: RemoteProject }> {
 	const env = requireEnvironment(db, userId, input.environmentId);
+	if (input.projectId === NO_PROJECT_ID) {
+		if (input.workspaceMode === 'worktree') {
+			throw new CodingTaskError(
+				400,
+				'Worktrees need a project; without one the agent gets its own folder'
+			);
+		}
+		return { env, project: NO_PROJECT };
+	}
 	let project: RemoteProject | undefined;
 	try {
 		project = (await listRemoteProjects(env)).find((p) => p.id === input.projectId);
@@ -435,6 +472,20 @@ export async function resolveCodingTarget(
 		project = { ...project, isGitRepo: true };
 	}
 	return { env, project };
+}
+
+/** T3's scratch project id, created on first use like T3's own "No project" threads. */
+async function ensureScratchProject(env: CodingEnvironmentRow): Promise<string> {
+	try {
+		const result = rec(
+			await withConnection(env, (conn) => conn.call('projects.ensureScratch', {}))
+		);
+		const projectId = str(result?.projectId);
+		if (!projectId) throw new CodingTaskError(502, 'The environment did not return a project');
+		return projectId;
+	} catch (e) {
+		throw asTaskError(e, 'Could not start a task without a project');
+	}
 }
 
 async function isGitWorkspace(env: CodingEnvironmentRow, cwd: string | null): Promise<boolean> {
@@ -479,6 +530,7 @@ export async function createCodingTask(
 		}
 	}
 	const { env, project } = await resolveCodingTarget(userId, input, db);
+	const projectId = project === NO_PROJECT ? await ensureScratchProject(env) : project.id;
 
 	const conversation = db.transaction(() => {
 		// Checked again inside the write: two starts can both pass the check above.
@@ -494,7 +546,7 @@ export async function createCodingTask(
 		createCodingConversation(db, {
 			conversationId: conv.id,
 			environmentId: env.id,
-			projectId: project.id,
+			projectId,
 			projectTitle: project.title,
 			providerInstanceId: input.providerInstanceId,
 			model: input.model,
