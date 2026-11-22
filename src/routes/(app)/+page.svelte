@@ -411,7 +411,8 @@
 			<span class="text-sm font-medium text-muted-foreground">Drop files to attach</span>
 		</div>
 	{/if}
-	<div class="flex flex-col items-center gap-5">
+	<!-- Same width as the composer below, so center-in-viewport moves both by the same amount. -->
+	<div class="flex w-full max-w-2xl center-in-viewport flex-col items-center gap-5">
 		{#if data.codingEnvironments.length > 0}
 			<Tabs.Root value={mode} onValueChange={(v) => setMode(v as 'chat' | 'coding')}>
 				<Tabs.List aria-label="What to start">
@@ -452,7 +453,7 @@
 			<h1 class="launch-title text-2xl font-semibold">What can I help you with?</h1>
 		{/if}
 	</div>
-	<div class="w-full max-w-2xl">
+	<div class="w-full max-w-2xl center-in-viewport">
 		<PromptInput
 			class="launch-composer"
 			value={displayInput}
@@ -590,7 +591,9 @@
 	</div>
 	{#if coding}
 		{#if codingTask.project}
-			<div class="launch-chips mt-2 flex max-w-2xl flex-wrap justify-center gap-2">
+			<div
+				class="launch-chips mt-2 flex w-full max-w-2xl center-in-viewport flex-wrap justify-center gap-2"
+			>
 				{#each codingSuggestions as suggestion (suggestion)}
 					<PromptSuggestion onclick={() => useSuggestion(suggestion)}>{suggestion}</PromptSuggestion
 					>
@@ -598,7 +601,9 @@
 			</div>
 		{/if}
 	{:else}
-		<div class="launch-chips flex max-w-2xl flex-wrap justify-center gap-2">
+		<div
+			class="launch-chips flex w-full max-w-2xl center-in-viewport flex-wrap justify-center gap-2"
+		>
 			{#each suggestions as suggestion (suggestion)}
 				<PromptSuggestion onclick={() => startChat(suggestion)}>{suggestion}</PromptSuggestion>
 			{/each}

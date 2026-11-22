@@ -1683,24 +1683,30 @@
 					speech={playback}
 				/>
 				{#if waiting}
-					<ThinkingIndicator since={waitingSince} class="mx-auto w-full max-w-3xl px-4 pb-4" />
+					<ThinkingIndicator
+						since={waitingSince}
+						class="mx-auto w-full max-w-3xl center-in-viewport px-4 pb-4"
+					/>
 				{:else if backgroundWaiting}
-					<WaitingIndicator class="mx-auto w-full max-w-3xl px-4 pb-4" />
+					<WaitingIndicator class="mx-auto w-full max-w-3xl center-in-viewport px-4 pb-4" />
 				{/if}
 			</ChatContainerContent>
 		</ChatContainer>
-		<!-- Beside the centred column, only when the chat pane (not the window) leaves room for it. -->
+		<!-- Beside the centred column, only when the chat pane (not the window) leaves room for it.
+		     Moves with the column when center-in-viewport shifts it (same shift, 48rem column). -->
 		<MessageNav
 			items={navItems}
 			{scrollEl}
 			onjump={() => scroll?.stopScroll()}
-			class="left-[max(0.5rem,calc(50%-26.75rem))] hidden @4xl/chat:block"
+			class="message-rail-left! hidden @4xl/chat:block"
 		/>
 	</div>
 	<div role="status" class="sr-only">{replyAnnouncement}</div>
 	<div class="sr-only" aria-live="polite">{voiceAnnouncement}</div>
 
-	<div class="relative mx-auto w-full max-w-3xl px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+	<div
+		class="relative mx-auto w-full max-w-3xl center-in-viewport px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+	>
 		{#if showJumpToLatest}
 			<Button
 				variant="outline"

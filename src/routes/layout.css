@@ -130,6 +130,40 @@
 	app-region: drag;
 }
 
+/* Width of the open desktop sidebar (set by the app layout, 0 otherwise). Registered so
+   it animates along with the sidebar's own width transition. */
+@property --sidebar-inset {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+
+/* Centres a column on the viewport rather than on the space beside the sidebar: shifts it
+   left by half the sidebar's width, but only as far as the free space on its left allows
+   (100% is the column's own width), keeping 3.25rem clear (room for the chat's message rail). */
+@utility center-in-viewport {
+	translate: calc(
+			-1 *
+				min(var(--sidebar-inset) / 2, max(0px, (100vw - var(--sidebar-inset) - 100%) / 2 - 3.25rem))
+		)
+		0;
+}
+
+/* The chat's message rail, just left of the centred 48rem (max-w-3xl) column, moved by
+   the same amount center-in-viewport moves that column. */
+@utility message-rail-left {
+	left: max(
+		0.5rem,
+		calc(
+			50% - 26.75rem -
+				min(
+					var(--sidebar-inset) / 2,
+					max(0px, (100vw - var(--sidebar-inset) - 48rem) / 2 - 3.25rem)
+				)
+		)
+	);
+}
+
 @theme inline {
 	--font-sans: 'Inter Variable', sans-serif;
 	--color-sidebar-ring: var(--sidebar-ring);

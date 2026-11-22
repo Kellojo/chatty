@@ -133,7 +133,9 @@
 	}
 </script>
 
-<div class={cn('mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6', className)}>
+<div
+	class={cn('mx-auto flex w-full max-w-3xl center-in-viewport flex-col gap-6 px-4 py-6', className)}
+>
 	{#each messages as message, index (message.id)}
 		{@const status = messageStatus(message)}
 		{@const messageActive = streaming && index === lastAssistantIndex}

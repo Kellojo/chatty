@@ -422,7 +422,13 @@
 	style:--sidebar-width={sidebarOpen ? '288px' : '0px'}
 	aria-hidden="true"
 ></div>
-<div class="flex h-screen overflow-hidden pt-(--titlebar-height)">
+<!-- --sidebar-inset lets columns centre on the viewport (center-in-viewport utility). -->
+<div
+	class={cn(
+		'flex h-screen overflow-hidden pt-(--titlebar-height) transition-[--sidebar-inset] duration-200',
+		sidebarOpen && 'md:[--sidebar-inset:288px]'
+	)}
+>
 	<!-- While a finger drags it, it follows without a transition; letting go settles it
 	     open or closed at the finger's speed (settleMs), as iOS does. -->
 	<div
