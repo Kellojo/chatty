@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+	addedLineNumbers,
+	inlineDiff,
+	findDiffFile,
 	defaultDiffSource,
 	MAX_DIFF_LINES_PER_FILE,
 	parseUnifiedDiff,
@@ -107,5 +110,92 @@ describe('defaultDiffSource', () => {
 			'working-tree'
 		);
 		expect(defaultDiffSource([])).toBeNull();
+	});
+});
+
+describe('addedLineNumbers', () => {
+	it("maps added lines to their numbers in the file's current version", () => {
+		const [file] = parseUnifiedDiff(
+			[
+				'diff --git a/a.ts b/a.ts',
+				'--- a/a.ts',
+				'+++ b/a.ts',
+				'@@ -1,3 +1,4 @@',
+				' one',
+				'-two',
+				'+TWO',
+				'+2b',
+				' three',
+				'@@ -10,2 +11,2 @@ fn',
+				' ten',
+				'+eleven',
+				'\\ No newline at end of file'
+			].join('\n')
+		);
+		expect([...addedLineNumbers(file)]).toEqual([2, 3, 12]);
+	});
+});
+
+describe('findDiffFile', () => {
+	it('prefers the source the diff opens with', () => {
+		const file = (path: string, additions: number) => ({
+			path,
+			previousPath: null,
+			status: 'modified' as const,
+			additions,
+			deletions: 0,
+			binary: false,
+			lines: [],
+			truncated: false
+		});
+		const diff = {
+			sources: [
+				{
+					kind: 'working-tree' as const,
+					title: 'W',
+					baseRef: null,
+					files: [file('a.ts', 1)],
+					truncated: false
+				},
+				{
+					kind: 'branch-range' as const,
+					title: 'B',
+					baseRef: 'main',
+					files: [file('a.ts', 5)],
+					truncated: false
+				}
+			]
+		};
+		expect(findDiffFile(diff, 'a.ts')?.additions).toBe(5);
+		expect(findDiffFile(diff, 'b.ts')).toBeNull();
+	});
+});
+
+describe('inlineDiff', () => {
+	it('places removed lines before the line that follows them', () => {
+		const [file] = parseUnifiedDiff(
+			[
+				'diff --git a/a.ts b/a.ts',
+				'--- a/a.ts',
+				'+++ b/a.ts',
+				'@@ -1,4 +1,4 @@',
+				' one',
+				'-two',
+				'+TWO',
+				' three',
+				'-four',
+				'@@ -10,2 +10,3 @@',
+				' ten',
+				'+eleven',
+				'+twelve'
+			].join('\n')
+		);
+		const diff = inlineDiff(file);
+		expect([...diff.added]).toEqual([2, 11, 12]);
+		expect([...diff.removedBefore]).toEqual([
+			[2, ['two']],
+			[4, ['four']]
+		]);
+		expect(diff.changeStarts).toEqual([2, 4, 11]);
 	});
 });

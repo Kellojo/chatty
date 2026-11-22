@@ -168,3 +168,97 @@ export function defaultDiffSource(sources: readonly CodingDiffSource[]): CodingD
 		null
 	);
 }
+
+/**
+ * Each diff line's number (1-based) in the file's current version, read from
+ * the hunk headers; null for removed lines and headers.
+ */
+export function newLineNumbers(lines: readonly CodingDiffLine[]): (number | null)[] {
+	let next = 0;
+	return lines.map((line) => {
+		if (line.kind === 'hunk') {
+			next = Number(/^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line.text)?.[1] ?? 0);
+			return null;
+		}
+		return next > 0 && (line.kind === 'add' || line.kind === 'context') ? next++ : null;
+	});
+}
+
+/**
+ * The file's lines (1-based, in its current version) that the diff adds or
+ * changes. Lines a truncated diff left out are missing.
+ */
+export function addedLineNumbers(file: CodingDiffFile): Set<number> {
+	const numbers = newLineNumbers(file.lines);
+	const added = new Set<number>();
+	file.lines.forEach((line, i) => {
+		const n = numbers[i];
+		if (line.kind === 'add' && n !== null) added.add(n);
+	});
+	return added;
+}
+
+/** The diff of the file at `path` (workspace-relative), from the source to open first. */
+export function findDiffFile(diff: CodingTaskDiff, path: string): CodingDiffFile | null {
+	const sources = [defaultDiffSource(diff.sources), ...diff.sources];
+	for (const source of sources) {
+		const file = source?.files.find((f) => f.path === path);
+		if (file) return file;
+	}
+	return null;
+}
+
+/** A file's diff laid over its current version, for showing the changes inside the file. */
+export interface InlineDiff {
+	/** Lines (1-based, current version) the diff adds or changes. */
+	added: Set<number>;
+	/**
+	 * Removed lines, by the current line they stood before. Lines removed at the
+	 * end of the file are keyed one past its last line.
+	 */
+	removedBefore: Map<number, string[]>;
+	/** Where each block of changes starts, in file order, for jumping between them. */
+	changeStarts: number[];
+}
+
+export function inlineDiff(file: CodingDiffFile): InlineDiff {
+	const numbers = newLineNumbers(file.lines);
+	const added = new Set<number>();
+	const removedBefore = new Map<number, string[]>();
+	const starts = new Set<number>();
+	let pending: string[] = [];
+	let next = 0;
+	let inChange = false;
+	const flush = (at: number) => {
+		if (pending.length === 0) return;
+		removedBefore.set(at, [...(removedBefore.get(at) ?? []), ...pending]);
+		pending = [];
+	};
+	file.lines.forEach((line, i) => {
+		const n = numbers[i];
+		if (line.kind === 'hunk') {
+			flush(next);
+			inChange = false;
+			next = Number(/^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line.text)?.[1] ?? 0);
+			return;
+		}
+		if (line.kind === 'del') {
+			if (!inChange && next > 0) starts.add(next);
+			inChange = true;
+			pending.push(line.text);
+			return;
+		}
+		if (n === null) return;
+		flush(n);
+		if (line.kind === 'add') {
+			if (!inChange) starts.add(n);
+			inChange = true;
+			added.add(n);
+		} else {
+			inChange = false;
+		}
+		next = n + 1;
+	});
+	flush(next);
+	return { added, removedBefore, changeStarts: [...starts].sort((a, b) => a - b) };
+}

@@ -14,6 +14,7 @@
 		type CodingTaskDiff
 	} from '$lib/coding-diff.js';
 	import { formatCount } from '$lib/formats.js';
+	import CodingDiffLines from './CodingDiffLines.svelte';
 
 	/** The task's changed files with per-file diffs, read from T3 when opened. */
 	let { conversationId, open = $bindable(false) }: { conversationId: string; open?: boolean } =
@@ -88,15 +89,6 @@
 		modified: { letter: 'M', label: 'Modified', tone: 'text-muted-foreground' }
 	};
 
-	const LINE_CLASS = {
-		add: 'bg-success/10',
-		del: 'bg-destructive/10',
-		context: '',
-		hunk: 'bg-muted text-muted-foreground',
-		meta: 'text-muted-foreground italic'
-	} as const;
-	const LINE_SIGN = { add: '+', del: '-', context: ' ', hunk: '', meta: '' } as const;
-
 	const visibleLines = (file: CodingDiffFile) =>
 		file.lines.slice(0, shownLines[file.path] ?? PAGE_LINES);
 </script>
@@ -141,6 +133,9 @@
 				{#each sources as s (s.kind)}
 					<Button
 						variant={s.kind === source?.kind ? 'secondary' : 'ghost'}
+						class={s.kind === source?.kind
+							? 'text-foreground ring-1 ring-border'
+							: 'text-muted-foreground'}
 						size="sm"
 						aria-pressed={s.kind === source?.kind}
 						onclick={() => selectSource(s)}
@@ -210,14 +205,7 @@
 								</p>
 							{:else}
 								{@const shown = visibleLines(file)}
-								<div class="overflow-x-auto">
-									<pre
-										class="min-w-max font-mono text-xs leading-5">{#each shown as line, i (i)}<div
-												class="px-3 {LINE_CLASS[line.kind]}"><span
-													class="inline-block w-3 text-muted-foreground select-none"
-													aria-hidden="true">{LINE_SIGN[line.kind]}</span
-												>{line.text}</div>{/each}</pre>
-								</div>
+								<CodingDiffLines lines={shown} />
 								{#if shown.length < file.lines.length}
 									<div class="px-3 py-1.5">
 										<Button

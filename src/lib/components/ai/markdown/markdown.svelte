@@ -3,6 +3,7 @@
 	import { mode } from 'mode-watcher';
 	import MarkdownImage from './markdown-image.svelte';
 	import MarkdownLink from './markdown-link.svelte';
+	import MarkdownInlineCode from './markdown-inline-code.svelte';
 	import WeatherWidget from './weather-widget.svelte';
 	import ChartWidget from './chart-widget.svelte';
 	import MapWidget from './map-widget.svelte';
@@ -66,7 +67,7 @@
 		]
 	};
 
-	const components = { img: MarkdownImage, a: MarkdownLink };
+	const components = { img: MarkdownImage, a: MarkdownLink, inlineCode: MarkdownInlineCode };
 
 	const theme: StreamdownProps['theme'] = {
 		h1: { base: 'mt-8 mb-3 text-3xl font-semibold text-foreground' },
@@ -168,13 +169,19 @@
 </script>
 
 <script lang="ts">
-	import { setContext, untrack } from 'svelte';
+	import { getContext, setContext, untrack } from 'svelte';
 	import { cn } from '$lib/utils';
 	import { Streamdown } from 'streamdown-svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import LinkSafetyModal from './link-safety-modal.svelte';
-	import { codingAssetUrl, escapeLocalImagePaths, isLocalImagePath } from '$lib/coding-assets.js';
+	import { codingAssetUrl, escapeLocalPaths, isLocalImagePath } from '$lib/coding-assets.js';
 	import { t3ThreadLinkToPath } from '$lib/t3-thread-links.js';
+	import {
+		CODING_FILES_CONTEXT,
+		codingFileHref,
+		parseCodingFileRef,
+		type CodingFilesViewer
+	} from '$lib/coding-file-links.js';
 	import { loadKatexCss, mayContainMath } from './katex-css.js';
 	import type { SourceIndex } from '$lib/source-cards.js';
 
@@ -207,6 +214,8 @@
 	}: Props = $props();
 
 	const isStatic = untrack(() => !streaming);
+	// Set by a coding chat: file links in its messages open its file viewer.
+	const codingFiles = getContext<CodingFilesViewer | undefined>(CODING_FILES_CONTEXT);
 
 	setContext(
 		'conversationId',
@@ -222,13 +231,20 @@
 	// Coding agents embed screenshots by their path on the coding machine.
 	// Streamdown would block those (`C:` reads as a URL scheme), so they are
 	// rewritten to Chatty's relay to the T3 server before its URL checks run.
-	const markdown = $derived(conversationId ? escapeLocalImagePaths(content) : content);
+	const markdown = $derived(conversationId ? escapeLocalPaths(content) : content);
 	function urlTransform(url: string, key: string): string {
 		if (key === 'src' && conversationId && isLocalImagePath(url)) {
 			return codingAssetUrl(conversationId, url);
 		}
+		if (key !== 'href') return url;
 		// T3 Code thread links open the thread's conversation in Chatty.
-		if (key === 'href') return t3ThreadLinkToPath(url) ?? url;
+		const thread = t3ThreadLinkToPath(url);
+		if (thread) return thread;
+		// Links to files on the coding machine open in the chat's file viewer.
+		if (conversationId && codingFiles?.enabled) {
+			const file = parseCodingFileRef(url);
+			if (file) return codingFileHref(conversationId, file);
+		}
 		return url;
 	}
 

@@ -21,6 +21,8 @@
 	} from '$lib/coding-task-proposal.js';
 	import CodingTaskProposalCard from './CodingTaskProposalCard.svelte';
 	import CodingTaskNoticeRow from './CodingTaskNoticeRow.svelte';
+	import CheckpointCard from './CheckpointCard.svelte';
+	import { readCheckpoint } from '$lib/coding-checkpoint.js';
 	import { groupParts, hasVisibleContent } from './timeline.js';
 	import { messageText } from '$lib/chat-history.js';
 	import { readableErrorText } from '$lib/error-text.js';
@@ -193,6 +195,8 @@
 						{/if}
 					{:else if part && isCodingTaskProposalPart(part)}
 						<CodingTaskProposalCard part={part as never} active={messageActive} />
+					{:else if part && readCheckpoint(part)}
+						<CheckpointCard {part} />
 					{:else if part && readCodingTaskNotice(part)}
 						<CodingTaskNoticeRow notice={readCodingTaskNotice(part)!} />
 					{:else if part && readPrivacyNotice(part)}

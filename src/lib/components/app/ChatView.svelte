@@ -2,9 +2,10 @@
 	import { Chat } from '@ai-sdk/svelte';
 	import { PRIVATE_CHAT_HINT } from '$lib/private-data.js';
 	import { DefaultChatTransport } from 'ai';
-	import { onMount, tick, untrack } from 'svelte';
+	import { onMount, setContext, tick, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { page } from '$app/state';
+	import { replaceState } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import {
 		ChatContainer,
@@ -29,6 +30,8 @@
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import ChatTopbar from './ChatTopbar.svelte';
+	import CodingFileDialog, { forgetTaskDiff } from './CodingFileDialog.svelte';
+	import CodingDiffDialog from './CodingDiffDialog.svelte';
 	import { setChatViewContext } from './chat-view-context.js';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
@@ -93,6 +96,12 @@
 		type CodingConversation,
 		type CodingEnvironment
 	} from '$lib/coding-environments.js';
+	import {
+		CODING_FILES_CONTEXT,
+		readCodingFileParams,
+		type CodingFileRef,
+		type CodingFilesViewer
+	} from '$lib/coding-file-links.js';
 	import { browserActivity } from '$lib/coding-preview.js';
 	import { PRIVATE_DATA_OFF } from '$lib/private-data.js';
 	import { setPrivateChat } from '$lib/private-context.js';
@@ -365,6 +374,37 @@
 	// The remote agent can't rewind or read attachments, so hide those affordances.
 	const isCoding = $derived(coding !== null);
 
+	// Files the agent links to (`[a.ts:4](/repo/a.ts:4)`) open in a viewer.
+	let codingFile = $state<CodingFileRef | null>(null);
+	let codingFileOpen = $state(false);
+	/** The task's whole diff, opened from a checkpoint card. */
+	let codingChangesOpen = $state(false);
+	const hasCodingThread = $derived(!!coding?.threadId && !!coding.environmentId);
+	setContext<CodingFilesViewer>(CODING_FILES_CONTEXT, {
+		get enabled() {
+			return hasCodingThread;
+		},
+		open(ref) {
+			codingFile = ref;
+			codingFileOpen = true;
+		},
+		openChanges() {
+			codingChangesOpen = true;
+		}
+	});
+	// A file link opened in a new tab arrives as `?file=…` on the chat's URL.
+	$effect(() => {
+		const ref = hasCodingThread ? readCodingFileParams(page.url.searchParams) : null;
+		if (!ref) return;
+		codingFile = ref;
+		codingFileOpen = true;
+		const url = new URL(page.url);
+		for (const key of ['file', 'line', 'end']) url.searchParams.delete(key);
+		// The chat's own URL, minus the file parameters.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		untrack(() => replaceState(url, page.state));
+	});
+
 	// Only the most recently started refresh may apply, so a slow stale response
 	// can't restore an old status or a cleared pending request.
 	let codingRefreshSeq = 0;
@@ -401,6 +441,8 @@
 				(event.type === 'coding.task.updated' || event.type === 'coding.thread.finished') &&
 				event.conversationId === id
 			) {
+				// A run may have changed files: file viewers read the diff again.
+				forgetTaskDiff(id);
 				refresh();
 			}
 		});
@@ -1847,3 +1889,8 @@
 		/>
 	</div>
 </div>
+
+{#if hasCodingThread}
+	<CodingFileDialog conversationId={conversation.id} file={codingFile} bind:open={codingFileOpen} />
+	<CodingDiffDialog conversationId={conversation.id} bind:open={codingChangesOpen} />
+{/if}

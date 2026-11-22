@@ -22,10 +22,18 @@
 	// when link safety is off). T3 thread links arrive already rewritten to
 	// `/t3-thread/…` (see `urlTransform` in markdown.svelte); a bare one, whose
 	// text is just the `t3-thread://` URL, is labelled with the thread's title.
-	import type { Snippet } from 'svelte';
+	import { getContext, setContext, type Snippet } from 'svelte';
+	import FileCodeIcon from '@lucide/svelte/icons/file-code';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import { cn } from '$lib/utils';
 	import { parseT3ThreadLink, parseT3ThreadPath } from '$lib/t3-thread-links.js';
+	import {
+		CODING_FILES_CONTEXT,
+		INSIDE_LINK_CONTEXT,
+		followCodingFileLink,
+		parseCodingFileHref,
+		type CodingFilesViewer
+	} from '$lib/coding-file-links.js';
 
 	type Props = {
 		href?: string;
@@ -38,6 +46,16 @@
 	};
 
 	let { href, target, rel, title, class: className, children, token }: Props = $props();
+
+	const conversationId = getContext<string | null | undefined>('conversationId');
+	const codingFiles = getContext<CodingFilesViewer | undefined>(CODING_FILES_CONTEXT);
+	// Rewritten by `urlTransform` in markdown.svelte from a path on the coding machine.
+	const codingFile = $derived(
+		href && conversationId && codingFiles ? parseCodingFileHref(href, conversationId) : null
+	);
+
+	const openFile = (event: MouseEvent) => followCodingFileLink(event, codingFiles, codingFile);
+	setContext(INSIDE_LINK_CONTEXT, true);
 
 	const isThread = $derived(!!href && !!parseT3ThreadPath(href));
 	// Autolinks (`<t3-thread://…>`) and links labelled with their own URL.
@@ -58,7 +76,19 @@
 </script>
 
 <!-- eslint-disable svelte/no-navigation-without-resolve -- hrefs come from the message's markdown -->
-{#if isThread}
+{#if codingFile}
+	<a
+		data-streamdown="link"
+		data-coding-file
+		class={cn(className, 'inline-flex items-baseline gap-1')}
+		{href}
+		title={title ?? codingFile.path}
+		onclick={openFile}
+	>
+		<FileCodeIcon class="size-3.5 shrink-0 self-center" aria-hidden="true" />
+		<span>{@render children?.()}</span>
+	</a>
+{:else if isThread}
 	<a
 		data-streamdown="link"
 		class={cn(className, 'inline-flex items-baseline gap-1')}

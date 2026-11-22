@@ -242,6 +242,14 @@ const REASON_MESSAGES: Record<string, Record<string, string>> = {
 		reference_unreadable: 'Could not read the secret from the secret provider.',
 		record_failed: 'Saved the secret, but could not update the request.'
 	},
+	// Carries its reason as `failure`.
+	ProjectReadFileError: {
+		workspace_path_outside_root: "This file is outside the task's workspace.",
+		resolved_path_outside_root: "This file links outside the task's workspace.",
+		path_not_file: 'This path is a folder, not a file.',
+		binary_file: "This is a binary file, so it can't be shown.",
+		operation_failed: 'T3 could not read this file.'
+	},
 	PeerLinkRequestError: {
 		load_failed: 'Could not load the link request.',
 		not_found: 'This link request no longer exists.',
@@ -266,7 +274,7 @@ export function describeFailureCause(cause: unknown): { message: string; unautho
 					unauthorized: true
 				};
 			}
-			const reason = str(err.reason);
+			const reason = str(err.reason) ?? str(err.failure);
 			const byReason = reason ? REASON_MESSAGES[tag]?.[reason] : undefined;
 			return {
 				message: str(err.message) ?? str(err.detail) ?? byReason ?? tag,

@@ -77,7 +77,10 @@ export function parseDiffPreview(result: unknown): CodingTaskDiff {
 }
 
 /** The thread's entry in T3's thread list (active or archived), if any. */
-async function shellThread(env: CodingEnvironmentRow, threadId: string): Promise<Rec | null> {
+export async function shellThread(
+	env: CodingEnvironmentRow,
+	threadId: string
+): Promise<Rec | null> {
 	const shell = rec(
 		await t3HttpGet(
 			env.base_url,
@@ -94,7 +97,7 @@ async function shellThread(env: CodingEnvironmentRow, threadId: string): Promise
 }
 
 /** Where the task's thread works: its worktree, else the project checkout. */
-async function taskWorkingDirectory(
+export async function taskWorkingDirectory(
 	env: CodingEnvironmentRow,
 	thread: Rec | null,
 	projectId: string

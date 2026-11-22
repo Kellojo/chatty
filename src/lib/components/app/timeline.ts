@@ -3,6 +3,7 @@ import { CODING_TASK_NOTICE_PART, isCodingTaskProposalPart } from '$lib/coding-t
 import { readHtmlRender } from '$lib/html-render.js';
 import { PRIVACY_NOTICE_PART } from '$lib/private-data.js';
 import { describeTool, toolFailed, type ToolKind } from '$lib/tool-meta.js';
+import { readCheckpoint } from '$lib/coding-checkpoint.js';
 
 /** Minimal shape of a UIMessage part, enough to group and summarise it. */
 export interface PartLike {
@@ -38,6 +39,8 @@ function isActivity(part: PartLike): boolean {
 	if (isAskUserPart(part)) return false;
 	// And a proposed coding task, which waits on the user to start it.
 	if (isCodingTaskProposalPart(part)) return false;
+	// And a coding agent's checkpoint with changed files, shown as a card to open them from.
+	if (readCheckpoint(part)) return false;
 	return part.type === 'reasoning' || isToolPart(part);
 }
 

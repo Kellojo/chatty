@@ -51,7 +51,7 @@ function someString(value: unknown, test: (s: string) => boolean): boolean {
  * Only paths the coding agent itself put in the conversation are served, so a
  * chat can't be used to read arbitrary files off the coding machine.
  */
-function isReferenced(db: Db, conversationId: string, path: string): boolean {
+export function isReferenced(db: Db, conversationId: string, path: string): boolean {
 	// Message parts are stored as JSON, where backslashes are escaped; the SQL
 	// substring match only prefilters, the exact check runs on decoded strings.
 	const needle = JSON.stringify(path).slice(1, -1);

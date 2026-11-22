@@ -22,14 +22,21 @@ export function codingAssetUrl(conversationId: string, path: string): string {
 	return `/api/coding/tasks/${encodeURIComponent(conversationId)}/asset?path=${encodeURIComponent(path)}`;
 }
 
-/** `![alt](dest` with the destination bare or in angle brackets. */
-const IMAGE_DESTINATION = /(!\[[^\]\n]*\]\(\s*)(<[^>\n]*>|[^\s)]+)/g;
+/**
+ * `![alt](dest` or `[text](dest` with the destination bare or in angle
+ * brackets. The text part is optional: inline code in it splits the line there.
+ */
+const DESTINATION = /((?:!?\[[^\]\n]*)?\]\(\s*)(<[^>\n]*>|[^\s)]+)/g;
+/** Windows drive and UNC paths: the local paths written with backslashes. */
+const WINDOWS_PATH = /^(?:[a-z]:\\|\\\\)/i;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const INLINE_CODE = /(`+)[^`]*?\1/g;
 
 function escapeDestination(match: string, prefix: string, dest: string): string {
 	const bare = dest.startsWith('<') ? dest.slice(1, -1) : dest;
-	if (!bare.includes('\\') || !isLocalImagePath(bare)) return match;
+	if (!bare.includes('\\')) return match;
+	// Images: the ones Chatty serves. Links: any Windows path (file links).
+	if (prefix.startsWith('!') ? !isLocalImagePath(bare) : !WINDOWS_PATH.test(bare)) return match;
 	// Already escaped by the writer: every backslash is doubled.
 	if (!/(?<!\\)\\(?!\\)/.test(bare) && /\\\\/.test(bare)) return match;
 	return prefix + dest.replaceAll('\\', '\\\\');
@@ -38,10 +45,11 @@ function escapeDestination(match: string, prefix: string, dest: string): string 
 /**
  * Markdown treats `\.` and similar as escapes, so `C:\me\.t3\a.png` would
  * parse as `C:\me.t3\a.png`. Agents write Windows paths raw, so double the
- * backslashes in local image destinations (outside code) before parsing.
+ * backslashes in local image and file link destinations (outside code)
+ * before parsing.
  */
-export function escapeLocalImagePaths(markdown: string): string {
-	if (!markdown.includes('\\') || !markdown.includes('![')) return markdown;
+export function escapeLocalPaths(markdown: string): string {
+	if (!markdown.includes('\\') || !markdown.includes('](')) return markdown;
 	let fence: string | null = null;
 	return markdown
 		.split('\n')
@@ -58,11 +66,11 @@ export function escapeLocalImagePaths(markdown: string): string {
 			let out = '';
 			let last = 0;
 			for (const code of line.matchAll(INLINE_CODE)) {
-				out += line.slice(last, code.index).replace(IMAGE_DESTINATION, escapeDestination);
+				out += line.slice(last, code.index).replace(DESTINATION, escapeDestination);
 				out += code[0];
 				last = code.index + code[0].length;
 			}
-			return out + line.slice(last).replace(IMAGE_DESTINATION, escapeDestination);
+			return out + line.slice(last).replace(DESTINATION, escapeDestination);
 		})
 		.join('\n');
 }
