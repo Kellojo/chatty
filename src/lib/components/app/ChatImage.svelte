@@ -2,6 +2,7 @@
 	// An image attachment in the chat: rotatable in place, click opens the viewer.
 	// CSS rotation doesn't change layout, so the frame is sized to the rotated
 	// footprint (see `fitRotated`) and the image is centered and turned inside it.
+	import { settledAfterPaint } from '$lib/after-paint.svelte.js';
 	import { fitRotated } from '$lib/image-fit.js';
 	import { cn } from '$lib/utils.js';
 	import ImageViewer from './ImageViewer.svelte';
@@ -38,6 +39,10 @@
 			: null
 	);
 
+	/** Size and turn changes animate only once the first fitted layout has painted,
+	 * so the image doesn't grow in from the placeholder each time a chat opens. */
+	const settled = settledAfterPaint(() => fit !== null);
+
 	// A cached image can finish loading before hydration attaches onload.
 	$effect(() => {
 		if (imgEl?.complete && !natural) {
@@ -69,7 +74,9 @@
 	{:else}
 		<div
 			class={cn(
-				'group relative max-w-full overflow-hidden rounded-md ring-1 ring-border transition-[width,height] duration-200 ease-out motion-reduce:transition-none',
+				'group relative max-w-full overflow-hidden rounded-md ring-1 ring-border',
+				settled.current &&
+					'transition-[width,height] duration-200 ease-out motion-reduce:transition-none',
 				// Until the image arrives, hold a little space so it doesn't pop in from nothing.
 				!fit && 'min-h-24 min-w-40 animate-pulse bg-muted motion-reduce:animate-none'
 			)}
@@ -89,9 +96,13 @@
 					draggable="false"
 					onload={(e) => readNatural(e.currentTarget as HTMLImageElement)}
 					onerror={() => (failed = true)}
-					class={fit
-						? 'absolute top-1/2 left-1/2 max-w-none transition-transform duration-200 ease-out motion-reduce:transition-none'
-						: 'block max-h-96 w-auto max-w-full opacity-0'}
+					class={cn(
+						fit
+							? 'absolute top-1/2 left-1/2 max-w-none'
+							: 'block max-h-96 w-auto max-w-full opacity-0',
+						settled.current &&
+							'transition-transform duration-200 ease-out motion-reduce:transition-none'
+					)}
 					style:width={fit && natural ? `${natural.w}px` : undefined}
 					style:height={fit && natural ? `${natural.h}px` : undefined}
 					style:transform={fit

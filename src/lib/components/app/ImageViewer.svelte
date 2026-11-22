@@ -4,6 +4,7 @@
 	// thumbnail and its viewer stay turned the same way.
 	import { untrack } from 'svelte';
 	import { Dialog as DialogPrimitive } from 'bits-ui';
+	import { settledAfterPaint } from '$lib/after-paint.svelte.js';
 	import { fitRotated, normalizeRotation } from '$lib/image-fit.js';
 	import { cn } from '$lib/utils.js';
 	import XIcon from '@lucide/svelte/icons/x';
@@ -67,6 +68,10 @@
 	/** Natural size to fitted size. The img keeps its natural size and is scaled by transform,
 	 * so a turn (which changes the fit) animates as one smooth transform. */
 	const fitScale = $derived(fit && natural ? fit.width / natural.w : 1);
+
+	/** Transform changes animate only once an opening's fitted image has painted, so
+	 * the image doesn't shrink down from its natural size when it first arrives. */
+	const settled = settledAfterPaint(() => open && fit !== null);
 
 	$effect(() => {
 		if (!open || hinted) return;
@@ -454,7 +459,8 @@
 						class={cn(
 							'absolute top-1/2 left-1/2 max-w-none',
 							!fit && 'opacity-0',
-							!gesturing &&
+							settled.current &&
+								!gesturing &&
 								'transition-transform duration-200 ease-out motion-reduce:transition-none',
 							zoom > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in'
 						)}
