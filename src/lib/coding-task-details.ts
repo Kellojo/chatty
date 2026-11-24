@@ -123,6 +123,30 @@ const RUNTIME_LABELS: Record<string, string> = {
 	'full-access': 'Full access'
 };
 
+const UPPERCASE_WORDS = new Set(['gpt', 'glm', 'xl']);
+
+/**
+ * A readable stand-in for a model slug when the environment can't name it:
+ * `claude-opus-5-5` → "Claude Opus 5.5", `gpt-5.1-codex` → "GPT 5.1 Codex".
+ * Adjacent number parts are taken as a version; anything with a date or
+ * other punctuation is left as it is.
+ */
+export function modelSlugLabel(slug: string): string {
+	if (!/^[a-z0-9.-]+$/i.test(slug) || /\d{6,}/.test(slug)) return slug;
+	const words: string[] = [];
+	for (const part of slug.split('-').filter(Boolean)) {
+		const prev = words.at(-1);
+		if (/^\d+$/.test(part) && prev && /^\d+(\.\d+)*$/.test(prev)) {
+			words[words.length - 1] = `${prev}.${part}`;
+		} else if (UPPERCASE_WORDS.has(part.toLowerCase())) {
+			words.push(part.toUpperCase());
+		} else {
+			words.push(part.charAt(0).toUpperCase() + part.slice(1));
+		}
+	}
+	return words.join(' ') || slug;
+}
+
 /** How much the agent may do on its own, as shown when starting a task. */
 export function runtimeModeLabel(mode: string): string {
 	return RUNTIME_LABELS[mode] ?? mode;

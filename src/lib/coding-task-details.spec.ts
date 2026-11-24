@@ -3,6 +3,7 @@ import type { CodingConversation } from './coding-environments.js';
 import {
 	agentIsFree,
 	autonomyFromRuntimeMode,
+	modelSlugLabel,
 	canCreatePullRequest,
 	CODING_RUNTIME_MODES,
 	createPullRequestPrompt,
@@ -102,5 +103,18 @@ describe('coding task details', () => {
 		expect(autonomyFromRuntimeMode('auto-accept-edits')).toBe('auto-edits');
 		expect(autonomyFromRuntimeMode('full-access')).toBe('full-access');
 		expect(autonomyFromRuntimeMode('custom')).toBeNull();
+	});
+});
+
+describe('modelSlugLabel', () => {
+	it('turns a slug into a readable name', () => {
+		expect(modelSlugLabel('claude-opus-5-5')).toBe('Claude Opus 5.5');
+		expect(modelSlugLabel('claude-sonnet-4')).toBe('Claude Sonnet 4');
+		expect(modelSlugLabel('gpt-5.1-codex')).toBe('GPT 5.1 Codex');
+	});
+
+	it('leaves dated or unusual slugs alone', () => {
+		expect(modelSlugLabel('claude-3-5-sonnet-20241022')).toBe('claude-3-5-sonnet-20241022');
+		expect(modelSlugLabel('openai/gpt-5')).toBe('openai/gpt-5');
 	});
 });

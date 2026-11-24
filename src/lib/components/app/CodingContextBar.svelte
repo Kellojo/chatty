@@ -13,12 +13,9 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import ServerOffIcon from '@lucide/svelte/icons/server-off';
-	import HandIcon from '@lucide/svelte/icons/hand';
-	import PencilLineIcon from '@lucide/svelte/icons/pencil-line';
-	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
-	import ZapIcon from '@lucide/svelte/icons/zap';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import GithubIcon from './GithubIcon.svelte';
+	import { AUTONOMY_ICONS, FULL_ACCESS_TONE } from './coding-icons.js';
 	import NewProjectDialog from './NewProjectDialog.svelte';
 	import type { NewProjectMode } from './new-project.js';
 	import {
@@ -71,17 +68,11 @@
 	const chip =
 		'relative h-8 shrink-0 max-w-60 min-w-0 gap-1.5 rounded-full max-sm:before:absolute max-sm:before:inset-x-0 max-sm:before:-inset-y-1.5 border-transparent bg-input/40 px-3 text-sm text-muted-foreground shadow-none hover:bg-input/70 hover:text-foreground data-[state=open]:bg-input/70 data-[state=open]:text-foreground dark:bg-input/30 dark:hover:bg-input/60 max-sm:px-2 max-sm:[&>svg:last-child]:hidden sm:max-w-64 [&>svg]:text-muted-foreground [&>svg:last-child]:size-3.5';
 
-	const AUTONOMY_ICONS: Record<CodingAutonomy, typeof HandIcon> = {
-		supervised: HandIcon,
-		'auto-edits': PencilLineIcon,
-		auto: ZapIcon,
-		'full-access': ShieldAlertIcon
-	};
 	const AutonomyIcon = $derived(AUTONOMY_ICONS[task.autonomy]);
 	// Same look as a chip, minus the hover/open affordances (for non-interactive states).
 	const staticChip =
 		'inline-flex h-8 shrink-0 max-w-60 min-w-0 cursor-default items-center gap-1.5 rounded-full bg-input/40 px-3 text-sm text-muted-foreground dark:bg-input/30 max-sm:px-2 [&>svg]:text-muted-foreground';
-	const warnFullAccess = 'text-amber-600 dark:text-amber-400 [&>svg]:text-current!';
+	const warnFullAccess = `${FULL_ACCESS_TONE} [&>svg]:text-current!`;
 	// On the chip only the icon turns amber, so the row doesn't read as an error.
 	const warnIconOnly =
 		'ring-1 ring-amber-500/40 [&>svg:first-child]:text-amber-600! dark:[&>svg:first-child]:text-amber-400!';
