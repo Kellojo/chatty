@@ -193,6 +193,8 @@ export const TOOL_META: Record<string, ToolMeta> = {
 	dynamic_tool: { label: 'Used a tool', server: 'coding', kind: 'tool' },
 	error: { label: 'Error', server: 'coding', kind: 'error' },
 	notice: { label: 'Notice', server: 'coding', kind: 'tool', detail: 'text' },
+	// Shown as its own row (CompactionRow); this names it anywhere else. No input field is a detail.
+	compaction: { label: 'Compacted context', server: 'coding', kind: 'tool', detail: 'text' },
 	subagent: { label: 'Subagent', server: 'coding', kind: 'subagent', detail: 'description' },
 
 	// The coding agent's own tools, reported by name (Claude Code naming).

@@ -37,6 +37,7 @@
 	import MessageTimeline from './MessageTimeline.svelte';
 	import MessageNav from './MessageNav.svelte';
 	import { hasVisibleContent } from './timeline.js';
+	import { readCompaction } from '$lib/coding-compaction.js';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import WaitingIndicator from './WaitingIndicator.svelte';
 	import { activeChats } from '$lib/state/active-chats.svelte.js';
@@ -559,8 +560,13 @@
 	);
 	// A coding agent blocked on a question keeps its reply stream open, but it's
 	// waiting on you, not working: the pending request card says so instead.
+	/** The coding agent is compacting its context: its own row in the reply says so. */
+	const compacting = $derived(
+		!!lastAssistant?.parts.some((part) => readCompaction(part)?.state === 'running')
+	);
 	const waiting = $derived(
 		!coding?.pendingRequest &&
+			!compacting &&
 			(remoteGenerating ||
 				chat.status === 'submitted' ||
 				(chat.status === 'streaming' &&

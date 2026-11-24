@@ -430,6 +430,57 @@ describe('renderRun', () => {
 		});
 	});
 
+	it('renders a context compaction with its timing and token counts', () => {
+		const state = emptyThreadState();
+		const item = (status: string, extra: Record<string, unknown> = {}) => ({
+			id: 'k1',
+			runId: 'run-1',
+			ordinal: 2,
+			type: 'compaction',
+			status,
+			title: 'Context compacted',
+			startedAt: '2026-11-24T19:42:25.918Z',
+			...extra
+		});
+		applyStreamItem(state, snapshot({ runs: [run()], turnItems: [item('running')] }));
+		expect(renderRun(state, run())[0]).toMatchObject({
+			final: false,
+			part: {
+				toolName: 'compaction',
+				state: 'input-available',
+				input: { startedAt: Date.parse('2026-11-24T19:42:25.918Z'), beforeTokens: null }
+			}
+		});
+		applyStreamItem(
+			state,
+			snapshot(
+				{
+					runs: [run({ status: 'completed' })],
+					turnItems: [
+						item('completed', {
+							completedAt: '2026-11-24T19:43:05.041Z',
+							beforeTokenCount: 251952,
+							afterTokenCount: 13924
+						})
+					]
+				},
+				11
+			)
+		);
+		expect(renderRun(state, run())[0]).toMatchObject({
+			final: true,
+			part: {
+				toolName: 'compaction',
+				state: 'output-available',
+				input: {
+					completedAt: Date.parse('2026-11-24T19:43:05.041Z'),
+					beforeTokens: 251952,
+					afterTokens: 13924
+				}
+			}
+		});
+	});
+
 	it('marks failed commands as errors', () => {
 		const state = emptyThreadState();
 		applyStreamItem(
@@ -617,6 +668,29 @@ describe('summarizeTask', () => {
 			snapshot({ runs: [run({ status: 'completed' })], turnItems: [subagent('completed')] }, 11)
 		);
 		expect(summarizeTask(state)).toMatchObject({ status: 'idle', runStartedAt: null });
+	});
+
+	it('counts as running while the agent compacts its context, until its run finishes', () => {
+		const state = emptyThreadState();
+		const compaction = {
+			id: 'k1',
+			runId: 'run-1',
+			ordinal: 2,
+			type: 'compaction',
+			status: 'running',
+			title: 'Compacting context'
+		};
+		// A run status the projection doesn't know as active.
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'compacting' })], turnItems: [compaction] })
+		);
+		expect(summarizeTask(state).status).toBe('running');
+		applyStreamItem(
+			state,
+			snapshot({ runs: [run({ status: 'completed' })], turnItems: [compaction] }, 11)
+		);
+		expect(summarizeTask(state).status).toBe('idle');
 	});
 
 	it('surfaces a pending approval with its offered decisions', () => {

@@ -449,6 +449,18 @@ export function hasRunningSubagent(state: ThreadState): boolean {
 	return runningSubagents(state).length > 0;
 }
 
+/**
+ * Whether the agent is compacting its context: the task is at work then, even
+ * if its run reports a status this projection doesn't count as active. Only
+ * within a run that hasn't finished, so an item T3 never closed can't hold it.
+ */
+export function isCompacting(state: ThreadState): boolean {
+	return itemsOfType(state, 'compaction').some((item) => {
+		const run = state.runs.get(String(item.runId));
+		return !DONE_ITEM.has(String(item.status)) && !!run && !isRunFinished(run);
+	});
+}
+
 const BASE_ITEM_FIELDS = new Set([
 	'id',
 	'runId',
@@ -845,6 +857,24 @@ export function renderRunSegments(
 				);
 				break;
 			}
+			case 'compaction':
+				// The agent summarising its context to free up room (`/compact`, or on
+				// its own mid-run); shown as its own row (see $lib/coding-compaction.ts).
+				entries.push(
+					toolEntry(
+						item,
+						'compaction',
+						{
+							startedAt: time(item.startedAt),
+							completedAt: time(item.completedAt),
+							beforeTokens: num(item.beforeTokenCount),
+							afterTokens: num(item.afterTokenCount)
+						},
+						{ ok: true },
+						status
+					)
+				);
+				break;
 			case 'notification': {
 				// "Command … and subagent … were stopped": a one-off message, never in progress.
 				const text = str(item.text) ?? str(item.title);
@@ -1176,8 +1206,9 @@ export function summarizeTask(state: ThreadState): TaskSummary {
 	if (pending) status = 'awaiting_input';
 	// Background subagents keep working after their turn ends; the task isn't
 	// done until they are.
-	else if (runs.some(isRunActive) || hasRunningSubagent(state)) status = 'running';
-	else if (isWaitingOnBackgroundWork(state, last)) status = 'waiting';
+	else if (runs.some(isRunActive) || hasRunningSubagent(state) || isCompacting(state)) {
+		status = 'running';
+	} else if (isWaitingOnBackgroundWork(state, last)) status = 'waiting';
 	else if (!last) status = runs.length > 0 ? 'idle' : 'starting';
 	else if (last.status === 'completed') status = 'idle';
 	else if (last.status === 'failed') status = 'failed';

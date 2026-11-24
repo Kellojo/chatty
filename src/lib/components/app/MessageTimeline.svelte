@@ -23,6 +23,8 @@
 	import CodingTaskNoticeRow from './CodingTaskNoticeRow.svelte';
 	import CheckpointCard from './CheckpointCard.svelte';
 	import { readCheckpoint } from '$lib/coding-checkpoint.js';
+	import { readCompaction } from '$lib/coding-compaction.js';
+	import CompactionRow from './CompactionRow.svelte';
 	import { groupParts, hasVisibleContent } from './timeline.js';
 	import { messageText } from '$lib/chat-history.js';
 	import { readableErrorText } from '$lib/error-text.js';
@@ -199,6 +201,8 @@
 						<CodingTaskProposalCard part={part as never} active={messageActive} />
 					{:else if part && readCheckpoint(part)}
 						<CheckpointCard {part} />
+					{:else if part && readCompaction(part)}
+						<CompactionRow compaction={readCompaction(part)!} />
 					{:else if part && readCodingTaskNotice(part)}
 						<CodingTaskNoticeRow notice={readCodingTaskNotice(part)!} />
 					{:else if part && readPrivacyNotice(part)}
