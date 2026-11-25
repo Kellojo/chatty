@@ -103,9 +103,27 @@
 	let overContent = $state(false);
 	let sidebarButton = $state<HTMLElement | null>(null);
 	const lastScrollTop = new WeakMap<Element, number>();
+	// Scrollers inside another scroller (a streaming command's output, a code block)
+	// can sit under the button once the outer one scrolls them up, but they never move
+	// the page, so only outermost scrollers count. Cached: scroll events fire a lot.
+	const nestedScroller = new WeakMap<Element, boolean>();
+	function isNestedScroller(el: Element): boolean {
+		let nested = nestedScroller.get(el);
+		if (nested === undefined) {
+			nested = false;
+			for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+				if (/(auto|scroll)/.test(getComputedStyle(node).overflowY)) {
+					nested = true;
+					break;
+				}
+			}
+			nestedScroller.set(el, nested);
+		}
+		return nested;
+	}
 	function onAnyScroll(event: Event) {
 		const el = event.target;
-		if (!(el instanceof Element)) return;
+		if (!(el instanceof Element) || isNestedScroller(el)) return;
 		const top = el.scrollTop;
 		const last = lastScrollTop.get(el) ?? 0;
 		lastScrollTop.set(el, top);
