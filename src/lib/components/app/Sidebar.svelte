@@ -852,6 +852,7 @@
 
 	/** What a seen (idle) coding task last ended in; a plain finished task says nothing. */
 	const IDLE_CODING_STATUS: Partial<Record<CodingTaskStatus, RowStatus>> = {
+		draft: { label: 'Draft · not sent', tone: 'text-muted-foreground' },
 		failed: { label: 'Failed', tone: 'text-destructive' },
 		interrupted: { label: 'Stopped', tone: 'text-muted-foreground' }
 	};

@@ -30,6 +30,7 @@ const task = (patch: Partial<CodingConversation> = {}): CodingConversation => ({
 	status: 'idle',
 	pendingRequest: null,
 	lastError: null,
+	autoStart: false,
 	runStartedAt: null,
 	diff: { insertions: 3, deletions: 1 },
 	...patch

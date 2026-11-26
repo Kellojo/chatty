@@ -36,6 +36,7 @@ import {
 } from '../db/repo/conversations.js';
 import {
 	branchesFor,
+	countMessages,
 	createMessage,
 	deleteMessage,
 	extractText,
@@ -1478,6 +1479,27 @@ function stepCompactor(input: {
 	return { prepare, overflow };
 }
 
+/**
+ * A draft coding task (saved while its environment was offline) keeps its one
+ * message until the user starts it; the reply is an empty stream.
+ */
+function saveCodingDraftMessage(
+	db: Db,
+	userId: string,
+	conversation: ConversationRow,
+	message: UIMessage
+): Response {
+	if (!getMessage(db, message.id) && countMessages(db, conversation.id) > 0) {
+		throw new ChatRequestError(409, 'Start the draft before sending more messages');
+	}
+	const userMessage = upsertUserMessage(db, conversation.id, message);
+	afterUserMessage(db, userId, conversation, userMessage);
+	publishServerEvent(userId, { type: 'chat.messages.updated', conversationId: conversation.id });
+	return createUIMessageStreamResponse({
+		stream: new ReadableStream({ start: (controller) => controller.close() })
+	});
+}
+
 export async function handleChatRequest(
 	userId: string,
 	body: ChatTurnRequest & { conversationId: string }
@@ -1497,6 +1519,8 @@ export async function handleChatRequest(
 		if (body.branchFrom !== undefined) {
 			throw new ChatRequestError(400, 'Coding tasks cannot rewind their history');
 		}
+		if (coding.status === 'draft')
+			return saveCodingDraftMessage(db, userId, conversation, body.message);
 		const userMessage = upsertUserMessage(db, conversation.id, body.message);
 		afterUserMessage(db, userId, conversation, userMessage);
 		try {

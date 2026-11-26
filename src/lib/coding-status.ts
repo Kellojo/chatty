@@ -8,6 +8,7 @@ export const CODING_STATUS_STYLE: Record<
 	CodingTaskStatus,
 	{ label: string; dot: string; tone: string }
 > = {
+	draft: { label: 'Draft', dot: 'bg-muted-foreground/50', tone: 'text-muted-foreground' },
 	starting: { label: 'Starting', dot: 'bg-info animate-pulse', tone: 'text-muted-foreground' },
 	running: { label: 'Working', dot: 'bg-info animate-pulse', tone: 'text-muted-foreground' },
 	awaiting_input: {

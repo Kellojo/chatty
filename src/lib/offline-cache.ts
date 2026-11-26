@@ -20,10 +20,14 @@ export const USER_DATA_CACHES = {
 /** The account whose data the caches hold. */
 const OWNER_KEY = 'chatty.cache.owner';
 
+/** The coding environments' last loaded projects and models, for drafting tasks offline. */
+export const CODING_OPTIONS_KEY = 'chatty.codingTask.options';
+
 /** Deletes every cache holding account data. Never throws. */
 export async function clearUserDataCaches(): Promise<void> {
 	try {
 		localStorage.removeItem(OWNER_KEY);
+		localStorage.removeItem(CODING_OPTIONS_KEY);
 	} catch {
 		// storage unavailable: nothing to forget
 	}

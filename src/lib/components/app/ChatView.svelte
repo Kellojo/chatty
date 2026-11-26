@@ -34,6 +34,7 @@
 	import CodingDiffDialog from './CodingDiffDialog.svelte';
 	import { setChatViewContext } from './chat-view-context.js';
 	import CodingPendingRequest from './CodingPendingRequest.svelte';
+	import CodingDraftCard from './CodingDraftCard.svelte';
 	import MessageTimeline from './MessageTimeline.svelte';
 	import MessageNav from './MessageNav.svelte';
 	import { hasVisibleContent } from './timeline.js';
@@ -1249,6 +1250,65 @@
 		}
 	}
 
+	/** A draft (saved offline) holding its task: the composer gives way to "Start task". */
+	const draftWaiting = $derived(
+		coding?.status === 'draft' &&
+			chat.status !== 'error' &&
+			chat.messages.some((m) => m.role === 'user')
+	);
+	let startingDraft = $state(false);
+	const draftText = $derived.by(() => {
+		const message = draftWaiting ? chat.messages.findLast((m) => m.role === 'user') : undefined;
+		return message ? messageText(message) : '';
+	});
+
+	/** Sends the draft's task to its environment; the reply is then followed like any other. */
+	async function startDraft() {
+		if (startingDraft) return;
+		startingDraft = true;
+		try {
+			const res = await fetch(`/api/coding/tasks/${encodeURIComponent(conversation.id)}/start`, {
+				method: 'POST'
+			});
+			const data = (await res.json().catch(() => null)) as {
+				coding?: CodingConversation;
+				message?: string;
+			} | null;
+			if (!res.ok) throw new Error(data?.message ?? 'Could not start the task');
+			if (data?.coding) coding = data.coding;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not start the task');
+			// Still a draft while offline; a failed launch shows its error and Retry.
+			void refreshCoding().catch(() => undefined);
+		} finally {
+			startingDraft = false;
+		}
+	}
+
+	/** Turns the draft's start-by-itself on or off (shown right away, undone on failure). */
+	async function setDraftAutoStart(on: boolean) {
+		if (!coding) return;
+		const before = coding;
+		coding = { ...coding, autoStart: on, lastError: on ? null : coding.lastError };
+		try {
+			const res = await fetch(`/api/coding/tasks/${encodeURIComponent(conversation.id)}/start`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ autoStart: on })
+			});
+			const data = (await res.json().catch(() => null)) as {
+				coding?: CodingConversation;
+				message?: string;
+			} | null;
+			if (!res.ok) throw new Error(data?.message ?? 'Could not change the draft');
+			if (data?.coding) coding = data.coding;
+		} catch (e) {
+			coding = before;
+			toast.error(e instanceof Error ? e.message : 'Could not change the draft');
+			void refreshCoding().catch(() => undefined);
+		}
+	}
+
 	function recoverCodingTask(action: CodingRecoveryAction) {
 		if (action.prompt) return void sendCodingFollowUp({ text: action.prompt });
 		// The thread never started: send the last request again, attachments included.
@@ -1803,6 +1863,17 @@
 		{/if}
 		{#if voice.active || voice.phase === 'starting'}
 			<VoiceBar {voice} />
+		{:else if draftWaiting && coding}
+			<CodingDraftCard
+				environmentName={codingEnvironmentName}
+				projectTitle={coding.projectTitle}
+				text={draftText}
+				autoStart={coding.autoStart}
+				error={coding.lastError}
+				starting={startingDraft}
+				onstart={() => void startDraft()}
+				onautostart={(on) => void setDraftAutoStart(on)}
+			/>
 		{:else}
 			<PromptInput
 				class="launch-composer"

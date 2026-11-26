@@ -24,6 +24,7 @@ import { createStreamReplayResponse } from '../chat/replay.js';
 import { decryptSecret } from '../crypto.js';
 import { getDb, type Db } from '../db/index.js';
 import {
+	claimCodingDraft,
 	recordCodingRequestAnswer,
 	createCodingConversation,
 	getCodingConversation,
@@ -36,7 +37,7 @@ import {
 } from '../db/repo/coding-conversations.js';
 import { getCodingEnvironment, type CodingEnvironmentRow } from '../db/repo/coding-environments.js';
 import { createConversation, getConversation } from '../db/repo/conversations.js';
-import { createMessage, extractText } from '../db/repo/messages.js';
+import { createMessage, extractText, listMessages } from '../db/repo/messages.js';
 import { publishServerEvent } from '../events/bus.js';
 import { createLogger } from '../logger.js';
 import {
@@ -531,9 +532,56 @@ export async function createCodingTask(
 	}
 	const { env, project } = await resolveCodingTarget(userId, input, db);
 	const projectId = project === NO_PROJECT ? await ensureScratchProject(env) : project.id;
+	return insertCodingTask(db, userId, input, {
+		...opts,
+		environmentId: env.id,
+		project: { id: projectId, title: project.title }
+	});
+}
 
+/**
+ * Saves a task while its environment is unreachable: nothing is sent to it,
+ * and the target is taken as given (the client's last known projects). It is
+ * checked when the draft is started (`startCodingDraft`); the chat's first
+ * message is kept until then.
+ */
+export function createCodingDraft(
+	userId: string,
+	input: CreateCodingTaskInput & { projectTitle: string },
+	db: Db = getDb()
+) {
+	const env = requireEnvironment(db, userId, input.environmentId);
+	const noProject = input.projectId === NO_PROJECT_ID;
+	if (noProject && input.workspaceMode === 'worktree') {
+		throw new CodingTaskError(
+			400,
+			'Worktrees need a project; without one the agent gets its own folder'
+		);
+	}
+	return insertCodingTask(db, userId, input, {
+		environmentId: env.id,
+		project: { id: input.projectId, title: noProject ? NO_PROJECT_TITLE : input.projectTitle },
+		draft: true
+	});
+}
+
+/** Writes a new task's conversation and record, announcing the new chat. */
+function insertCodingTask(
+	db: Db,
+	userId: string,
+	input: CreateCodingTaskInput,
+	opts: {
+		environmentId: string;
+		project: { id: string; title: string };
+		title?: string;
+		onCreated?: (conversationId: string) => void;
+		proposal?: CodingTaskProposalRef;
+		draft?: boolean;
+	}
+) {
+	const { proposal } = opts;
 	const conversation = db.transaction(() => {
-		// Checked again inside the write: two starts can both pass the check above.
+		// Checked again inside the write: two starts can both pass the check before.
 		if (proposal && hasProposedCodingTask(db, proposal)) {
 			throw new CodingTaskError(409, 'This proposed task was already started');
 		}
@@ -545,21 +593,64 @@ export async function createCodingTask(
 		});
 		createCodingConversation(db, {
 			conversationId: conv.id,
-			environmentId: env.id,
-			projectId,
-			projectTitle: project.title,
+			environmentId: opts.environmentId,
+			projectId: opts.project.id,
+			projectTitle: opts.project.title,
 			providerInstanceId: input.providerInstanceId,
 			model: input.model,
 			runtimeMode: RUNTIME_MODES[input.autonomy],
 			workspaceMode: input.workspaceMode,
 			baseBranch: input.workspaceMode === 'worktree' ? (input.baseBranch ?? null) : null,
-			proposal
+			proposal,
+			draft: opts.draft
 		});
 		opts.onCreated?.(conv.id);
 		return conv;
 	})();
 	publishServerEvent(userId, { type: 'chat.created', conversationId: conversation.id });
 	return { conversation, coding: getCodingConversation(db, conversation.id)! };
+}
+
+/**
+ * Starts a draft: checks its target against the environment (it stays a draft
+ * while that is unreachable), then sends the draft's message as the task's
+ * first. A failed launch leaves a failed task, retried like any other.
+ */
+export async function startCodingDraft(
+	userId: string,
+	conversationId: string,
+	db: Db = getDb()
+): Promise<CodingConversationRow> {
+	const row = getCodingConversationForUser(db, userId, conversationId);
+	if (!row) throw new CodingTaskError(404, 'Coding task not found');
+	if (row.status !== 'draft') throw new CodingTaskError(409, 'This task was already started');
+	if (!row.environment_id) {
+		throw new CodingTaskError(409, 'The coding environment for this task was removed');
+	}
+	const draftMessage = listMessages(db, conversationId).findLast((m) => m.role === 'user');
+	if (!draftMessage) throw new CodingTaskError(400, 'Write the task first');
+
+	const { env, project } = await resolveCodingTarget(
+		userId,
+		{
+			environmentId: row.environment_id,
+			projectId: row.project_id,
+			workspaceMode: row.workspace_mode
+		},
+		db
+	);
+	const projectId = project === NO_PROJECT ? await ensureScratchProject(env) : project.id;
+	if (!claimCodingDraft(db, conversationId, { id: projectId, title: project.title })) {
+		throw new CodingTaskError(409, 'This task was already started');
+	}
+	publishServerEvent(userId, { type: 'coding.task.updated', conversationId });
+	const message: UIMessage = {
+		id: draftMessage.id,
+		role: 'user',
+		parts: JSON.parse(draftMessage.parts) as UIMessage['parts']
+	};
+	await startCodingTurn(userId, getCodingConversation(db, conversationId)!, message, db);
+	return getCodingConversation(db, conversationId)!;
 }
 
 /** Longest first message a launch accepts (hand-offs, agent prompts). */

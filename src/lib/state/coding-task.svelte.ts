@@ -13,6 +13,7 @@ import type {
 	CodingWorkspaceMode
 } from '$lib/coding-environments.js';
 import { NO_PROJECT_ID } from '$lib/coding-environments.js';
+import { CODING_OPTIONS_KEY } from '$lib/offline-cache.js';
 
 /** Everything POST /api/coding/tasks needs. */
 export interface CodingTaskDraft {
@@ -116,6 +117,35 @@ function writeStored(next: Stored) {
 	}
 }
 
+/** Per environment: its options and the branches of the projects picked there. */
+type SavedOptions = Record<
+	string,
+	{ options: CodingOptions; branches: Record<string, BranchesResult> }
+>;
+
+function readSavedOptions(): SavedOptions {
+	try {
+		const raw = localStorage.getItem(CODING_OPTIONS_KEY);
+		const parsed: unknown = raw ? JSON.parse(raw) : null;
+		return parsed && typeof parsed === 'object' ? (parsed as SavedOptions) : {};
+	} catch {
+		return {};
+	}
+}
+
+function updateSavedOptions(
+	environmentId: string,
+	update: (entry: SavedOptions[string] | undefined) => SavedOptions[string]
+) {
+	try {
+		const saved = readSavedOptions();
+		saved[environmentId] = update(saved[environmentId]);
+		localStorage.setItem(CODING_OPTIONS_KEY, JSON.stringify(saved));
+	} catch {
+		// storage unavailable or full — offline drafts just fall back to the error
+	}
+}
+
 const branchesKey = (environmentId: string, projectId: string) => `${environmentId}\n${projectId}`;
 
 async function errorMessage(res: Response, fallback: string): Promise<string> {
@@ -139,6 +169,11 @@ export class CodingTaskState {
 	options = $state<CodingOptions | null>(null);
 	optionsLoading = $state(false);
 	optionsError = $state<string | null>(null);
+	/**
+	 * Why the environment can't be reached while `options` are the ones last
+	 * loaded from it (see `offlineDrafts`): a task can then only be saved as a draft.
+	 */
+	offlineError = $state<string | null>(null);
 	branches = $state<BranchesResult | null>(null);
 	branchesLoading = $state(false);
 	branchesError = $state<string | null>(null);
@@ -146,6 +181,8 @@ export class CodingTaskState {
 	private readonly stored: Stored;
 	/** False when editing a saved target (e.g. a coding agent): selections stay out of localStorage. */
 	private readonly remember: boolean;
+	/** Falls back to the options last loaded when the environment is unreachable. */
+	private readonly offlineDrafts: boolean;
 	// Successful responses only; failures are retried on the next selection.
 	private readonly optionsCache = new SvelteMap<string, CodingOptions>();
 	private readonly branchesCache = new SvelteMap<string, BranchesResult>();
@@ -155,15 +192,18 @@ export class CodingTaskState {
 	/**
 	 * `initial` starts from a saved target (a coding agent's) instead of the
 	 * last selection. `remember` (default: true without `initial`) controls
-	 * whether picks update the start page's remembered selection.
+	 * whether picks update the start page's remembered selection. `offlineDrafts`
+	 * keeps the last loaded options usable while the environment is unreachable
+	 * (the start page saves the task as a draft then).
 	 */
 	constructor(
 		environments: CodingEnvironment[],
-		opts: { initial?: AgentCodingTarget | null; remember?: boolean } = {}
+		opts: { initial?: AgentCodingTarget | null; remember?: boolean; offlineDrafts?: boolean } = {}
 	) {
 		this.environments = environments;
 		const initial = opts.initial;
 		this.remember = opts.remember ?? !initial;
+		this.offlineDrafts = opts.offlineDrafts ?? false;
 		this.stored = initial
 			? {
 					environmentId: initial.environmentId,
@@ -240,6 +280,9 @@ export class CodingTaskState {
 		};
 	});
 
+	/** The environment is unreachable but its last loaded options are shown. */
+	readonly offline = $derived(this.offlineError !== null);
+
 	/** Why the task can't start yet, for the send button's tooltip. */
 	readonly blocker = $derived.by((): string | null => {
 		if (this.optionsLoading) return 'Connecting to the coding environment…';
@@ -301,6 +344,7 @@ export class CodingTaskState {
 		this.options = null;
 		this.optionsLoading = false;
 		this.optionsError = null;
+		this.offlineError = null;
 		this.projectId = '';
 		this.modelValue = '';
 		this.branches = null;
@@ -308,23 +352,32 @@ export class CodingTaskState {
 		if (!id) return;
 		if (opts.refresh) this.optionsCache.delete(id);
 		let result = this.optionsCache.get(id);
+		let offlineError: string | null = null;
 		if (!result) {
 			this.optionsLoading = true;
 			try {
 				const res = await fetch(`/api/coding/options?environmentId=${encodeURIComponent(id)}`);
 				if (!res.ok) throw new Error(await errorMessage(res, 'Could not reach the environment'));
-				result = (await res.json()) as CodingOptions;
-				this.optionsCache.set(id, result);
-			} catch (e) {
-				if (this.environmentId === id) {
-					this.optionsError = e instanceof Error ? e.message : 'Could not reach the environment';
+				const loaded = (await res.json()) as CodingOptions;
+				result = loaded;
+				this.optionsCache.set(id, loaded);
+				if (this.offlineDrafts) {
+					updateSavedOptions(id, (entry) => ({ options: loaded, branches: entry?.branches ?? {} }));
 				}
-				return;
+			} catch (e) {
+				const message = e instanceof Error ? e.message : 'Could not reach the environment';
+				result = this.offlineDrafts ? readSavedOptions()[id]?.options : undefined;
+				if (!result) {
+					if (this.environmentId === id) this.optionsError = message;
+					return;
+				}
+				offlineError = message;
 			} finally {
 				if (this.environmentId === id) this.optionsLoading = false;
 			}
 		}
 		if (this.environmentId !== id) return;
+		this.offlineError = offlineError;
 		this.options = result;
 
 		const stored = this.stored;
@@ -349,7 +402,15 @@ export class CodingTaskState {
 		let result =
 			id === NO_PROJECT_ID
 				? { isRepo: false, branches: [] }
-				: this.branchesCache.get(branchesKey(envId, id));
+				: this.offline
+					? readSavedOptions()[envId]?.branches[id]
+					: this.branchesCache.get(branchesKey(envId, id));
+		// Offline without saved branches: the project's default branch stands in.
+		if (!result && this.offline) {
+			this.applyDefaults();
+			this.branchValue = this.pickBranch(id);
+			return;
+		}
 		if (!result) {
 			this.branchesLoading = true;
 			try {
@@ -382,7 +443,7 @@ export class CodingTaskState {
 	async refreshBranches(): Promise<void> {
 		const envId = this.environmentId;
 		const id = this.projectId;
-		if (!envId || !id || id === NO_PROJECT_ID || this.branchesLoading) return;
+		if (!envId || !id || id === NO_PROJECT_ID || this.branchesLoading || this.offline) return;
 		this.branchesCache.delete(branchesKey(envId, id));
 		if (this.branchesError || !this.branches) return this.selectProject(id);
 		const seq = ++this.branchesRefreshSeq;
@@ -410,6 +471,13 @@ export class CodingTaskState {
 		if (!res.ok) throw new Error(await errorMessage(res, 'Could not load branches'));
 		const result = (await res.json()) as BranchesResult;
 		this.branchesCache.set(branchesKey(envId, projectId), result);
+		const options = this.optionsCache.get(envId);
+		if (this.offlineDrafts && options) {
+			updateSavedOptions(envId, (entry) => ({
+				options: entry?.options ?? options,
+				branches: { ...entry?.branches, [projectId]: result }
+			}));
+		}
 		return result;
 	}
 

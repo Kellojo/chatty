@@ -9,6 +9,7 @@ import { flushMemoryIndexes } from './memory/bundle.js';
 import { stopPushDispatcher } from './push/dispatcher.js';
 import { prepareCodingShutdown, stopAllCodingFollowers } from './t3/follower.js';
 import { closeAllPreviewViewers } from './t3/preview.js';
+import { stopDraftStarter } from './t3/draft-starter.js';
 import { stopCodingEnvironmentSync } from './t3/sync.js';
 
 const log = createLogger('server');
@@ -27,6 +28,7 @@ export function drainForShutdown(): Promise<void> {
 		stopSnoozeWaker();
 		stopPushDispatcher();
 		stopCodingEnvironmentSync();
+		stopDraftStarter();
 		// Coding agents run remotely and must keep going; only detach from them.
 		prepareCodingShutdown();
 		// Preview streams never end on their own (heartbeats keep them open).

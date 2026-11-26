@@ -42,20 +42,24 @@ vi.doMock('../events/bus.js', () => ({ publishServerEvent: vi.fn() }));
 const { openDatabase } = await import('../db/index.js');
 const conversations = await import('../db/repo/conversations.js');
 const coding = await import('../db/repo/coding-conversations.js');
+const { createMessage } = await import('../db/repo/messages.js');
 const { createCodingEnvironment } = await import('../db/repo/coding-environments.js');
 const {
 	archiveCodingThread,
 	browseCodingFolders,
 	createCodingProject,
+	createCodingDraft,
 	createCodingTask,
 	getCodingOptions,
 	resolveCodingTarget,
+	startCodingDraft,
 	startCodingTurn,
 	respondToCodingRequest,
 	updateCodingTaskSettings
 } = await import('./tasks.js');
 const { T3ClientError } = await import('./client.js');
 const { closeAllT3Connections } = await import('./pool.js');
+const { startWaitingDrafts } = await import('./draft-starter.js');
 
 type Db = ReturnType<typeof openDatabase>;
 let db: Db;
@@ -624,5 +628,148 @@ describe('no project', () => {
 				db
 			)
 		).rejects.toMatchObject({ status: 400 });
+	});
+});
+
+describe('drafts', () => {
+	const target = {
+		providerInstanceId: 'codex',
+		model: 'gpt',
+		autonomy: 'auto' as const,
+		workspaceMode: 'local' as const
+	};
+
+	function draftWithMessage(projectId = 'p1') {
+		const { conversation } = createCodingDraft(
+			'u1',
+			{ environmentId, projectId, projectTitle: 'App', ...target },
+			db
+		);
+		createMessage(db, {
+			id: 'd1',
+			conversationId: conversation.id,
+			role: 'user',
+			parts: [{ type: 'text', text: 'Add a dark mode' }],
+			status: 'complete'
+		});
+		return conversation.id;
+	}
+
+	it('saves a draft without reaching the environment', () => {
+		const id = draftWithMessage();
+		const row = coding.getCodingConversation(db, id)!;
+		expect(row.status).toBe('draft');
+		expect(row.project_title).toBe('App');
+		expect(t3HttpGet).not.toHaveBeenCalled();
+		expect(call).not.toHaveBeenCalled();
+	});
+
+	it('stays a draft while the environment is unreachable', async () => {
+		const id = draftWithMessage();
+		t3HttpGet.mockRejectedValue(new T3ClientError('offline', 'remote'));
+		await expect(startCodingDraft('u1', id, db)).rejects.toMatchObject({ status: 502 });
+		expect(coding.getCodingConversation(db, id)!.status).toBe('draft');
+		expect(follower.launch).not.toHaveBeenCalled();
+	});
+
+	it('launches with the draft message once started, and only once', async () => {
+		const id = draftWithMessage();
+		t3HttpGet.mockResolvedValue({
+			projects: [{ id: 'p1', title: 'App (renamed)', workspaceRoot: '/home/u/app' }]
+		});
+		const started = startCodingDraft('u1', id, db);
+		await vi.waitFor(() => expect(follower.launch).toHaveBeenCalledOnce());
+		await expect(startCodingDraft('u1', id, db)).rejects.toMatchObject({ status: 409 });
+		release();
+		const row = await started;
+		expect(follower.launch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				projectId: 'p1',
+				message: expect.objectContaining({ id: 'd1', text: 'Add a dark mode' })
+			})
+		);
+		expect(row.project_title).toBe('App (renamed)');
+		expect(row.thread_id).not.toBeNull();
+	});
+
+	it("resolves a draft without a project to T3's scratch project when started", async () => {
+		const id = draftWithMessage(':none');
+		expect(coding.getCodingConversation(db, id)!.project_title).toBe('No project');
+		call.mockImplementation(async (tag) =>
+			tag === 'projects.ensureScratch' ? { projectId: 's1' } : {}
+		);
+		const started = startCodingDraft('u1', id, db);
+		await vi.waitFor(() => expect(follower.launch).toHaveBeenCalledOnce());
+		release();
+		expect((await started).project_id).toBe('s1');
+	});
+});
+
+describe('auto-starting drafts', () => {
+	const target = {
+		providerInstanceId: 'codex',
+		model: 'gpt',
+		autonomy: 'auto' as const,
+		workspaceMode: 'local' as const
+	};
+
+	function draft(text: string | null = 'Add a dark mode') {
+		const { conversation } = createCodingDraft(
+			'u1',
+			{ environmentId, projectId: 'p1', projectTitle: 'App', ...target },
+			db
+		);
+		if (text !== null) {
+			createMessage(db, {
+				id: `m-${conversation.id}`,
+				conversationId: conversation.id,
+				role: 'user',
+				parts: [{ type: 'text', text }],
+				status: 'complete'
+			});
+		}
+		return conversation.id;
+	}
+
+	it('starts a waiting draft once the environment answers', async () => {
+		const id = draft();
+		expect(coding.toPublic(coding.getCodingConversation(db, id)!).autoStart).toBe(true);
+		t3HttpGet.mockResolvedValue({ projects: [{ id: 'p1', title: 'App', workspaceRoot: '/a' }] });
+		follower.launch.mockResolvedValueOnce(undefined);
+		await startWaitingDrafts(db);
+		expect(follower.launch).toHaveBeenCalledOnce();
+		expect(coding.getCodingConversation(db, id)!.status).not.toBe('draft');
+	});
+
+	it('keeps waiting while offline, trying each environment once per pass', async () => {
+		const a = draft();
+		const b = draft();
+		t3HttpGet.mockRejectedValue(new T3ClientError('offline', 'remote'));
+		await startWaitingDrafts(db);
+		expect(t3HttpGet).toHaveBeenCalledOnce();
+		for (const id of [a, b]) {
+			const row = coding.getCodingConversation(db, id)!;
+			expect([row.status, row.auto_start, row.last_error]).toEqual(['draft', 1, null]);
+		}
+	});
+
+	it('skips drafts whose message has not arrived, and ones turned off', async () => {
+		draft(null);
+		const off = draft();
+		coding.setCodingDraftAutoStart(db, off, false);
+		await startWaitingDrafts(db);
+		expect(t3HttpGet).not.toHaveBeenCalled();
+	});
+
+	it('stops auto-starting a draft whose project is gone, saying why', async () => {
+		const id = draft();
+		t3HttpGet.mockResolvedValue({ projects: [] });
+		await startWaitingDrafts(db);
+		const row = coding.getCodingConversation(db, id)!;
+		expect(row.status).toBe('draft');
+		expect(row.auto_start).toBe(0);
+		expect(row.last_error).toMatch(/not found/i);
+		expect(coding.setCodingDraftAutoStart(db, id, true)).toBe(true);
+		expect(coding.getCodingConversation(db, id)!.last_error).toBeNull();
 	});
 });

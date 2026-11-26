@@ -226,6 +226,32 @@
 			</Button>
 		</div>
 	{:else}
+		{#if task.offline}
+			<!-- Icon in line with the chips' icons below (they're padded px-3, px-2 on phones). -->
+			<div
+				class="flex items-start gap-2 pl-3 text-sm text-muted-foreground max-sm:pl-2"
+				role="status"
+			>
+				<ServerOffIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+				<span class="min-w-0 flex-1 py-0.5" title={task.offlineError ?? undefined}>
+					<span class="text-foreground"
+						>Can't reach {task.environment?.name ?? 'the environment'}.</span
+					>
+					Tasks are saved as drafts and start when it's back.
+				</span>
+				<Button
+					variant="ghost"
+					size="sm"
+					class="-my-0.5 h-7 shrink-0 rounded-full px-2.5 max-sm:size-9 max-sm:px-0"
+					aria-label="Retry connecting"
+					{disabled}
+					onclick={() => void task.selectEnvironment(task.environmentId, { refresh: true })}
+				>
+					<RefreshCwIcon class="size-3.5" />
+					<span class="max-sm:hidden">Retry</span>
+				</Button>
+			</div>
+		{/if}
 		<div class="flex flex-wrap items-center gap-2" role="group" aria-label="Coding task options">
 			{@render environmentPicker()}
 
@@ -308,25 +334,28 @@
 								{/if}
 							{/each}
 						</Select.Group>
-						<!-- Pinned so the actions stay reachable when the list scrolls. -->
-						<div class="sticky bottom-0 -mb-1 bg-popover pb-1">
-							<Select.Separator />
-							<Select.Group>
-								<Select.Label>Add a project</Select.Label>
-								<Select.Item value={CLONE_PROJECT} label="Clone repository">
-									<GithubIcon class="size-4 text-muted-foreground" />
-									Clone repository…
-								</Select.Item>
-								<Select.Item value={OPEN_FOLDER} label="Open folder">
-									<FolderOpenIcon class="size-4 text-muted-foreground" />
-									Open folder…
-								</Select.Item>
-								<Select.Item value={NEW_PROJECT} label="New empty project">
-									<FolderPlusIcon class="size-4 text-muted-foreground" />
-									New empty project…
-								</Select.Item>
-							</Select.Group>
-						</div>
+						<!-- Pinned so the actions stay reachable when the list scrolls. Adding a
+						     project needs the environment, so not while it's offline. -->
+						{#if !task.offline}
+							<div class="sticky bottom-0 -mb-1 bg-popover pb-1">
+								<Select.Separator />
+								<Select.Group>
+									<Select.Label>Add a project</Select.Label>
+									<Select.Item value={CLONE_PROJECT} label="Clone repository">
+										<GithubIcon class="size-4 text-muted-foreground" />
+										Clone repository…
+									</Select.Item>
+									<Select.Item value={OPEN_FOLDER} label="Open folder">
+										<FolderOpenIcon class="size-4 text-muted-foreground" />
+										Open folder…
+									</Select.Item>
+									<Select.Item value={NEW_PROJECT} label="New empty project">
+										<FolderPlusIcon class="size-4 text-muted-foreground" />
+										New empty project…
+									</Select.Item>
+								</Select.Group>
+							</div>
+						{/if}
 					</Select.Content>
 				</Select.Root>
 

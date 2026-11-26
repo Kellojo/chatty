@@ -47,6 +47,8 @@ export interface CodingConversationRow {
 	proposed_tool_call_id: string | null;
 	/** When the proposing chat got its "finished" notice; NULL until then. */
 	proposal_reported_at: number | null;
+	/** A draft that starts by itself once its environment is reachable (0/1). */
+	auto_start: number;
 	created_at: number;
 	updated_at: number;
 }
@@ -78,6 +80,7 @@ export function toPublic(row: CodingConversationRow): CodingConversation {
 		status: row.status,
 		pendingRequest: parsePending(row.pending_request),
 		lastError: row.last_error,
+		autoStart: row.status === 'draft' && row.auto_start === 1,
 		runStartedAt: row.run_started_at,
 		diff:
 			row.diff_insertions === null || row.diff_deletions === null
@@ -147,6 +150,8 @@ export interface CreateCodingConversationInput {
 	baseBranch: string | null;
 	/** The chat's `propose_coding_task` call this task starts (at most one task each). */
 	proposal?: CodingTaskProposalRef | null;
+	/** A draft waits for the user to start it (see `claimCodingDraft`). */
+	draft?: boolean;
 }
 
 /** A `propose_coding_task` call: the chat it was made in and its tool call id. */
@@ -163,8 +168,8 @@ export function createCodingConversation(
 	db.prepare(
 		`INSERT INTO coding_conversations (conversation_id, environment_id, project_id, project_title,
 		   provider_instance_id, model, runtime_mode, workspace_mode, base_branch, status,
-		   proposed_in, proposed_tool_call_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?)`
+		   proposed_in, proposed_tool_call_id, auto_start, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	).run(
 		input.conversationId,
 		input.environmentId,
@@ -175,12 +180,66 @@ export function createCodingConversation(
 		input.runtimeMode,
 		input.workspaceMode,
 		input.baseBranch,
+		input.draft ? 'draft' : 'starting',
 		input.proposal?.conversationId ?? null,
 		input.proposal?.toolCallId ?? null,
+		// Drafts start by themselves unless the user turns that off.
+		input.draft ? 1 : 0,
 		now,
 		now
 	);
 	return getCodingConversation(db, input.conversationId)!;
+}
+
+/**
+ * Turns a draft's auto-start on or off; false when it's no longer a draft.
+ * Turning it on clears the error that stopped it, so it's tried afresh.
+ */
+export function setCodingDraftAutoStart(db: Db, conversationId: string, on: boolean): boolean {
+	const clearError = on ? ', last_error = NULL' : '';
+	return (
+		db
+			.prepare(
+				`UPDATE coding_conversations SET auto_start = ?, updated_at = ?${clearError}
+				 WHERE conversation_id = ? AND status = 'draft'`
+			)
+			.run(on ? 1 : 0, Date.now(), conversationId).changes > 0
+	);
+}
+
+/** Drafts waiting to start by themselves, oldest first, with their owner. */
+export function listAutoStartDrafts(
+	db: Db
+): { conversation_id: string; environment_id: string; user_id: string }[] {
+	return db
+		.prepare(
+			`SELECT cc.conversation_id, cc.environment_id, c.user_id FROM coding_conversations cc
+			 JOIN conversations c ON c.id = cc.conversation_id
+			 WHERE cc.status = 'draft' AND cc.auto_start = 1 AND cc.environment_id IS NOT NULL
+			   AND c.deleted_at IS NULL
+			 ORDER BY cc.created_at`
+		)
+		.all() as { conversation_id: string; environment_id: string; user_id: string }[];
+}
+
+/**
+ * Turns a draft into a task being started, with the project it resolved to.
+ * Only the first caller succeeds, so a draft is started once.
+ */
+export function claimCodingDraft(
+	db: Db,
+	conversationId: string,
+	project: { id: string; title: string }
+): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE coding_conversations SET status = 'starting', project_id = ?, project_title = ?,
+				   last_error = NULL, updated_at = ?
+				 WHERE conversation_id = ? AND status = 'draft'`
+			)
+			.run(project.id, project.title, Date.now(), conversationId).changes > 0
+	);
 }
 
 /** The (not deleted) tasks started from proposals in `conversationId`, with their titles. */

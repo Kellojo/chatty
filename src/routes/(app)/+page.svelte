@@ -81,7 +81,11 @@
 	let fileInput: HTMLInputElement | undefined = $state();
 	let mode = $state<'chat' | 'coding'>(untrack(() => data.startMode));
 	const coding = $derived(mode === 'coding' && data.codingEnvironments.length > 0);
-	const codingTask = new CodingTaskState(untrack(() => data.codingEnvironments));
+	// While the environment is unreachable, tasks are saved as drafts to start later.
+	const codingTask = new CodingTaskState(
+		untrack(() => data.codingEnvironments),
+		{ offlineDrafts: true }
+	);
 	const codingDraft = $derived(codingTask.draft);
 	let codingStarted = false;
 
@@ -166,7 +170,8 @@
 				if (shared) useSuggestion(shared);
 			}
 			if (prompt && input.trim() === '') {
-				setMode('chat');
+				// A prompt comes with `?mode=coding` when a draft is rewritten as a new task.
+				if (startMode !== 'coding') setMode('chat');
 				useSuggestion(prompt);
 			}
 		});
@@ -285,12 +290,14 @@
 		return conversation;
 	}
 
-	// The task itself starts when ChatView sends the first message.
+	// The task itself starts when ChatView sends the first message. Offline, that
+	// message is kept in a draft the user starts once the environment is back.
 	async function createCodingTask(draft: CodingTaskDraft): Promise<Conversation> {
+		const projectTitle = codingTask.offline ? codingTask.project?.title : undefined;
 		const res = await fetch('/api/coding/tasks', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(draft)
+			body: JSON.stringify(projectTitle ? { ...draft, draft: { projectTitle } } : draft)
 		});
 		if (!res.ok) {
 			const data = (await res.json().catch(() => null)) as { message?: string } | null;
@@ -514,10 +521,13 @@
 				{:else}
 					<Button
 						size="sm"
-						aria-label="Send"
+						aria-label={coding && codingTask.offline ? 'Save as draft' : 'Send'}
 						disabled={!canSend}
 						title={coding
-							? (codingTask.blocker ?? 'Start coding task')
+							? (codingTask.blocker ??
+								(codingTask.offline
+									? 'Save as a draft; it starts when the environment is back'
+									: 'Start coding task'))
 							: modelMissing
 								? 'Select a model first'
 								: untrustedModel

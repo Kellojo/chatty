@@ -19,6 +19,7 @@ import { reconcileMemoryFts } from '$lib/server/memory/fts.js';
 import { startPushDispatcher } from '$lib/server/push/dispatcher.js';
 import { registerShutdownHandlers } from '$lib/server/shutdown.js';
 import { seedDefaultSkills } from '$lib/server/skills/defaults.js';
+import { startDraftStarter } from '$lib/server/t3/draft-starter.js';
 import { startCodingEnvironmentSync } from '$lib/server/t3/sync.js';
 import { resumeCodingTasks } from '$lib/server/t3/tasks.js';
 
@@ -82,6 +83,7 @@ if (!building) {
 	startSnoozeWaker(getDb());
 	startCodingEnvironmentSync(getDb());
 	resumeCodingTasks(getDb());
+	startDraftStarter(getDb());
 	registerShutdownHandlers();
 }
 

@@ -87,9 +87,19 @@ export const START_MODE_COOKIE = 'chatty_start_mode';
  * `waiting`: the run ended but the agent waits on background work it started
  * (a background task, delegated thread or watched pull request) and resumes
  * when it reports back.
+ *
+ * `draft`: saved while the environment was unreachable; nothing was sent to it
+ * yet. Its first message goes out when the user starts it.
  */
 export type CodingTaskStatus =
-	'starting' | 'running' | 'awaiting_input' | 'waiting' | 'idle' | 'failed' | 'interrupted';
+	| 'draft'
+	| 'starting'
+	| 'running'
+	| 'awaiting_input'
+	| 'waiting'
+	| 'idle'
+	| 'failed'
+	| 'interrupted';
 
 export type CodingWorkspaceMode = 'worktree' | 'local';
 
@@ -194,6 +204,8 @@ export interface CodingConversation {
 	status: CodingTaskStatus;
 	pendingRequest: CodingPendingRequest | null;
 	lastError: string | null;
+	/** A draft that starts by itself once its environment is back online. */
+	autoStart: boolean;
 	/** Start of the agent run in progress (ms), null when nothing runs. */
 	runStartedAt: number | null;
 	/** Lines changed on the task's branch / working tree, null until known. */
