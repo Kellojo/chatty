@@ -197,6 +197,19 @@ describe('memory tools: untrusted turns', () => {
 		expect(fileOf('user', 'a2', 'sec.md')).toBe(before);
 	});
 
+	it("never name a private note in create_concept's possibly-related hint", async () => {
+		await save('user', 'a7', 'sec.md', 'Kumquat orchard', 'secret plans', true);
+		await save('user', 'a7', 'pub.md', 'Kumquat orchard', 'public plans');
+		const res = await callTool(untrustedTurn('a7'), 'create_concept', {
+			path: 'new.md',
+			title: 'Kumquat orchard',
+			body: 'more plans'
+		});
+		const hint = texts(res)[2];
+		expect(hint).toContain('pub.md');
+		expect(hint).not.toContain('sec.md');
+	});
+
 	it('get nothing at all under strict memory privacy, not even the note', async () => {
 		await save('user', 'a3', 'pub.md', 'Pub', 'the walrus is public');
 		await save('user', 'a3', 'sec.md', 'Sec', 'the walrus is secret', true);
@@ -220,6 +233,18 @@ describe('memory tools: trusted turns', () => {
 		expect(texts(res)[0]).toContain('secret body');
 		expect(privacy.tainted).toBe(true);
 		expect(isConversationPrivate(getDb(), conversationId)).toBe(true);
+	});
+
+	it('taint the turn when the possibly-related hint names a private note', async () => {
+		await save('user', 'b4', 'sec.md', 'Kumquat orchard', 'secret plans', true);
+		const { ctx, privacy } = trusted('b4');
+		const res = await callTool(ctx, 'create_concept', {
+			path: 'new.md',
+			title: 'Kumquat orchard',
+			body: 'more plans'
+		});
+		expect(texts(res)[2]).toContain('sec.md');
+		expect(privacy.tainted).toBe(true);
 	});
 
 	it('stay untainted when nothing private comes back', async () => {

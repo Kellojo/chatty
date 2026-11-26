@@ -20,7 +20,14 @@ import {
 	searchMemoryFts,
 	type MemoryReadOptions
 } from '../../memory/fts.js';
+import {
+	conceptShapeProblem,
+	conceptShapeRegressions,
+	shapeRefusal,
+	type ConceptShape
+} from '../../memory/limits.js';
 import { ftsScope, normalizeConceptPath, type MemoryScope } from '../../memory/paths.js';
+import { commonWords, sharesSubject, subjectWords } from '../../memory/similar.js';
 import { classifySensitive, reviewUpdate, type PrivacyUpdate } from '../../privacy/classify.js';
 import { recordPrivacyCheck } from '../../privacy/sweep.js';
 import { callerPrivacy, isPrivateContext } from '../../privacy/policy.js';
@@ -150,6 +157,59 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 	});
 
 	const guardPath = (path: string): string | null => normalizeConceptPath(path);
+
+	/** Built-in memory agents (author 'system', see run-lifecycle.ts) get shape limits. */
+	const shapeProblem = (fields: ConceptShape): string | null =>
+		ctx.author === 'system' ? conceptShapeProblem(fields) : null;
+	const shapeRegressions = (before: ConceptShape, after: ConceptShape): string | null =>
+		ctx.author === 'system' ? shapeRefusal(conceptShapeRegressions(before, after)) : null;
+
+	/**
+	 * Up to three other notes that look like they're about the same subject as
+	 * the note at `path` (by the words of title and tags, see memory/similar.ts),
+	 * so the writer can merge instead of keeping a duplicate. Only notes the
+	 * caller may see; naming a private one taints the turn like a search.
+	 */
+	const commonByScope = new Map<string, Set<string>>();
+	const possiblyRelated = (
+		view: MemoryView,
+		scope: MemoryScope,
+		path: string,
+		note: { title: string; tags?: string[] }
+	): string | null => {
+		if (view === 'none') return null;
+		const db = getDb();
+		const fts = ftsScope(scope, ctx.userId);
+		const options = readOptions(view);
+		// Words most of the bundle's titles share (say, the app most notes are
+		// about) don't make two notes the same subject. Worked out once per
+		// server (one turn or run): a few notes created meanwhile hardly change it.
+		const key = `${fts}:${view}`;
+		let common = commonByScope.get(key);
+		if (!common) {
+			common = commonWords([...memorySummaries(db, fts, options).values()].map((s) => s.title));
+			commonByScope.set(key, common);
+		}
+		const subject = [note.title, ...(note.tags ?? [])].join(' ');
+		const words = subjectWords(subject, common);
+		if (words.size === 0) return null;
+		// Any-word matching: fetch enough that common words don't crowd out the match.
+		const hits = searchMemoryFts(db, [fts], subject, 25, options)
+			.filter(
+				(h) =>
+					h.path !== path &&
+					sharesSubject(words, subjectWords([h.title, h.description, ...h.tags].join(' '), common))
+			)
+			.slice(0, 3);
+		if (hits.length === 0) return null;
+		if (hits.some((h) => h.private)) taint('a private note');
+		const list = hits.map((h) => (h.title ? `${h.path} ("${h.title}")` : h.path)).join(', ');
+		// Memory agents tidy up on their own; a chat model only saves what it was
+		// asked to, so it is just told, not sent to merge and delete.
+		return ctx.author === 'system'
+			? `Possibly related: ${list}. Read them. Only if one is about the same subject, move this note's facts into it with update_concept and delete_concept this note; otherwise keep both.`
+			: `Possibly related: ${list}. If one covers the same subject, mention it to the user instead of changing either note.`;
+	};
 
 	/** Counts concepts the model came across; tracking never fails the tool call. */
 	const trackViews = (kind: MemoryViewInput['kind'], concepts: MemoryViewInput['concepts']) => {
@@ -316,6 +376,8 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			const s = scope ?? 'user';
 			const denied = guardSharedWrite(s);
 			if (denied) return err(denied);
+			const badShape = shapeProblem({ path: normalized, title, description, tags, body });
+			if (badShape) return err(badShape);
 			const view = memoryView(ctx);
 			// Any occupied path answers the same, whether or not the caller may see
 			// the concept there, and is never overwritten.
@@ -346,7 +408,7 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 			} catch (e) {
 				return err(e instanceof Error ? e.message : String(e));
 			}
-			return written(
+			const result = written(
 				'created',
 				normalized,
 				s,
@@ -355,6 +417,16 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				privacy.private === true,
 				privacy.privateReason
 			);
+			// Only a hint: the note is saved, so a failing search mustn't fail the call.
+			try {
+				const related = possiblyRelated(view, s, normalized, { title, tags });
+				if (related) result.content.push({ type: 'text', text: related });
+			} catch (e) {
+				log.warn('Looking up related memory notes failed:', {
+					error: e instanceof Error ? e.message : String(e)
+				});
+			}
+			return result;
 		}
 	);
 
@@ -391,6 +463,14 @@ export function createMemoryServer(ctx: CallerContext): McpServer {
 				tags: tags ?? existing.frontmatter.tags
 			};
 			const nextBody = body ?? existing.body;
+			// Only what this update makes worse is refused: a legacy note over the
+			// limits can still take a small fix, and fields the call didn't pass
+			// are unchanged, so never the reason.
+			const badShape = shapeRegressions(
+				{ ...existing.frontmatter, path: normalized, body: existing.body },
+				{ ...fields, path: normalized, body: nextBody }
+			);
+			if (badShape) return err(badShape);
 			const { update: privacy, checked } = await privacyFor(view, existing, {
 				...fields,
 				body: nextBody

@@ -300,6 +300,175 @@ describe('memory views', () => {
 	});
 });
 
+describe('memory agent note limits', () => {
+	const agentCtx = { ...userCtx, userId: 'shape1', author: 'system', agentRunId: 'run1' } as Ctx;
+	const personCtx = { ...userCtx, userId: 'shape1' };
+	const longBody = 'fact '.repeat(600);
+
+	it('refuses an over-long note from a built-in memory agent, saying why', async () => {
+		const res = await callTool(agentCtx, 'create_concept', {
+			path: 'notes/long.md',
+			title: 'Long',
+			description: 'Shipped in da8a460c.',
+			tags: ['v0.0.49'],
+			body: longBody
+		});
+		expect(isError(res)).toBe(true);
+		const message = resultText(res);
+		expect(message).toContain('commit hash');
+		expect(message).toContain('v0.0.49');
+		expect(message).toContain('body is');
+		const read = await callTool(personCtx, 'read_concept', { path: 'notes/long.md' });
+		expect(isError(read)).toBe(true);
+	});
+
+	it('leaves notes people write alone', async () => {
+		const res = await callTool(personCtx, 'create_concept', {
+			path: 'notes/recipe.md',
+			title: 'Recipe',
+			body: longBody
+		});
+		expect(isError(res)).toBe(false);
+	});
+
+	it('lets an agent make small fixes to an over-long note, but not make it longer', async () => {
+		const tagsOnly = await callTool(agentCtx, 'update_concept', {
+			path: 'notes/recipe.md',
+			tags: ['cooking']
+		});
+		expect(isError(tagsOnly)).toBe(false);
+		const longer = await callTool(agentCtx, 'update_concept', {
+			path: 'notes/recipe.md',
+			body: `${longBody} more`
+		});
+		expect(isError(longer)).toBe(true);
+		expect(resultText(longer)).toContain('body is');
+		const shorter = await callTool(agentCtx, 'update_concept', {
+			path: 'notes/recipe.md',
+			body: longBody.slice(10)
+		});
+		expect(isError(shorter)).toBe(false);
+	});
+
+	it('refiles an over-long legacy note once the agent shortens it', async () => {
+		await callTool(personCtx, 'create_concept', {
+			path: 'misc/sourdough.md',
+			title: 'Sourdough starter',
+			body: longBody
+		});
+		const asIs = await callTool(agentCtx, 'create_concept', {
+			path: 'recipes/sourdough.md',
+			title: 'Sourdough starter',
+			body: longBody
+		});
+		expect(isError(asIs)).toBe(true);
+		expect(resultText(asIs)).toContain('body is');
+		const moved = await callTool(agentCtx, 'create_concept', {
+			path: 'recipes/sourdough.md',
+			title: 'Sourdough starter',
+			body: 'Fed daily, 1:1:1.'
+		});
+		expect(isError(moved)).toBe(false);
+		const texts = (moved as { content: Array<{ text?: string }> }).content.map((c) => c.text);
+		expect(texts[2]).toContain('misc/sourdough.md');
+		expect(texts[2]).toContain('delete_concept this note');
+		const removed = await callTool(agentCtx, 'delete_concept', { path: 'misc/sourdough.md' });
+		expect(isError(removed)).toBe(false);
+	});
+
+	it('lets an agent edit a legacy note with bad metadata, but not add to the problems', async () => {
+		await callTool(personCtx, 'create_concept', {
+			path: 'notes/legacy.md',
+			title: 'Legacy',
+			description: 'Shipped in v0.0.49 (da8a460c).',
+			tags: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'v0.0.49'],
+			body: 'A fact.'
+		});
+		const bodyOnly = await callTool(agentCtx, 'update_concept', {
+			path: 'notes/legacy.md',
+			body: 'A fact, reworded.'
+		});
+		expect(isError(bodyOnly)).toBe(false);
+		const moreTags = await callTool(agentCtx, 'update_concept', {
+			path: 'notes/legacy.md',
+			tags: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'v0.0.49', 'pr-22']
+		});
+		expect(isError(moreTags)).toBe(true);
+		expect(resultText(moreTags)).toContain('9 tags');
+		expect(resultText(moreTags)).toContain('pr-22');
+		const fixed = await callTool(agentCtx, 'update_concept', {
+			path: 'notes/legacy.md',
+			description: 'A legacy note.',
+			tags: ['legacy']
+		});
+		expect(isError(fixed)).toBe(false);
+	});
+});
+
+describe('similar notes on create', () => {
+	const ctx = { ...userCtx, userId: 'similar1' };
+
+	it('names existing notes that overlap a new one, but not unrelated ones', async () => {
+		await callTool(ctx, 'create_concept', {
+			path: 'projects/marmalade-app.md',
+			title: 'Marmalade app',
+			description: 'The user’s marmalade tracking app.',
+			body: 'Tracks jars.'
+		});
+		const dup = await callTool(ctx, 'create_concept', {
+			path: 'projects/marmalade-tracker.md',
+			title: 'Marmalade tracker',
+			body: 'Tracks jars too.'
+		});
+		const texts = (dup as { content: Array<{ text?: string }> }).content.map((c) => c.text);
+		expect(texts[0]).toBe('created projects/marmalade-tracker.md');
+		expect(texts[2]).toContain('projects/marmalade-app.md ("Marmalade app")');
+		expect(texts[2]).not.toContain('projects/marmalade-tracker.md');
+		// A chat model is only told, not sent to merge and delete.
+		expect(texts[2]).toContain('mention it to the user');
+		expect(texts[2]).not.toContain('delete_concept');
+
+		const unrelated = await callTool(ctx, 'create_concept', {
+			path: 'people/zebulon.md',
+			title: 'Zebulon',
+			body: 'A friend.'
+		});
+		expect((unrelated as { content: unknown[] }).content).toHaveLength(2);
+	});
+
+	it('ignores a word most of the bundle’s titles share', async () => {
+		const appCtx = { ...userCtx, userId: 'similar2' };
+		for (const [slug, title] of [
+			['voice', 'Quillboard voice mode'],
+			['search', 'Quillboard web search'],
+			['palette', 'Quillboard command palette']
+		]) {
+			await callTool(appCtx, 'create_concept', { path: `projects/${slug}.md`, title, body: 'x' });
+		}
+		const res = await callTool(appCtx, 'create_concept', {
+			path: 'projects/onboarding.md',
+			title: 'Quillboard onboarding',
+			body: 'x'
+		});
+		expect((res as { content: unknown[] }).content).toHaveLength(2);
+	});
+
+	it('gives no hint for notes that only share common words', async () => {
+		await callTool(ctx, 'create_concept', {
+			path: 'preferences/coffee.md',
+			title: 'How the user takes coffee',
+			description: 'The user and their coffee.',
+			body: 'Black.'
+		});
+		const res = await callTool(ctx, 'create_concept', {
+			path: 'preferences/tea.md',
+			title: 'How the user brews tea',
+			body: 'Green.'
+		});
+		expect((res as { content: unknown[] }).content).toHaveLength(2);
+	});
+});
+
 describe('memorySnippet', () => {
 	it('prefers the description and truncates long text', async () => {
 		const { memorySnippet } = await import('./memory.js');
