@@ -379,7 +379,7 @@
  * would sit on its toolbar. The drawer is closed then, so `left: -100%` puts the chat
  * exactly where translateX(-50%) had it.
  */
-:root:has([data-streamdown='table-fullscreen'], [data-expanded='true']) {
+:root:has([data-streamdown='table-fullscreen'], [data-streamdown-mermaid] [data-expanded='true']) {
 	[data-drawer-track] {
 		left: -100%;
 		transform: none !important;
@@ -393,5 +393,32 @@
 	/* Floats above the drawer track, so it would sit on the fullscreen view's toolbar. */
 	[data-sidebar-toggle] {
 		visibility: hidden;
+	}
+}
+
+/*
+ * Streamdown's Mermaid component ships a global rule that turns every [data-expanded='true']
+ * into a fixed fullscreen overlay. Sonner marks its toasts the same way while the stack is
+ * expanded (hover, or a tap on a phone), so tapping a toast stretched it over the screen.
+ * Put toasts back to Sonner's own positioning (its expanded height rule is more specific).
+ */
+[data-sonner-toast][data-expanded='true'] {
+	position: absolute;
+	z-index: var(--z-index);
+	height: auto;
+	margin: 0;
+}
+
+[data-sonner-toast][data-y-position='bottom'][data-expanded='true'] {
+	top: auto;
+}
+
+[data-sonner-toast][data-x-position='right'][data-expanded='true'] {
+	left: auto;
+}
+
+@media (max-width: 600px) {
+	[data-sonner-toaster] [data-sonner-toast][data-expanded='true'] {
+		left: 0;
 	}
 }
