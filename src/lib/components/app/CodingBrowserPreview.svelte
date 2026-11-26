@@ -7,6 +7,7 @@
 	// picture-in-picture in the bottom right that opens while the agent uses
 	// the browser during a run.
 	import { untrack } from 'svelte';
+	import { Portal } from 'bits-ui';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -709,58 +710,62 @@
 	</Dialog.Content>
 </Dialog.Root>
 
-<!-- Watches the tab; take control to click and type in it, or expand it for the toolbar. -->
+<!-- Watches the tab; take control to click and type in it, or expand it for the toolbar.
+     Portaled to <body>: the topbar it's mounted in is translated (center-in-viewport), which
+     would make it the containing block for `fixed` and pin this to the topbar instead. -->
 {#if showPip}
-	<section
-		class="fixed right-4 bottom-4 z-40 flex w-[22rem] flex-col overflow-hidden rounded-xl border bg-background shadow-lg max-lg:hidden"
-		aria-label="Browser preview"
-	>
-		<header class="flex items-center gap-1 py-1 pr-1 pl-3 text-xs text-muted-foreground">
-			<GlobeIcon class="size-3.5 shrink-0" />
-			<span class="min-w-0 flex-1 truncate" title={selected?.url ?? undefined}>
-				{selected ? tabLabel(selected) : 'Browser preview'}
-			</span>
-			{#if control?.canOperate}
-				<Button
-					variant={driving ? 'secondary' : 'ghost'}
-					size="xs"
-					title={driving ? 'Hand the tab back' : 'Click and type in this tab'}
-					onclick={() => send({ type: driving ? 'releaseControl' : 'takeControl' })}
-				>
-					{driving ? 'Release' : 'Take control'}
-				</Button>
-			{/if}
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				title="Expand"
-				aria-label="Open the full browser preview"
-				onclick={expandPip}
-			>
-				<Maximize2Icon />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				title="Close"
-				aria-label="Close the picture in picture"
-				onclick={closePip}
-			>
-				<XIcon />
-			</Button>
-		</header>
-		<!-- Watching, the frame is a big target for expanding (the header's Expand button is the
-		     keyboard route); in control, it's the page. -->
-		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-		<div
-			class="max-h-[50vh] p-1 pt-0 {driving ? '' : 'cursor-pointer'}"
-			style:aspect-ratio={pageSize ? `${pageSize.width} / ${pageSize.height}` : '16 / 10'}
-			onclick={(event) => {
-				// Buttons inside the frame (Reconnect) do their own thing.
-				if (!driving && !(event.target as Element).closest('button')) expandPip();
-			}}
+	<Portal>
+		<section
+			class="fixed right-4 bottom-4 z-40 flex w-[22rem] flex-col overflow-hidden rounded-xl border bg-background shadow-lg max-lg:hidden"
+			aria-label="Browser preview"
 		>
-			{@render surface('size-full')}
-		</div>
-	</section>
+			<header class="flex items-center gap-1 py-1 pr-1 pl-3 text-xs text-muted-foreground">
+				<GlobeIcon class="size-3.5 shrink-0" />
+				<span class="min-w-0 flex-1 truncate" title={selected?.url ?? undefined}>
+					{selected ? tabLabel(selected) : 'Browser preview'}
+				</span>
+				{#if control?.canOperate}
+					<Button
+						variant={driving ? 'secondary' : 'ghost'}
+						size="xs"
+						title={driving ? 'Hand the tab back' : 'Click and type in this tab'}
+						onclick={() => send({ type: driving ? 'releaseControl' : 'takeControl' })}
+					>
+						{driving ? 'Release' : 'Take control'}
+					</Button>
+				{/if}
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					title="Expand"
+					aria-label="Open the full browser preview"
+					onclick={expandPip}
+				>
+					<Maximize2Icon />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					title="Close"
+					aria-label="Close the picture in picture"
+					onclick={closePip}
+				>
+					<XIcon />
+				</Button>
+			</header>
+			<!-- Watching, the frame is a big target for expanding (the header's Expand button is the
+		     keyboard route); in control, it's the page. -->
+			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+			<div
+				class="max-h-[50vh] p-1 pt-0 {driving ? '' : 'cursor-pointer'}"
+				style:aspect-ratio={pageSize ? `${pageSize.width} / ${pageSize.height}` : '16 / 10'}
+				onclick={(event) => {
+					// Buttons inside the frame (Reconnect) do their own thing.
+					if (!driving && !(event.target as Element).closest('button')) expandPip();
+				}}
+			>
+				{@render surface('size-full')}
+			</div>
+		</section>
+	</Portal>
 {/if}
