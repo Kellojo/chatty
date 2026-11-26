@@ -6,6 +6,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import DownloadIcon from '@lucide/svelte/icons/download';
 	import SettingsHeader from '$lib/components/app/settings/SettingsHeader.svelte';
 	import SettingsSection from '$lib/components/app/settings/SettingsSection.svelte';
 	import SettingsRow from '$lib/components/app/settings/SettingsRow.svelte';
@@ -98,6 +99,43 @@
 			{/if}
 		</Button>
 	</SettingsRow>
+</SettingsSection>
+
+<SettingsSection title="Export" description="Download memory as a zip of Markdown files.">
+	<SettingsRow
+		label="Export memory"
+		description="All your memory concepts, private ones included, in their folders."
+		stack
+	>
+		<Button
+			variant="outline"
+			class="w-full sm:w-auto"
+			href="/api/memory/export"
+			download
+			data-sveltekit-reload
+		>
+			<DownloadIcon class="size-4" />
+			Export
+		</Button>
+	</SettingsRow>
+	{#if isAdmin}
+		<SettingsRow
+			label="Export shared memory"
+			description="Memory shared by everyone on this server."
+			stack
+		>
+			<Button
+				variant="outline"
+				class="w-full sm:w-auto"
+				href="/api/memory/export?scope=shared"
+				download
+				data-sveltekit-reload
+			>
+				<DownloadIcon class="size-4" />
+				Export shared
+			</Button>
+		</SettingsRow>
+	{/if}
 </SettingsSection>
 
 {#if data.privateData.enabled}

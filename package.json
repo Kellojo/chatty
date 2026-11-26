@@ -83,6 +83,7 @@
 		"cron-parser": "^5.10.4",
 		"cronstrue": "^3.39.0",
 		"diff": "^9.0.0",
+		"fflate": "^0.8.3",
 		"gray-matter": "^4.0.3",
 		"isolated-vm": "^6.2.0",
 		"isomorphic-git": "^1.44.12",
