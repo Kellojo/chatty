@@ -26,6 +26,7 @@
 	import SnoozeMenuItems from './SnoozeMenuItems.svelte';
 	import SnoozeDialog from './SnoozeDialog.svelte';
 	import { markedUnread, setConversationRead } from './marked-unread.svelte.js';
+	import { getSidebarState } from './sidebar-state.svelte.js';
 	import { registerCommands, type PaletteCommand } from '$lib/state/commands.js';
 	import { isSnoozed, snoozeOptions } from '$lib/snooze.js';
 	import { snoozeConversation, wakeConversation } from '$lib/snooze-actions.js';
@@ -154,6 +155,7 @@
 		contextPercent !== null && contextPercent >= 90 ? 'text-destructive' : 'text-warning-foreground'
 	);
 	const noun = $derived(coding ? 'task' : 'conversation');
+	const sidebar = getSidebarState();
 
 	async function request(path: string, init: RequestInit, failure: string): Promise<boolean> {
 		const res = await fetch(`/api/conversations/${conversation.id}${path}`, init).catch(() => null);
@@ -172,24 +174,28 @@
 	}
 
 	async function toggleSettled() {
+		// Snapshot: `settled` is derived from `conversation`, which `onupdated` flips.
+		const wasSettled = settled;
 		const ok = await request(
 			'/settle',
-			{ method: settled ? 'DELETE' : 'POST' },
-			settled ? 'Failed to un-settle' : 'Failed to settle'
+			{ method: wasSettled ? 'DELETE' : 'POST' },
+			wasSettled ? 'Failed to un-settle' : 'Failed to settle'
 		);
 		if (!ok) return;
 		onupdated({
 			...conversation,
-			settledAt: settled ? null : Date.now(),
-			settledReason: settled ? null : 'manual',
-			pinned: settled ? conversation.pinned : false,
-			snoozedUntil: settled ? conversation.snoozedUntil : null
+			settledAt: wasSettled ? null : Date.now(),
+			settledReason: wasSettled ? null : 'manual',
+			pinned: wasSettled ? conversation.pinned : false,
+			snoozedUntil: wasSettled ? conversation.snoozedUntil : null
 		});
 		toast.success(
-			settled
+			wasSettled
 				? `${coding ? 'Task' : 'Conversation'} un-settled`
 				: `${coding ? 'Task' : 'Conversation'} settled`
 		);
+		// A settled chat is done with, so on phones head back to the list.
+		if (!wasSettled) sidebar?.showOnPhone();
 		await invalidateAll();
 	}
 

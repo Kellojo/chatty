@@ -49,6 +49,9 @@
 		},
 		get mobileOpen() {
 			return mobileOpen;
+		},
+		showOnPhone() {
+			if (!isDesktop.current) mobileOpen = true;
 		}
 	});
 

@@ -3,6 +3,8 @@ import { getContext, setContext } from 'svelte';
 export interface SidebarState {
 	readonly open: boolean;
 	readonly mobileOpen: boolean;
+	/** Opens the drawer on phones (back to the chat list); a no-op on desktop. */
+	showOnPhone(): void;
 }
 
 const KEY = Symbol('sidebar');
